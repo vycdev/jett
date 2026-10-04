@@ -727,6 +727,17 @@ sealed raw source is ordinary data with an independently supported clone. MIR
 clones that exact backing once and restores the existing conversion spine;
 an erased Interface signature does not grant cloning authority.
 
+Intrinsic operands normalize their closed physical View roles before the common
+ordered caller staging check. That check distinguishes relinquished owners from
+retained borrows without using a collection's clone support as transfer authority.
+
+Extracted breakpoint conditions retain private constructor-owned lexical regions.
+The ownership walker rejoins their exact statements, terminators, CFG boundaries
+and final endpoints before selecting observation context. Canonical sequence and
+uninhabited-sum preparation update these records through checked edits and remaps;
+copied, moved or forged markers cannot grant observation context. Archived source
+conditions do not keep removed blocks or locals alive.
+
 Compiler-generated refinement handlers retain their ordered exact predicate
 identities, candidate backing, error-empty tests, selecting branches and shared
 failure entry. One validated output and every owning default must reach the use

@@ -2994,3 +2994,2102 @@ fn caller_acquisition_source_sum_defaults_reject_logical_borrows_under_transpare
         }
     }
 }
+
+const CONVERTED_HANDLED_SOURCE: &str = r#"namespace app
+interface Show:
+    function show(view self: Show) returns string
+implement Show for uint64:
+    function show(view self: uint64) returns string:
+        return "uint64"
+function exercise(incoming: optional[uint64], spare: uint64) returns string:
+    uint64 fallback = 0
+    return Show.show(view(incoming handle:
+        default fallback
+    ))
+"#;
+
+const OWNED_CONVERTED_HANDLED_SOURCE: &str = r#"namespace app
+interface Show:
+    function show(view self: Show) returns string
+implement Show for uint64:
+    function show(view self: uint64) returns string:
+        return "uint64"
+function read(value: Show) returns string:
+    return "received"
+function exercise(incoming: optional[uint64], spare: uint64) returns string:
+    uint64 fallback = 0
+    return read((incoming handle:
+        default fallback
+    ))
+"#;
+
+fn converted_handle_stage(function: &Function) -> Option<LocalId> {
+    let E::Call {
+        ownership: hir::CallOwnership::Source(packet),
+        ..
+    } = &read_call(function).kind
+    else {
+        panic!("checked converted source call");
+    };
+    match packet.arguments[0].staging {
+        hir::ArgumentStaging::Original => None,
+        hir::ArgumentStaging::Borrowed { loan } => Some(loan),
+        hir::ArgumentStaging::Transferred { owner }
+        | hir::ArgumentStaging::Relinquished { owner, .. }
+        | hir::ArgumentStaging::RetainedSnapshot { owner, .. }
+        | hir::ArgumentStaging::Observed { owner } => Some(owner),
+        hir::ArgumentStaging::Copied { value } => Some(value),
+    }
+}
+
+fn converted_handle_operand(function: &Function) -> &Expression {
+    if let Some(stage) = converted_handle_stage(function) {
+        return function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .find_map(|statement| match &statement.kind {
+                S::Let { local, value } | S::BeginCallView { local, value } if *local == stage => {
+                    Some(value)
+                }
+                _ => None,
+            })
+            .expect("exact source staging initializer");
+    }
+    let E::Call { args, .. } = &read_call(function).kind else {
+        panic!("source read");
+    };
+    &args[0]
+}
+
+fn converted_handle_operand_mut(function: &mut Function) -> &mut Expression {
+    if let Some(stage) = converted_handle_stage(function) {
+        return function
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                S::Let { local, value } | S::BeginCallView { local, value } if *local == stage => {
+                    Some(value)
+                }
+                _ => None,
+            })
+            .expect("exact source staging initializer");
+    }
+    for block in &mut function.blocks {
+        for statement in &mut block.statements {
+            if let S::Let { value, .. } | S::Evaluate(value) = &mut statement.kind
+                && let E::Call { args, .. } = &mut value.kind
+            {
+                return &mut args[0];
+            }
+        }
+        if let T::Return(Some(value)) = &mut block.terminator.kind
+            && let E::Call { args, .. } = &mut value.kind
+        {
+            return &mut args[0];
+        }
+    }
+    panic!("source read invocation");
+}
+
+fn converted_handle_leaf_mut(mut value: &mut Expression) -> &mut Expression {
+    while matches!(
+        value.kind,
+        E::View(_) | E::InterfaceCoerce { .. } | E::FunctionAdapter { .. }
+    ) {
+        value = match &mut value.kind {
+            E::View(inner)
+            | E::InterfaceCoerce { value: inner, .. }
+            | E::FunctionAdapter { value: inner, .. } => inner,
+            _ => unreachable!("transparent conversion checked before borrowing"),
+        };
+    }
+    value
+}
+
+#[test]
+fn caller_acquisition_converted_handle_joins_exact_inner_result_and_full_cfg() {
+    let (program, types) = source_program(CONVERTED_HANDLED_SOURCE);
+    let function = exercise(&program);
+    let E::Call {
+        ownership: hir::CallOwnership::Source(packet),
+        ..
+    } = &read_call(function).kind
+    else {
+        panic!("source read");
+    };
+    let argument = &packet.arguments[0];
+    let backing = hir::validate_source_handled_operand(
+        converted_handle_operand(function),
+        argument,
+        &packet.bridge,
+        &types,
+    )
+    .expect("exact conversion")
+    .expect("private original Handle backing");
+    let E::Local(local) = backing.kind else {
+        panic!("lowered Handle result");
+    };
+    assert_eq!(backing.ty, TypeInterner::UINT64);
+    assert_ne!(backing.span, argument.source_span);
+    assert_ne!(local, function.params[1].local);
+    assert!(function.blocks.iter().flat_map(|block| &block.statements).any(|statement|
+        matches!(statement.kind, S::SumTake { target, success: true, .. } if target == local)));
+    validate_function(&program, function, &types).expect("original result and complete CFG proofs");
+    // A written View of a statically selected method retains the inner source
+    // span. A separate owning interface formal exercises actual conversion.
+    let (converted, converted_types) = source_program(OWNED_CONVERTED_HANDLED_SOURCE);
+    let converted_function = exercise(&converted);
+    let E::Call {
+        ownership: hir::CallOwnership::Source(packet),
+        ..
+    } = &read_call(converted_function).kind
+    else {
+        panic!("owning interface source call");
+    };
+    let operand = converted_handle_operand(converted_function);
+    assert!(matches!(operand.kind, E::InterfaceCoerce { .. }));
+    let backing = hir::validate_source_handled_operand(
+        operand,
+        &packet.arguments[0],
+        &packet.bridge,
+        &converted_types,
+    )
+    .expect("actual finite conversion")
+    .expect("private original Handle");
+    assert!(matches!(backing.kind, E::Local(_)));
+    assert_eq!(backing.ty, TypeInterner::UINT64);
+    assert_ne!(operand.ty, backing.ty);
+    validate_function(&converted, converted_function, &converted_types)
+        .expect("converted result CFG");
+}
+
+#[test]
+fn caller_acquisition_converted_handle_refuses_foreign_occurrences_and_unproved_slots() {
+    let (program, types) = source_program(CONVERTED_HANDLED_SOURCE);
+    for mutation in [
+        "inner span",
+        "inner type",
+        "parameter substitution",
+        "outer source span",
+        "sum occurrence",
+        "failed tag",
+    ] {
+        let mut corrupted = program.clone();
+        let function = exercise_mut(&mut corrupted);
+        let spare = function.params[1].local;
+        let backing = converted_handle_leaf_mut(converted_handle_operand_mut(function));
+        let E::Local(output) = backing.kind else {
+            panic!("original CFG result");
+        };
+        match mutation {
+            "inner span" => backing.span.start += 1,
+            "inner type" => backing.ty = TypeInterner::INT64,
+            "parameter substitution" => backing.kind = E::Local(spare),
+            "outer source span" => converted_handle_operand_mut(function).span.start += 1,
+            "sum occurrence" | "failed tag" => {
+                let statement = function.blocks.iter_mut().flat_map(|block| &mut block.statements)
+                    .find(|statement| matches!(statement.kind, S::SumTake { target, success: true, .. } if target == output))
+                    .expect("exact handled success");
+                if mutation == "sum occurrence" {
+                    statement.span.start += 1;
+                } else {
+                    let S::SumTake { success, .. } = &mut statement.kind else {
+                        unreachable!()
+                    };
+                    *success = false;
+                }
+            }
+            _ => unreachable!(),
+        }
+        rejects(&corrupted, &types);
+    }
+    let (mut converted, converted_types) = source_program(OWNED_CONVERTED_HANDLED_SOURCE);
+    let original = converted_handle_operand_mut(exercise_mut(&mut converted));
+    let E::InterfaceCoerce { value, .. } = &original.kind else {
+        panic!("actual conversion");
+    };
+    original.kind = value.kind.clone();
+    rejects(&converted, &converted_types);
+}
+
+const CONVERTED_VIEW_OWNER_SOURCE: &str = r#"namespace app
+interface Named:
+    function name(view self: Named) returns string
+struct Boxed[T]:
+    value: T
+implement Named for Boxed[int8]:
+    function name(view self: Boxed[int8]) returns string:
+        return "narrow"
+function read(view value: Named) returns int64:
+    return 7
+function exercise() returns int64:
+    return read(Boxed[int8](value: 5))
+"#;
+
+#[test]
+fn caller_acquisition_converted_view_producer_owns_the_complete_endpoint_once() {
+    let (program, types) = source_program(CONVERTED_VIEW_OWNER_SOURCE);
+    let function = exercise(&program);
+    let call = read_call(function);
+    let E::Call {
+        ownership: hir::CallOwnership::Source(packet),
+        args,
+        ..
+    } = &call.kind
+    else {
+        panic!("checked Source call");
+    };
+    let argument = &packet.arguments[0];
+    assert_eq!(argument.syntax, jett_typecheck::CheckedCallerSyntax::Bare);
+    assert_eq!(argument.effect, CheckedCallerEffect::RelinquishOwned);
+    assert_eq!(
+        argument.callee_access,
+        jett_typecheck::CheckedCalleeAccess::View
+    );
+    assert_eq!(
+        argument.physical_access,
+        jett_typecheck::CheckedCalleeAccess::View
+    );
+    assert!(matches!(
+        argument.origin,
+        hir::CallerOrigin::OwnedExpression
+    ));
+    assert!(matches!(
+        types.resolve(argument.actual_type),
+        Type::Struct(_)
+    ));
+    let (owner, loan) = owning_stage(function);
+    assert_ne!(owner, loan);
+    let initializer = observation_initializer(function, owner);
+    let E::InterfaceCoerce { value: raw, .. } = &initializer.kind else {
+        panic!("owning storage contains the full checked conversion");
+    };
+    assert!(matches!(raw.kind, E::StructConstruct { .. }));
+    assert_eq!(raw.ty, argument.actual_type);
+    assert_eq!(raw.span, argument.source_span);
+    assert_ne!(initializer.ty, raw.ty);
+    assert!(matches!(types.resolve(initializer.ty), Type::Interface(_)));
+    assert!(!crate::handlers::can_snapshot_view(&types, initializer.ty));
+    let original_view = Expression {
+        kind: E::View(Box::new(initializer.clone())),
+        ty: initializer.ty,
+        span: initializer.span,
+    };
+    assert!(
+        crate::call_views::temporary_root(&types, &function.locals, &original_view).is_none(),
+        "the converted endpoint does not acquire raw-temporary borrowing permission"
+    );
+    assert!(
+        matches!(&args[0].kind, E::View(value) if matches!(value.kind, E::Local(id) if id == loan))
+    );
+    let owner_metadata = function.local(owner).expect("independent owning slot");
+    assert_eq!(owner_metadata.ty, initializer.ty);
+    assert_eq!(owner_metadata.debug_ty, initializer.ty);
+    assert_eq!(owner_metadata.view_source, None);
+    assert_eq!(function.local(loan).unwrap().view_source, Some(owner));
+    let block = function
+        .blocks
+        .iter()
+        .find(|block| {
+            block.statements.iter().any(|statement|
+        matches!(&statement.kind, S::Let { value, .. } if std::ptr::eq(value, call)))
+        })
+        .expect("materialized consuming operation");
+    let owner_at = block
+        .statements
+        .iter()
+        .position(|statement| matches!(statement.kind, S::Let { local, .. } if local == owner))
+        .expect("one full owner");
+    let begin_at = block
+        .statements
+        .iter()
+        .position(
+            |statement| matches!(statement.kind, S::BeginCallView { local, .. } if local == loan),
+        )
+        .expect("loan begins");
+    let call_at = block.statements.iter().position(|statement|
+        matches!(&statement.kind, S::Let { value, .. } if std::ptr::eq(value, call))).unwrap();
+    let end_at = block
+        .statements
+        .iter()
+        .position(|statement| matches!(statement.kind, S::EndCallView { local } if local == loan))
+        .expect("loan ends");
+    assert!(owner_at < begin_at && begin_at < call_at && call_at < end_at);
+    assert_eq!(
+        function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter(|statement| matches!(statement.kind, S::Let { local, .. } if local == owner))
+            .count(),
+        1
+    );
+    let acquisitions =
+        validate_function(&program, function, &types).expect("exact owning conversion and loan");
+    assert_eq!(acquisitions.owner_initializers().count(), 1);
+    let acquired = acquisitions.owner_initializer(owner).unwrap();
+    assert_eq!(acquired.binding, None);
+    assert_eq!(acquired.effect, CheckedCallerEffect::RelinquishOwned);
+    assert_eq!(acquired.actual_type, raw.ty);
+    assert_eq!(acquired.storage_type, initializer.ty);
+    crate::move_values::MoveValuePlan::analyze(&program, function, &types)
+        .expect("ordinary owning storage and bounded View scope");
+}
+
+#[test]
+fn caller_acquisition_converted_owner_preflight_preserves_written_borrow_paths() {
+    let written_producer = CONVERTED_VIEW_OWNER_SOURCE.replace(
+        "return read(Boxed[int8](value: 5))",
+        "return read(view Boxed[int8](value: 5))",
+    );
+    let (program, types) = source_program(&written_producer);
+    let function = exercise(&program);
+    let E::Call {
+        ownership: hir::CallOwnership::Source(packet),
+        ..
+    } = &read_call(function).kind
+    else {
+        panic!("written producer Source call");
+    };
+    let argument = &packet.arguments[0];
+    assert_eq!(
+        argument.syntax,
+        jett_typecheck::CheckedCallerSyntax::WrittenView
+    );
+    assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+    assert_eq!(argument.staging, hir::ArgumentStaging::Original);
+    assert_eq!(
+        validate_function(&program, function, &types)
+            .expect("original written producer")
+            .owner_initializers()
+            .count(),
+        0
+    );
+    assert!(
+        !function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .any(|statement| matches!(statement.kind, S::BeginCallView { .. })),
+        "no owning-stage permission from written View"
+    );
+
+    let source = r#"namespace app
+interface Named:
+    function name(view self: Named) returns string
+function read(view value: Named, extra: int64) returns int64:
+    return extra
+function exercise(view value: Named, incoming: optional[int64]) returns int64:
+    return read(view value, incoming handle:
+        default 3
+    )
+"#;
+    let (program, types) = source_program(source);
+    let function = exercise(&program);
+    let E::Call {
+        ownership: hir::CallOwnership::Source(packet),
+        ..
+    } = &read_call(function).kind
+    else {
+        panic!("written parameter Source call");
+    };
+    let argument = &packet.arguments[0];
+    assert_eq!(
+        argument.syntax,
+        jett_typecheck::CheckedCallerSyntax::WrittenView
+    );
+    assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+    let hir::ArgumentStaging::Borrowed { loan } = argument.staging else {
+        panic!("retained ABI parameter stages as a borrow");
+    };
+    assert_eq!(
+        function.local(loan).unwrap().view_source,
+        Some(function.params[0].local)
+    );
+    assert_eq!(
+        function
+            .local(function.params[0].local)
+            .unwrap()
+            .view_source,
+        None
+    );
+    assert_eq!(
+        validate_function(&program, function, &types)
+            .expect("existing written parameter borrow")
+            .owner_initializers()
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn caller_acquisition_converted_view_owner_keeps_original_and_owned_slot_guards() {
+    let (program, types) = source_program(CONVERTED_VIEW_OWNER_SOURCE);
+    let (owner, loan) = owning_stage(exercise(&program));
+    for mutation in [
+        "changed effect",
+        "missing stage",
+        "borrowed owner",
+        "borrowed initializer",
+        "missing initializer",
+        "missing conversion",
+        "foreign loan owner",
+    ] {
+        let mut changed = program.clone();
+        let function = exercise_mut(&mut changed);
+        match mutation {
+            "changed effect" | "missing stage" | "borrowed owner" => {
+                let E::Call {
+                    ownership: hir::CallOwnership::Source(packet),
+                    ..
+                } = &mut read_call_mut(function).kind
+                else {
+                    panic!("Source converted call");
+                };
+                match mutation {
+                    "changed effect" => {
+                        packet.arguments[0].effect = CheckedCallerEffect::RetainBorrow
+                    }
+                    "missing stage" => packet.arguments[0].staging = hir::ArgumentStaging::Original,
+                    "borrowed owner" => {
+                        packet.arguments[0].staging =
+                            hir::ArgumentStaging::Relinquished { owner: loan, loan }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            "borrowed initializer" | "missing initializer" | "missing conversion" => {
+                let (block, index) = function.blocks.iter().enumerate().find_map(|(block, body)|
+                    body.statements.iter().position(|statement|
+                        matches!(statement.kind, S::Let { local, .. } if local == owner)).map(|index| (block, index)))
+                    .expect("original full owning initializer");
+                if mutation == "missing initializer" {
+                    function.blocks[block].statements.remove(index);
+                } else {
+                    let S::Let { value, .. } = &mut function.blocks[block].statements[index].kind
+                    else {
+                        unreachable!();
+                    };
+                    if mutation == "missing conversion" {
+                        let E::InterfaceCoerce { value: raw, .. } = &value.kind else {
+                            panic!("original full owning conversion");
+                        };
+                        value.kind = raw.kind.clone();
+                    } else {
+                        value.kind = E::View(Box::new(value.clone()));
+                    }
+                }
+            }
+            "foreign loan owner" => function.locals[loan.index() as usize].view_source = None,
+            _ => unreachable!(),
+        }
+        let expected = match mutation {
+            "changed effect" => "call ownership disagrees with its original source witness",
+            "missing stage" => {
+                "call ownership requires explicit owning staging at this physical boundary"
+            }
+            "borrowed owner" => "relinquished call owner cannot be a borrowed slot",
+            "borrowed initializer" => {
+                "call ownership owner initializer changes type, occurrence or ownership"
+            }
+            "missing initializer" => "call ownership acquired slot requires one unique initializer",
+            "missing conversion" => {
+                "call ownership current operand has no typed conversion from the checked actual"
+            }
+            "foreign loan owner" => "call view has no borrowed origin",
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            validate_function(&changed, exercise(&changed), &types)
+                .expect_err("original witness and owning storage remain mandatory"),
+            expected,
+            "{mutation}"
+        );
+    }
+}
+
+const RETAINED_SNAPSHOT_DIRECT: &str = r#"namespace app
+function read(view values: list[int64], extra: int64) returns int64:
+    mutable int64 total = extra
+    for value in view values:
+        total = total + value
+    return total
+function exercise(incoming: optional[int64]) returns int64:
+    mutable list[int64] values = list(3)
+    list[int64] spare = list(9)
+    int64 answer = read(view values, incoming handle:
+        values = list(8)
+        default 2
+    )
+    int64 after = read(view values, 0)
+    return answer + after
+"#;
+
+const RETAINED_SNAPSHOT_PROJECTED: &str = r#"namespace app
+struct Store:
+    items: list[int64]
+function read(view values: list[int64], extra: int64) returns int64:
+    mutable int64 total = extra
+    for value in view values:
+        total = total + value
+    return total
+function exercise(incoming: optional[int64]) returns int64:
+    mutable Store store = Store(items: list(3))
+    int64 answer = read(view store.items, incoming handle:
+        store = Store(items: list(8))
+        default 2
+    )
+    int64 after = read(view store.items, 0)
+    return answer + after
+"#;
+
+fn retained_snapshot_stage(function: &Function) -> (LocalId, LocalId) {
+    let ownership = match &read_call(function).kind {
+        E::Call { ownership, .. } | E::IndirectCall { ownership, .. } => ownership,
+        _ => panic!("checked source invocation"),
+    };
+    let hir::CallOwnership::Source(source) = ownership else {
+        panic!("Source packet");
+    };
+    let argument = &source.arguments[0];
+    assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+    assert_eq!(
+        argument.syntax,
+        jett_typecheck::CheckedCallerSyntax::WrittenView
+    );
+    let hir::ArgumentStaging::RetainedSnapshot { owner, loan } = argument.staging else {
+        panic!("independent retained snapshot");
+    };
+    assert_ne!(owner, loan);
+    (owner, loan)
+}
+
+fn retained_snapshot_initializer(function: &Function, owner: LocalId) -> &Expression {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .find_map(|statement| match &statement.kind {
+            S::Let { local, value } if *local == owner => Some(value),
+            _ => None,
+        })
+        .expect("unique retained owner initializer")
+}
+
+fn retained_snapshot_initializer_mut(function: &mut Function, owner: LocalId) -> &mut Expression {
+    function
+        .blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.statements)
+        .find_map(|statement| match &mut statement.kind {
+            S::Let { local, value } if *local == owner => Some(value),
+            _ => None,
+        })
+        .expect("unique retained owner initializer")
+}
+
+fn retained_snapshot_error(program: &Program, types: &TypeInterner) -> String {
+    validate_function(program, exercise(program), types).expect_err("corrupted retained snapshot")
+}
+
+#[test]
+fn caller_acquisition_retained_snapshots_capture_direct_and_projected_endpoint_before_rebinding() {
+    for (source, projected) in [
+        (RETAINED_SNAPSHOT_DIRECT, false),
+        (RETAINED_SNAPSHOT_PROJECTED, true),
+    ] {
+        let (program, types) = source_program(source);
+        let function = exercise(&program);
+        let (owner, loan) = retained_snapshot_stage(function);
+        let acquisitions =
+            validate_function(&program, function, &types).expect("retained snapshot proof");
+        assert_eq!(
+            acquisitions.owner_initializers().count(),
+            0,
+            "caller ownership is retained"
+        );
+        assert!(
+            acquisitions
+                .arguments(read_call(function))
+                .expect("exact call")
+                .is_empty()
+        );
+        assert_eq!(function.local(loan).expect("loan").view_source, Some(owner));
+        assert!(
+            function
+                .local(owner)
+                .expect("snapshot")
+                .view_source
+                .is_none()
+        );
+        let initializer = retained_snapshot_initializer(function, owner);
+        let E::Clone(endpoint) = &initializer.kind else {
+            panic!("full endpoint snapshot");
+        };
+        let E::View(endpoint) = &endpoint.kind else {
+            panic!("original written view");
+        };
+        assert_eq!(matches!(endpoint.kind, E::Field { .. }), projected);
+        assert_eq!(matches!(endpoint.kind, E::Local(_)), !projected);
+        let owner_block = function
+            .blocks
+            .iter()
+            .find(|block| {
+                block.statements.iter().any(
+                    |statement| matches!(statement.kind, S::Let { local, .. } if local == owner),
+                )
+            })
+            .expect("snapshot block");
+        let tag_block = function
+            .blocks
+            .iter()
+            .find(|block| {
+                block
+                    .statements
+                    .iter()
+                    .any(|statement| matches!(statement.kind, S::SumTag { .. }))
+            })
+            .expect("later handled argument");
+        assert_eq!(owner_block.id, tag_block.id);
+        let owner_index = owner_block
+            .statements
+            .iter()
+            .position(|statement| matches!(statement.kind, S::Let { local, .. } if local == owner))
+            .expect("owner position");
+        let begin_index = owner_block.statements.iter().position(|statement|
+            matches!(statement.kind, S::BeginCallView { local, .. } if local == loan)).expect("loan position");
+        let tag_index = owner_block
+            .statements
+            .iter()
+            .position(|statement| matches!(statement.kind, S::SumTag { .. }))
+            .expect("tag position");
+        assert!(owner_index < begin_index && begin_index < tag_index);
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .any(
+                    |statement| matches!(statement.kind, S::EndCallView { local } if local == loan)
+                )
+        );
+        crate::move_values::MoveValuePlan::analyze(&program, function, &types)
+            .expect("rebind does not free the independent snapshot loan");
+    }
+}
+
+#[test]
+fn caller_acquisition_retained_snapshot_indirect_and_abort_keep_exact_scope_cleanup() {
+    let indirect = RETAINED_SNAPSHOT_DIRECT.replace(
+        "    int64 answer = read(view values,",
+        "    function(view list[int64], int64) returns int64 callback = read\n    int64 answer = callback(view values,",
+    );
+    let abort = RETAINED_SNAPSHOT_DIRECT.replace("        default 2", "        return 11");
+    for (source, indirect) in [(&indirect, true), (&abort, false)] {
+        let (program, types) = source_program(source);
+        let function = exercise(&program);
+        let (_, loan) = retained_snapshot_stage(function);
+        assert_eq!(
+            matches!(read_call(function).kind, E::IndirectCall { .. }),
+            indirect
+        );
+        validate_function(&program, function, &types).expect("call and aborted-call scopes");
+        crate::move_values::MoveValuePlan::analyze(&program, function, &types)
+            .expect("retained owner and independent snapshot cleanup");
+        if !indirect {
+            let returned = function.blocks.iter().find(|block|
+                matches!(&block.terminator.kind, T::Return(Some(value)) if matches!(value.kind, E::Int(11))))
+                .expect("original early handler return");
+            assert!(returned.statements.iter().any(
+                |statement| matches!(statement.kind, S::EndCallView { local } if local == loan)
+            ));
+        }
+    }
+}
+
+#[test]
+fn caller_acquisition_retained_snapshot_rejects_removed_clone_and_changed_source_occurrence() {
+    let (program, types) = source_program(RETAINED_SNAPSHOT_DIRECT);
+    let (owner, _) = retained_snapshot_stage(exercise(&program));
+    for mutation in [
+        "remove clone",
+        "span",
+        "endpoint type",
+        "different root",
+        "effect",
+    ] {
+        let mut changed = program.clone();
+        let function = exercise_mut(&mut changed);
+        if mutation == "effect" {
+            let E::Call {
+                ownership: hir::CallOwnership::Source(source),
+                ..
+            } = &mut read_call_mut(function).kind
+            else {
+                panic!("source call");
+            };
+            source.arguments[0].effect = CheckedCallerEffect::RelinquishOwned;
+        } else {
+            let other = function
+                .locals
+                .iter()
+                .find(|local| local.name == "spare")
+                .expect("same-type unused owner")
+                .id;
+            let initializer = retained_snapshot_initializer_mut(function, owner);
+            match mutation {
+                "remove clone" => {
+                    let E::Clone(endpoint) = &initializer.kind else {
+                        panic!("snapshot");
+                    };
+                    *initializer = endpoint.as_ref().clone();
+                }
+                "span" => initializer.span.start += 1,
+                "endpoint type" => {
+                    let E::Clone(endpoint) = &mut initializer.kind else {
+                        panic!("snapshot");
+                    };
+                    endpoint.ty = TypeInterner::BOOL;
+                }
+                "different root" => {
+                    let E::Clone(endpoint) = &mut initializer.kind else {
+                        panic!("snapshot");
+                    };
+                    let E::View(endpoint) = &mut endpoint.kind else {
+                        panic!("written view");
+                    };
+                    endpoint.kind = E::Local(other);
+                }
+                _ => unreachable!(),
+            }
+        }
+        let error = retained_snapshot_error(&changed, &types);
+        assert!(
+            error.contains("snapshot") || error.contains("call ownership"),
+            "{mutation}: {error}"
+        );
+    }
+}
+
+#[test]
+fn caller_acquisition_retained_snapshot_rejects_loan_substitution_missing_end_and_late_capture() {
+    let (program, types) = source_program(RETAINED_SNAPSHOT_DIRECT);
+    let (owner, loan) = retained_snapshot_stage(exercise(&program));
+    for mutation in [
+        "loan source",
+        "missing end",
+        "late capture",
+        "aliased owner",
+    ] {
+        let mut changed = program.clone();
+        let function = exercise_mut(&mut changed);
+        match mutation {
+            "loan source" => {
+                function.locals[loan.index() as usize].view_source = Some(function.params[0].local)
+            }
+            "aliased owner" => {
+                function.locals[owner.index() as usize].view_source = Some(function.params[0].local)
+            }
+            "missing end" => {
+                for block in &mut function.blocks {
+                    block.statements.retain(|statement| !matches!(statement.kind, S::EndCallView { local } if local == loan));
+                }
+            }
+            "late capture" => {
+                let block = function
+                    .blocks
+                    .iter_mut()
+                    .find(|block| {
+                        block.statements.iter().any(|statement|
+                    matches!(statement.kind, S::Let { local, .. } if local == owner))
+                    })
+                    .expect("capture block");
+                let at = block.statements.iter().position(|statement|
+                    matches!(statement.kind, S::Let { local, .. } if local == owner)).expect("capture index");
+                let capture = block.statements.remove(at);
+                let begin = block.statements.iter().position(|statement|
+                    matches!(statement.kind, S::BeginCallView { local, .. } if local == loan)).expect("loan");
+                let begin = block.statements.remove(begin);
+                // Keep the loan valid on both handler arms, but move capture
+                // after the later source's SumTag evaluation. Lexical snapshot
+                // order must be proved independently from call dominance.
+                assert!(
+                    block
+                        .statements
+                        .iter()
+                        .any(|statement| matches!(statement.kind, S::SumTag { .. }))
+                );
+                block.statements.push(capture);
+                block.statements.push(begin);
+            }
+            _ => unreachable!(),
+        }
+        let error = retained_snapshot_error(&changed, &types);
+        assert!(
+            error.contains("snapshot")
+                || error.contains("call ownership")
+                || error.contains("call view"),
+            "{mutation}: {error}"
+        );
+    }
+}
+
+#[test]
+fn caller_acquisition_retained_snapshot_metadata_remaps_both_slots_without_source_reads() {
+    let (program, types) = source_program(RETAINED_SNAPSHOT_PROJECTED);
+    let function = exercise(&program);
+    let (owner, loan) = retained_snapshot_stage(function);
+    let E::Call { ownership, .. } = &read_call(function).kind else {
+        panic!("source call");
+    };
+    let mut changed = ownership.clone();
+    let mut ids = Vec::new();
+    changed.metadata_local_ids(|id| ids.push(id));
+    assert!(ids.contains(&owner) && ids.contains(&loan));
+    changed
+        .remap_metadata_locals(|id| Ok::<_, ()>(LocalId::new(id.index() + 1)))
+        .expect("structural remap");
+    let hir::CallOwnership::Source(source) = changed else {
+        panic!("Source");
+    };
+    assert_eq!(
+        source.arguments[0].staging,
+        hir::ArgumentStaging::RetainedSnapshot {
+            owner: LocalId::new(owner.index() + 1),
+            loan: LocalId::new(loan.index() + 1),
+        }
+    );
+    assert_eq!(
+        source.arguments[0].effect,
+        CheckedCallerEffect::RetainBorrow
+    );
+    assert_eq!(
+        source.arguments[0].retained_snapshot_type(),
+        Some(source.arguments[0].source_witness().occurrence_type())
+    );
+    let mut prepared = program.clone();
+    crate::prepare_native_sequences(&mut prepared, &types);
+    crate::prepare_native_uninhabited_sums(&mut prepared, &types);
+    crate::prepare_native_generated_functions(&mut prepared, &types);
+    crate::validate_call_ownership(&prepared, &types)
+        .expect("actual canonical remaps keep snapshot proof");
+    crate::move_values::MoveValuePlan::analyze(&prepared, exercise(&prepared), &types)
+        .expect("metadata does not reread the rebound source at the call");
+}
+
+#[test]
+fn caller_acquisition_retained_snapshot_does_not_grant_descriptor_signature_clone_authority() {
+    let source = r#"namespace app
+function value() returns int64:
+    return 7
+function read(view callback: function() returns int64, extra: int64) returns int64:
+    return callback() + extra
+function exercise(incoming: optional[int64]) returns int64:
+    function() returns int64 callback = value
+    return read(view callback, incoming handle:
+        default 2
+    )
+"#;
+    let (program, types) = source_program(source);
+    let function = exercise(&program);
+    let E::Call {
+        ownership: hir::CallOwnership::Source(source),
+        ..
+    } = &read_call(function).kind
+    else {
+        panic!("descriptor source call");
+    };
+    assert!(source.arguments[0].retained_snapshot_type().is_none());
+    assert!(matches!(
+        source.arguments[0].staging,
+        hir::ArgumentStaging::Borrowed { .. }
+    ));
+    let mut ownership = hir::CallOwnership::Source(source.clone());
+    assert!(
+        ownership
+            .stage_retained_snapshot(0, LocalId::new(100), LocalId::new(101))
+            .is_err()
+    );
+    validate_function(&program, function, &types)
+        .expect("existing descriptor raw loan, no clone authority");
+
+    let produced = r#"namespace app
+function read(view values: list[int64], extra: int64) returns int64:
+    return extra
+function exercise(incoming: optional[int64]) returns int64:
+    return read(view list(3), incoming handle:
+        default 2
+    )
+"#;
+    let (program, types) = source_program(produced);
+    let function = exercise(&program);
+    let E::Call {
+        ownership: hir::CallOwnership::Source(source),
+        ..
+    } = &read_call(function).kind
+    else {
+        panic!("written producer Source call");
+    };
+    assert_eq!(
+        source.arguments[0].origin,
+        hir::CallerOrigin::OwnedExpression
+    );
+    assert!(source.arguments[0].retained_snapshot_type().is_none());
+    assert_eq!(source.arguments[0].staging, hir::ArgumentStaging::Original);
+    let mut ownership = hir::CallOwnership::Source(source.clone());
+    assert!(
+        ownership
+            .stage_retained_snapshot(0, LocalId::new(100), LocalId::new(101))
+            .is_err()
+    );
+    validate_function(&program, function, &types)
+        .expect("existing fresh producer backing, no snapshot permission from type/span");
+}
+
+fn transparent_retained_source(secret: bool, projected: bool) -> String {
+    let declaration = if secret {
+        ""
+    } else {
+        "type Numbers = list[int64] where true\n"
+    };
+    let ty = if secret {
+        "secret[list[int64]]"
+    } else {
+        "Numbers"
+    };
+    let wrapper = if secret { "declassify" } else { "coarsen" };
+    let (holder, input_ty, setup, endpoint, rebind) = if projected {
+        (
+            format!("struct Store:\n    items: {ty}\n"),
+            "Store",
+            "    mutable Store store = input\n",
+            "store.items",
+            "store = replacement",
+        )
+    } else {
+        (
+            String::new(),
+            ty,
+            "    mutable ",
+            "values",
+            "values = replacement",
+        )
+    };
+    let setup = if projected {
+        setup.to_string()
+    } else {
+        format!("{setup}{ty} values = input\n")
+    };
+    format!(
+        "namespace app\n{declaration}{holder}function read(view values: list[int64], extra: int64) returns int64:\n    mutable int64 total = extra\n    for value in view values:\n        total = total + value\n    return total\nfunction exercise(input: {input_ty}, replacement: {input_ty}, spare: {input_ty}, incoming: optional[int64]) returns int64:\n{setup}    int64 answer = read(view({wrapper} {endpoint}), incoming handle:\n        {rebind}\n        default 2\n    )\n    int64 after = read(view({wrapper} {endpoint}), 0)\n    return answer + after\n"
+    )
+}
+
+fn transparent_retained_program(source: &str, release: bool) -> (Program, TypeInterner) {
+    let file = jett_common::FileId::new(0);
+    let parsed = jett_parser::parse(source, file);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let resolved = jett_resolve::resolve(&parsed.module);
+    assert!(
+        resolved
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+        "{:?}",
+        resolved.diagnostics
+    );
+    let checked = jett_typecheck::check_with_options(
+        &parsed.module,
+        &resolved,
+        jett_typecheck::CheckOptions { release },
+    );
+    assert!(
+        checked
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+        "{:?}",
+        checked.diagnostics
+    );
+    let high = hir::lower(
+        &parsed.module,
+        &resolved,
+        &checked,
+        &HashMap::from([(file, jett_common::SourceOrigin::Project)]),
+    )
+    .expect("exact checked transparent-view Source HIR");
+    let program = crate::lower(&high, &checked.interner)
+        .expect("retained transparent place keeps its original Source backing");
+    (program, checked.interner)
+}
+
+fn transparent_retained_leaf(mut value: &Expression, secret: bool, projected: bool) -> LocalId {
+    let E::Clone(endpoint) = &value.kind else {
+        panic!("one full-endpoint snapshot Clone");
+    };
+    value = endpoint;
+    let E::View(endpoint) = &value.kind else {
+        panic!("original written View");
+    };
+    value = endpoint;
+    value = match (&value.kind, secret) {
+        (E::Declassify(inner), true) | (E::Coarsen(inner), false) => inner,
+        _ => panic!("original checked qualifier conversion"),
+    };
+    if projected {
+        let E::Field { base, .. } = &value.kind else {
+            panic!("original projected endpoint");
+        };
+        value = base;
+    }
+    let E::Local(local) = value.kind else {
+        panic!("exact original Local backing, no introduced inner Clone");
+    };
+    local
+}
+
+fn transparent_retained_leaf_mut(mut value: &mut Expression) -> &mut Expression {
+    while !matches!(value.kind, E::Local(_)) {
+        value = match &mut value.kind {
+            E::Clone(inner) | E::View(inner) | E::Coarsen(inner) | E::Declassify(inner) => inner,
+            E::Field { base, .. } => base,
+            _ => panic!("checked finite place spine"),
+        };
+    }
+    value
+}
+
+fn assert_transparent_retained_scope(
+    program: &Program,
+    types: &TypeInterner,
+    secret: bool,
+    projected: bool,
+) {
+    let function = exercise(program);
+    let (owner, loan) = retained_snapshot_stage(function);
+    let original = transparent_retained_leaf(
+        retained_snapshot_initializer(function, owner),
+        secret,
+        projected,
+    );
+    let source_name = if projected { "store" } else { "values" };
+    assert_eq!(
+        function.local(original).expect("original binding").name,
+        source_name
+    );
+    assert_eq!(function.local(loan).expect("loan").view_source, Some(owner));
+    let acquisitions =
+        validate_function(program, function, types).expect("unchanged Source place proof");
+    assert_eq!(
+        acquisitions.owner_initializers().count(),
+        0,
+        "caller retains its owner"
+    );
+    assert!(
+        acquisitions
+            .arguments(read_call(function))
+            .expect("exact source call")
+            .is_empty()
+    );
+    let block = function
+        .blocks
+        .iter()
+        .find(|block| {
+            block
+                .statements
+                .iter()
+                .any(|statement| matches!(statement.kind, S::Let { local, .. } if local == owner))
+        })
+        .expect("capture block");
+    let capture = block
+        .statements
+        .iter()
+        .position(|statement| matches!(statement.kind, S::Let { local, .. } if local == owner))
+        .expect("capture");
+    let begin = block
+        .statements
+        .iter()
+        .position(
+            |statement| matches!(statement.kind, S::BeginCallView { local, .. } if local == loan),
+        )
+        .expect("loan begins");
+    let tag = block
+        .statements
+        .iter()
+        .position(|statement| matches!(statement.kind, S::SumTag { .. }))
+        .expect("later handled selection");
+    assert!(
+        capture < begin && begin < tag,
+        "snapshot before later handler work"
+    );
+    assert!(
+        function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .any(|statement| matches!(statement.kind, S::EndCallView { local } if local == loan))
+    );
+    crate::move_values::MoveValuePlan::analyze(program, function, types)
+        .expect("independent snapshot survives original owner rebind or abort");
+}
+
+#[test]
+fn caller_acquisition_retained_transparent_direct_places_survive_later_rebind() {
+    for secret in [false, true] {
+        let source = transparent_retained_source(secret, false);
+        for release in [false, true] {
+            let (program, types) = transparent_retained_program(&source, release);
+            assert_transparent_retained_scope(&program, &types, secret, false);
+        }
+    }
+}
+
+#[test]
+fn caller_acquisition_retained_transparent_projected_places_snapshot_only_the_endpoint() {
+    for secret in [false, true] {
+        let source = transparent_retained_source(secret, true);
+        for release in [false, true] {
+            let (program, types) = transparent_retained_program(&source, release);
+            assert_transparent_retained_scope(&program, &types, secret, true);
+        }
+    }
+}
+
+#[test]
+fn caller_acquisition_retained_transparent_indirect_and_return_keep_exact_loan_scope() {
+    for secret in [false, true] {
+        let direct = transparent_retained_source(secret, false);
+        let indirect = direct.replace("    int64 answer = read(view(",
+            "    function(view list[int64], int64) returns int64 callback = read\n    int64 answer = callback(view(");
+        let aborted = direct.replace("        default 2", "        return 11");
+        for (source, is_indirect) in [(&indirect, true), (&aborted, false)] {
+            for release in [false, true] {
+                let (program, types) = transparent_retained_program(source, release);
+                assert_transparent_retained_scope(&program, &types, secret, false);
+                assert_eq!(
+                    matches!(read_call(exercise(&program)).kind, E::IndirectCall { .. }),
+                    is_indirect
+                );
+                if !is_indirect {
+                    let (_, loan) = retained_snapshot_stage(exercise(&program));
+                    let returned = exercise(&program).blocks.iter().find(|block|
+                        matches!(&block.terminator.kind, T::Return(Some(value)) if matches!(value.kind, E::Int(11))))
+                        .expect("original handler early return");
+                    assert!(returned.statements.iter().any(|statement|
+                        matches!(statement.kind, S::EndCallView { local } if local == loan)));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn caller_acquisition_retained_transparent_spines_reject_added_clone_and_foreign_backing() {
+    for (secret, projected) in [(false, false), (true, false), (false, true), (true, true)] {
+        let source = transparent_retained_source(secret, projected);
+        let (program, types) = transparent_retained_program(&source, false);
+        let (owner, _) = retained_snapshot_stage(exercise(&program));
+        for mutation in [
+            "inner clone",
+            "foreign backing",
+            "endpoint type",
+            "endpoint span",
+        ] {
+            let mut changed = program.clone();
+            let function = exercise_mut(&mut changed);
+            let spare = function.params[2].local;
+            let initializer = retained_snapshot_initializer_mut(function, owner);
+            if matches!(mutation, "endpoint type" | "endpoint span") {
+                let E::Clone(endpoint) = &mut initializer.kind else {
+                    panic!("snapshot");
+                };
+                assert!(matches!(endpoint.kind, E::View(_)), "written View");
+                if mutation == "endpoint type" {
+                    endpoint.ty = TypeInterner::BOOL;
+                } else {
+                    endpoint.span.start += 1;
+                }
+            } else {
+                let leaf = transparent_retained_leaf_mut(initializer);
+                if mutation == "inner clone" {
+                    leaf.kind = E::Clone(Box::new(leaf.clone()));
+                } else {
+                    leaf.kind = E::Local(spare);
+                }
+            }
+            let error = retained_snapshot_error(&changed, &types);
+            assert!(
+                error.contains("call ownership") || error.contains("snapshot"),
+                "{mutation}: {error}"
+            );
+        }
+        let mut prepared = program.clone();
+        crate::prepare_native_sequences(&mut prepared, &types);
+        crate::prepare_native_uninhabited_sums(&mut prepared, &types);
+        crate::prepare_native_generated_functions(&mut prepared, &types);
+        crate::validate_call_ownership(&prepared, &types)
+            .expect("exact transparent place survives canonical remaps");
+    }
+}
+
+#[test]
+fn caller_acquisition_retained_transparent_places_keep_known_borrow_and_owned_formal_policy() {
+    for (ty, declaration, wrapper) in [
+        (
+            "Numbers",
+            "type Numbers = list[int64] where true\n",
+            "coarsen",
+        ),
+        ("secret[list[int64]]", "", "declassify"),
+    ] {
+        for (owned_formal, expected) in [(false, 401), (true, 375)] {
+            let formal = if owned_formal { "" } else { "view " };
+            let argument = if owned_formal {
+                format!("view({wrapper} values)")
+            } else {
+                format!("{wrapper} values")
+            };
+            let source = format!(
+                "namespace app\n{declaration}function read({formal}values: list[int64], extra: int64) returns int64:\n    return extra\nfunction rejected(view values: {ty}, incoming: optional[int64]) returns int64:\n    return read({argument}, incoming handle:\n        default 2\n    )\n"
+            );
+            for release in [false, true] {
+                let parsed = jett_parser::parse(&source, jett_common::FileId::new(0));
+                assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+                let resolved = jett_resolve::resolve(&parsed.module);
+                assert!(
+                    resolved
+                        .diagnostics
+                        .iter()
+                        .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+                    "{:?}",
+                    resolved.diagnostics
+                );
+                let checked = jett_typecheck::check_with_options(
+                    &parsed.module,
+                    &resolved,
+                    jett_typecheck::CheckOptions { release },
+                );
+                let errors = checked
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                    .collect::<Vec<_>>();
+                assert_eq!(errors.len(), 1, "{source}: {errors:?}");
+                assert_eq!(errors[0].code.code(), expected, "{source}: {errors:?}");
+            }
+        }
+    }
+}
+
+const RETAINED_PHYSICAL_PIPELINE: &str = r#"namespace app
+function read(view values: list[int64], extra: int64) returns int64:
+    mutable int64 total = extra
+    for value in view values:
+        total = total + value
+    return total
+function exercise(incoming: optional[int64]) returns int64:
+    mutable list[int64] values = list(3)
+    list[int64] spare = list(9)
+    int64 answer = values into view read(incoming handle:
+        values = list(8)
+        default 2
+    )
+    return answer + read(view values, 0)
+"#;
+
+#[test]
+fn caller_acquisition_retained_physical_pipeline_span_preserves_raw_source_and_order() {
+    for release in [false, true] {
+        let (program, types) = transparent_retained_program(RETAINED_PHYSICAL_PIPELINE, release);
+        let function = exercise(&program);
+        let (owner, loan) = retained_snapshot_stage(function);
+        let E::Call {
+            ownership: hir::CallOwnership::Source(packet),
+            args,
+            evaluation_order,
+            ..
+        } = &read_call(function).kind
+        else {
+            panic!("real source pipeline");
+        };
+        let argument = &packet.arguments[0];
+        let physical = argument
+            .retained_snapshot_span()
+            .expect("private initial physical occurrence");
+        assert_ne!(physical, argument.source_span);
+        assert_eq!(evaluation_order, &[0, 1]);
+        assert_eq!(argument.source_index, 0);
+        assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+        assert_eq!(args[0].span, physical);
+        let initializer = retained_snapshot_initializer(function, owner);
+        let E::Clone(endpoint) = &initializer.kind else {
+            panic!("complete snapshot");
+        };
+        assert_eq!(initializer.span, physical);
+        assert_eq!(endpoint.span, physical);
+        let E::View(raw) = &endpoint.kind else {
+            panic!("initial physical View");
+        };
+        assert_eq!(raw.span, argument.source_span);
+        let E::Local(original) = raw.kind else {
+            panic!("raw original binding");
+        };
+        assert_eq!(
+            function.local(original).expect("source binding").name,
+            "values"
+        );
+        assert_eq!(function.local(loan).expect("loan").view_source, Some(owner));
+        let acquired =
+            validate_function(&program, function, &types).expect("physical and raw joins");
+        assert_eq!(acquired.owner_initializers().count(), 0);
+        assert!(
+            acquired
+                .arguments(read_call(function))
+                .expect("call")
+                .is_empty()
+        );
+        crate::move_values::MoveValuePlan::analyze(&program, function, &types)
+            .expect("snapshot before later handler rebind");
+        let mut prepared = program.clone();
+        crate::prepare_native_sequences(&mut prepared, &types);
+        crate::prepare_native_uninhabited_sums(&mut prepared, &types);
+        crate::prepare_native_generated_functions(&mut prepared, &types);
+        crate::validate_call_ownership(&prepared, &types)
+            .expect("no span rewrite in structural remaps");
+    }
+}
+
+#[test]
+fn caller_acquisition_retained_physical_reflected_getter_keeps_initial_view_and_raw_binding() {
+    let original_source = r#"namespace app
+struct Record:
+    values: list[int64]
+function exercise(view source: Record, view field: TypeField) returns list[int64]:
+    return source into view type.field_value[Record, list[int64]](view field)
+"#;
+    // Match the existing recursive object regression: non-Exact field plans
+    // enter ordered call staging before the raw read and refinement checks.
+    let ordered_source = r#"namespace app
+type Positive = int64 where value > 0
+struct Record:
+    values: list[optional[result[map[int64, list[int64]], set[int64]]]]
+function exercise(view source: Record, view field: TypeField) returns list[optional[result[map[Positive, list[Positive]], set[Positive]]]]:
+    return source into view type.field_value[Record, list[optional[result[map[Positive, list[Positive]], set[Positive]]]]](view field)
+"#;
+    for release in [false, true] {
+        for (source, ordered) in [(original_source, false), (ordered_source, true)] {
+            let (program, types) = transparent_retained_program(source, release);
+            let function = exercise(&program);
+            let call = function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .find_map(|statement| match &statement.kind {
+                    S::Let { value, .. } | S::Evaluate(value)
+                        if matches!(
+                            value.kind,
+                            E::Intrinsic {
+                                intrinsic: hir::IntrinsicId::TypeFieldValue,
+                                ..
+                            }
+                        ) =>
+                    {
+                        Some(value)
+                    }
+                    _ => None,
+                })
+                .or_else(|| {
+                    function
+                        .blocks
+                        .iter()
+                        .find_map(|block| match &block.terminator.kind {
+                            T::Return(Some(value))
+                                if matches!(
+                                    value.kind,
+                                    E::Intrinsic {
+                                        intrinsic: hir::IntrinsicId::TypeFieldValue,
+                                        ..
+                                    }
+                                ) =>
+                            {
+                                Some(value)
+                            }
+                            _ => None,
+                        })
+                })
+                .expect("real reflected getter invocation");
+            let E::Intrinsic {
+                ownership: hir::CallOwnership::Source(packet),
+                args,
+                ..
+            } = &call.kind
+            else {
+                panic!("unchanged reflected Source packet");
+            };
+            let argument = &packet.arguments[0];
+            assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+            assert_eq!(
+                argument.syntax,
+                jett_typecheck::CheckedCallerSyntax::WrittenView
+            );
+            if !ordered {
+                // Exact field plans use the existing unstaged raw getter path.
+                assert_eq!(argument.staging, hir::ArgumentStaging::Original);
+                let E::View(raw) = &args[0].kind else {
+                    panic!("initial written physical View");
+                };
+                assert!(matches!(raw.kind, E::Local(local) if local == function.params[0].local));
+                validate_function(&program, function, &types)
+                    .expect("exact field getter stays Original");
+                crate::move_values::MoveValuePlan::analyze(&program, function, &types)
+                    .expect("existing unstaged reflected read");
+                continue;
+            }
+            let hir::ArgumentStaging::RetainedSnapshot { owner, loan } = argument.staging else {
+                panic!("ordinary Record endpoint snapshot");
+            };
+            let physical = argument
+                .retained_snapshot_span()
+                .expect("initial pipeline occurrence");
+            assert_ne!(physical, argument.source_span);
+            assert_eq!(args[0].span, physical);
+            let initializer = retained_snapshot_initializer(function, owner);
+            let E::Clone(endpoint) = &initializer.kind else {
+                panic!("full endpoint snapshot");
+            };
+            let E::View(raw) = &endpoint.kind else {
+                panic!("original written physical View");
+            };
+            assert_eq!(initializer.span, physical);
+            assert_eq!(endpoint.span, physical);
+            assert_eq!(raw.span, argument.source_span);
+            assert!(matches!(raw.kind, E::Local(local) if local == function.params[0].local));
+            assert_eq!(function.local(loan).expect("loan").view_source, Some(owner));
+            validate_function(&program, function, &types)
+                .expect("reflected certificate and exact raw source stay active");
+            crate::move_values::MoveValuePlan::analyze(&program, function, &types)
+                .expect("existing reflected owning-result/read analysis");
+        }
+    }
+}
+
+#[test]
+fn caller_acquisition_retained_physical_span_does_not_replace_raw_or_backing_authority() {
+    let (program, types) = transparent_retained_program(RETAINED_PHYSICAL_PIPELINE, false);
+    let (owner, loan) = retained_snapshot_stage(exercise(&program));
+    for mutation in [
+        "physical occurrence",
+        "raw occurrence",
+        "foreign binding",
+        "physical loan",
+        "public raw witness",
+    ] {
+        let mut changed = program.clone();
+        let function = exercise_mut(&mut changed);
+        if mutation == "public raw witness" {
+            let E::Call {
+                ownership: hir::CallOwnership::Source(packet),
+                ..
+            } = &mut read_call_mut(function).kind
+            else {
+                panic!("source pipeline");
+            };
+            packet.arguments[0].source_span.start += 1;
+        } else if mutation == "physical loan" {
+            let E::Call { args, .. } = &mut read_call_mut(function).kind else {
+                panic!("call");
+            };
+            args[0].span.start += 1;
+        } else if mutation == "physical occurrence" {
+            let span = {
+                let initializer = retained_snapshot_initializer_mut(function, owner);
+                initializer.span.start += 1;
+                let E::Clone(endpoint) = &mut initializer.kind else {
+                    panic!("snapshot");
+                };
+                endpoint.span = initializer.span;
+                initializer.span
+            };
+            // Preserve owner/initializer agreement so only the sealed original
+            // physical occurrence can reject this coordinated replacement.
+            function.locals[owner.index() as usize].span = span;
+        } else {
+            let spare = function
+                .locals
+                .iter()
+                .find(|local| local.name == "spare")
+                .expect("same-type source")
+                .id;
+            let initializer = retained_snapshot_initializer_mut(function, owner);
+            let E::Clone(endpoint) = &mut initializer.kind else {
+                panic!("snapshot");
+            };
+            let E::View(raw) = &mut endpoint.kind else {
+                panic!("physical pipeline View");
+            };
+            if mutation == "raw occurrence" {
+                raw.span.start += 1;
+            } else {
+                raw.kind = E::Local(spare);
+            }
+        }
+        let error = retained_snapshot_error(&changed, &types);
+        assert!(
+            error.contains("retained snapshot") || error.contains("call ownership"),
+            "{mutation}: {error}"
+        );
+    }
+    assert_eq!(
+        exercise(&program)
+            .local(loan)
+            .expect("original loan")
+            .view_source,
+        Some(owner)
+    );
+}
+const FLOW_PROJECTED_SOURCE: &str = r#"namespace app
+machine Session:
+    states:
+        active(items: list[int64])
+        cached(items: list[int64])
+        empty
+function read(view values: list[int64]) returns int64:
+    return 7
+function exercise(source: Session, other: Session) returns int64:
+    if source at active:
+        return read(view source.items)
+    return 0
+machine TaskState:
+    states:
+        ready(value: nothing)
+        cached(value: nothing)
+        empty
+function depth(value: nothing) returns int64:
+    return 3
+function copied(source: TaskState) returns int64:
+    if source at ready:
+        return depth(source.value)
+    return 0
+"#;
+
+fn flow_projected_mir_field(value: &mut Expression) -> &mut Expression {
+    if matches!(value.kind, E::View(_)) {
+        let E::View(inner) = &mut value.kind else {
+            unreachable!()
+        };
+        return flow_projected_mir_field(inner);
+    }
+    assert!(matches!(value.kind, E::Field { .. }));
+    value
+}
+
+fn flow_projected_mir_call_mut(function: &mut Function) -> &mut Expression {
+    for block in &mut function.blocks {
+        if let T::Return(Some(value)) = &mut block.terminator.kind {
+            if matches!(value.kind, E::Call { .. }) {
+                return value;
+            }
+        }
+    }
+    panic!("guarded original source call")
+}
+
+#[test]
+fn caller_acquisition_flow_projection_keeps_bare_storage_and_exact_original_state() {
+    let (mut program, types) = source_program(FLOW_PROJECTED_SOURCE);
+    for name in ["exercise", "copied"] {
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == name)
+            .unwrap();
+        let E::Call {
+            ownership: hir::CallOwnership::Source(packet),
+            ..
+        } = &read_call(function).kind
+        else {
+            panic!("guarded source packet");
+        };
+        let root = packet.arguments[0]
+            .source_witness()
+            .projection_root()
+            .unwrap();
+        assert!(matches!(
+            types.resolve(root.2),
+            jett_types::Type::MachineState { .. }
+        ));
+        assert!(matches!(
+            types.resolve(root.3),
+            jett_types::Type::Machine(_)
+        ));
+        assert_eq!(function.local(root.0).unwrap().ty, root.3);
+        assert_eq!(
+            packet.arguments[0].effect,
+            if name == "exercise" {
+                CheckedCallerEffect::RetainBorrow
+            } else {
+                CheckedCallerEffect::Copy
+            }
+        );
+        assert!(matches!(
+            packet.arguments[0].staging,
+            hir::ArgumentStaging::Original
+        ));
+        validate_function(&program, function, &types)
+            .expect("original flow projection Source proof");
+    }
+    crate::prepare_native_sequences(&mut program, &types);
+    crate::prepare_native_uninhabited_sums(&mut program, &types);
+    crate::prepare_native_generated_functions(&mut program, &types);
+    crate::validate_call_ownership(&program, &types)
+        .expect("dense remaps preserve private root without a new loan");
+}
+
+#[test]
+fn caller_acquisition_flow_projection_rejects_changed_state_root_span_and_endpoint() {
+    let (program, mut types) = source_program(FLOW_PROJECTED_SOURCE);
+    let function = exercise(&program);
+    let other = function
+        .locals
+        .iter()
+        .find(|local| local.name == "other")
+        .unwrap()
+        .id;
+    let E::Call {
+        ownership: hir::CallOwnership::Source(packet),
+        ..
+    } = &read_call(function).kind
+    else {
+        panic!("source packet");
+    };
+    let root = packet.arguments[0]
+        .source_witness()
+        .projection_root()
+        .unwrap();
+    let jett_types::Type::Machine(machine) = *types.resolve(root.3) else {
+        panic!("bare owner");
+    };
+    let cached = types.resolve_machine(machine).state_id("cached").unwrap();
+    let sibling = types.intern(jett_types::Type::MachineState {
+        machine,
+        state: cached,
+    });
+    for mutation in ["state", "span", "local", "field", "endpoint"] {
+        let mut changed = program.clone();
+        let E::Call { args, .. } =
+            &mut flow_projected_mir_call_mut(exercise_mut(&mut changed)).kind
+        else {
+            panic!("source call");
+        };
+        let value = flow_projected_mir_field(&mut args[0]);
+        if mutation == "endpoint" {
+            value.ty = TypeInterner::BOOL;
+        } else {
+            let E::Field {
+                base,
+                owner_type,
+                field,
+            } = &mut value.kind
+            else {
+                panic!("field");
+            };
+            match mutation {
+                "state" => {
+                    *owner_type = sibling;
+                    base.ty = sibling;
+                }
+                "span" => base.span.start += 1,
+                "local" => base.kind = E::Local(other),
+                "field" => *field = hir::FieldId::new(1),
+                _ => unreachable!(),
+            }
+        }
+        assert!(
+            validate_function(&changed, exercise(&changed), &types).is_err(),
+            "{mutation}"
+        );
+    }
+}
+
+const MAP_GET_PUBLIC_DECLARATION: &str = "export function get[K, V](items: map[K, V], view key: K) returns optional[V]:\n    return map.__get[K, V](items, view key)\n";
+
+fn intrinsic_owning_map_program(release: bool) -> (Program, TypeInterner) {
+    assert!(include_str!("../../../../stdlib/map.jett").contains(MAP_GET_PUBLIC_DECLARATION));
+    let stdlib_file = jett_common::FileId::new(jett_common::STDLIB_FILE_ID_START);
+    let project_file = jett_common::FileId::new(0);
+    let stdlib_source = format!(
+        "namespace map\nexport interface Named:\n    function name(view self: Named) returns string\n{MAP_GET_PUBLIC_DECLARATION}function retained(view items: map[string, Named], incoming: optional[string]) returns optional[Named]:\n    return map.__get[string, Named](view items, incoming handle:\n        default \"key\"\n    )\n"
+    );
+    let project_source = "namespace app\nfunction exercise(items: map[string, map.Named], view key: string) returns optional[map.Named]:\n    use map\n    return map.get[string, map.Named](items, view key)\n";
+    let mut stdlib = jett_parser::parse(&stdlib_source, stdlib_file);
+    let mut project = jett_parser::parse(project_source, project_file);
+    assert!(stdlib.errors.is_empty(), "{:?}", stdlib.errors);
+    assert!(project.errors.is_empty(), "{:?}", project.errors);
+    stdlib.module.items.append(&mut project.module.items);
+    let resolved = jett_resolve::resolve(&stdlib.module);
+    assert!(
+        resolved
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+        "{:?}",
+        resolved.diagnostics
+    );
+    let checked = jett_typecheck::check_with_options(
+        &stdlib.module,
+        &resolved,
+        jett_typecheck::CheckOptions { release },
+    );
+    assert!(
+        checked
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+        "{:?}",
+        checked.diagnostics
+    );
+    let origins = HashMap::from([
+        (stdlib_file, jett_common::SourceOrigin::Stdlib),
+        (project_file, jett_common::SourceOrigin::Project),
+    ]);
+    let high = hir::lower(&stdlib.module, &resolved, &checked, &origins)
+        .expect("original compiler-origin facade and ordinary source caller");
+    (
+        crate::lower(&high, &checked.interner).expect("closed intrinsic owning staging"),
+        checked.interner,
+    )
+}
+
+fn map_get_function(program: &Program) -> &Function {
+    let mut matches = program
+        .functions
+        .iter()
+        .filter(|function| function.identity.declaration.name == "get");
+    let function = matches.next().expect("concrete public map.get body");
+    assert!(
+        matches.next().is_none(),
+        "one selected public instantiation"
+    );
+    function
+}
+
+fn map_get_function_mut(program: &mut Program) -> &mut Function {
+    program
+        .functions
+        .iter_mut()
+        .find(|function| function.identity.declaration.name == "get")
+        .expect("concrete public map.get body")
+}
+
+fn map_get_intrinsic(function: &Function) -> &Expression {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .find_map(|statement| {
+            let (S::Let { value, .. } | S::Evaluate(value)) = &statement.kind else {
+                return None;
+            };
+            matches!(
+                value.kind,
+                E::Intrinsic {
+                    intrinsic: hir::IntrinsicId::MapGet,
+                    ..
+                }
+            )
+            .then_some(value)
+        })
+        .expect("materialized exact MapGet operation")
+}
+
+fn map_get_intrinsic_mut(function: &mut Function) -> &mut Expression {
+    function
+        .blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.statements)
+        .find_map(|statement| {
+            let (S::Let { value, .. } | S::Evaluate(value)) = &mut statement.kind else {
+                return None;
+            };
+            matches!(
+                value.kind,
+                E::Intrinsic {
+                    intrinsic: hir::IntrinsicId::MapGet,
+                    ..
+                }
+            )
+            .then_some(value)
+        })
+        .expect("materialized exact MapGet operation")
+}
+
+#[test]
+fn caller_acquisition_intrinsic_map_get_transfers_opaque_containing_owner_without_clone() {
+    for release in [false, true] {
+        let (program, types) = intrinsic_owning_map_program(release);
+        let function = map_get_function(&program);
+        let call = map_get_intrinsic(function);
+        let E::Intrinsic {
+            ownership: hir::CallOwnership::Source(packet),
+            args,
+            evaluation_order,
+            ..
+        } = &call.kind
+        else {
+            panic!("exact checked intrinsic packet");
+        };
+        let argument = &packet.arguments[0];
+        assert_eq!(argument.syntax, jett_typecheck::CheckedCallerSyntax::Bare);
+        assert_eq!(argument.effect, CheckedCallerEffect::RelinquishOwned);
+        assert_eq!(
+            argument.callee_access,
+            jett_typecheck::CheckedCalleeAccess::View
+        );
+        assert_eq!(
+            argument.physical_access,
+            jett_typecheck::CheckedCalleeAccess::View
+        );
+        assert_eq!(evaluation_order.as_slice(), &[0, 1]);
+        let hir::ArgumentStaging::Relinquished { owner, loan } = argument.staging else {
+            panic!("source owning transfer is staged");
+        };
+        assert_ne!(owner, loan);
+        let initializer = observation_initializer(function, owner);
+        assert!(matches!(initializer.kind, E::Local(local) if local == function.params[0].local));
+        assert_eq!(initializer.ty, argument.actual_type);
+        assert_eq!(initializer.span, argument.source_span);
+        let Type::Map(key, value) = types.resolve(initializer.ty) else {
+            panic!("exact map owner");
+        };
+        assert_eq!(*key, TypeInterner::STRING);
+        assert!(matches!(types.resolve(*value), Type::Interface(_)));
+        assert!(!crate::handlers::can_snapshot_view(&types, initializer.ty));
+        assert_eq!(function.local(owner).unwrap().view_source, None);
+        assert_eq!(function.local(loan).unwrap().view_source, Some(owner));
+        assert!(
+            matches!(&args[0].kind, E::View(value) if matches!(value.kind, E::Local(id) if id == loan))
+        );
+        assert_eq!(
+            packet.arguments[1].syntax,
+            jett_typecheck::CheckedCallerSyntax::WrittenView
+        );
+        assert_eq!(packet.arguments[1].effect, CheckedCallerEffect::Copy);
+        let hir::ArgumentStaging::Copied { value: key_owner } = packet.arguments[1].staging else {
+            panic!("the implicitly copyable string key keeps its separate copied slot");
+        };
+        let key_initializer = observation_initializer(function, key_owner);
+        assert_eq!(key_initializer.ty, TypeInterner::STRING);
+        assert!(matches!(key_initializer.kind, E::Clone(_)));
+        let block = function
+            .blocks
+            .iter()
+            .find(|block| {
+                block.statements.iter().any(|statement|
+            matches!(&statement.kind, S::Let { value, .. } if std::ptr::eq(value, call)))
+            })
+            .expect("one consuming operation owns both loans");
+        let owner_at = block
+            .statements
+            .iter()
+            .position(|statement| matches!(statement.kind, S::Let { local, .. } if local == owner))
+            .unwrap();
+        let begin_at = block.statements.iter().position(|statement|
+            matches!(statement.kind, S::BeginCallView { local, .. } if local == loan)).unwrap();
+        let call_at = block.statements.iter().position(|statement|
+            matches!(&statement.kind, S::Let { value, .. } if std::ptr::eq(value, call))).unwrap();
+        let end_at = block
+            .statements
+            .iter()
+            .position(
+                |statement| matches!(statement.kind, S::EndCallView { local } if local == loan),
+            )
+            .unwrap();
+        assert!(owner_at < begin_at && begin_at < call_at && call_at < end_at);
+        assert_eq!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .filter(
+                    |statement| matches!(statement.kind, S::Let { local, .. } if local == owner)
+                )
+                .count(),
+            1
+        );
+        let acquisitions = validate_function(&program, function, &types)
+            .expect("original map move and exact loan");
+        assert_eq!(acquisitions.owner_initializers().count(), 1);
+        let acquisition = acquisitions.owner_initializer(owner).unwrap();
+        assert_eq!(acquisition.binding, Some(function.params[0].local));
+        assert_eq!(acquisition.effect, CheckedCallerEffect::RelinquishOwned);
+        let E::Call {
+            ownership: hir::CallOwnership::Source(public),
+            ..
+        } = &read_call(exercise(&program)).kind
+        else {
+            panic!("ordinary caller preserves public source ownership");
+        };
+        assert_eq!(
+            public.arguments[0].effect,
+            CheckedCallerEffect::TransferOwned
+        );
+        assert_eq!(
+            public.arguments[0].callee_access,
+            jett_typecheck::CheckedCalleeAccess::Owned
+        );
+        crate::validate_call_ownership(&program, &types)
+            .expect("all source and intrinsic packets remain exact");
+        crate::move_values::MoveValuePlan::analyze(&program, function, &types)
+            .expect("map owner consumed once and released after its scoped borrow");
+    }
+}
+
+#[test]
+fn caller_acquisition_intrinsic_map_get_keeps_retained_maps_borrowed_across_later_handler() {
+    for release in [false, true] {
+        let (program, types) = intrinsic_owning_map_program(release);
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "retained")
+            .expect("written view control");
+        let E::Intrinsic {
+            ownership: hir::CallOwnership::Source(packet),
+            ..
+        } = &map_get_intrinsic(function).kind
+        else {
+            panic!("exact intrinsic packet");
+        };
+        let argument = &packet.arguments[0];
+        assert_eq!(
+            argument.syntax,
+            jett_typecheck::CheckedCallerSyntax::WrittenView
+        );
+        assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+        let hir::ArgumentStaging::Borrowed { loan } = argument.staging else {
+            panic!("retained map gains only a scoped loan");
+        };
+        assert_eq!(
+            function.local(loan).unwrap().view_source,
+            Some(function.params[0].local)
+        );
+        assert!(!crate::handlers::can_snapshot_view(
+            &types,
+            argument.actual_type
+        ));
+        let acquisitions =
+            validate_function(&program, function, &types).expect("retained map and handled key");
+        assert_eq!(
+            acquisitions.owner_initializers().count(),
+            0,
+            "neither the retained map nor the copied key transfers a source owner"
+        );
+        assert_eq!(packet.arguments[1].effect, CheckedCallerEffect::Copy);
+        let hir::ArgumentStaging::Copied { value: copied } = packet.arguments[1].staging else {
+            panic!("the handled string key uses its own copied slot");
+        };
+        assert_eq!(
+            observation_initializer(function, copied).ty,
+            TypeInterner::STRING
+        );
+        crate::move_values::MoveValuePlan::analyze(&program, function, &types)
+            .expect("later handler does not consume the retained map");
+    }
+}
+
+#[test]
+fn caller_acquisition_intrinsic_map_get_refuses_missing_or_forged_owner_staging() {
+    for release in [false, true] {
+        let (program, types) = intrinsic_owning_map_program(release);
+        let E::Intrinsic {
+            ownership: hir::CallOwnership::Source(packet),
+            ..
+        } = &map_get_intrinsic(map_get_function(&program)).kind
+        else {
+            panic!("source intrinsic packet");
+        };
+        let hir::ArgumentStaging::Relinquished { owner, loan } = packet.arguments[0].staging else {
+            panic!("original owning stage");
+        };
+        for mutation in [
+            "stage",
+            "effect",
+            "aliased owner",
+            "added clone",
+            "missing owner",
+            "missing end",
+            "loan backing",
+            "order",
+        ] {
+            let mut changed = program.clone();
+            let function = map_get_function_mut(&mut changed);
+            match mutation {
+                "stage" | "effect" | "aliased owner" | "order" => {
+                    let E::Intrinsic {
+                        ownership: hir::CallOwnership::Source(packet),
+                        evaluation_order,
+                        ..
+                    } = &mut map_get_intrinsic_mut(function).kind
+                    else {
+                        panic!("source intrinsic packet");
+                    };
+                    match mutation {
+                        "stage" => packet.arguments[0].staging = hir::ArgumentStaging::Original,
+                        "effect" => packet.arguments[0].effect = CheckedCallerEffect::RetainBorrow,
+                        "aliased owner" => {
+                            packet.arguments[0].staging =
+                                hir::ArgumentStaging::Relinquished { owner: loan, loan }
+                        }
+                        "order" => *evaluation_order = vec![0, 0],
+                        _ => unreachable!(),
+                    }
+                }
+                "added clone" => {
+                    let initializer = function
+                        .blocks
+                        .iter_mut()
+                        .flat_map(|block| &mut block.statements)
+                        .find_map(|statement| match &mut statement.kind {
+                            S::Let { local, value } if *local == owner => Some(value),
+                            _ => None,
+                        })
+                        .expect("unique original owner initializer");
+                    initializer.kind = E::Clone(Box::new(initializer.clone()));
+                }
+                "missing owner" | "missing end" => {
+                    let (block, index) = function
+                        .blocks
+                        .iter()
+                        .enumerate()
+                        .find_map(|(block, body)| {
+                            body.statements
+                                .iter()
+                                .position(|statement| match statement.kind {
+                                    S::Let { local, .. } if mutation == "missing owner" => {
+                                        local == owner
+                                    }
+                                    S::EndCallView { local } if mutation == "missing end" => {
+                                        local == loan
+                                    }
+                                    _ => false,
+                                })
+                                .map(|index| (block, index))
+                        })
+                        .expect("original owner or scope endpoint");
+                    function.blocks[block].statements.remove(index);
+                }
+                "loan backing" => {
+                    function.locals[loan.index() as usize].view_source =
+                        Some(function.params[0].local)
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                validate_function(&changed, map_get_function(&changed), &types).is_err(),
+                "{mutation}"
+            );
+        }
+    }
+}

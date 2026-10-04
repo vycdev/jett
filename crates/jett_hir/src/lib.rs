@@ -45,7 +45,8 @@ pub use call_ownership::{
     GeneratedSnapshotProof, ObservationProof, OwnershipLocalInfo, SourceArgumentWitness,
     SourceCallOwnership, observation_data_type, validate_compiler_metadata_operand,
     validate_generated_operand_tree, validate_hir_invocation, validate_invocation_target,
-    validate_operand_ownership, validate_program_call_ownership, validate_source_operand,
+    validate_operand_ownership, validate_program_call_ownership, validate_source_handled_operand,
+    validate_source_operand,
 };
 pub use interface_values::complete_value_conversions;
 pub use local_views::{
@@ -2576,6 +2577,7 @@ struct BodyLowerer<'lowerer, 'program> {
     function_ids: &'lowerer HashMap<FunctionKey, FunctionId>,
     expression_types: HashMap<Span, TypeId>,
     source_expression_types: HashMap<Span, TypeId>,
+    source_projection_roots: HashMap<Span, ast::Ident>,
     debug_type_names: HashMap<Span, String>,
     binding_modes: HashMap<Span, CheckedBindingMode>,
     call_ownership: HashMap<Span, CheckedCallOwnership>,
@@ -2634,6 +2636,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             function_ids,
             expression_types,
             source_expression_types,
+            source_projection_roots: HashMap::new(),
             debug_type_names,
             binding_modes,
             call_ownership,
@@ -3552,6 +3555,9 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
     fn lower_expression(&mut self, expression: &Expr) -> Option<Expression> {
         let span = expression.span();
         let ty = self.expression_type(expression)?;
+        if let Some(root) = call_ownership::source_projection_ast_root(expression) {
+            self.source_projection_roots.insert(span, root.clone());
+        }
         let kind = match expression {
             Expr::IntLiteral(value, _) => ExpressionKind::Int(*value),
             Expr::FloatLiteral(value, _) => ExpressionKind::Float(*value),

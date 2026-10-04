@@ -655,7 +655,9 @@ impl<'a> OwnershipChecker<'a> {
         let initial_state = self.initial_task_state(&decl.value);
         // Erasing an exact machine state into another owned local transfers
         // its value. Reusing the source requires an explicit clone.
-        if let Expr::Ident(source) = &decl.value
+        let destination_is_view = self.binding_state(&decl.name) == Some(OwnershipState::Viewed);
+        if !destination_is_view
+            && let Expr::Ident(source) = &decl.value
             && self
                 .states
                 .get(&self.binding_key(&source.name, source.span))

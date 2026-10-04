@@ -1,35 +1,36 @@
 # Typed caller ownership: selected implementation contract
 
 Status: integrated candidate in the isolated native-call-view-staging worktree,
-based on `a9a6cd63db33fb29fb10f4b32607b3f82ab431bc`. Root has executed all
-293 checker tests and all 598 frontend fixtures successfully. The latest native
-backend unit and object-emission suites pass 67 and 63 tests respectively.
-All 15 native caller-ownership groups pass with exact debug/release output and
-error oracles after deleting their source files. These include always-successful
-Result payloads, an inhabited-error control and pending-value rejection.
+based on `a9a6cd63db33fb29fb10f4b32607b3f82ab431bc`. The latest formatted compiler
+passes all 304 checker, 188 HIR, 181 MIR, 67 backend and 63 object-emission tests,
+plus the MIR doctest. These counts describe the current compiler-core gate.
 
-Both property replays that failed the earlier 85/87 driver run now pass in
-independent focused runs: ordinary-data snapshots before interface conversion,
-and generated refinement chains/nested predicates. Five refinement ownership
-groups pass, including logical viewed-loop default rejection and an explicit
-Clone control. Invalid-call recovery preserves independent operand and nested
-ownership errors; fixture retention sites use written views under Rule24.
-The formatted candidate now passes all 168 HIR and 147 MIR tests, including
-the Source sum-default backing repairs and two whole-program validation
-regressions. The native backend and object suites also pass again after this
-integration. Whole-program ownership validation builds one immutable signature
-table per pass while preserving every function and disconnected-block check.
-The full updated driver, 479-case native and platform acceptance remain pending.
-Earlier CLI/source/reference receipts are historical. This isolated candidate
-is being frozen for complete acceptance before merging into the branch. These
-results do not establish additional whole-language feature coverage.
+A stable Windows native snapshot completed 472 of 479 supplemental test groups
+successfully, with seven failures. Five failures subsequently passed focused
+native replays: the nested breakpoint condition, primitive and refined interface
+identity, contextual secret constructors in both profiles, and the 64-fixture
+scalar/owned-collection group. The collection fixture corrections add explicit
+views to set/map observers and preserve their output oracles. All 64 sources also
+pass source checking. Ten breakpoint-context and three intrinsic owning-staging
+regression groups pass. These native replays preceded the formatting-only pass;
+the compiler-core gate above follows it. A fresh complete native run is pending.
 
-The unchanged exact-a9 baseline passed 464 native cases and all 182 object
-obligations. Workflow 37130142896 completed all four Windows/Ubuntu build and
-installed jobs successfully. This note implements the existing Rule24 contract,
-not a new source ownership rule. No Resource carrier, provider, owning ticket
-runtime or finalizer acceptance follows. The full 100% native-codegen objective
-and the broad tracking estimate of about 85% remain unchanged.
+The two unrepaired test groups concern a builder binding replaced while an earlier
+call view remains active, and a reflected read whose written-view handled producer
+needs exact temporary owner/loan staging. Their admitted source behavior remains
+required. Full workspace, fixed inventory and supported-host acceptance are also
+pending; focused replay success is not a new complete-suite count.
+
+Earlier integration receipts passed 598 frontend fixtures, 15 native caller groups
+with source deletion and exact debug/release streams, and both property replays
+that failed the earlier driver run. Their scope remains historical. The unchanged
+exact-a9 baseline passed 464 native cases and all 182 object obligations; workflow
+37130142896 passed all four Windows/Ubuntu build and installed jobs. Those baseline
+receipts do not validate this candidate.
+
+This implements the existing Rule24 contract rather than a new source ownership
+rule. No Resource carrier, provider, ticket runtime or finalizer acceptance follows.
+The full 100% native-codegen objective and rough 85% feature estimate remain open.
 
 ## Existing authority and actual proof
 

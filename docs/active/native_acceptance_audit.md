@@ -1915,30 +1915,31 @@ and the whole-language 100% goal remain unchanged.
 
 ## Typed caller ownership integration
 
-The isolated caller-ownership change over `a9a6cd63` implements the existing
-Rule24 caller disposition and Rule25 ordinary-data observation exceptions.
-Sealed source-call facts rejoin exact declarations, argument permutations and
-raw/physical types through HIR, MIR and native validation. Generated calls,
-temporary staging, viewed-loop bindings and handled sum/refinement defaults
-carry separate checked proofs. Invalid outer calls retain independent operand
-and nested ownership errors without transferring ownership at that invalid call.
-The [implementation contract](native_call_ownership_facts.md) records the scope.
+The isolated caller-ownership change over `a9a6cd63` implements Rule24 caller
+disposition and Rule25 ordinary-data observation. Sealed source-call facts rejoin
+exact declarations, argument permutations and raw/physical types through HIR,
+MIR and native validation. Generated calls, temporary staging, viewed loops and
+handled defaults carry separate checked proofs. The
+[implementation contract](native_call_ownership_facts.md) records the scope.
 
-The formatted candidate passes all 293 checker tests, 598 frontend fixtures,
-168 HIR tests, 147 MIR tests, 67 backend unit tests and 63 object-emission tests.
-All 15 native caller groups pass with exact debug/release stdout, stderr and
-status after source deletion: 28 linked binaries plus 14 negative checks before
-artifact lookup/publication. Both previously failing driver property replays
-pass independently, including generated refinement shrinking and ordinary-data
-snapshots before interface conversion. Whole-program ownership validation now
-constructs one immutable signature projection per pass; mutation and late
-disconnected-call regressions retain exact diagnostics.
+The latest formatted compiler passes all 304 checker, 188 HIR, 181 MIR, 67 backend
+and 63 object-emission tests, plus the MIR doctest. A stable Windows supplemental
+native snapshot completed 472/479 test groups; seven failed. Subsequent focused
+replays passed five of those failures: nested breakpoint conditions, primitive
+and refined interface identity, contextual secrets in both profiles, and the
+64-fixture scalar/owned-collection group. Explicit collection views preserve the
+existing output oracles. Ten breakpoint-region and three intrinsic owning-staging
+regression groups pass. The linked replays preceded the formatting-only pass;
+the complete compiler-core gate follows it. No new complete native count is claimed.
 
-The accepted unchanged a9 baseline passed its clean workspace: 92 successful
-result groups, 464 supplemental native cases and all 182 object obligations.
-Workflow 37130142896 passed all four Windows/Linux build and installed jobs.
-Those receipts do not validate this candidate. Its full workspace, 479-case
-supplemental corpus, fixed inventory and supported-host acceptance are pending.
-The fixed inventory remains 207 with 182 object obligations; the broad estimate
-stays about 85%. Resource providers/cleanup, async and actor lifetimes and
-remaining capture/reflection shapes remain part of the 100% objective.
+The builder replacement and reflected handled-view read tests remain unrepaired.
+Full current workspace, complete native replay, fixed inventory and supported-host
+acceptance remain required. Earlier 598-fixture frontend, 15 caller-group source
+erasure and property-replay receipts retain their individual historical scope.
+
+The accepted unchanged a9 baseline passed 92 workspace result groups, 464 native
+cases and all 182 object obligations. Workflow 37130142896 passed all four
+Windows/Linux build and installed jobs. Those receipts do not validate this
+candidate. The fixed inventory remains 207 with 182 object obligations and the
+rough feature estimate stays 85%. Resource providers and cleanup, async and actor
+lifetimes, and remaining capture/reflection shapes remain in the 100% objective.

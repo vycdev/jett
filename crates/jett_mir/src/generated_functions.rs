@@ -12,10 +12,10 @@ pub fn prepare_native_generated_functions(program: &mut Program, types: &TypeInt
         return;
     }
     for function in &mut program.functions {
-        if function.debug_kind == hir::FunctionDebugKind::Inline {
-            sequences::prune::unreachable(function);
+        let _prepared = if function.debug_kind == hir::FunctionDebugKind::Inline {
+            sequences::prune::unreachable(function)
         } else {
-            sequences::prune::unused_locals(function);
-        }
+            sequences::prune::unused_locals(function)
+        };
     }
 }

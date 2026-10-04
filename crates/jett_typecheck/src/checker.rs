@@ -7647,6 +7647,32 @@ impl<'a> TypeChecker<'a> {
             || self.constant_declarations.contains(&declared.span)
     }
 
+    fn caller_is_qualified_unit_enum(&self, expression: &Expr) -> bool {
+        let Expr::FieldAccess(_, variant, span) = expression else {
+            return false;
+        };
+        let Some(definition) = self.resolve.resolutions.get(span) else {
+            return false;
+        };
+        if self.resolve.scope_table.def(*definition).kind != DefKind::Enum {
+            return false;
+        }
+        let Some(&enum_ty) = self.type_env.get(definition) else {
+            return false;
+        };
+        if self.checked_source_expression_type(*span) != Some(enum_ty) {
+            return false;
+        }
+        let Type::Enum(id) = *self.interner.resolve(enum_ty) else {
+            return false;
+        };
+        self.interner
+            .resolve_enum(id)
+            .variants
+            .iter()
+            .any(|declared| declared.name == variant.name && declared.fields.is_empty())
+    }
+
     fn caller_origin(
         &mut self,
         expression: Option<&Expr>,
@@ -7661,6 +7687,26 @@ impl<'a> TypeChecker<'a> {
         | Expr::Declassify(inner, _) = expression
         {
             expression = inner;
+        }
+        if matches!(expression, Expr::FieldAccess(..)) {
+            let resolved_function = self
+                .resolve
+                .resolutions
+                .get(&expression.span())
+                .is_some_and(|definition| {
+                    self.resolve.scope_table.def(*definition).kind == DefKind::Function
+                });
+            let checked_method = match self.active_generic_instantiations.last() {
+                Some(active) => active.method_values.contains_key(&expression.span()),
+                None => self.method_values.contains_key(&expression.span()),
+            };
+            // HIR lowers these exact checked declarations to FunctionRef or
+            // zero-payload EnumConstruct, not to a runtime field. A type or
+            // namespace spelling alone cannot replace declaration identity.
+            if resolved_function || checked_method || self.caller_is_qualified_unit_enum(expression)
+            {
+                return CheckedCallerOrigin::OwnedExpression;
+            }
         }
         let root = Self::assignment_root(expression).and_then(|ident| self.ident_def_id(ident));
         if root.is_some_and(|definition| {
@@ -7841,12 +7887,9 @@ impl<'a> TypeChecker<'a> {
             }) else {
                 return;
             };
-            let definition_span = self.resolve.scope_table.def(call.definition).span;
-            let Some(template) = self
-                .generic_function_templates
-                .values()
-                .find(|template| template.name.span == definition_span)
-            else {
+            let Some(template) = self.generic_function_templates.values().find(|template| {
+                self.declaration_def_id(template.name.span) == Some(call.definition)
+            }) else {
                 return;
             };
             (
@@ -26714,6 +26757,652 @@ function acquired(view numbers: Numbers, view hidden: secret[list[int64]], view 
                     result.diagnostics
                 );
             }
+        }
+    }
+
+    #[test]
+    fn caller_facts_qualified_descriptors_keep_source_order_and_written_views() {
+        let source = r#"namespace app
+function identity(value: int64) returns int64:
+    return value
+function inspect(view callback: function(int64) returns int64, marker: int64) returns int64:
+    return marker
+function exercise() returns int64:
+    int64 direct = inspect(marker: 1, callback: app.identity)
+    int64 retained = inspect(view app.identity, 2)
+    return app.identity into view inspect(3)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut packets = result.call_ownership.iter().collect::<Vec<_>>();
+            packets.sort_by_key(|(span, _)| span.start);
+            assert_eq!(packets.len(), 3);
+            for (index, (_, packet)) in packets.iter().enumerate() {
+                let argument = packet
+                    .arguments
+                    .iter()
+                    .find(|argument| argument.parameter_index == 0)
+                    .expect("descriptor formal");
+                assert_eq!(argument.origin, CheckedCallerOrigin::OwnedExpression);
+                assert_eq!(argument.callee_access, CheckedCalleeAccess::View);
+                assert_eq!(
+                    argument.effect,
+                    if index == 0 {
+                        CheckedCallerEffect::RelinquishOwned
+                    } else {
+                        CheckedCallerEffect::RetainBorrow
+                    }
+                );
+                assert_eq!(
+                    argument.syntax,
+                    if index == 0 {
+                        CheckedCallerSyntax::Bare
+                    } else {
+                        CheckedCallerSyntax::WrittenView
+                    }
+                );
+            }
+            assert_eq!(
+                packets[0]
+                    .1
+                    .arguments
+                    .iter()
+                    .map(|argument| (argument.source_index, argument.parameter_index))
+                    .collect::<Vec<_>>(),
+                [(0, 1), (1, 0)]
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_method_descriptor_producers_use_exact_concrete_frames() {
+        let source = r#"namespace models
+export struct Point:
+    value: int64
+    function amount(view self: Point) returns int64:
+        return self.value
+namespace app
+function inspect(view callback: function(view models.Point) returns int64) returns nothing:
+    return nothing
+function forward[T](seed: T) returns nothing:
+    use models as m
+    inspect(m.Point.amount)
+    return nothing
+function exercise() returns nothing:
+    use models as m
+    inspect(view m.Point.amount)
+    forward[int64](1)
+    forward[string]("two")
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let root = result
+                .call_ownership
+                .values()
+                .find(|packet| {
+                    packet.arguments.first().is_some_and(|argument| {
+                        matches!(
+                            result.interner.resolve(argument.actual_type),
+                            Type::Function { .. }
+                        )
+                    })
+                })
+                .expect("root method descriptor call");
+            assert_eq!(
+                root.arguments[0].origin,
+                CheckedCallerOrigin::OwnedExpression
+            );
+            assert_eq!(root.arguments[0].effect, CheckedCallerEffect::RetainBorrow);
+            assert_eq!(result.generic_function_instantiations.len(), 2);
+            for body in &result.generic_function_instantiations {
+                assert_eq!(body.method_values.len(), 1);
+                assert_eq!(body.call_ownership.len(), 1);
+                let argument = &body.call_ownership.values().next().unwrap().arguments[0];
+                assert_eq!(argument.origin, CheckedCallerOrigin::OwnedExpression);
+                assert_eq!(argument.effect, CheckedCallerEffect::RelinquishOwned);
+                assert!(body.method_values.contains_key(&argument.source_span));
+                assert!(!result.method_values.contains_key(&argument.source_span));
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_function_value_fields_and_locals_remain_value_origins() {
+        let source = r#"namespace app
+struct Holder:
+    callback: function(int64) returns int64
+function identity(value: int64) returns int64:
+    return value
+function inspect(view callback: function(int64) returns int64) returns nothing:
+    return nothing
+function exercise(view holder: Holder) returns nothing:
+    function(int64) returns int64 stored = identity
+    inspect(view stored)
+    inspect(holder.callback)
+    inspect(view holder.callback)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut packets = result.call_ownership.iter().collect::<Vec<_>>();
+            packets.sort_by_key(|(span, _)| span.start);
+            assert_eq!(packets.len(), 3);
+            assert!(matches!(
+                packets[0].1.arguments[0].origin,
+                CheckedCallerOrigin::Binding(_)
+            ));
+            assert!(matches!(
+                packets[1].1.arguments[0].origin,
+                CheckedCallerOrigin::OwnedFieldCopy {
+                    parent: CheckedViewSource::Binding(_)
+                }
+            ));
+            assert!(matches!(
+                packets[2].1.arguments[0].origin,
+                CheckedCallerOrigin::BorrowedProjection {
+                    source: CheckedViewSource::Binding(_)
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn caller_facts_generic_mutual_forwarding_joins_resolved_definition_not_body_span() {
+        let source = r#"namespace sample
+mutual:
+    function leaf[T](view value: T) returns int64
+    function forward[T](view value: T) returns int64
+function leaf[T](view value: T) returns int64:
+    return 7
+function forward[T](view value: T) returns int64:
+    return leaf[T](view value)
+function exercise(values: list[int64]) returns int64:
+    int64 retained = forward[list[int64]](view values)
+    return forward[list[int64]](values) + retained
+"#;
+        for release in [false, true] {
+            let file = FileId::new(0);
+            let parsed = jett_parser::parse(source, file);
+            assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+            let resolved = jett_resolve::resolve(&parsed.module);
+            assert!(
+                resolved
+                    .diagnostics
+                    .iter()
+                    .all(|d| d.severity != jett_diagnostics::Severity::Error),
+                "{:?}",
+                resolved.diagnostics
+            );
+            let result = check_with_options(&parsed.module, &resolved, CheckOptions { release });
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let forward = parsed
+                .module
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::Function(function) if function.name.name == "forward" => Some(function),
+                    _ => None,
+                })
+                .expect("actual mutual function body");
+            let definition = resolved.resolutions[&forward.name.span];
+            assert_ne!(resolved.scope_table.def(definition).span, forward.name.span);
+            let mut root = result.call_ownership.iter().collect::<Vec<_>>();
+            root.sort_by_key(|(span, _)| span.start);
+            assert_eq!(root.len(), 2, "both selected source calls require packets");
+            for (index, (_, packet)) in root.iter().enumerate() {
+                let CheckedInvocationTarget::Generic(target) = &packet.target else {
+                    panic!("exact generic source target");
+                };
+                assert_eq!(target.definition, definition);
+                assert_eq!(
+                    packet.arguments[0].syntax,
+                    if index == 0 {
+                        CheckedCallerSyntax::WrittenView
+                    } else {
+                        CheckedCallerSyntax::Bare
+                    }
+                );
+                assert_eq!(packet.arguments[0].callee_access, CheckedCalleeAccess::View);
+                assert_eq!(
+                    packet.arguments[0].effect,
+                    if index == 0 {
+                        CheckedCallerEffect::RetainBorrow
+                    } else {
+                        CheckedCallerEffect::RelinquishOwned
+                    }
+                );
+                assert_eq!(
+                    result.source_type_map.get(&packet.arguments[0].source_span),
+                    Some(&packet.arguments[0].actual_type)
+                );
+            }
+            let body = result
+                .generic_function_instantiations
+                .iter()
+                .find(|body| body.definition == definition)
+                .expect("concrete forward body");
+            assert_eq!(body.call_ownership.len(), 1);
+            let nested = body.call_ownership.values().next().unwrap();
+            let argument = &nested.arguments[0];
+            assert_eq!(argument.syntax, CheckedCallerSyntax::WrittenView);
+            assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+            assert_eq!(
+                body.source_type_map.get(&argument.source_span),
+                Some(&argument.actual_type)
+            );
+            assert!(
+                !result
+                    .call_ownership
+                    .contains_key(body.call_ownership.keys().next().unwrap())
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_mutual_generic_same_leaf_names_keep_exact_modes_and_targets() {
+        let source = r#"namespace left
+mutual:
+    export function inspect[T](view value: T) returns int64
+export function inspect[T](view value: T) returns int64:
+    return 1
+namespace right
+mutual:
+    export function inspect[T](value: T) returns int64
+export function inspect[T](value: T) returns int64:
+    return 2
+namespace app
+function exercise(first: list[int64], second: list[int64]) returns int64:
+    use left
+    use right
+    int64 observed = left.inspect[list[int64]](view first)
+    return right.inspect[list[int64]](second) + observed
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut calls = result.call_ownership.iter().collect::<Vec<_>>();
+            calls.sort_by_key(|(span, _)| span.start);
+            assert_eq!(calls.len(), 2);
+            let CheckedInvocationTarget::Generic(left) = &calls[0].1.target else {
+                panic!("left");
+            };
+            let CheckedInvocationTarget::Generic(right) = &calls[1].1.target else {
+                panic!("right");
+            };
+            assert_ne!(left.definition, right.definition);
+            assert_eq!(
+                calls[0].1.arguments[0].callee_access,
+                CheckedCalleeAccess::View
+            );
+            assert_eq!(
+                calls[0].1.arguments[0].effect,
+                CheckedCallerEffect::RetainBorrow
+            );
+            assert_eq!(
+                calls[1].1.arguments[0].callee_access,
+                CheckedCalleeAccess::Owned
+            );
+            assert_eq!(
+                calls[1].1.arguments[0].effect,
+                CheckedCallerEffect::TransferOwned
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_machine_state_forwarded_views_preserve_immediate_bindings() {
+        let source = r#"namespace app
+machine Packet:
+    states:
+        ready(values: list[int64])
+struct Envelope:
+    packet: Packet at ready
+function inspect(view packet: Packet at ready) returns nothing:
+    return nothing
+function exercise(view envelope: Envelope) returns nothing:
+    Packet at ready borrowed = view envelope.packet
+    Packet at ready forwarded = borrowed
+    inspect(view forwarded)
+    inspect(view borrowed)
+    inspect(view envelope.packet)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let fact = |name| {
+                result
+                    .binding_facts
+                    .values()
+                    .find(|fact| {
+                        &source[fact.declaration_span.start as usize
+                            ..fact.declaration_span.end as usize]
+                            == name
+                    })
+                    .expect("exact checked binding")
+            };
+            let borrowed = fact("borrowed");
+            let forwarded = fact("forwarded");
+            assert_eq!(
+                forwarded.mode,
+                CheckedBindingMode::View {
+                    source: CheckedViewSource::Binding(borrowed.definition),
+                }
+            );
+            assert_eq!(forwarded.ty, borrowed.ty);
+            assert!(matches!(
+                result.interner.resolve(forwarded.ty),
+                Type::MachineState { .. }
+            ));
+            assert_eq!(result.call_ownership.len(), 3);
+            assert!(
+                result
+                    .call_ownership
+                    .values()
+                    .all(|packet| packet.arguments[0].effect == CheckedCallerEffect::RetainBorrow)
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_machine_view_forwarding_stays_in_each_concrete_generic_body() {
+        let source = r#"namespace app
+machine Packet:
+    states:
+        ready(values: list[int64])
+struct Envelope[T]:
+    packet: Packet at ready
+    extra: T
+function inspect(view packet: Packet at ready) returns nothing:
+    return nothing
+function forward[T](view envelope: Envelope[T]) returns nothing:
+    Packet at ready borrowed = view envelope.packet
+    Packet at ready forwarded = borrowed
+    inspect(view forwarded)
+    inspect(view envelope.packet)
+    return nothing
+function exercise(first: Envelope[int64], second: Envelope[list[int64]]) returns nothing:
+    forward[int64](view first)
+    forward[list[int64]](view second)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            assert_eq!(result.generic_function_instantiations.len(), 2);
+            for body in &result.generic_function_instantiations {
+                let fact = |name| {
+                    body.binding_facts
+                        .values()
+                        .find(|fact| {
+                            &source[fact.declaration_span.start as usize
+                                ..fact.declaration_span.end as usize]
+                                == name
+                        })
+                        .expect("concrete body binding")
+                };
+                let borrowed = fact("borrowed");
+                let forwarded = fact("forwarded");
+                assert_eq!(
+                    forwarded.mode,
+                    CheckedBindingMode::View {
+                        source: CheckedViewSource::Binding(borrowed.definition),
+                    }
+                );
+                assert_eq!(body.call_ownership.len(), 2);
+                assert!(
+                    body.call_ownership
+                        .values()
+                        .all(|packet| packet.arguments[0].effect
+                            == CheckedCallerEffect::RetainBorrow)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_machine_forwarding_does_not_relax_owned_erasure_or_bare_views() {
+        let prefix = "namespace app\nmachine Packet:\n    states:\n        ready(values: list[int64])\nfunction inspect(view packet: Packet at ready) returns nothing:\n    return nothing\n";
+        let cases = [
+            (
+                "function exercise(packet: Packet at ready) returns nothing:\n    Packet erased = packet\n    inspect(view packet)\n    return nothing\n",
+                vec![400],
+            ),
+            (
+                "function exercise(packet: Packet at ready) returns nothing:\n    Packet erased = clone packet\n    inspect(view packet)\n    return nothing\n",
+                vec![],
+            ),
+            (
+                "function exercise(view packet: Packet at ready) returns nothing:\n    inspect(packet)\n    return nothing\n",
+                vec![401],
+            ),
+            (
+                "function exercise(view packet: Packet at ready) returns Packet at ready:\n    Packet at ready forwarded = packet\n    return forwarded\n",
+                vec![401],
+            ),
+        ];
+        for (body, expected) in cases {
+            for release in [false, true] {
+                let result = checked(&format!("{prefix}{body}"), release, false);
+                let codes = errors(&result)
+                    .iter()
+                    .map(|error| error.code.code())
+                    .collect::<Vec<_>>();
+                assert_eq!(codes, expected, "{body}: {:?}", result.diagnostics);
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_qualified_unit_enums_keep_named_order_and_pipeline_syntax() {
+        let source = r#"namespace models
+export enum Choice:
+    empty
+    full(value: int64)
+namespace app
+function inspect(view choice: models.Choice, marker: int64) returns int64:
+    return marker
+function exercise() returns int64:
+    use models as m
+    int64 first = inspect(marker: 1, choice: m.Choice.empty)
+    int64 second = inspect(view m.Choice.empty, 2)
+    return m.Choice.empty into view inspect(3)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut packets = result.call_ownership.iter().collect::<Vec<_>>();
+            packets.sort_by_key(|(span, _)| span.start);
+            assert_eq!(packets.len(), 3);
+            for (index, (_, packet)) in packets.iter().enumerate() {
+                let argument = packet
+                    .arguments
+                    .iter()
+                    .find(|argument| argument.parameter_index == 0)
+                    .expect("unit enum actual");
+                assert_eq!(argument.origin, CheckedCallerOrigin::OwnedExpression);
+                assert_eq!(argument.callee_access, CheckedCalleeAccess::View);
+                assert_eq!(
+                    argument.effect,
+                    if index == 0 {
+                        CheckedCallerEffect::RelinquishOwned
+                    } else {
+                        CheckedCallerEffect::RetainBorrow
+                    }
+                );
+                assert_eq!(
+                    argument.syntax,
+                    if index == 0 {
+                        CheckedCallerSyntax::Bare
+                    } else {
+                        CheckedCallerSyntax::WrittenView
+                    }
+                );
+                assert_eq!(
+                    result.source_type_map.get(&argument.source_span),
+                    Some(&argument.actual_type)
+                );
+                let Type::Enum(id) = result.interner.resolve(argument.actual_type) else {
+                    panic!("exact nominal enum source type");
+                };
+                assert_eq!(result.interner.resolve_enum(*id).name, "models.Choice");
+            }
+            assert_eq!(
+                packets[0]
+                    .1
+                    .arguments
+                    .iter()
+                    .map(|argument| (argument.source_index, argument.parameter_index))
+                    .collect::<Vec<_>>(),
+                [(0, 1), (1, 0)]
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_qualified_unit_enums_use_concrete_and_reflected_source_maps() {
+        let source = r#"namespace models
+export enum Choice:
+    empty
+    full(value: int64)
+namespace app
+struct First:
+    count: int64
+    text: string
+struct Second:
+    count: int64
+function inspect(view choice: models.Choice) returns nothing:
+    return nothing
+function forward[T](view seed: T) returns nothing:
+    use models
+    inspect(models.Choice.empty)
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            inspect(view models.Choice.empty)
+    return nothing
+function exercise(first: First, second: Second) returns nothing:
+    forward[First](view first)
+    forward[Second](view second)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            assert_eq!(result.generic_function_instantiations.len(), 2);
+            let mut scoped_count = 0;
+            for body in &result.generic_function_instantiations {
+                let packet = body
+                    .call_ownership
+                    .values()
+                    .find(|packet| {
+                        packet.arguments.first().is_some_and(|argument| {
+                            &source[argument.source_span.start as usize
+                                ..argument.source_span.end as usize]
+                                == "models.Choice.empty"
+                        })
+                    })
+                    .expect("outside reflected scope");
+                let argument = &packet.arguments[0];
+                assert_eq!(argument.origin, CheckedCallerOrigin::OwnedExpression);
+                assert_eq!(argument.effect, CheckedCallerEffect::RelinquishOwned);
+                assert_eq!(
+                    body.source_type_map.get(&argument.source_span),
+                    Some(&argument.actual_type)
+                );
+                assert!(!result.source_type_map.contains_key(&argument.source_span));
+                for scoped in body.comptime_type_bindings.values().flatten() {
+                    scoped_count += 1;
+                    let packet = scoped
+                        .body
+                        .call_ownership
+                        .values()
+                        .find(|packet| {
+                            packet.arguments.first().is_some_and(|argument| {
+                                source[argument.source_span.start as usize
+                                    ..argument.source_span.end as usize]
+                                    .contains("models.Choice.empty")
+                            })
+                        })
+                        .expect("reflected scope packet");
+                    let argument = &packet.arguments[0];
+                    assert_eq!(argument.origin, CheckedCallerOrigin::OwnedExpression);
+                    assert_eq!(argument.syntax, CheckedCallerSyntax::WrittenView);
+                    assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+                    assert_eq!(
+                        scoped.body.source_type_map.get(&argument.source_span),
+                        Some(&argument.actual_type)
+                    );
+                    assert_eq!(
+                        body.source_type_map.get(&argument.source_span),
+                        Some(&argument.actual_type)
+                    );
+                    assert!(!result.source_type_map.contains_key(&argument.source_span));
+                }
+            }
+            assert_eq!(
+                scoped_count, 3,
+                "one exact body per declared reflected field"
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_enum_valued_bindings_and_real_fields_remain_value_origins() {
+        let source = r#"namespace models
+export enum Choice:
+    empty
+    full(value: int64)
+namespace app
+struct Holder:
+    choice: models.Choice
+function inspect(view choice: models.Choice, marker: int64) returns nothing:
+    return nothing
+function exercise(view holder: Holder, view stored: models.Choice) returns nothing:
+    use models
+    inspect(view stored, 1)
+    inspect(holder.choice, 2)
+    inspect(view holder.choice, 3)
+    inspect(Holder(choice: models.Choice.empty).choice, 4)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut packets = result.call_ownership.iter().collect::<Vec<_>>();
+            packets.sort_by_key(|(span, _)| span.start);
+            assert_eq!(packets.len(), 4);
+            assert!(matches!(
+                packets[0].1.arguments[0].origin,
+                CheckedCallerOrigin::Binding(_)
+            ));
+            assert!(matches!(
+                packets[1].1.arguments[0].origin,
+                CheckedCallerOrigin::OwnedFieldCopy {
+                    parent: CheckedViewSource::Binding(_)
+                }
+            ));
+            assert!(matches!(
+                packets[2].1.arguments[0].origin,
+                CheckedCallerOrigin::BorrowedProjection {
+                    source: CheckedViewSource::Binding(_)
+                }
+            ));
+            assert_eq!(
+                packets[3].1.arguments[0].origin,
+                CheckedCallerOrigin::OwnedFieldCopy {
+                    parent: CheckedViewSource::Other,
+                }
+            );
+            assert!(
+                packets
+                    .iter()
+                    .all(|(_, packet)| packet.arguments[0].actual_type
+                        == packets[0].1.arguments[0].actual_type)
+            );
         }
     }
 }

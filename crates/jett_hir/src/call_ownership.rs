@@ -53,6 +53,7 @@ pub struct ArgumentOwnership {
     pub staging: ArgumentStaging,
     /// Immutable source authority. MIR may stage an operand, never rewrite this witness.
     witness: SourceArgumentWitness,
+    retained_snapshot: Option<RetainedSnapshotProof>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +70,44 @@ pub struct SourceArgumentWitness {
     effect: CheckedCallerEffect,
     context: CheckedOwnershipContext,
     observation: Option<ObservationProof>,
+    handled_result: Option<SourceHandledResult>,
+    projection_root: Option<SourceProjectionRoot>,
+}
+
+/// Original checked flow occurrence, separate from the owner's stored type.
+/// Only the Source lowerer can mint this; it grants no alias or loan authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SourceProjectionRoot {
+    local: LocalId,
+    span: Span,
+    occurrence_type: TypeId,
+    storage_type: TypeId,
+}
+
+fn retained_snapshot_origin(origin: &CallerOrigin) -> bool {
+    matches!(
+        origin,
+        CallerOrigin::Binding(_)
+            | CallerOrigin::BorrowedProjection {
+                source: CallerViewSource::Local(_)
+            }
+    )
+}
+
+/// Checked ordinary-data endpoint permission, independent of caller consumption.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RetainedSnapshotProof {
+    actual_type: TypeId,
+    occurrence_type: TypeId,
+    /// Exact initial HIR header; pipeline View and raw source spans differ.
+    physical_span: Span,
+}
+
+/// Exact original Handle backing; it grants no CFG acquisition authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SourceHandledResult {
+    ty: TypeId,
+    span: Span,
 }
 
 /// Checked capture ownership, separate from a function's parameter/result types.
@@ -86,9 +125,25 @@ impl ArgumentOwnership {
     pub fn observation_proof(&self) -> Option<&ObservationProof> {
         self.witness.observation.as_ref()
     }
+    pub fn retained_snapshot_type(&self) -> Option<TypeId> {
+        self.retained_snapshot.map(|proof| proof.occurrence_type)
+    }
+    pub fn retained_snapshot_span(&self) -> Option<Span> {
+        self.retained_snapshot.map(|proof| proof.physical_span)
+    }
 }
 
 impl SourceArgumentWitness {
+    pub fn projection_root(&self) -> Option<(LocalId, Span, TypeId, TypeId)> {
+        self.projection_root.map(|root| {
+            (
+                root.local,
+                root.span,
+                root.occurrence_type,
+                root.storage_type,
+            )
+        })
+    }
     pub fn occurrence_type(&self) -> TypeId {
         self.occurrence_type
     }
@@ -107,6 +162,7 @@ pub enum ArgumentStaging {
     Copied { value: LocalId },
     Borrowed { loan: LocalId },
     Relinquished { owner: LocalId, loan: LocalId },
+    RetainedSnapshot { owner: LocalId, loan: LocalId },
     Observed { owner: LocalId },
 }
 
@@ -1414,6 +1470,17 @@ impl CallOwnership {
                 for argument in &source.arguments {
                     visit(argument.actual_type);
                     visit(argument.witness.occurrence_type);
+                    if let Some(result) = argument.witness.handled_result {
+                        visit(result.ty);
+                    }
+                    if let Some(root) = argument.witness.projection_root {
+                        visit(root.occurrence_type);
+                        visit(root.storage_type);
+                    }
+                    if let Some(proof) = argument.retained_snapshot {
+                        visit(proof.actual_type);
+                        visit(proof.occurrence_type);
+                    }
                     visit(argument.parameter_type);
                     if let CallerOrigin::Binding(fact) = &argument.origin {
                         visit(fact.ty);
@@ -1542,6 +1609,33 @@ impl CallOwnership {
         Ok(())
     }
 
+    pub fn stage_retained_snapshot(
+        &mut self,
+        index: usize,
+        owner: LocalId,
+        loan: LocalId,
+    ) -> Result<(), String> {
+        let Self::Source(source) = self else {
+            return Err(
+                "generated operand cannot acquire retained source snapshot authority".into(),
+            );
+        };
+        let argument = source
+            .arguments
+            .get_mut(index)
+            .ok_or("retained snapshot parameter is out of bounds")?;
+        if argument.staging != ArgumentStaging::Original
+            || argument.effect != CheckedCallerEffect::RetainBorrow
+            || argument.physical_access != CheckedCalleeAccess::View
+            || argument.retained_snapshot.is_none()
+            || owner == loan
+        {
+            return Err("retained snapshot requires an original checked ordinary-data view".into());
+        }
+        argument.staging = ArgumentStaging::RetainedSnapshot { owner, loan };
+        Ok(())
+    }
+
     pub fn stage_observation(&mut self, index: usize, owner: LocalId) -> Result<(), String> {
         let Self::Source(source) = self else {
             return Err("generated operand cannot acquire source observation authority".into());
@@ -1645,6 +1739,9 @@ impl CallOwnership {
         match self {
             Self::Source(source) => {
                 for argument in &source.arguments {
+                    if let Some(root) = argument.witness.projection_root {
+                        visit(root.local);
+                    }
                     if let Some(proof) = argument.observation_proof() {
                         for &(capture, _) in &proof.captures {
                             visit(capture);
@@ -1655,7 +1752,8 @@ impl CallOwnership {
                         ArgumentStaging::Transferred { owner } => visit(owner),
                         ArgumentStaging::Copied { value } => visit(value),
                         ArgumentStaging::Borrowed { loan } => visit(loan),
-                        ArgumentStaging::Relinquished { owner, loan } => {
+                        ArgumentStaging::Relinquished { owner, loan }
+                        | ArgumentStaging::RetainedSnapshot { owner, loan } => {
                             visit(owner);
                             visit(loan);
                         }
@@ -1702,6 +1800,9 @@ impl CallOwnership {
         match self {
             Self::Source(source) => {
                 for argument in &mut source.arguments {
+                    if let Some(root) = &mut argument.witness.projection_root {
+                        root.local = map(root.local)?;
+                    }
                     if let Some(proof) = &mut argument.witness.observation {
                         for (capture, _) in &mut proof.captures {
                             *capture = map(*capture)?;
@@ -1713,7 +1814,8 @@ impl CallOwnership {
                         ArgumentStaging::Transferred { owner } => *owner = map(*owner)?,
                         ArgumentStaging::Copied { value } => *value = map(*value)?,
                         ArgumentStaging::Borrowed { loan } => *loan = map(*loan)?,
-                        ArgumentStaging::Relinquished { owner, loan } => {
+                        ArgumentStaging::Relinquished { owner, loan }
+                        | ArgumentStaging::RetainedSnapshot { owner, loan } => {
                             *owner = map(*owner)?;
                             *loan = map(*loan)?;
                         }
@@ -2225,6 +2327,9 @@ pub fn validate_operand_ownership(
                 }
                 if !valid_type(types, argument.actual_type)
                     || !valid_type(types, witness.occurrence_type)
+                    || witness
+                        .handled_result
+                        .is_some_and(|result| !valid_type(types, result.ty))
                     || !valid_type(types, argument.parameter_type)
                 {
                     return Err("call ownership source type is outside its interner".into());
@@ -2270,6 +2375,42 @@ pub fn validate_operand_ownership(
                                     .into(),
                             );
                         }
+                    }
+                }
+                if let Some(proof) = argument.retained_snapshot {
+                    if argument.effect != CheckedCallerEffect::RetainBorrow
+                        || !retained_snapshot_origin(&argument.origin)
+                        || proof.actual_type != argument.actual_type
+                        || proof.occurrence_type != witness.occurrence_type
+                        || !observation_data_type(types, proof.actual_type)
+                        || !observation_data_type(types, proof.occurrence_type)
+                    {
+                        return Err(
+                            "retained snapshot lost its checked ordinary-data endpoint proof"
+                                .into(),
+                        );
+                    }
+                }
+                if let Some(root) = witness.projection_root {
+                    let stored = require_local(root.local, &local)?;
+                    if stored.ty != root.storage_type
+                        || !flow_projection_root_matches(
+                            types,
+                            root.occurrence_type,
+                            root.storage_type,
+                        )
+                        || !matches!(argument.origin,
+                            CallerOrigin::BorrowedProjection { source: CallerViewSource::Local(id) }
+                            | CallerOrigin::OwnedFieldCopy { parent: CallerViewSource::Local(id) }
+                            if id == root.local)
+                        || root.span.file != argument.source_span.file
+                        || root.span.start < argument.source_span.start
+                        || root.span.end > argument.source_span.end
+                        || root.span.start >= root.span.end
+                    {
+                        return Err(
+                            "call ownership flow projection lost its exact checked root".into()
+                        );
                     }
                 }
                 if initial_hir && argument.staging != ArgumentStaging::Original {
@@ -2341,6 +2482,28 @@ pub fn validate_operand_ownership(
                         }
                         if require_local(loan, &local)?.ty != argument_types[parameter_index] {
                             return Err("relinquished call loan has the wrong operand type".into());
+                        }
+                    }
+                    ArgumentStaging::RetainedSnapshot { owner, loan } => {
+                        if argument.effect != CheckedCallerEffect::RetainBorrow
+                            || argument.physical_access != CheckedCalleeAccess::View
+                            || argument.retained_snapshot_type()
+                                != Some(argument_types[parameter_index])
+                            || owner == loan
+                        {
+                            return Err("retained snapshot disagrees with checked endpoint or caller retention".into());
+                        }
+                        let owner = require_local(owner, &local)?;
+                        if owner.ty != argument_types[parameter_index]
+                            || owner.view_source.is_some()
+                            || owner.is_view_parameter
+                            || owner.view_iteration.is_some()
+                            || require_local(loan, &local)?.ty != owner.ty
+                        {
+                            return Err(
+                                "retained snapshot requires an owning endpoint and exact loan type"
+                                    .into(),
+                            );
                         }
                     }
                     ArgumentStaging::Observed { owner } => {
@@ -3017,21 +3180,48 @@ impl crate::BodyLowerer<'_, '_> {
                 effect: fact.effect,
                 context: checked.context,
                 observation,
+                handled_result: None,
+                projection_root: self.checked_flow_projection_root(fact.source_span, &origin)?,
             };
-            arguments.push(ArgumentOwnership {
+            let mut argument = ArgumentOwnership {
                 source_span: fact.source_span,
                 source_index: fact.source_index,
                 parameter_index,
                 actual_type: fact.actual_type,
                 parameter_type: fact.parameter_type,
                 syntax: fact.syntax,
-                origin,
+                origin: origin.clone(),
                 callee_access: fact.callee_access,
                 physical_access: fact.callee_access,
                 effect: fact.effect,
                 staging: ArgumentStaging::Original,
                 witness,
-            });
+                retained_snapshot: (fact.effect == CheckedCallerEffect::RetainBorrow
+                    && retained_snapshot_origin(&origin)
+                    && observation_data_type(&self.parent.check.interner, fact.actual_type)
+                    && observation_data_type(&self.parent.check.interner, occurrence_type))
+                .then_some(RetainedSnapshotProof {
+                    actual_type: fact.actual_type,
+                    occurrence_type,
+                    physical_span: args[parameter_index].span,
+                }),
+            };
+            if argument.origin == CallerOrigin::OwnedExpression {
+                let original = source_operand(
+                    &args[parameter_index],
+                    &argument,
+                    &CallBridge::Direct,
+                    &self.parent.check.interner,
+                )?;
+                let backing = source_view_backing(original);
+                if matches!(backing.kind, ExpressionKind::Handle { .. }) {
+                    argument.witness.handled_result = Some(SourceHandledResult {
+                        ty: backing.ty,
+                        span: backing.span,
+                    });
+                }
+            }
+            arguments.push(argument);
         }
         let shape = checked.shape.clone();
         let context = checked.context;
@@ -3066,6 +3256,70 @@ impl crate::BodyLowerer<'_, '_> {
             true,
         )?;
         Ok(ownership)
+    }
+
+    fn checked_flow_projection_root(
+        &self,
+        source_span: Span,
+        origin: &CallerOrigin,
+    ) -> Result<Option<SourceProjectionRoot>, String> {
+        let local = match origin {
+            CallerOrigin::BorrowedProjection {
+                source: CallerViewSource::Local(id),
+            }
+            | CallerOrigin::OwnedFieldCopy {
+                parent: CallerViewSource::Local(id),
+            } => *id,
+            _ => return Ok(None),
+        };
+        let stored = self
+            .locals
+            .get(local.index() as usize)
+            .filter(|stored| stored.id == local)
+            .ok_or("call ownership projection root has no exact stored local")?;
+        if !valid_type(&self.parent.check.interner, stored.ty) {
+            return Err("call ownership projection root has invalid stored metadata".into());
+        }
+        if !matches!(
+            self.parent.check.interner.resolve(stored.ty),
+            Type::Machine(_)
+        ) {
+            return Ok(None);
+        }
+        let root = self
+            .source_projection_roots
+            .get(&source_span)
+            .ok_or("call ownership projection has no original source AST root")?;
+        let occurrence_type = *self
+            .source_expression_types
+            .get(&root.span)
+            .ok_or("call ownership projection root has no exact checked body type")?;
+        if !flow_projection_root_matches(&self.parent.check.interner, occurrence_type, stored.ty) {
+            return Ok(None);
+        }
+        let definition = self
+            .parent
+            .resolve
+            .resolutions
+            .get(&root.span)
+            .ok_or("call ownership projection root has no exact source definition")?;
+        if self.local_ids.get(definition) != Some(&local)
+            || self.expression_types.get(&root.span) != Some(&occurrence_type)
+            || root.span.file != source_span.file
+            || root.span.start < source_span.start
+            || root.span.end > source_span.end
+            || root.span.start >= root.span.end
+        {
+            return Err(
+                "call ownership flow projection differs from its original source root".into(),
+            );
+        }
+        Ok(Some(SourceProjectionRoot {
+            local,
+            span: root.span,
+            occurrence_type,
+            storage_type: stored.ty,
+        }))
     }
 
     fn checked_ownership_target(
@@ -3383,6 +3637,28 @@ fn source_syntax(mut expression: &jett_parser::ast::Expr) -> CheckedCallerSyntax
     }
 }
 
+/// Syntactic place provenance only, recorded while lowering the original AST.
+pub(super) fn source_projection_ast_root(
+    mut expression: &jett_parser::ast::Expr,
+) -> Option<&jett_parser::ast::Ident> {
+    use jett_parser::ast::Expr;
+    let mut projected = false;
+    loop {
+        expression = match expression {
+            Expr::View(inner, _)
+            | Expr::Paren(inner, _)
+            | Expr::Coarsen(inner, _)
+            | Expr::Declassify(inner, _) => inner,
+            Expr::FieldAccess(base, _, _) => {
+                projected = true;
+                base
+            }
+            Expr::Ident(root) if projected => return Some(root),
+            _ => return None,
+        };
+    }
+}
+
 fn original_view(mut expression: &Expression) -> bool {
     loop {
         match &expression.kind {
@@ -3528,6 +3804,14 @@ pub fn validate_hir_invocation(
     match ownership {
         CallOwnership::Source(source) => {
             for (index, argument) in source.arguments.iter().enumerate() {
+                if argument
+                    .retained_snapshot_span()
+                    .is_some_and(|span| span != args[index].span)
+                {
+                    return Err(
+                        "call ownership retained snapshot physical occurrence changed".into(),
+                    );
+                }
                 validate_source_operand(&args[index], argument, &source.bridge, locals, types)?;
             }
             for (tail, argument) in source.generated_operands.iter().enumerate() {
@@ -4208,8 +4492,45 @@ pub fn validate_source_operand<'a>(
     types: &TypeInterner,
 ) -> Result<&'a Expression, String> {
     let original = source_operand(expression, argument, bridge, types)?;
+    if let Some(backing) = validate_source_handled_operand(expression, argument, bridge, types)?
+        && !matches!(backing.kind, ExpressionKind::Handle { .. })
+    {
+        return Err("call ownership original handled occurrence is no longer a Handle".into());
+    }
     validate_operand_origin(original, argument, locals, types)?;
     Ok(original)
+}
+
+fn source_view_backing(mut value: &Expression) -> &Expression {
+    while let ExpressionKind::View(inner) = &value.kind {
+        value = inner;
+    }
+    value
+}
+
+/// Rejoin a privately retained Handle occurrence through its original finite
+/// conversion. MIR must independently prove a lowered Local's complete CFG;
+/// this occurrence check never grants an owner or manufactures a Binding.
+pub fn validate_source_handled_operand<'a>(
+    expression: &'a Expression,
+    argument: &ArgumentOwnership,
+    bridge: &CallBridge,
+    types: &TypeInterner,
+) -> Result<Option<&'a Expression>, String> {
+    let Some(result) = argument.witness.handled_result else {
+        return Ok(None);
+    };
+    if argument.origin != CallerOrigin::OwnedExpression {
+        return Err("call ownership handled occurrence is not an original source producer".into());
+    }
+    let original = source_operand(expression, argument, bridge, types)?;
+    let backing = source_view_backing(original);
+    if backing.ty != result.ty || backing.span != result.span {
+        return Err(
+            "call ownership handled backing differs from its original typed occurrence".into(),
+        );
+    }
+    Ok(Some(backing))
 }
 
 fn validate_operand_origin(
@@ -4253,8 +4574,12 @@ fn validate_operand_origin(
     }
     match &argument.origin {
         CallerOrigin::Binding(fact) => {
+            let checked_state_narrowing = value.ty == leaf.ty
+                && leaf.ty == argument.actual_type
+                && leaf.ty == argument.witness.occurrence_type
+                && machine_state_parent_matches(types, leaf.ty, fact.ty);
             if !matches!(leaf.kind, ExpressionKind::Local(local) if local == fact.local)
-                || leaf.ty != fact.ty
+                || (leaf.ty != fact.ty && !checked_state_narrowing)
             {
                 return Err(
                     "call ownership binding does not match its actual typed operand".into(),
@@ -4274,8 +4599,12 @@ fn validate_operand_origin(
                 let parent = locals
                     .get(id.index() as usize)
                     .ok_or("call projection source is outside its function")?;
-                crate::validate_local_view_initializer(value, *id, parent.ty, value.ty, types)
-                    .map_err(str::to_string)?;
+                if let Some(root) = argument.witness.projection_root {
+                    validate_flow_projection_operand(value, *id, parent.ty, root, types)?;
+                } else {
+                    crate::validate_local_view_initializer(value, *id, parent.ty, value.ty, types)
+                        .map_err(str::to_string)?;
+                }
             } else {
                 let mut field = leaf;
                 while let ExpressionKind::Field { base, .. } = &field.kind {
@@ -4297,6 +4626,59 @@ fn validate_operand_origin(
     Ok(())
 }
 
+fn validate_flow_projection_operand(
+    value: &Expression,
+    source: LocalId,
+    storage_type: TypeId,
+    root: SourceProjectionRoot,
+    types: &TypeInterner,
+) -> Result<(), String> {
+    if root.local != source
+        || root.storage_type != storage_type
+        || !flow_projection_root_matches(types, root.occurrence_type, storage_type)
+    {
+        return Err("call ownership flow projection changed its declared root storage".into());
+    }
+    // Every existing field/wrapper/endpoint check remains strict. Only this
+    // privately certified source occurrence supplies its exact flowed root type.
+    crate::validate_local_view_initializer(value, source, root.occurrence_type, value.ty, types)
+        .map_err(str::to_string)?;
+    let mut terminal = value;
+    loop {
+        terminal = match &terminal.kind {
+            ExpressionKind::Field { base, .. } => base,
+            ExpressionKind::View(inner)
+            | ExpressionKind::Coarsen(inner)
+            | ExpressionKind::Declassify(inner) => inner,
+            ExpressionKind::InterfaceCoerce { value, adapters } if adapters.is_empty() => value,
+            ExpressionKind::Local(id)
+                if *id == root.local
+                    && terminal.span == root.span
+                    && terminal.ty == root.occurrence_type =>
+            {
+                return Ok(());
+            }
+            _ => {
+                return Err(
+                    "call ownership flow projection changed its exact source occurrence".into(),
+                );
+            }
+        };
+    }
+}
+
+fn flow_projection_root_matches(types: &TypeInterner, occurrence: TypeId, storage: TypeId) -> bool {
+    if !valid_type(types, occurrence) || !valid_type(types, storage) {
+        return false;
+    }
+    let (Type::MachineState { machine, state }, Type::Machine(parent)) =
+        (types.resolve(occurrence), types.resolve(storage))
+    else {
+        return false;
+    };
+    machine == parent && types.resolve_machine(*machine).state(*state).is_some()
+}
+
 pub fn validate_generated_operand_tree(
     value: &Expression,
     argument: &GeneratedArgumentOwnership,
@@ -4315,10 +4697,10 @@ pub fn validate_generated_operand_tree(
     {
         original = inner;
     }
-    if original.span != argument.witness.source_span
-        || original_view(original) != argument.witness.written_view
-        || immediate_source(original) != argument.witness.origin
-    {
+    // A canonical conversion keeps the physical occurrence header, but may
+    // allocate an adapter around the sealed raw parameter. Rejoin its backing
+    // only after the existing exact-actual-type conversion walk below.
+    if original.span != argument.witness.source_span {
         return Err(
             "generated operand differs from its original typed occurrence or backing".into(),
         );
@@ -4329,6 +4711,14 @@ pub fn validate_generated_operand_tree(
             | ExpressionKind::FunctionAdapter { value, .. } => value,
             _ => return Err("generated operand has no checked actual/conversion type".into()),
         };
+    }
+    if original.span != argument.witness.source_span
+        || original_view(original) != argument.witness.written_view
+        || immediate_source(original) != argument.witness.origin
+    {
+        return Err(
+            "generated operand differs from its original typed occurrence or backing".into(),
+        );
     }
     argument.witness.validate_producer_shape(original)?;
     match argument.acquisition {
@@ -4705,6 +5095,18 @@ fn nominal_secret_payload(types: &TypeInterner, mut actual: TypeId) -> Option<Ty
     None
 }
 
+// The checker admits only this one-way nominal state erasure. No state is
+// recovered or substituted, and the checked actual occurrence stays exact.
+fn machine_state_parent_matches(types: &TypeInterner, actual: TypeId, declared: TypeId) -> bool {
+    if !valid_type(types, actual) || !valid_type(types, declared) {
+        return false;
+    }
+    matches!(
+        (types.resolve(actual), types.resolve(declared)),
+        (Type::MachineState { machine, .. }, Type::Machine(parent)) if machine == parent
+    )
+}
+
 fn source_parameter_matches(
     argument: &ArgumentOwnership,
     physical: TypeId,
@@ -4712,6 +5114,10 @@ fn source_parameter_matches(
     types: &TypeInterner,
 ) -> bool {
     physical == declared
+        || (physical == argument.actual_type
+            && physical == argument.witness.occurrence_type
+            && declared == argument.parameter_type
+            && machine_state_parent_matches(types, physical, declared))
         || (has_outer_secret(types, argument.actual_type)
             && secret_taint_matches(types, physical, declared))
         || (physical == argument.actual_type

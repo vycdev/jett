@@ -227,16 +227,79 @@ fn stable_deferred_view(locals: &[Local], expression: &Expression) -> bool {
         .is_some_and(|local| local.id == root && !local.mutable)
 }
 
-/// Only original explicit borrowed positions may receive an internal borrow
-/// scope. Formal-mode wrappers cannot convert a bare owned argument into one.
+/// Preserve an already-checked retained place until its one endpoint snapshot.
+/// Generic value lowering may snapshot a Local below Coarsen/Declassify; that
+/// inner acquisition would change the original Source binding/field witness.
+fn retained_snapshot_place(expression: &Expression) -> Option<Expression> {
+    let mut place = expression;
+    loop {
+        place = match &place.kind {
+            ExpressionKind::Local(_) => return Some(expression.clone()),
+            ExpressionKind::Field { base, .. } => base,
+            ExpressionKind::View(value)
+            | ExpressionKind::Coarsen(value)
+            | ExpressionKind::Declassify(value) => value,
+            _ => return None,
+        };
+    }
+}
+
+/// Ordered staging distinguishes actual borrows from an endpoint whose checked
+/// Source effect requires an owning transfer before physical View access.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OrderedCallViewInput {
+    Unstaged,
+    Borrowed,
+    SourceOwningTransfer,
+}
+
+fn ordered_call_view_input(ownership: &hir::CallOwnership, index: usize) -> OrderedCallViewInput {
+    use jett_typecheck::{CheckedCalleeAccess as Access, CheckedCallerEffect as Effect};
+    match ownership {
+        hir::CallOwnership::Source(source) => {
+            let Some(argument) = source.arguments.get(index) else {
+                return OrderedCallViewInput::Unstaged;
+            };
+            if argument.staging != hir::ArgumentStaging::Original
+                || argument.physical_access != Access::View
+            {
+                return OrderedCallViewInput::Unstaged;
+            }
+            match argument.effect {
+                Effect::RelinquishOwned => OrderedCallViewInput::SourceOwningTransfer,
+                Effect::TransferOwned if source.bridge != hir::CallBridge::Direct => {
+                    OrderedCallViewInput::SourceOwningTransfer
+                }
+                Effect::RetainBorrow | Effect::ObserveData => OrderedCallViewInput::Borrowed,
+                _ => OrderedCallViewInput::Unstaged,
+            }
+        }
+        hir::CallOwnership::Generated(generated) => {
+            if generated.arguments.get(index).is_some_and(|argument| {
+                argument.callee_access == Access::View
+                    && matches!(
+                        argument.acquisition,
+                        hir::GeneratedAcquisition::Borrow { .. } | hir::GeneratedAcquisition::Copy
+                    )
+            }) {
+                OrderedCallViewInput::Borrowed
+            } else {
+                OrderedCallViewInput::Unstaged
+            }
+        }
+    }
+}
+
+/// Retained/generated raw borrows keep their existing origin eligibility.
+/// A checked Source owning transfer instead materializes the full endpoint.
 fn valid_ordered_borrowed_values(
     types: &TypeInterner,
     locals: &[Local],
     values: &[Expression],
     order: &[usize],
-    eligible: &[bool],
+    inputs: &[OrderedCallViewInput],
 ) -> bool {
-    eligible.len() == values.len()
+    inputs.len() == values.len()
         && order.len() == values.len()
         && order.iter().all(|&index| index < values.len())
         && order
@@ -247,9 +310,10 @@ fn valid_ordered_borrowed_values(
             == values.len()
         && values.iter().enumerate().all(|(index, value)| {
             !matches!(value.kind, ExpressionKind::View(_))
+                || inputs[index] == OrderedCallViewInput::SourceOwningTransfer
                 || can_snapshot_view(types, value.ty)
                 || stable_deferred_view(locals, value)
-                || (eligible[index]
+                || (inputs[index] == OrderedCallViewInput::Borrowed
                     && (crate::call_views::borrowed_source(types, locals, value).is_some()
                         || crate::call_views::temporary_root(types, locals, value).is_some()))
         })
@@ -440,21 +504,10 @@ impl Builder<'_> {
         if ownership.parameter_count() != values.len() {
             return None;
         }
-        let eligible = values.iter().enumerate().map(|(index, _)| {
-            ownership.parameter_physical_access(index)
-                == Some(jett_typecheck::CheckedCalleeAccess::View)
-                && matches!(ownership.source_parameter_effect(index),
-                    Some(jett_typecheck::CheckedCallerEffect::RetainBorrow
-                        | jett_typecheck::CheckedCallerEffect::ObserveData
-                        | jett_typecheck::CheckedCallerEffect::RelinquishOwned
-                        | jett_typecheck::CheckedCallerEffect::TransferOwned))
-                || matches!(ownership, hir::CallOwnership::Generated(generated)
-                    if generated.arguments.get(index).is_some_and(|argument|
-                        argument.callee_access == jett_typecheck::CheckedCalleeAccess::View
-                            && matches!(argument.acquisition, hir::GeneratedAcquisition::Borrow { .. }
-                                | hir::GeneratedAcquisition::Copy)))
-        }).collect::<Vec<_>>();
-        if !valid_ordered_borrowed_values(self.types, &self.locals, values, order, &eligible) {
+        let inputs = (0..values.len())
+            .map(|index| ordered_call_view_input(ownership, index))
+            .collect::<Vec<_>>();
+        if !valid_ordered_borrowed_values(self.types, &self.locals, values, order, &inputs) {
             return None;
         }
         if let hir::CallOwnership::Source(source) = ownership {
@@ -479,7 +532,9 @@ impl Builder<'_> {
         self.call_view_scopes.push(Vec::new());
         let mut lowered = values.to_vec();
         for &index in order {
-            if eligible[index] && matches!(ownership, hir::CallOwnership::Generated(_)) {
+            if inputs[index] == OrderedCallViewInput::Borrowed
+                && matches!(ownership, hir::CallOwnership::Generated(_))
+            {
                 lowered[index] =
                     self.lower_generated_call_view(index, &values[index], ownership)?;
                 continue;
@@ -521,14 +576,7 @@ impl Builder<'_> {
                 };
                 continue;
             }
-            let consumes = matches!(
-                ownership.source_parameter_effect(index),
-                Some(
-                    jett_typecheck::CheckedCallerEffect::RelinquishOwned
-                        | jett_typecheck::CheckedCallerEffect::TransferOwned
-                )
-            );
-            if eligible[index] && consumes {
+            if inputs[index] == OrderedCallViewInput::SourceOwningTransfer {
                 let ExpressionKind::View(original) = &values[index].kind else {
                     return None;
                 };
@@ -556,7 +604,57 @@ impl Builder<'_> {
                     self.stage_checked_call_view(index, Some(owner), owner, projection, ownership)?;
                 continue;
             }
-            if eligible[index]
+            if inputs[index] == OrderedCallViewInput::Borrowed
+                && let hir::CallOwnership::Source(source) = ownership
+                && source.arguments[index].retained_snapshot_type() == Some(values[index].ty)
+                && can_snapshot_view(self.types, values[index].ty)
+            {
+                let endpoint = retained_snapshot_place(&values[index])
+                    .unwrap_or_else(|| self.lower_value(&values[index]));
+                let value = Expression {
+                    kind: ExpressionKind::Clone(Box::new(endpoint)),
+                    ty: values[index].ty,
+                    span: values[index].span,
+                };
+                let owner = self.temporary(value.ty, value.span);
+                self.push(
+                    StatementKind::Let {
+                        local: owner,
+                        value,
+                    },
+                    values[index].span,
+                );
+                let projection = Expression {
+                    kind: ExpressionKind::View(Box::new(Expression {
+                        kind: ExpressionKind::Local(owner),
+                        ty: values[index].ty,
+                        span: values[index].span,
+                    })),
+                    ty: values[index].ty,
+                    span: values[index].span,
+                };
+                let loan = self.call_view_temporary(projection.ty, owner, projection.span);
+                ownership.stage_retained_snapshot(index, owner, loan).ok()?;
+                self.push(
+                    StatementKind::BeginCallView {
+                        local: loan,
+                        value: projection.clone(),
+                    },
+                    projection.span,
+                );
+                self.call_view_scopes.last_mut()?.push(loan);
+                lowered[index] = Expression {
+                    kind: ExpressionKind::View(Box::new(Expression {
+                        kind: ExpressionKind::Local(loan),
+                        ty: projection.ty,
+                        span: projection.span,
+                    })),
+                    ty: projection.ty,
+                    span: projection.span,
+                };
+                continue;
+            }
+            if inputs[index] == OrderedCallViewInput::Borrowed
                 && let Some((source, projection)) = self.call_view_initializer(&values[index])
             {
                 lowered[index] =
@@ -1392,14 +1490,9 @@ impl Builder<'_> {
             ownership,
         } = &expression.kind
             && (args.iter().any(needs_eager_lowering) || needs_call_owner_staging(ownership))
-            && args.iter().enumerate().all(|(index, arg)| {
-                !crate::move_values::intrinsic_borrows(*intrinsic, index, arg)
-                    || can_snapshot_view(self.types, arg.ty)
-                    || stable_deferred_view(&self.locals, arg)
-                    || crate::call_views::borrowed_source(self.types, &self.locals, arg).is_some()
-                    || crate::call_views::temporary_root(self.types, &self.locals, arg).is_some()
-            })
         {
+            // Normalize closed physical View roles before the common preflight
+            // distinguishes a source owner transfer from a retained/raw borrow.
             let inputs = args
                 .iter()
                 .enumerate()
@@ -4263,6 +4356,179 @@ function inspect(view source: list[int64], view other: list[int64]) returns list
         }
     }
 
+    fn staged_alias_source_argument(
+        function: &Function,
+        alias: LocalId,
+    ) -> (&hir::ArgumentOwnership, &Expression, BlockId, usize) {
+        let calls = function.blocks.iter().flat_map(|block| {
+            block.statements.iter().enumerate().filter_map(move |(index, statement)| {
+                let value = match &statement.kind {
+                    StatementKind::Let { value, .. } | StatementKind::Evaluate(value) => value,
+                    _ => return None,
+                };
+                let ExpressionKind::Call { ownership: hir::CallOwnership::Source(packet), args, .. } = &value.kind
+                    else { return None; };
+                let argument = packet.arguments.iter().position(|argument|
+                    matches!(&argument.origin, hir::CallerOrigin::Binding(fact) if fact.local == alias))?;
+                Some((&packet.arguments[argument], &args[argument], block.id, index))
+            })
+        }).collect::<Vec<_>>();
+        assert_eq!(calls.len(), 1, "one exact Source argument for the alias");
+        calls[0]
+    }
+
+    fn assert_staged_alias_has_retained_snapshot(
+        program: &Program,
+        function: &Function,
+        alias: LocalId,
+        types: &TypeInterner,
+    ) {
+        let (argument, actual, call_block, call_index) =
+            staged_alias_source_argument(function, alias);
+        assert_eq!(
+            argument.effect,
+            jett_typecheck::CheckedCallerEffect::RetainBorrow
+        );
+        assert_eq!(
+            argument.syntax,
+            jett_typecheck::CheckedCallerSyntax::WrittenView
+        );
+        let hir::ArgumentStaging::RetainedSnapshot { owner, loan } = argument.staging else {
+            panic!("ordinary alias endpoint snapshot");
+        };
+        let physical = argument
+            .retained_snapshot_span()
+            .expect("sealed physical occurrence");
+        assert_eq!(argument.retained_snapshot_type(), Some(actual.ty));
+        assert_eq!(actual.span, physical);
+        assert!(matches!(&actual.kind, ExpressionKind::View(value)
+            if matches!(value.kind, ExpressionKind::Local(id) if id == loan)));
+
+        let statements = || {
+            function.blocks.iter().flat_map(|block| {
+                block
+                    .statements
+                    .iter()
+                    .enumerate()
+                    .map(move |(index, statement)| (block.id, index, statement))
+            })
+        };
+        let owners = statements()
+            .filter_map(|(block, index, statement)| match &statement.kind {
+                StatementKind::Let { local, value } if *local == owner => {
+                    Some((block, index, value))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(owners.len(), 1, "unique owning endpoint initializer");
+        let (owner_block, owner_index, initializer) = owners[0];
+        let ExpressionKind::Clone(endpoint) = &initializer.kind else {
+            panic!("full endpoint Clone");
+        };
+        let ExpressionKind::View(original) = &endpoint.kind else {
+            panic!("unchanged written View");
+        };
+        assert!(matches!(original.kind, ExpressionKind::Local(id) if id == alias));
+        assert_eq!(initializer.span, physical);
+        assert_eq!(endpoint.span, physical);
+        assert_eq!(
+            endpoint.span, argument.source_span,
+            "original written View occurrence"
+        );
+        assert!(function.local(owner).unwrap().view_source.is_none());
+        assert_eq!(function.local(loan).unwrap().view_source, Some(owner));
+
+        let begins = statements()
+            .filter_map(|(block, index, statement)| match &statement.kind {
+                StatementKind::BeginCallView { local, value } if *local == loan => {
+                    Some((block, index, value))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(begins.len(), 1, "unique owner-backed Begin");
+        let (begin_block, begin_index, projection) = begins[0];
+        assert_eq!(begin_block, owner_block);
+        assert!(owner_index < begin_index);
+        assert!(matches!(&projection.kind, ExpressionKind::View(value)
+            if matches!(value.kind, ExpressionKind::Local(id) if id == owner)));
+        let tag_index = function.blocks[owner_block.index() as usize]
+            .statements
+            .iter()
+            .position(|statement| matches!(statement.kind, StatementKind::SumTag { .. }))
+            .expect("later argument handler tag");
+        assert!(
+            begin_index < tag_index,
+            "capture alias endpoint before later handler"
+        );
+
+        let ends = statements()
+            .filter_map(|(block, index, statement)| {
+                matches!(statement.kind, StatementKind::EndCallView { local } if local == loan)
+                    .then_some((block, index))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ends.len(), 1, "unique completion End");
+        let (end_block, end_index) = ends[0];
+        assert_eq!(end_block, call_block);
+        assert!(call_index < end_index);
+
+        // Persistent alias storage remains precisely its checked initializer.
+        let alias_values = statements()
+            .filter_map(|(_, _, statement)| match &statement.kind {
+                StatementKind::Let { local, value } if *local == alias => Some(value),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(alias_values.len(), 1);
+        let metadata = function.local(alias).unwrap();
+        let backing = metadata
+            .view_source
+            .expect("original alias stays nonowning");
+        hir::validate_local_view_initializer(
+            alias_values[0],
+            backing,
+            function.local(backing).unwrap().ty,
+            metadata.ty,
+            types,
+        )
+        .unwrap();
+        let plan = crate::move_values::MoveValuePlan::analyze(program, function, types).unwrap();
+        assert!(plan.owned_locals.contains(&(owner.index() as usize)));
+        assert!(!plan.owned_locals.contains(&(alias.index() as usize)));
+        assert!(!plan.owned_locals.contains(&(loan.index() as usize)));
+        assert!(
+            plan.live_after_statement[call_block.index() as usize][call_index]
+                .contains(&(owner.index() as usize))
+        );
+        assert!(
+            !plan.live_after_statement[end_block.index() as usize][end_index]
+                .contains(&(owner.index() as usize)),
+            "owner becomes dead after End"
+        );
+    }
+
+    fn assert_staged_alias_has_raw_borrow(function: &Function, alias: LocalId) {
+        let (argument, _, _, _) = staged_alias_source_argument(function, alias);
+        assert_eq!(
+            argument.effect,
+            jett_typecheck::CheckedCallerEffect::RetainBorrow
+        );
+        assert_eq!(
+            argument.syntax,
+            jett_typecheck::CheckedCallerSyntax::WrittenView
+        );
+        assert!(
+            argument.retained_snapshot_type().is_none(),
+            "no descriptor data-copy proof"
+        );
+        assert!(matches!(
+            argument.staging,
+            hir::ArgumentStaging::Borrowed { .. }
+        ));
+        assert_staged_alias_is_borrowed(function, alias);
+    }
     fn assert_staged_alias_is_borrowed(function: &Function, alias: LocalId) {
         let statements = || function.blocks.iter().flat_map(|block| &block.statements);
         let loans = statements()
@@ -4310,7 +4576,7 @@ function inspect() returns int64:
             .find(|local| local.name == "forwarded")
             .unwrap()
             .id;
-        assert_staged_alias_is_borrowed(function, forwarded);
+        assert_staged_alias_has_retained_snapshot(&program, function, forwarded, &types);
     }
 
     #[test]
@@ -4377,7 +4643,7 @@ function inspect() returns int64:
     }
 
     #[test]
-    fn handler_call_staging_keeps_copy_owned_view_carriers_borrowed() {
+    fn handler_call_staging_snapshots_data_but_keeps_function_alias_borrowed() {
         let (program, types) = lower_handler_source(
             r#"namespace app
 function increment(value: int64) returns int64:
@@ -4398,15 +4664,16 @@ function inspect() returns int64:
         validate(&program).expect("copy-owned staged views");
         let function = inspected_handler_function(&program);
         crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
-        for name in ["borrowed", "callable"] {
-            let alias = function
+        let alias = |name| {
+            function
                 .locals
                 .iter()
                 .find(|local| local.name == name)
                 .unwrap()
-                .id;
-            assert_staged_alias_is_borrowed(function, alias);
-        }
+                .id
+        };
+        assert_staged_alias_has_retained_snapshot(&program, function, alias("borrowed"), &types);
+        assert_staged_alias_has_raw_borrow(function, alias("callable"));
     }
 
     #[test]

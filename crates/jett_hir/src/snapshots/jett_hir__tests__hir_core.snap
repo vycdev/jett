@@ -1,6 +1,6 @@
 ---
 source: crates/jett_hir/src/lib.rs
-assertion_line: 6992
+assertion_line: 7203
 expression: program
 ---
 Program {
@@ -378,7 +378,10 @@ Program {
                                                         effect: Copy,
                                                         context: Ordinary,
                                                         observation: None,
+                                                        handled_result: None,
+                                                        projection_root: None,
                                                     },
+                                                    retained_snapshot: None,
                                                 },
                                                 ArgumentOwnership {
                                                     source_span: Span {
@@ -427,7 +430,10 @@ Program {
                                                         effect: Copy,
                                                         context: Ordinary,
                                                         observation: None,
+                                                        handled_result: None,
+                                                        projection_root: None,
                                                     },
+                                                    retained_snapshot: None,
                                                 },
                                             ],
                                             bridge: Direct,

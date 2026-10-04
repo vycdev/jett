@@ -4,9 +4,9 @@ function main() returns nothing:
     numbers = set.add[int64](numbers, -2)
     numbers = set.add[int64](numbers, 7)
     numbers = set.add[int64](numbers, -2)
-    println(set.length[int64](numbers), set.contains[int64](numbers, 7))
+    println(set.length[int64](view numbers), set.contains[int64](view numbers, 7))
     numbers = set.remove[int64](numbers, -2)
-    println(set.length[int64](numbers), set.contains[int64](numbers, -2))
+    println(set.length[int64](view numbers), set.contains[int64](view numbers, -2))
     mutable int64 total = 0
     for item in numbers:
         total = total + item
@@ -17,8 +17,8 @@ function main() returns nothing:
     names = set.add[string](names, "ada")
     set[string] copy = clone names
     names = set.remove[string](names, "ada")
-    println(set.length[string](names), set.contains[string](names, "ada"))
-    println(set.length[string](copy), set.contains[string](copy, "ada"))
+    println(set.length[string](view names), set.contains[string](view names, "ada"))
+    println(set.length[string](view copy), set.contains[string](view copy, "ada"))
     for item in view names:
         println(item)
     for item in copy:

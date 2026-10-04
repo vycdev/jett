@@ -224,6 +224,8 @@ fn validate_function_with_signatures<'a>(
     types: &TypeInterner,
     signatures: &[hir::Function],
 ) -> Result<CallerAcquisitions<'a>, String> {
+    // Fresh exact site proof precedes lexical context selection.
+    let breakpoint_sites = crate::breakpoint_regions::validate(function, types)?;
     let mut validator = Validator::new(function, types, signatures)?;
     let context = if function.debug_kind == hir::FunctionDebugKind::Inline {
         CheckedOwnershipContext::Ordinary
@@ -240,11 +242,21 @@ fn validate_function_with_signatures<'a>(
                 block: block.id,
                 statement,
             };
+            let context = if breakpoint_sites.statement(block.id, statement) {
+                CheckedOwnershipContext::BreakpointExpression
+            } else {
+                context
+            };
             validator.statement(&value.kind, site, context)?;
         }
         let site = Site {
             block: block.id,
             statement: block.statements.len(),
+        };
+        let context = if breakpoint_sites.terminator(block.id) {
+            CheckedOwnershipContext::BreakpointExpression
+        } else {
+            context
         };
         validator.terminator(&block.terminator.kind, site, context)?;
     }
@@ -610,15 +622,62 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                             }
                             let (initializer, defined) =
                                 self.owning_let(owner, value.ty, begun.site)?;
-                            // Physical view wrapping is implementation access, not written syntax.
-                            let restored = Expression {
-                                kind: E::View(Box::new(initializer.clone())),
-                                ty: projection.ty,
-                                span: projection.span,
-                            };
-                            self.original(&restored, argument, &source.bridge, defined.site)?;
+                            // The scoped loan proves physical View access separately.
+                            // Rejoin the complete owning initializer without inventing
+                            // a wrapper around its original typed conversion spine.
+                            self.original(initializer, argument, &source.bridge, defined.site)?;
                             self.claim_slot(loan)?;
                             self.claim_owner(owner, acquisition)?;
+                        }
+                        hir::ArgumentStaging::RetainedSnapshot { owner, loan } => {
+                            self.slot_operand(value, loan, true)?;
+                            let (projection, begun) = self.loan(loan, value.ty, site)?;
+                            self.slot_operand(projection, owner, true)?;
+                            if self
+                                .function
+                                .local(loan)
+                                .and_then(|local| local.view_source)
+                                != Some(owner)
+                            {
+                                return Err(
+                                    "retained snapshot loan does not borrow its exact owner".into(),
+                                );
+                            }
+                            let (initializer, defined) =
+                                self.owning_let(owner, value.ty, begun.site)?;
+                            let E::Clone(endpoint) = &initializer.kind else {
+                                return Err(
+                                    "retained snapshot requires a full-endpoint Clone initializer"
+                                        .into(),
+                                );
+                            };
+                            let physical_span = argument
+                                .retained_snapshot_span()
+                                .ok_or("retained snapshot has no checked physical occurrence")?;
+                            // The initial physical View may have a pipeline-step span.
+                            // Its child still rejoins the unchanged exact raw Source span.
+                            let E::View(physical_loan) = &value.kind else {
+                                unreachable!("slot_operand proved View");
+                            };
+                            let E::View(physical_owner) = &projection.kind else {
+                                unreachable!("slot_operand proved View");
+                            };
+                            if argument.retained_snapshot_type() != Some(initializer.ty)
+                                || endpoint.ty != initializer.ty
+                                || initializer.span != physical_span
+                                || endpoint.span != physical_span
+                                || value.span != physical_span
+                                || physical_loan.span != physical_span
+                                || projection.span != physical_span
+                                || physical_owner.span != physical_span
+                                || !crate::handlers::can_snapshot_view(self.types, initializer.ty)
+                            {
+                                return Err("retained snapshot changes its checked endpoint type or occurrence".into());
+                            }
+                            self.original(endpoint, argument, &source.bridge, defined.site)?;
+                            self.retained_snapshot_order(source, argument, defined.site)?;
+                            self.claim_slot(owner)?;
+                            self.claim_slot(loan)?;
                         }
                         hir::ArgumentStaging::Borrowed { loan } => {
                             self.slot_operand(value, loan, true)?;
@@ -648,6 +707,48 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
             hir::CallOwnership::Generated(generated) => {
                 for (value, argument) in args.iter().zip(&generated.arguments) {
                     self.generated_operand(value, argument, site)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn retained_snapshot_order(
+        &self,
+        source: &hir::SourceCallOwnership,
+        argument: &hir::ArgumentOwnership,
+        defined: Site,
+    ) -> Result<(), String> {
+        for later in &source.arguments {
+            if later.source_index <= argument.source_index {
+                continue;
+            }
+            let within = |span: Span| {
+                span.file == later.source_span.file
+                    && span.start < span.end
+                    && later.source_span.start <= span.start
+                    && span.end <= later.source_span.end
+            };
+            for block in &self.function.blocks {
+                for (statement, value) in block.statements.iter().enumerate() {
+                    if within(value.span) {
+                        self.dominates(
+                            defined,
+                            Site {
+                                block: block.id,
+                                statement,
+                            },
+                        )?;
+                    }
+                }
+                if within(block.terminator.span) {
+                    self.dominates(
+                        defined,
+                        Site {
+                            block: block.id,
+                            statement: block.statements.len(),
+                        },
+                    )?;
                 }
             }
         }
@@ -833,20 +934,28 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                 if argument.origin != hir::CallerOrigin::OwnedExpression {
                     return Err(error);
                 }
-                let mut original = value;
-                while let E::View(inner) = &original.kind {
-                    original = inner;
-                }
-                let occurrence_type = argument.source_witness().occurrence_type();
-                if original.ty != occurrence_type || original.span != argument.source_span {
-                    return Err(error);
-                }
+                let original = match hir::validate_source_handled_operand(
+                    value, argument, bridge, self.types,
+                )? {
+                    Some(backing) => backing,
+                    None => {
+                        let mut original = value;
+                        while let E::View(inner) = &original.kind {
+                            original = inner;
+                        }
+                        let occurrence_type = argument.source_witness().occurrence_type();
+                        if original.ty != occurrence_type || original.span != argument.source_span {
+                            return Err(error);
+                        }
+                        original
+                    }
+                };
                 let E::Local(local) = original.kind else {
                     return Err(error);
                 };
                 // The sealed physical occurrence may carry an expected Secret
                 // layer. Raw actual_type still controls caller acquisition.
-                self.produced_result(local, occurrence_type, argument.source_span, site)
+                self.produced_result(local, original.ty, original.span, site)
             }
         }
     }
@@ -938,7 +1047,7 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                         Type::Optional(inner) | Type::Result(inner, _) => *inner,
                         _ => {
                             return Err(
-                                "call ownership produced result is not a typed sum payload".into()
+                                "call ownership produced result is not a typed sum payload".into(),
                             );
                         }
                     };

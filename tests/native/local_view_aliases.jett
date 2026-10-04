@@ -107,14 +107,14 @@ function handler_report() returns string:
     list[int64] borrowed = view source
     function(view list[int64], int64) returns int64 callback = selected_length
     function(view list[int64], int64) returns int64 callback_alias = view callback
-    int64 direct = selected_length(borrowed,(none handle: default 1))
+    int64 direct = selected_length(view borrowed,(none handle: default 1))
     list[int64] indirect_borrowed = view source
-    int64 indirect = callback_alias(indirect_borrowed,(none handle: default 2))
+    int64 indirect = callback_alias(view indirect_borrowed,(none handle: default 2))
     secret[string] hidden = "secret"
     secret[string] hidden_alias = view hidden
     string explicit = selected_secret(view hidden_alias,(none handle: default 3))
     secret[string] implicit_alias = view hidden
-    string implicit = selected_secret(implicit_alias,(none handle: default 4))
+    string implicit = selected_secret(view implicit_alias,(none handle: default 4))
     Label label = "refined" handle error:
         return error
     Label label_alias = view label
@@ -125,7 +125,7 @@ function copied_callbacks(view source: function(int64) returns int64) returns li
     return list(clone borrowed)
 function copied_secret_text(view source: secret[string]) returns optional[string]:
     secret[string] borrowed = view source
-    return some(declassify borrowed)
+    return some(declassify clone borrowed)
 function copied_texts(view source: string) returns list[string]:
     return list(view source, clone view source)
 function copied_text_sum(view source: string) returns optional[string]:

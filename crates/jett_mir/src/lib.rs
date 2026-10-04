@@ -1,6 +1,7 @@
 //! Jett's backend-neutral control-flow graph representation.
 
 mod analysis;
+mod breakpoint_regions;
 mod call_ownership;
 pub use call_ownership::{CallerAcquisitions, SourceAcquisition};
 mod call_views;
@@ -22,7 +23,7 @@ use jett_common::Span;
 use jett_hir::{self as hir, Expression, FieldId, FunctionIdentity, VariantId};
 use jett_types::{TypeId, TypeInterner};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlockId(u32);
 
 impl BlockId {
@@ -54,6 +55,7 @@ pub struct Function {
     prepared_present_successes: Vec<uninhabited_sums::PreparedPresentSuccess>,
     prepared_view_iterations: Vec<iteration_views::PreparedViewIteration>,
     original_view_iterations: Vec<iteration_views::OriginalIteration>,
+    breakpoint_regions: Vec<breakpoint_regions::BreakpointRegion>,
 }
 
 impl Function {
@@ -1130,7 +1132,8 @@ pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Ve
             .functions
             .iter()
             .map(|function| lower_function(function, types, &function_param_modes))
-            .collect(),
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| vec![error])?,
     };
     validate_call_ownership(&lowered, types).map_err(|errors| {
         errors
@@ -1148,7 +1151,7 @@ fn lower_function(
     function: &hir::Function,
     types: &TypeInterner,
     function_param_modes: &std::collections::HashMap<FunctionId, Vec<ParamMode>>,
-) -> Function {
+) -> Result<Function, LowerError> {
     let mut builder = Builder::new(function.body.span, types, function_param_modes);
     builder.locals = function.locals.clone();
     builder.view_params = function
@@ -1168,6 +1171,7 @@ fn lower_function(
     if builder.open() && function.return_type == jett_types::TypeInterner::NOTHING {
         builder.terminate(TerminatorKind::Return(None), function.body.span);
     }
+    let breakpoint_capture = std::mem::take(&mut builder.breakpoint_capture);
     let mut lowered = Function {
         id: function.id,
         identity: function.identity.clone(),
@@ -1183,9 +1187,17 @@ fn lower_function(
         prepared_present_successes: Vec::new(),
         prepared_view_iterations: Vec::new(),
         original_view_iterations: Vec::new(),
+        breakpoint_regions: Vec::new(),
     };
+    lowered.breakpoint_regions =
+        breakpoint_capture
+            .seal(&lowered)
+            .map_err(|message| LowerError {
+                span: function.span,
+                message,
+            })?;
     iteration_views::capture_original(&mut lowered, types);
-    lowered
+    Ok(lowered)
 }
 
 #[derive(Clone)]
@@ -1199,6 +1211,7 @@ struct Builder<'a> {
     locals: Vec<Local>,
     handlers: Vec<(LocalId, BlockId)>,
     view_params: Vec<LocalId>,
+    breakpoint_capture: breakpoint_regions::Capture,
 }
 
 impl<'a> Builder<'a> {
@@ -1224,6 +1237,7 @@ impl<'a> Builder<'a> {
             locals: Vec::new(),
             handlers: Vec::new(),
             view_params: Vec::new(),
+            breakpoint_capture: breakpoint_regions::Capture::default(),
         }
     }
 
@@ -1237,6 +1251,7 @@ impl<'a> Builder<'a> {
                 span,
             },
         });
+        self.breakpoint_capture.block(id);
         id
     }
 
@@ -1248,13 +1263,19 @@ impl<'a> Builder<'a> {
     }
 
     fn terminate(&mut self, kind: TerminatorKind, span: Span) {
-        self.blocks[self.current.index() as usize].terminator = Terminator { kind, span };
+        let value = Terminator { kind, span };
+        self.breakpoint_capture.terminator(self.current, &value);
+        self.blocks[self.current.index() as usize].terminator = value;
     }
 
     fn push(&mut self, kind: StatementKind, span: Span) {
+        let index = self.blocks[self.current.index() as usize].statements.len();
+        let value = Statement { kind, span };
+        self.breakpoint_capture
+            .statement(self.current, index, &value);
         self.blocks[self.current.index() as usize]
             .statements
-            .push(Statement { kind, span });
+            .push(value);
     }
 
     fn close_to(&mut self, target: BlockId, span: Span) {
@@ -1381,6 +1402,14 @@ impl<'a> Builder<'a> {
                 condition,
                 bindings,
             } => {
+                let capturing = condition.is_some();
+                if capturing {
+                    self.breakpoint_capture.begin(
+                        statement,
+                        self.current,
+                        self.blocks[self.current.index() as usize].statements.len(),
+                    );
+                }
                 let condition = condition.as_ref().map(|value| self.lower_value(value));
                 self.push(
                     StatementKind::Breakpoint {
@@ -1389,6 +1418,12 @@ impl<'a> Builder<'a> {
                     },
                     statement.span,
                 );
+                if capturing {
+                    self.breakpoint_capture.end(
+                        self.current,
+                        self.blocks[self.current.index() as usize].statements.len() - 1,
+                    );
+                }
             }
             hir::StatementKind::Respond(value) => {
                 self.end_call_views_since(0, statement.span);

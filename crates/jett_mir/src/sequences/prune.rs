@@ -3,9 +3,10 @@
 //! below therefore name dense local/block tables, including unreachable input.
 use super::*;
 
-pub(crate) fn unreachable(function: &mut Function) {
+pub(crate) fn unreachable(function: &mut Function) -> bool {
+    let before = (!function.breakpoint_regions.is_empty()).then(|| function.clone());
     let Ok(cfg) = ControlFlowGraph::analyze(function) else {
-        return;
+        return false;
     };
     let mut reachable = vec![false; function.blocks.len()];
     let mut pending = vec![function.entry];
@@ -45,12 +46,21 @@ pub(crate) fn unreachable(function: &mut Function) {
         .original_view_iterations
         .retain_mut(|record| record.remap_blocks(&blocks));
 
-    unused_locals(function);
+    if crate::breakpoint_regions::remap_blocks(function, &blocks).is_err()
+        || !unused_locals(function)
+    {
+        if let Some(before) = before {
+            *function = before;
+        }
+        return false;
+    }
+    true
 }
 
 /// Remove absent frame slots without changing any original control-flow block.
 /// Every parameter, binding, read, capture and debug or loan reference survives.
-pub(crate) fn unused_locals(function: &mut Function) {
+pub(crate) fn unused_locals(function: &mut Function) -> bool {
+    let before = (!function.breakpoint_regions.is_empty()).then(|| function.clone());
     let mut used = vec![false; function.locals.len()];
     for parameter in &function.params {
         used[parameter.local.index() as usize] = true;
@@ -121,9 +131,16 @@ pub(crate) fn unused_locals(function: &mut Function) {
     function
         .original_view_iterations
         .retain_mut(|record| record.remap_locals(&locals));
+    if crate::breakpoint_regions::remap_locals(function, &locals).is_err() {
+        if let Some(before) = before {
+            *function = before;
+        }
+        return false;
+    }
+    true
 }
 
-fn block_targets(kind: &mut TerminatorKind, visit: &impl Fn(&mut BlockId)) {
+pub(crate) fn block_targets(kind: &mut TerminatorKind, visit: &impl Fn(&mut BlockId)) {
     match kind {
         TerminatorKind::Goto(target) => visit(target),
         TerminatorKind::Branch {

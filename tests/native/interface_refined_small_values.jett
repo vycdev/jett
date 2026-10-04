@@ -22,11 +22,11 @@ implement Named for Enabled:
         return "enabled:{coarsen self}"
 implement Named for bytes:
     function name(view self: bytes) returns string:
-        return "bytes:{bytes.to_hex(self)}"
+        return "bytes:{bytes.to_hex(view self)}"
 implement Named for Data:
     function name(view self: Data) returns string:
-        string text = bytes.to_hex(coarsen self)
-        int64 length = bytes.length(coarsen self)
+        string text = bytes.to_hex(view coarsen self)
+        int64 length = bytes.length(view coarsen self)
         if length == 0:
             return "empty"
         return "data:{text}"
@@ -34,9 +34,9 @@ struct Packet:
     data: Data
     hidden: secret[bytes]
 function hex(view data: bytes) returns string:
-    return bytes.to_hex(data)
+    return bytes.to_hex(view data)
 function sized(view data: bytes, length: int64) returns string:
-    return "{bytes.to_hex(data)}:{length}"
+    return "{bytes.to_hex(view data)}:{length}"
 function borrowed() returns string:
     Packet packet = Packet(data: bytes.from_string("ok"), hidden: bytes.from_string("sh")) handle error:
         return error

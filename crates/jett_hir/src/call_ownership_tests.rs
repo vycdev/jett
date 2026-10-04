@@ -1878,3 +1878,1489 @@ fn caller_packets_reject_replaced_nominal_secret_operands_and_untainted_results(
         rejects(&corrupted, &checked, "untainted nominal Secret result");
     }
 }
+
+#[test]
+fn caller_packets_accept_exact_qualified_descriptors_but_not_value_substitutions() {
+    let source = r#"namespace app
+struct Holder:
+    callback: function(int64) returns int64
+function identity(value: int64) returns int64:
+    return value
+function inspect(view callback: function(int64) returns int64, marker: int64) returns int64:
+    return marker
+function exercise(holder: Holder, stored: function(int64) returns int64) returns int64:
+    return inspect(marker: 1, callback: app.identity)
+"#;
+    for replacement in ["local", "field"] {
+        let (mut program, checked) = checked_source(source);
+        let index = exercise_index(&program);
+        let holder = local_id(&program.functions[index], "holder");
+        let stored = local_id(&program.functions[index], "stored");
+        let holder_type = program.functions[index].locals[holder.index() as usize].ty;
+        let expression = returned_call_mut(&mut program.functions[index]);
+        let ExpressionKind::Call {
+            args,
+            ownership: CallOwnership::Source(packet),
+            evaluation_order,
+            ..
+        } = &mut expression.kind
+        else {
+            panic!("qualified descriptor argument");
+        };
+        assert_eq!(evaluation_order, &[1, 0]);
+        assert_eq!(packet.arguments[0].origin, CallerOrigin::OwnedExpression);
+        assert!(matches!(args[0].kind, ExpressionKind::FunctionRef(_)));
+        args[0].kind = if replacement == "local" {
+            ExpressionKind::Local(stored)
+        } else {
+            ExpressionKind::Field {
+                base: Box::new(Expression {
+                    kind: ExpressionKind::Local(holder),
+                    ty: holder_type,
+                    span: args[0].span,
+                }),
+                owner_type: holder_type,
+                field: FieldId::new(0),
+            }
+        };
+        let errors = validate_program_call_ownership(&program, &checked.interner)
+            .expect_err("a descriptor producer cannot be replaced by a value origin");
+        assert!(errors.iter().any(|error| error.message ==
+            "call ownership cannot manufacture a producer acquisition from a binding or field"),
+            "{replacement}: {errors:?}");
+    }
+}
+
+#[test]
+fn caller_packets_keep_method_producers_and_real_callback_field_projections_distinct() {
+    let source = r#"namespace models
+export struct Point:
+    value: int64
+    function amount(view self: Point) returns int64:
+        return self.value
+namespace app
+struct Holder:
+    callback: function(view models.Point) returns int64
+function inspect(view callback: function(view models.Point) returns int64) returns int64:
+    return 7
+function method_call() returns int64:
+    use models as m
+    return inspect(view m.Point.amount)
+function exercise(view holder: Holder) returns int64:
+    return inspect(view holder.callback)
+"#;
+    let (program, checked) = checked_source(source);
+    let method = program
+        .functions
+        .iter()
+        .find(|function| function.identity.declaration.name == "method_call")
+        .expect("method source caller");
+    let ExpressionKind::Call {
+        args,
+        ownership: CallOwnership::Source(packet),
+        ..
+    } = &returned_call(method).kind
+    else {
+        panic!("method descriptor call");
+    };
+    assert_eq!(packet.arguments[0].origin, CallerOrigin::OwnedExpression);
+    let ExpressionKind::View(inner) = &args[0].kind else {
+        panic!("written descriptor view");
+    };
+    assert!(matches!(inner.kind, ExpressionKind::FunctionRef(_)));
+    let field = &program.functions[exercise_index(&program)];
+    let ExpressionKind::Call {
+        args,
+        ownership: CallOwnership::Source(packet),
+        ..
+    } = &returned_call(field).kind
+    else {
+        panic!("borrowed value field call");
+    };
+    assert!(
+        matches!(packet.arguments[0].origin, CallerOrigin::BorrowedProjection {
+        source: CallerViewSource::Local(local)
+    } if local == local_id(field, "holder"))
+    );
+    let ExpressionKind::View(inner) = &args[0].kind else {
+        panic!("written field view");
+    };
+    assert!(matches!(inner.kind, ExpressionKind::Field { .. }));
+    validate_program_call_ownership(&program, &checked.interner)
+        .expect("both exact origins validate");
+}
+
+#[test]
+fn caller_packets_generic_mutual_source_calls_have_exact_syntax_type_and_target_proofs() {
+    let source = r#"namespace sample
+mutual:
+    function leaf[T](view value: T) returns int64
+    function alternate[T](value: T) returns int64
+    function forward[T](view value: T) returns int64
+function leaf[T](view value: T) returns int64:
+    return 7
+function alternate[T](value: T) returns int64:
+    return 9
+function forward[T](view value: T) returns int64:
+    return leaf[T](view value)
+function exercise(values: list[int64]) returns int64:
+    return forward[list[int64]](view values)
+function instantiate_alternate(values: list[int64]) returns int64:
+    return alternate[list[int64]](values)
+"#;
+    let (program, checked) = checked_source(source);
+    let forward = program
+        .functions
+        .iter()
+        .find(|function| function.identity.declaration.name == "forward")
+        .expect("concrete mutual forwarding");
+    let ExpressionKind::Call {
+        ownership: CallOwnership::Source(packet),
+        ..
+    } = &returned_call(forward).kind
+    else {
+        panic!("source forward call");
+    };
+    assert_eq!(
+        packet.arguments[0].syntax,
+        jett_typecheck::CheckedCallerSyntax::WrittenView
+    );
+    assert_eq!(
+        packet.arguments[0].effect,
+        jett_typecheck::CheckedCallerEffect::RetainBorrow
+    );
+    assert_eq!(packet.arguments[0].callee_access, CheckedCalleeAccess::View);
+    validate_program_call_ownership(&program, &checked.interner).expect("every exact packet");
+    for mutation in ["syntax", "type", "target"] {
+        let mut corrupted = program.clone();
+        let alternate = corrupted
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "alternate")
+            .expect("owned alternative")
+            .id;
+        let index = corrupted
+            .functions
+            .iter()
+            .position(|function| function.identity.declaration.name == "forward")
+            .unwrap();
+        let expression = returned_call_mut(&mut corrupted.functions[index]);
+        let ExpressionKind::Call {
+            function,
+            ownership: CallOwnership::Source(packet),
+            ..
+        } = &mut expression.kind
+        else {
+            panic!("real mutual packet");
+        };
+        match mutation {
+            "syntax" => packet.arguments[0].syntax = jett_typecheck::CheckedCallerSyntax::Bare,
+            "type" => packet.arguments[0].actual_type = TypeInterner::INT64,
+            "target" => *function = alternate,
+            _ => unreachable!(),
+        }
+        let errors = validate_program_call_ownership(&corrupted, &checked.interner)
+            .expect_err("exact original mutual proof cannot be changed");
+        assert!(!errors.is_empty(), "{mutation}");
+    }
+}
+
+const MACHINE_STATE_SOURCE_JOINS: &str = r#"machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+    transitions:
+        guest to logged_in
+machine OtherSession:
+    states:
+        guest
+        logged_in(user_id: string)
+    transitions:
+        guest to logged_in
+function precise(session: Session at logged_in) returns string:
+    return session.user_id
+function guest_only(session: Session at guest) returns string:
+    return "guest"
+function other_only(view session: OtherSession at logged_in) returns int64:
+    return 2
+function wide(view session: Session) returns int64:
+    return 7
+function owned_wide(session: Session) returns int64:
+    return 9
+function guarded(session: Session) returns string:
+    if session at logged_in:
+        return precise(session)
+    return "guest"
+function exercise_direct(view session: Session at logged_in) returns int64:
+    return wide(view session)
+function exercise_indirect(view session: Session at logged_in, callback: function(view Session) returns int64) returns int64:
+    return callback(view session)
+"#;
+
+fn machine_state_caller_index(program: &Program, name: &str) -> usize {
+    program
+        .functions
+        .iter()
+        .position(|function| function.identity.declaration.name == name)
+        .expect("exact source function")
+}
+
+fn guarded_machine_call(function: &Function) -> &Expression {
+    let StatementKind::If { then_block, .. } = &function.body.statements[0].kind else {
+        panic!("checked source state guard");
+    };
+    let StatementKind::Return(Some(expression)) = &then_block.statements[0].kind else {
+        panic!("call inside exact state guard");
+    };
+    expression
+}
+
+#[test]
+fn caller_packets_machine_guard_keeps_exact_occurrence_and_declared_binding() {
+    let (program, checked) = checked_source(MACHINE_STATE_SOURCE_JOINS);
+    let caller = &program.functions[machine_state_caller_index(&program, "guarded")];
+    let ExpressionKind::Call {
+        args,
+        ownership: CallOwnership::Source(packet),
+        ..
+    } = &guarded_machine_call(caller).kind
+    else {
+        panic!("checked narrowed call");
+    };
+    let argument = &packet.arguments[0];
+    let CallerOrigin::Binding(fact) = &argument.origin else {
+        panic!("original binding");
+    };
+    let Type::Machine(parent) = checked.interner.resolve(fact.ty) else {
+        panic!("declaration remains bare machine");
+    };
+    let Type::MachineState { machine, .. } = checked.interner.resolve(argument.actual_type) else {
+        panic!("checked occurrence retains exact state");
+    };
+    assert_eq!(parent, machine);
+    assert_ne!(fact.ty, argument.actual_type);
+    assert_eq!(caller.locals[fact.local.index() as usize].ty, fact.ty);
+    assert_eq!(args[0].ty, argument.actual_type);
+    assert_eq!(
+        argument.source_witness().occurrence_type(),
+        argument.actual_type
+    );
+    assert!(matches!(args[0].kind, ExpressionKind::Local(local) if local == fact.local));
+    assert_eq!(argument.syntax, jett_typecheck::CheckedCallerSyntax::Bare);
+    assert_eq!(
+        argument.effect,
+        jett_typecheck::CheckedCallerEffect::TransferOwned
+    );
+    assert_eq!(argument.callee_access, CheckedCalleeAccess::Owned);
+    validate_program_call_ownership(&program, &checked.interner).expect("exact state proof");
+}
+
+#[test]
+fn caller_packets_machine_state_views_erase_only_to_exact_parent_parameters() {
+    let (program, checked) = checked_source(MACHINE_STATE_SOURCE_JOINS);
+    for name in ["exercise_direct", "exercise_indirect"] {
+        let caller = &program.functions[machine_state_caller_index(&program, name)];
+        let (args, packet) = match &returned_call(caller).kind {
+            ExpressionKind::Call {
+                args,
+                ownership: CallOwnership::Source(packet),
+                ..
+            }
+            | ExpressionKind::IndirectCall {
+                args,
+                ownership: CallOwnership::Source(packet),
+                ..
+            } => (args, packet),
+            _ => panic!("checked direct or indirect source call"),
+        };
+        let argument = &packet.arguments[0];
+        let Type::MachineState { machine, .. } = checked.interner.resolve(argument.actual_type)
+        else {
+            panic!("physical argument remains exact state");
+        };
+        let Type::Machine(parent) = checked.interner.resolve(argument.parameter_type) else {
+            panic!("parameter is bare parent machine");
+        };
+        assert_eq!(machine, parent);
+        assert_ne!(argument.actual_type, argument.parameter_type);
+        assert_eq!(args[0].ty, argument.actual_type);
+        assert_eq!(
+            argument.source_witness().occurrence_type(),
+            argument.actual_type
+        );
+        assert!(matches!(args[0].kind, ExpressionKind::View(_)));
+        assert_eq!(
+            argument.syntax,
+            jett_typecheck::CheckedCallerSyntax::WrittenView
+        );
+        assert_eq!(
+            argument.effect,
+            jett_typecheck::CheckedCallerEffect::RetainBorrow
+        );
+        assert_eq!(argument.callee_access, CheckedCalleeAccess::View);
+    }
+    validate_program_call_ownership(&program, &checked.interner)
+        .expect("one-way exact parent joins");
+}
+
+#[test]
+fn caller_packets_machine_state_joins_preserve_private_type_syntax_and_mode_proofs() {
+    let (program, checked) = checked_source(MACHINE_STATE_SOURCE_JOINS);
+    let direct = machine_state_caller_index(&program, "exercise_direct");
+    let guest = program.functions[machine_state_caller_index(&program, "guest_only")].params[0].ty;
+    let other = program.functions[machine_state_caller_index(&program, "other_only")].params[0].ty;
+    let owned = program.functions[machine_state_caller_index(&program, "owned_wide")].id;
+    for mutation in ["wrong state", "wrong machine", "syntax", "owned target"] {
+        let mut corrupted = program.clone();
+        let ExpressionKind::Call {
+            function,
+            args,
+            ownership: CallOwnership::Source(packet),
+            ..
+        } = &mut returned_call_mut(&mut corrupted.functions[direct]).kind
+        else {
+            panic!("real source View packet");
+        };
+        match mutation {
+            "wrong state" | "wrong machine" => {
+                let replacement = if mutation == "wrong state" {
+                    guest
+                } else {
+                    other
+                };
+                assert_ne!(args[0].ty, replacement);
+                args[0].ty = replacement;
+                let ExpressionKind::View(inner) = &mut args[0].kind else {
+                    panic!("written View");
+                };
+                inner.ty = replacement;
+            }
+            "syntax" => packet.arguments[0].syntax = jett_typecheck::CheckedCallerSyntax::Bare,
+            "owned target" => *function = owned,
+            _ => unreachable!(),
+        }
+        let errors = validate_program_call_ownership(&corrupted, &checked.interner)
+            .expect_err("private exact state/source/mode witness cannot be changed");
+        assert!(!errors.is_empty(), "{mutation}");
+    }
+    let mut corrupted = program.clone();
+    let guarded = machine_state_caller_index(&corrupted, "guarded");
+    let StatementKind::If { then_block, .. } =
+        &mut corrupted.functions[guarded].body.statements[0].kind
+    else {
+        panic!("original guard");
+    };
+    let StatementKind::Return(Some(expression)) = &mut then_block.statements[0].kind else {
+        panic!("guarded call");
+    };
+    let packet = source_packet_mut(expression);
+    let CallerOrigin::Binding(fact) = &mut packet.arguments[0].origin else {
+        panic!("binding fact");
+    };
+    fact.ty = other;
+    assert!(
+        validate_program_call_ownership(&corrupted, &checked.interner).is_err(),
+        "the declared binding fact stays exact"
+    );
+}
+
+#[test]
+fn caller_packets_machine_state_join_does_not_admit_wrong_nominal_or_state_sources() {
+    for source in [
+        MACHINE_STATE_SOURCE_JOINS.replace(
+            "return wide(view session)",
+            "return other_only(view session)",
+        ),
+        MACHINE_STATE_SOURCE_JOINS.replace("return precise(session)", "return guest_only(session)"),
+    ] {
+        let parsed = jett_parser::parse(&source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != Severity::Error),
+            "{:?}",
+            resolved.diagnostics
+        );
+        let checked = jett_typecheck::check(&parsed.module, &resolved);
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == Severity::Error
+                    && diagnostic.code.code() == 304),
+            "wrong machine/state remains a checked argument error: {:?}",
+            checked.diagnostics
+        );
+    }
+}
+
+const CONVERTED_SOURCE_HANDLE: &str = r#"namespace app
+interface Show:
+    function show(view self: Show) returns string
+implement Show for uint64:
+    function show(view self: uint64) returns string:
+        return "uint64"
+function read(view value: Show) returns int64:
+    return 7
+function exercise(incoming: optional[uint64], spare: uint64) returns int64:
+    uint64 fallback = 0
+    return read(view(incoming handle:
+        default fallback
+    ))
+"#;
+
+#[test]
+fn caller_packets_converted_handle_keeps_inner_occurrence_separate_from_written_view() {
+    let (program, checked) = checked_source(CONVERTED_SOURCE_HANDLE);
+    let function = &program.functions[exercise_index(&program)];
+    let ExpressionKind::Call {
+        args,
+        ownership: CallOwnership::Source(packet),
+        ..
+    } = &returned_call(function).kind
+    else {
+        panic!("source read");
+    };
+    let argument = &packet.arguments[0];
+    let backing = call_ownership::validate_source_handled_operand(
+        &args[0],
+        argument,
+        &packet.bridge,
+        &checked.interner,
+    )
+    .expect("exact finite conversion")
+    .expect("original Handle");
+    assert!(matches!(backing.kind, ExpressionKind::Handle { .. }));
+    assert_eq!(backing.ty, TypeInterner::UINT64);
+    assert_eq!(argument.actual_type, TypeInterner::UINT64);
+    assert!(matches!(
+        checked.interner.resolve(argument.parameter_type),
+        Type::Interface(_)
+    ));
+    assert_ne!(backing.span, argument.source_span);
+    assert_eq!(
+        argument.syntax,
+        jett_typecheck::CheckedCallerSyntax::WrittenView
+    );
+    assert_eq!(argument.origin, CallerOrigin::OwnedExpression);
+}
+
+#[test]
+fn caller_packets_converted_handle_rejects_lost_inner_occurrence_and_original_node() {
+    let (program, checked) = checked_source(CONVERTED_SOURCE_HANDLE);
+    for mutation in ["span", "type", "literal replacement"] {
+        let mut corrupted = program.clone();
+        let function = &mut corrupted.functions[exercise_index(&program)];
+        let ExpressionKind::Call { args, .. } = &mut returned_call_mut(function).kind else {
+            panic!("source read");
+        };
+        let mut backing = &mut args[0];
+        while matches!(
+            backing.kind,
+            ExpressionKind::View(_)
+                | ExpressionKind::InterfaceCoerce { .. }
+                | ExpressionKind::FunctionAdapter { .. }
+        ) {
+            backing = match &mut backing.kind {
+                ExpressionKind::View(inner)
+                | ExpressionKind::InterfaceCoerce { value: inner, .. }
+                | ExpressionKind::FunctionAdapter { value: inner, .. } => inner,
+                _ => unreachable!("transparent conversion checked before borrowing"),
+            };
+        }
+        assert!(matches!(backing.kind, ExpressionKind::Handle { .. }));
+        match mutation {
+            "span" => backing.span.start += 1,
+            "type" => backing.ty = TypeInterner::INT64,
+            "literal replacement" => backing.kind = ExpressionKind::Int(0),
+            _ => unreachable!(),
+        }
+        rejects(&corrupted, &checked, mutation);
+    }
+}
+
+const QUALIFIED_UNIT_ENUM_SOURCE: &str = r#"namespace models
+export enum Choice:
+    empty
+    full(value: int64)
+namespace app
+struct Holder:
+    choice: models.Choice
+function inspect(view choice: models.Choice, marker: int64) returns int64:
+    return marker
+function exercise(holder: Holder, stored: models.Choice) returns int64:
+    use models as m
+    return inspect(marker: 1, choice: m.Choice.empty)
+"#;
+
+#[test]
+fn caller_packets_qualified_unit_enums_are_producers_not_same_typed_value_origins() {
+    let (program, checked) = checked_source(QUALIFIED_UNIT_ENUM_SOURCE);
+    let index = exercise_index(&program);
+    let ExpressionKind::Call {
+        args,
+        ownership: CallOwnership::Source(packet),
+        evaluation_order,
+        ..
+    } = &returned_call(&program.functions[index]).kind
+    else {
+        panic!("qualified enum Source invocation");
+    };
+    assert_eq!(evaluation_order, &[1, 0]);
+    assert_eq!(packet.arguments[0].origin, CallerOrigin::OwnedExpression);
+    assert_eq!(
+        packet.arguments[0].effect,
+        jett_typecheck::CheckedCallerEffect::RelinquishOwned
+    );
+    let ExpressionKind::EnumConstruct {
+        enum_type,
+        variant,
+        payloads,
+        evaluation_order,
+    } = &args[0].kind
+    else {
+        panic!("exact static unit construction");
+    };
+    assert_eq!(*enum_type, packet.arguments[0].actual_type);
+    assert_eq!(args[0].ty, *enum_type);
+    assert!(payloads.is_empty() && evaluation_order.is_empty());
+    let Type::Enum(id) = checked.interner.resolve(*enum_type) else {
+        panic!("nominal Enum identity");
+    };
+    let declaration = checked.interner.resolve_enum(*id);
+    assert_eq!(declaration.name, "models.Choice");
+    assert_eq!(declaration.variants[variant.index() as usize].name, "empty");
+    assert!(
+        declaration.variants[variant.index() as usize]
+            .fields
+            .is_empty()
+    );
+    for replacement in ["local", "field", "public projection"] {
+        let mut corrupted = program.clone();
+        let holder = local_id(&corrupted.functions[index], "holder");
+        let stored = local_id(&corrupted.functions[index], "stored");
+        let holder_type = corrupted.functions[index].locals[holder.index() as usize].ty;
+        let expression = returned_call_mut(&mut corrupted.functions[index]);
+        let ExpressionKind::Call {
+            args,
+            ownership: CallOwnership::Source(packet),
+            ..
+        } = &mut expression.kind
+        else {
+            panic!("checked enum invocation");
+        };
+        match replacement {
+            "local" => args[0].kind = ExpressionKind::Local(stored),
+            "field" => {
+                args[0].kind = ExpressionKind::Field {
+                    base: Box::new(Expression {
+                        kind: ExpressionKind::Local(holder),
+                        ty: holder_type,
+                        span: args[0].span,
+                    }),
+                    owner_type: holder_type,
+                    field: FieldId::new(0),
+                }
+            }
+            "public projection" => {
+                packet.arguments[0].origin = CallerOrigin::OwnedFieldCopy {
+                    parent: CallerViewSource::Other,
+                }
+            }
+            _ => unreachable!(),
+        }
+        let expected = if replacement == "public projection" {
+            "call ownership disagrees with its original source witness"
+        } else {
+            "call ownership cannot manufacture a producer acquisition from a binding or field"
+        };
+        let errors = validate_program_call_ownership(&corrupted, &checked.interner)
+            .expect_err("static producer authority cannot become a real value origin");
+        assert!(
+            errors.iter().any(|error| error.message == expected),
+            "{replacement}: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn caller_packets_enum_valued_bindings_fields_and_temporary_fields_keep_exact_roots() {
+    let source = r#"namespace models
+export enum Choice:
+    empty
+    full(value: int64)
+namespace app
+struct Holder:
+    choice: models.Choice
+function inspect(view choice: models.Choice, marker: int64) returns int64:
+    return marker
+function from_field(view holder: Holder) returns int64:
+    return inspect(holder.choice, 1)
+function from_view(view holder: Holder) returns int64:
+    return inspect(view holder.choice, 2)
+function exercise(view stored: models.Choice) returns int64:
+    return inspect(view stored, 3)
+function from_temporary() returns int64:
+    use models
+    return inspect(Holder(choice: models.Choice.empty).choice, 4)
+"#;
+    let (program, checked) = checked_source(source);
+    for name in ["from_field", "from_view", "exercise", "from_temporary"] {
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == name)
+            .expect("checked runtime origin control");
+        let ExpressionKind::Call {
+            args,
+            ownership: CallOwnership::Source(packet),
+            ..
+        } = &returned_call(function).kind
+        else {
+            panic!("ordinary enum call");
+        };
+        let argument = &packet.arguments[0];
+        assert!(matches!(
+            checked.interner.resolve(argument.actual_type),
+            Type::Enum(_)
+        ));
+        let mut value = &args[0];
+        if let ExpressionKind::View(inner) = &value.kind {
+            value = inner;
+        }
+        match name {
+            "from_field" => {
+                assert_eq!(
+                    argument.origin,
+                    CallerOrigin::OwnedFieldCopy {
+                        parent: CallerViewSource::Local(local_id(function, "holder")),
+                    }
+                );
+                assert!(matches!(value.kind, ExpressionKind::Field { .. }));
+            }
+            "from_view" => {
+                assert_eq!(
+                    argument.origin,
+                    CallerOrigin::BorrowedProjection {
+                        source: CallerViewSource::Local(local_id(function, "holder")),
+                    }
+                );
+                assert!(matches!(value.kind, ExpressionKind::Field { .. }));
+            }
+            "exercise" => {
+                assert!(matches!(argument.origin, CallerOrigin::Binding(fact)
+                    if fact.local == local_id(function, "stored")));
+                assert!(matches!(value.kind, ExpressionKind::Local(_)));
+            }
+            "from_temporary" => {
+                assert_eq!(
+                    argument.origin,
+                    CallerOrigin::OwnedFieldCopy {
+                        parent: CallerViewSource::Other,
+                    }
+                );
+                let ExpressionKind::Field { base, .. } = &value.kind else {
+                    panic!("a real temporary field is not a static enum producer");
+                };
+                assert!(matches!(base.kind, ExpressionKind::StructConstruct { .. }));
+            }
+            _ => unreachable!(),
+        }
+    }
+    validate_program_call_ownership(&program, &checked.interner)
+        .expect("enum TypeId alone does not change source roots or copying rules");
+}
+
+#[test]
+fn caller_packets_retained_pipeline_seals_physical_header_separately_from_raw_source() {
+    let source = r#"namespace app
+function read(view values: list[int64], extra: int64) returns int64:
+    return extra
+function exercise(view values: list[int64]) returns int64:
+    return values into view read(2)
+"#;
+    let (program, checked) = checked_source(source);
+    let index = exercise_index(&program);
+    let ExpressionKind::Call {
+        ownership: CallOwnership::Source(packet),
+        args,
+        ..
+    } = &returned_call(&program.functions[index]).kind
+    else {
+        panic!("source pipeline");
+    };
+    let argument = &packet.arguments[0];
+    assert_eq!(argument.retained_snapshot_span(), Some(args[0].span));
+    assert_ne!(args[0].span, argument.source_span);
+    assert_eq!(argument.source_span, {
+        let ExpressionKind::View(raw) = &args[0].kind else {
+            panic!("written pipeline View");
+        };
+        raw.span
+    });
+    assert_eq!(
+        argument.effect,
+        jett_typecheck::CheckedCallerEffect::RetainBorrow
+    );
+    assert_eq!(
+        argument.syntax,
+        jett_typecheck::CheckedCallerSyntax::WrittenView
+    );
+    assert_eq!(argument.staging, ArgumentStaging::Original);
+
+    let mut changed = program.clone();
+    let ExpressionKind::Call { args, .. } =
+        &mut returned_call_mut(&mut changed.functions[index]).kind
+    else {
+        panic!("original pipeline");
+    };
+    args[0].span.start += 1;
+    let errors = validate_program_call_ownership(&changed, &checked.interner)
+        .expect_err("a new physical header cannot replace the private initial occurrence");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message
+                == "call ownership retained snapshot physical occurrence changed"),
+        "{errors:?}"
+    );
+}
+
+const GENERATED_CONVERTED_CALLABLE_SOURCE: &str = r#"namespace app
+interface Named:
+    function name(view self: Named) returns string
+struct User:
+    label: string
+implement Named for User:
+    function name(view self: User) returns string:
+        return "user:{self.label}"
+function show(view item: Named) returns string:
+    return Named.name(view item)
+function invoke_reader(reader: function(view User) returns string) returns string:
+    User input = User(label: "higher-order")
+    return reader(view input)
+function exercise() returns string:
+    function(function(view Named) returns string) returns string higher = invoke_reader
+    return higher(show)
+"#;
+const GENERATED_CONVERTED_CONTAINER_SOURCE: &str = r#"namespace app
+interface Named:
+    function name(view self: Named) returns string
+struct User:
+    label: string
+implement Named for User:
+    function name(view self: User) returns string:
+        return "user:{self.label}"
+function make_reader(prefix: string) returns function(view Named) returns string:
+    return function(view item: Named) returns string: return "{prefix}:{Named.name(view item)}"
+function first_reader(items: list[function(view User) returns string]) returns string:
+    User input = User(label: "higher-container")
+    for callback in items:
+        return callback(view input)
+    return "empty"
+function exercise() returns string:
+    function(list[function(view Named) returns string]) returns string adapted = first_reader
+    return adapted(list(make_reader("higher")))
+"#;
+const GENERATED_CONVERTED_TWO_READERS: &str = r#"namespace app
+interface Named:
+    function name(view self: Named) returns string
+struct User:
+    label: string
+implement Named for User:
+    function name(view self: User) returns string:
+        return "user:{self.label}"
+function show(view item: Named) returns string:
+    return Named.name(view item)
+function invoke_reader(first: function(view User) returns string, second: function(view User) returns string) returns string:
+    User input = User(label: "higher-order")
+    return "{first(view input)}:{second(view input)}"
+function exercise() returns string:
+    function(function(view Named) returns string, function(view Named) returns string) returns string higher = invoke_reader
+    return higher(show, show)
+"#;
+
+fn checked_generated_conversion_source(source: &str, release: bool) -> (Program, CheckResult) {
+    let file = FileId::new(0);
+    let parsed = jett_parser::parse(source, file);
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let resolved = jett_resolve::resolve(&parsed.module);
+    assert!(
+        resolved
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != Severity::Error),
+        "resolve: {:?}",
+        resolved.diagnostics
+    );
+    let checked = jett_typecheck::check_with_options(
+        &parsed.module,
+        &resolved,
+        jett_typecheck::CheckOptions { release },
+    );
+    assert!(
+        checked
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != Severity::Error),
+        "check: {:?}",
+        checked.diagnostics
+    );
+    let program = lower(
+        &parsed.module,
+        &resolved,
+        &checked,
+        &HashMap::from([(file, SourceOrigin::Project)]),
+    )
+    .expect("canonical generated adapter keeps its sealed raw actual");
+    validate_program_call_ownership(&program, &checked.interner)
+        .expect("complete generated ownership");
+    (program, checked)
+}
+
+fn generated_converted_adapter_index(program: &Program, container: bool) -> usize {
+    program
+        .functions
+        .iter()
+        .position(|function| {
+            function.body.statements.iter().any(|statement| {
+                let StatementKind::Return(Some(Expression {
+                    kind:
+                        ExpressionKind::IndirectCall {
+                            ownership: CallOwnership::Generated(packet),
+                            args,
+                            ..
+                        },
+                    ..
+                })) = &statement.kind
+                else {
+                    return false;
+                };
+                matches!(packet.operation, GeneratedOperation::FunctionAdapter { .. })
+                    && args.iter().zip(&packet.arguments).any(|(value, argument)| {
+                        value.ty != argument.actual_type
+                            && match &value.kind {
+                                ExpressionKind::InterfaceCoerce { adapters, .. } => {
+                                    container && !adapters.is_empty()
+                                }
+                                ExpressionKind::FunctionAdapter { .. } => !container,
+                                _ => false,
+                            }
+                    })
+            })
+        })
+        .expect("source-derived generated conversion body")
+}
+
+fn generated_converted_argument(function: &Function) -> (&Expression, &GeneratedArgumentOwnership) {
+    let ExpressionKind::IndirectCall {
+        ownership: CallOwnership::Generated(packet),
+        args,
+        ..
+    } = &returned_call(function).kind
+    else {
+        panic!("generated indirect adapter call");
+    };
+    args.iter()
+        .zip(&packet.arguments)
+        .find(|(value, argument)| value.ty != argument.actual_type)
+        .expect("original actual differs from converted physical formal")
+}
+
+fn generated_converted_endpoint(mut value: &Expression, actual: TypeId) -> &Expression {
+    while value.ty != actual {
+        value = match &value.kind {
+            ExpressionKind::InterfaceCoerce { value, .. }
+            | ExpressionKind::FunctionAdapter { value, .. } => value,
+            _ => panic!("canonical finite conversion"),
+        };
+    }
+    value
+}
+
+fn generated_converted_endpoint_mut(mut value: &mut Expression, actual: TypeId) -> &mut Expression {
+    while value.ty != actual {
+        value = match &mut value.kind {
+            ExpressionKind::InterfaceCoerce { value, .. }
+            | ExpressionKind::FunctionAdapter { value, .. } => value,
+            _ => panic!("canonical finite conversion"),
+        };
+    }
+    value
+}
+
+fn generated_conversion_locals(function: &Function) -> Vec<OwnershipLocalInfo> {
+    function
+        .locals
+        .iter()
+        .map(|local| OwnershipLocalInfo {
+            ty: local.ty,
+            mutable: local.mutable,
+            span: local.span,
+            view_source: local.view_source,
+            is_view_parameter: function
+                .params
+                .iter()
+                .any(|param| param.local == local.id && param.mode == ParamMode::View),
+            view_iteration: None,
+        })
+        .collect()
+}
+
+#[test]
+fn generated_converted_callable_rejoins_original_target_parameter_without_place_peeling() {
+    for release in [false, true] {
+        let (mut program, checked) =
+            checked_generated_conversion_source(GENERATED_CONVERTED_CALLABLE_SOURCE, release);
+        let index = generated_converted_adapter_index(&program, false);
+        let function = &program.functions[index];
+        let (value, argument) = generated_converted_argument(function);
+        assert!(matches!(value.kind, ExpressionKind::FunctionAdapter { .. }));
+        assert_eq!(
+            call_ownership::immediate_source(value),
+            CallerViewSource::Other,
+            "a callable adapter remains outside general place provenance"
+        );
+        let raw = generated_converted_endpoint(value, argument.actual_type);
+        let ExpressionKind::Local(local) = raw.kind else {
+            panic!("sealed raw target parameter");
+        };
+        assert_eq!(
+            argument.original_witness().origin(),
+            CallerViewSource::Local(local)
+        );
+        assert_eq!(raw.span, argument.original_witness().source_span());
+        assert_eq!(value.span, raw.span);
+        assert_eq!(raw.ty, function.locals[local.index() as usize].ty);
+        assert_eq!(argument.acquisition, GeneratedAcquisition::OwnedExpression);
+        validate_generated_operand_tree(value, argument, &generated_conversion_locals(function))
+            .expect("strict raw backing after canonical callable conversion");
+        let count = program.functions.len();
+        complete_value_conversions(&mut program, &checked.interner)
+            .expect("existing adapter completion is repeatable");
+        assert_eq!(program.functions.len(), count, "no new duplicate adapters");
+    }
+}
+
+#[test]
+fn generated_converted_container_rejoins_raw_local_without_erasing_callback_table() {
+    for release in [false, true] {
+        let (program, checked) =
+            checked_generated_conversion_source(GENERATED_CONVERTED_CONTAINER_SOURCE, release);
+        let function = &program.functions[generated_converted_adapter_index(&program, true)];
+        let (value, argument) = generated_converted_argument(function);
+        let ExpressionKind::InterfaceCoerce { adapters, .. } = &value.kind else {
+            panic!("container conversion");
+        };
+        assert!(!adapters.is_empty());
+        assert_eq!(
+            call_ownership::immediate_source(value),
+            CallerViewSource::Other
+        );
+        let raw = generated_converted_endpoint(value, argument.actual_type);
+        let ExpressionKind::Local(local) = raw.kind else {
+            panic!("raw list-of-callables target parameter");
+        };
+        assert_eq!(
+            argument.original_witness().origin(),
+            CallerViewSource::Local(local)
+        );
+        assert_eq!(argument.acquisition, GeneratedAcquisition::OwnedExpression);
+        for adapter in adapters {
+            let target = &program.functions[adapter.function.index() as usize];
+            assert_eq!(target.id, adapter.function);
+            assert_eq!(target.capture_count, 1);
+            assert_eq!(target.params[0].ty, adapter.source);
+            let Type::Function {
+                params,
+                view_params,
+                return_type,
+            } = checked.interner.resolve(adapter.target)
+            else {
+                panic!("checked callback target signature");
+            };
+            assert_eq!(
+                target.params[1..]
+                    .iter()
+                    .map(|param| param.ty)
+                    .collect::<Vec<_>>(),
+                *params
+            );
+            assert_eq!(
+                target.params[1..]
+                    .iter()
+                    .map(|param| param.mode == ParamMode::View)
+                    .collect::<Vec<_>>(),
+                *view_params
+            );
+            assert_eq!(target.return_type, *return_type);
+        }
+        validate_generated_operand_tree(value, argument, &generated_conversion_locals(function))
+            .expect("raw origin does not replace independent callback table validation");
+    }
+}
+
+#[test]
+fn generated_converted_raw_occurrence_refuses_same_typed_backing_and_arbitrary_wrappers() {
+    let (program, checked) =
+        checked_generated_conversion_source(GENERATED_CONVERTED_TWO_READERS, false);
+    let index = generated_converted_adapter_index(&program, false);
+    let function = &program.functions[index];
+    let (value, argument) = generated_converted_argument(function);
+    let raw = generated_converted_endpoint(value, argument.actual_type);
+    let ExpressionKind::Local(local) = raw.kind else {
+        panic!("raw target parameter");
+    };
+    let spare = function
+        .params
+        .iter()
+        .find(|param| param.local != local && param.ty == raw.ty)
+        .expect("independent same-typed source parameter")
+        .local;
+    for mutation in [
+        "physical span",
+        "raw span",
+        "foreign local",
+        "same type clone",
+        "same type adapter",
+        "nonconversion",
+    ] {
+        let mut changed = program.clone();
+        let function = &mut changed.functions[index];
+        let ExpressionKind::IndirectCall {
+            args,
+            ownership: CallOwnership::Generated(packet),
+            ..
+        } = &mut returned_call_mut(function).kind
+        else {
+            panic!("generated converted call");
+        };
+        let actual = packet.arguments[0].actual_type;
+        if mutation == "physical span" {
+            args[0].span.start += 1;
+        } else if mutation == "nonconversion" {
+            let original = args[0].clone();
+            args[0].kind = ExpressionKind::Clone(Box::new(original));
+        } else {
+            let raw = generated_converted_endpoint_mut(&mut args[0], actual);
+            match mutation {
+                "raw span" => raw.span.start += 1,
+                "foreign local" => raw.kind = ExpressionKind::Local(spare),
+                "same type clone" => raw.kind = ExpressionKind::Clone(Box::new(raw.clone())),
+                "same type adapter" => {
+                    raw.kind = ExpressionKind::FunctionAdapter {
+                        value: Box::new(raw.clone()),
+                        function: program.functions[index].id,
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+        let errors = validate_program_call_ownership(&changed, &checked.interner).expect_err(
+            "conversion cannot replace original raw occurrence/backing or mint same-type peel",
+        );
+        assert!(
+            errors.iter().any(|error| matches!(
+                error.message.as_str(),
+                "generated operand differs from its original typed occurrence or backing"
+                    | "generated operand has no checked actual/conversion type"
+            )),
+            "{mutation}: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn generated_converted_raw_owner_keeps_borrowed_slot_gate_and_metadata_remap_identity() {
+    let (program, _) =
+        checked_generated_conversion_source(GENERATED_CONVERTED_CALLABLE_SOURCE, false);
+    let function = &program.functions[generated_converted_adapter_index(&program, false)];
+    let (value, argument) = generated_converted_argument(function);
+    let raw = generated_converted_endpoint(value, argument.actual_type);
+    let ExpressionKind::Local(local) = raw.kind else {
+        panic!("raw original Local");
+    };
+    let mut locals = generated_conversion_locals(function);
+    locals[local.index() as usize].is_view_parameter = true;
+    assert_eq!(
+        validate_generated_operand_tree(value, argument, &locals).unwrap_err(),
+        "generated owner cannot acquire a borrowed binding"
+    );
+
+    let ExpressionKind::IndirectCall { ownership, .. } = &returned_call(function).kind else {
+        panic!("adapter call");
+    };
+    let mut remapped = ownership.clone();
+    remapped
+        .remap_metadata_locals(|id| Ok::<_, ()>(LocalId::new(id.index() + 3)))
+        .expect("structural remap");
+    let CallOwnership::Generated(packet) = remapped else {
+        panic!("same generated packet");
+    };
+    let argument = &packet.arguments[0];
+    let mapped = LocalId::new(local.index() + 3);
+    assert_eq!(
+        argument.original_witness().origin(),
+        CallerViewSource::Local(mapped)
+    );
+    let mut raw = raw.clone();
+    raw.kind = ExpressionKind::Local(mapped);
+    argument
+        .original_witness()
+        .validate_producer_shape(&raw)
+        .expect("raw shape remaps with the origin");
+    let mut stale = raw;
+    stale.kind = ExpressionKind::Local(local);
+    assert!(
+        argument
+            .original_witness()
+            .validate_producer_shape(&stale)
+            .is_err(),
+        "old numeric Local cannot replace remapped original backing"
+    );
+}
+
+const FLOW_PROJECTED_MACHINE: &str = r#"namespace app
+interface Named:
+    function name(view self: Named) returns string
+struct Item:
+    label: string
+implement Named for Item:
+    function name(view self: Item) returns string:
+        return self.label
+machine Session:
+    states:
+        active(item: Named)
+        cached(item: Named)
+        empty
+machine Other:
+    states:
+        active(item: Named)
+function exercise(source: Session, other: Session, foreign: Other) returns string:
+    if source at active:
+        return Named.name(view source.item)
+    return "empty"
+machine TaskState:
+    states:
+        ready(value: nothing)
+        cached(value: nothing)
+        empty
+function pending_depth(value: nothing) returns int64:
+    return 7
+function copied(state: TaskState) returns int64:
+    if state at ready:
+        return pending_depth(state.value)
+    return -1
+"#;
+
+fn flow_projected_call(function: &Function) -> &Expression {
+    let StatementKind::If { then_block, .. } = &function.body.statements[0].kind else {
+        panic!("source state guard");
+    };
+    let StatementKind::Return(Some(value)) = &then_block.statements[0].kind else {
+        panic!("guarded source invocation");
+    };
+    value
+}
+
+fn flow_projected_call_mut(function: &mut Function) -> &mut Expression {
+    let StatementKind::If { then_block, .. } = &mut function.body.statements[0].kind else {
+        panic!("source state guard");
+    };
+    let StatementKind::Return(Some(value)) = &mut then_block.statements[0].kind else {
+        panic!("guarded source invocation");
+    };
+    value
+}
+
+fn flow_projected_field_mut(expression: &mut Expression) -> &mut Expression {
+    let ExpressionKind::Call { args, .. } = &mut expression.kind else {
+        panic!("source invocation");
+    };
+    let value = &mut args[0];
+    fn field(value: &mut Expression) -> &mut Expression {
+        if matches!(value.kind, ExpressionKind::View(_)) {
+            let ExpressionKind::View(inner) = &mut value.kind else {
+                unreachable!()
+            };
+            return field(inner);
+        }
+        assert!(matches!(value.kind, ExpressionKind::Field { .. }));
+        value
+    }
+    field(value)
+}
+
+#[test]
+fn caller_packets_flow_projected_machine_calls_preserve_view_and_nothing_copy() {
+    use jett_typecheck::CheckedCallerEffect;
+    let (program, checked) = checked_source(FLOW_PROJECTED_MACHINE);
+    for (name, effect) in [
+        ("exercise", CheckedCallerEffect::RetainBorrow),
+        ("copied", CheckedCallerEffect::Copy),
+    ] {
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == name)
+            .unwrap();
+        let ExpressionKind::Call {
+            ownership: CallOwnership::Source(packet),
+            args,
+            ..
+        } = &flow_projected_call(function).kind
+        else {
+            panic!("original source packet");
+        };
+        let argument = &packet.arguments[0];
+        let (local, span, occurrence, storage) = argument
+            .source_witness()
+            .projection_root()
+            .expect("exact checked flow root");
+        assert_eq!(argument.effect, effect);
+        assert!(matches!(
+            checked.interner.resolve(storage),
+            Type::Machine(_)
+        ));
+        assert!(matches!(
+            checked.interner.resolve(occurrence),
+            Type::MachineState { .. }
+        ));
+        assert_eq!(function.locals[local.index() as usize].ty, storage);
+        assert!(
+            function
+                .locals
+                .iter()
+                .all(|local| local.view_source.is_none())
+        );
+        let value = if let ExpressionKind::View(inner) = &args[0].kind {
+            inner
+        } else {
+            &args[0]
+        };
+        let ExpressionKind::Field {
+            base, owner_type, ..
+        } = &value.kind
+        else {
+            panic!("source field");
+        };
+        assert_eq!(*owner_type, occurrence);
+        assert_eq!(base.span, span);
+        assert!(matches!(base.kind, ExpressionKind::Local(id) if id == local));
+        assert_eq!(base.ty, occurrence);
+        assert!(
+            validate_local_view_initializer(
+                &args[0],
+                local,
+                storage,
+                args[0].ty,
+                &checked.interner
+            )
+            .is_err(),
+            "Source certificate cannot weaken the persistent alias helper"
+        );
+        if name == "copied" {
+            assert_eq!(argument.actual_type, TypeInterner::NOTHING);
+        }
+    }
+}
+
+#[test]
+fn caller_packets_flow_projected_machine_rejects_sibling_state_and_root_corruption() {
+    let (program, mut checked) = checked_source(FLOW_PROJECTED_MACHINE);
+    let index = exercise_index(&program);
+    let function = &program.functions[index];
+    let source = local_id(function, "source");
+    let other = local_id(function, "other");
+    let foreign = local_id(function, "foreign");
+    let Type::Machine(machine) = *checked
+        .interner
+        .resolve(function.locals[source.index() as usize].ty)
+    else {
+        panic!("bare stored owner");
+    };
+    let Type::Machine(foreign_machine) = *checked
+        .interner
+        .resolve(function.locals[foreign.index() as usize].ty)
+    else {
+        panic!("foreign nominal owner");
+    };
+    let cached = checked
+        .interner
+        .resolve_machine(machine)
+        .state_id("cached")
+        .unwrap();
+    let foreign_active = checked
+        .interner
+        .resolve_machine(foreign_machine)
+        .state_id("active")
+        .unwrap();
+    let cached_type = checked.interner.intern(Type::MachineState {
+        machine,
+        state: cached,
+    });
+    let foreign_type = checked.interner.intern(Type::MachineState {
+        machine: foreign_machine,
+        state: foreign_active,
+    });
+    let stale = checked.interner.intern(Type::MachineState {
+        machine,
+        state: jett_types::MachineStateId::new(u32::MAX),
+    });
+    for mutation in [
+        "sibling",
+        "foreign",
+        "stale",
+        "root local",
+        "root span",
+        "field",
+        "endpoint",
+        "public origin",
+    ] {
+        let mut changed = program.clone();
+        let invocation = flow_projected_call_mut(&mut changed.functions[index]);
+        if mutation == "public origin" {
+            source_packet_mut(invocation).arguments[0].origin = CallerOrigin::BorrowedProjection {
+                source: CallerViewSource::Local(other),
+            };
+        } else {
+            let field = flow_projected_field_mut(invocation);
+            if mutation == "endpoint" {
+                field.ty = TypeInterner::BOOL;
+            } else {
+                let ExpressionKind::Field {
+                    base,
+                    owner_type,
+                    field,
+                    ..
+                } = &mut field.kind
+                else {
+                    panic!("exact field");
+                };
+                match mutation {
+                    "sibling" | "foreign" | "stale" => {
+                        let ty = match mutation {
+                            "sibling" => cached_type,
+                            "foreign" => foreign_type,
+                            _ => stale,
+                        };
+                        *owner_type = ty;
+                        base.ty = ty;
+                    }
+                    "root local" => base.kind = ExpressionKind::Local(other),
+                    "root span" => base.span.start += 1,
+                    "field" => *field = FieldId::new(1),
+                    _ => unreachable!(),
+                }
+            }
+        }
+        assert!(
+            validate_program_call_ownership(&changed, &checked.interner).is_err(),
+            "{mutation}"
+        );
+    }
+}
+
+#[test]
+fn caller_packets_flow_projection_metadata_visits_and_remaps_private_root() {
+    let (program, checked) = checked_source(FLOW_PROJECTED_MACHINE);
+    let function = &program.functions[exercise_index(&program)];
+    let ExpressionKind::Call { ownership, .. } = &flow_projected_call(function).kind else {
+        panic!("source call");
+    };
+    let CallOwnership::Source(packet) = ownership else {
+        panic!("source packet");
+    };
+    let original = packet.arguments[0]
+        .source_witness()
+        .projection_root()
+        .unwrap();
+    let mut visited = Vec::new();
+    ownership.metadata_types(|ty| visited.push(ty));
+    assert!(visited.contains(&original.2) && visited.contains(&original.3));
+    let mut locals = Vec::new();
+    ownership.metadata_local_ids(|local| locals.push(local));
+    assert!(locals.contains(&original.0));
+    let mut remapped = ownership.clone();
+    remapped
+        .remap_metadata_locals(|local| Ok::<_, ()>(LocalId::new(local.index() + 1)))
+        .unwrap();
+    let CallOwnership::Source(packet) = remapped else {
+        panic!("remapped packet");
+    };
+    let rewritten = packet.arguments[0]
+        .source_witness()
+        .projection_root()
+        .unwrap();
+    assert_eq!(
+        rewritten,
+        (
+            LocalId::new(original.0.index() + 1),
+            original.1,
+            original.2,
+            original.3
+        )
+    );
+    assert!(
+        matches!(packet.arguments[0].origin, CallerOrigin::BorrowedProjection {
+        source: CallerViewSource::Local(local) } if local == rewritten.0)
+    );
+    validate_program_call_ownership(&program, &checked.interner).unwrap();
+}
+
+const ORDINARY_PROJECTED_ROOTS: &str = r#"namespace app
+interface Named:
+    function name(view self: Named) returns string
+struct Holder:
+    item: Named
+machine Session:
+    states:
+        active(item: Named)
+        empty
+function ordinary(view source: Holder) returns string:
+    return Named.name(view source.item)
+function qualified(view source: Session at active) returns string:
+    return Named.name(view source.item)
+"#;
+
+#[test]
+fn caller_packets_ordinary_and_declared_state_projection_roots_keep_existing_helper() {
+    let (program, checked) = checked_source(ORDINARY_PROJECTED_ROOTS);
+    for name in ["ordinary", "qualified"] {
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == name)
+            .unwrap();
+        let ExpressionKind::Call {
+            ownership: CallOwnership::Source(packet),
+            args,
+            ..
+        } = &returned_call(function).kind
+        else {
+            panic!("original source packet");
+        };
+        let argument = &packet.arguments[0];
+        assert_eq!(argument.source_witness().projection_root(), None);
+        assert_eq!(
+            argument.effect,
+            jett_typecheck::CheckedCallerEffect::RetainBorrow
+        );
+        let CallerOrigin::BorrowedProjection {
+            source: CallerViewSource::Local(local),
+        } = argument.origin
+        else {
+            panic!("exact original source root");
+        };
+        let stored = &function.locals[local.index() as usize];
+        assert!(matches!(
+            checked.interner.resolve(stored.ty),
+            Type::Struct(_) | Type::MachineState { .. }
+        ));
+        validate_local_view_initializer(&args[0], local, stored.ty, args[0].ty, &checked.interner)
+            .expect("ordinary stored root keeps the original stable-backing proof");
+    }
+}

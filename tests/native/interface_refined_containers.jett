@@ -9,11 +9,11 @@ type Callback = function(int8) returns int8 where true
 implement Named for Mapping:
     function name(view self: Mapping) returns string:
         map[string, int8] plain = coarsen self
-        return "mapping:{map.length[string, int8](plain)}"
+        return "mapping:{map.length[string, int8](view plain)}"
 implement Named for Members:
     function name(view self: Members) returns string:
         set[int8] plain = coarsen self
-        return "members:{set.length[int8](plain)}"
+        return "members:{set.length[int8](view plain)}"
 implement Named for Maybe:
     function name(view self: Maybe) returns string:
         int8 plain = coarsen self handle:

@@ -54,11 +54,11 @@ fn rejected_cases() -> Vec<(&'static str, String)> {
         ),
         (
             "verify_alias",
-            "verify invalid_check:\n    list[int64] values = list(7)\n    list[int64] borrowed = view values\n    int64 observed = consume(borrowed)\n    assert observed == 1\n",
+            "function invalid(view values: list[int64]) returns int64:\n    list[int64] borrowed = view values\n    return consume(borrowed)\nverify invalid_check:\n    list[int64] values = list(7)\n    int64 observed = invalid(view values)\n    assert observed == 1\n",
         ),
         (
             "property_alias",
-            "property invalid_trials:\n    given input: int64\n    list[int64] values = list(input)\n    list[int64] borrowed = view values\n    int64 observed = consume(borrowed)\n    assert observed == 1\n",
+            "function invalid(view values: list[int64]) returns int64:\n    list[int64] borrowed = view values\n    return consume(borrowed)\nproperty invalid_trials:\n    given input: int64\n    list[int64] values = list(input)\n    int64 observed = invalid(view values)\n    assert observed == 1\n",
         ),
     ]
     .into_iter()
@@ -96,6 +96,52 @@ fn borrowed_values_cannot_escape_before_program_or_suite_execution() {
             .err()
             .expect("view escape prevents suite execution");
         assert!(failure.contains("E0401"), "{name}: {failure}");
+    }
+}
+
+#[test]
+fn lexical_verify_and_property_observations_preserve_borrowed_aliases() {
+    let cases = [
+        (
+            "verify_alias",
+            "verify observed_check:\n    list[int64] values = list(7)\n    list[int64] borrowed = view values\n    int64 observed = consume(borrowed)\n    assert observed == 1\n    assert list.length(view borrowed) == 1\n    assert list.length(view values) == 1\n",
+            "observed_check",
+            false,
+        ),
+        (
+            "property_alias",
+            "property observed_trials:\n    given input: int64\n    list[int64] values = list(input)\n    list[int64] borrowed = view values\n    int64 observed = consume(borrowed)\n    assert observed == 1\n    assert list.length(view borrowed) == 1\n    assert list.length(view values) == 1\n",
+            "observed_trials",
+            true,
+        ),
+    ];
+    for (name, body, block_name, is_property) in cases {
+        let source = format!("{DECLARATIONS}{body}");
+        let built = build_source(&source, name);
+        assert!(!built.has_errors, "{name}: {:?}", built.diagnostics);
+        assert!(built.debug_observations.is_empty(), "{name}");
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.jett");
+        fs::write(&path, source).unwrap();
+        let outcome = test_file(&path).expect("lexical observation suites should execute");
+        assert_eq!(
+            (outcome.total, outcome.passed, outcome.failed),
+            (1, 1, 0),
+            "{name}"
+        );
+        assert!(outcome.debug_observations.is_empty(), "{name}");
+        assert_eq!(outcome.blocks.len(), 1, "{name}");
+        let block = &outcome.blocks[0];
+        assert_eq!(block.name, block_name, "{name}");
+        assert!(block.passed, "{name}: {:?}", block.error);
+        assert!(block.error.is_none(), "{name}");
+        assert_eq!(block.is_property, is_property, "{name}");
+        assert_eq!(
+            block.iterations,
+            if is_property { Some(100) } else { None },
+            "{name}"
+        );
+        assert!(block.debug_events.is_empty(), "{name}");
     }
 }
 
