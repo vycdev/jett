@@ -5924,8 +5924,17 @@ preserve pending metadata, while field reads retain their eager receiver checks.
 The operation's result is materialized before the internal scope ends. An
 aborted handler ends abandoned scopes before returning an owned operand, and
 loop exits abandon only scopes inside the exited operation. Persistent source
-aliases retain the limits above. Owner changes during a later argument remain
-a separate checker/native reconciliation; see the
+aliases retain the limits above. Native staging now preserves the captured
+generation of an exact source-checked mutable plain `TypeConstruction` binding
+when a later argument assigns its replacement. The current binding and captured
+backing remain separate, without a new source clone or ABI permission. Broader
+simultaneous cohorts and other owner kinds still require reconciliation.
+
+A written view of an original handled owned producer also keeps its exact
+checked conversion and temporary backing. An interface boxing conversion may
+read that proved concrete input borrowed while producing an independently owned
+box; its runtime implementation may copy the payload. These bounded paths make
+no zero-runtime-copy claim; see the
 [call-view implementation](active/native_scoped_call_view_staging.md).
 
 **Rule 2: A view cannot be sent to another thread.**

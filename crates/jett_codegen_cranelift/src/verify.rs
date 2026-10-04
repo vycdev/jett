@@ -1044,6 +1044,55 @@ impl Verifier<'_> {
                 })?;
                 Ok(())
             }
+            StatementKind::OpenCallOwnerGeneration { root, .. }
+            | StatementKind::ReplaceCallOwnerGeneration { root, .. } => {
+                let owner = function.local(*root).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "call owner generation root is absent from the local table",
+                    )
+                })?;
+                if owner.ty.index() as usize >= self.types.len()
+                    || !matches!(self.types.resolve(owner.ty), Type::TypeConstruction)
+                    || !owner.mutable
+                    || function.is_view_local(*root)
+                    || function.parameter_for_local(*root).is_some()
+                {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "call owner generation root is not its exact mutable builder owner",
+                    ));
+                }
+                self.value_kind(function, owner.ty, "call owner generation root")?;
+                if let StatementKind::ReplaceCallOwnerGeneration { rhs_owner, .. } = &statement.kind
+                {
+                    let rhs = function.local(*rhs_owner).ok_or_else(|| {
+                        self.contract_error(
+                            function,
+                            statement.span,
+                            "call owner generation RHS is absent from the local table",
+                        )
+                    })?;
+                    if rhs_owner == root
+                        || rhs.ty != owner.ty
+                        || function.is_view_local(*rhs_owner)
+                        || function.parameter_for_local(*rhs_owner).is_some()
+                    {
+                        return Err(self.contract_error(
+                            function,
+                            statement.span,
+                            "call owner generation RHS is not its independent owning builder",
+                        ));
+                    }
+                    self.value_kind(function, rhs.ty, "call owner generation RHS")?;
+                }
+                // Exact sites, private Source joins and Open/Replace/Close CFG
+                // authority were checked by the original all-body MIR gate.
+                Ok(())
+            }
+            StatementKind::CloseCallOwnerGeneration { .. } => Ok(()),
             StatementKind::CheckRefinement { local, call, .. } => {
                 let local = function.local(*local).ok_or_else(|| {
                     self.contract_error(

@@ -798,6 +798,58 @@ fn translate_function(
             ))
         })
         .collect::<Vec<_>>();
+    let mut generation_slots = Vec::new();
+    let mut generation_ids = std::collections::BTreeSet::new();
+    let mut escrow_ids = std::collections::BTreeSet::new();
+    for slot in ownership.generation_storage().slots() {
+        let root = function.local(slot.root()).ok_or_else(|| {
+            contract_error(
+                symbol,
+                function.span,
+                "call owner generation root is absent",
+            )
+        })?;
+        let root_slot = local_slots
+            .get(slot.root().index() as usize)
+            .copied()
+            .flatten()
+            .ok_or_else(|| {
+                contract_error(
+                    symbol,
+                    function.span,
+                    "call owner generation has no owning root storage",
+                )
+            })?;
+        if !generation_ids.insert(slot.generation().index())
+            || !escrow_ids.insert(slot.escrow().index())
+            || root.ty != slot.ty()
+            || root.ty.index() as usize >= types.len()
+            || !matches!(types.resolve(root.ty), Type::TypeConstruction)
+            || root.view_source.is_some()
+        {
+            return Err(contract_error(
+                symbol,
+                function.span,
+                "call owner generation storage differs from its exact plan",
+            ));
+        }
+        generation_slots.push(NativeCallGenerationStorage {
+            generation: slot.generation(),
+            root: slot.root(),
+            ty: slot.ty(),
+            root_slot,
+            owner_slot: builder.create_sized_stack_slot(ir::StackSlotData::new(
+                ir::StackSlotKind::ExplicitSlot,
+                8,
+                3,
+            )),
+            retired_slot: builder.create_sized_stack_slot(ir::StackSlotData::new(
+                ir::StackSlotKind::ExplicitSlot,
+                8,
+                3,
+            )),
+        });
+    }
     let failure_block = builder.create_block();
 
     let mut variables = Vec::with_capacity(function.locals.len());
@@ -855,6 +907,10 @@ fn translate_function(
             for slot in local_slots.iter().flatten().chain(&temporary_slots) {
                 builder.ins().stack_store(zero, *slot, 0);
             }
+            for storage in &generation_slots {
+                builder.ins().stack_store(zero, storage.owner_slot, 0);
+                builder.ins().stack_store(zero, storage.retired_slot, 0);
+            }
         }
 
         let mut translator = Translator {
@@ -879,6 +935,7 @@ fn translate_function(
             ),
             local_slots: &local_slots,
             temporary_slots: &temporary_slots,
+            generation_slots: &generation_slots,
             next_temporary: 0,
             failure_block,
         };
@@ -1066,6 +1123,7 @@ fn translate_function(
         ),
         local_slots: &local_slots,
         temporary_slots: &temporary_slots,
+        generation_slots: &generation_slots,
         next_temporary: temporary_slots.len(),
         failure_block,
     };
@@ -1092,6 +1150,18 @@ enum LoweredValue {
     Owned(Value, ir::StackSlot),
 }
 
+/// Internal owning storage from one freshly validated Function plan. Neither
+/// this handle slot nor its retired state can be addressed as a Jett Local.
+#[derive(Clone, Copy)]
+struct NativeCallGenerationStorage {
+    generation: jett_mir::CallOwnerGenerationId,
+    root: jett_mir::LocalId,
+    ty: TypeId,
+    root_slot: ir::StackSlot,
+    owner_slot: ir::StackSlot,
+    retired_slot: ir::StackSlot,
+}
+
 struct Translator<'a, 'builder> {
     equality_methods: &'a std::collections::HashMap<TypeId, FunctionId>,
     builder: &'a mut FunctionBuilder<'builder>,
@@ -1111,6 +1181,7 @@ struct Translator<'a, 'builder> {
     test_ownership: bool,
     local_slots: &'a [Option<ir::StackSlot>],
     temporary_slots: &'a [ir::StackSlot],
+    generation_slots: &'a [NativeCallGenerationStorage],
     next_temporary: usize,
     failure_block: ir::Block,
 }
@@ -1345,6 +1416,24 @@ impl Translator<'_, '_> {
                 self.define_local(*local, value, statement.span)
             }
             StatementKind::EndCallView { .. } => Ok(()),
+            StatementKind::OpenCallOwnerGeneration { generation, root } => {
+                let storage =
+                    self.call_generation_storage(*generation, Some(*root), statement.span)?;
+                self.clear_slot(storage.owner_slot);
+                self.clear_slot(storage.retired_slot);
+                Ok(())
+            }
+            StatementKind::ReplaceCallOwnerGeneration {
+                generation,
+                root,
+                rhs_owner,
+            } => self.replace_call_generation(*generation, *root, *rhs_owner, statement.span),
+            StatementKind::CloseCallOwnerGeneration { generation } => {
+                let storage = self.call_generation_storage(*generation, None, statement.span)?;
+                self.drop_slot(storage.owner_slot)?;
+                self.clear_slot(storage.retired_slot);
+                Ok(())
+            }
             StatementKind::CheckRefinement {
                 local,
                 call,
@@ -5856,5 +5945,172 @@ function visit(items: list[int64]) returns int64:
             }
         }
         emit_host_object(&program, &types).expect("late-numbered unique loop preheader");
+    }
+
+    const CALL_OWNER_GENERATION_SOURCE: &str = r#"namespace app
+struct User:
+    name: string
+struct Alternate:
+    code: int64
+function inspect_builder(view builder: TypeConstruction, extra: int64) returns int64:
+    return extra
+function maybe(flag: bool) returns optional[int64]:
+    if flag:
+        return some(11)
+    return none
+function exercise(flag: bool) returns int64:
+    mutable TypeConstruction switchable = type.construct_start[User]()
+    int64 selected = inspect_builder(view switchable, maybe(flag) handle:
+        switchable = type.construct_start[Alternate]()
+        switchable = type.construct_start[User]()
+        default 7
+    )
+    return selected
+"#;
+
+    fn emit_call_owner_generation(source: &str) -> (Program, TypeInterner) {
+        let (program, types) = lower_source(source);
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "exercise")
+            .expect("actual source exercise function");
+        let ownership = MoveValuePlan::analyze(&program, function, &types)
+            .expect("fresh generation ownership proof");
+        let slots = ownership.generation_storage().slots();
+        assert_eq!(slots.len(), 1, "one source captured generation");
+        let root = function.local(slots[0].root()).expect("generation root");
+        assert!(matches!(types.resolve(root.ty), Type::TypeConstruction));
+        assert_eq!(slots[0].ty(), root.ty);
+        assert!(root.mutable && root.view_source.is_none());
+        let verified = verify_program(&program, &types).expect("full typed generation program");
+        let mut module = test_object_module();
+        let declarations = declare_reachable_functions(&mut module, &program, &types, &verified)
+            .expect("native declarations");
+        let declaration = declarations.get(function.id).expect("exercise declaration");
+        let mut context = module.make_context();
+        context.func.signature = declaration.signature.clone();
+        translate_function(
+            &mut module,
+            &declarations,
+            &program,
+            function,
+            &types,
+            &declaration.symbol,
+            &mut context,
+        )
+        .expect("generation native translation");
+        // This function handles a produced sum, so there is no independent
+        // stable-sum snapshot to obscure a call-capture clone regression.
+        assert!(
+            module.get_name(NativeLeaf::StructClone.symbol()).is_none(),
+            "generation capture must stack-move its owner without cloning"
+        );
+        let object = emit_host_object(&program, &types).expect("generation object");
+        assert!(!object.bytes.is_empty());
+        (program, types)
+    }
+
+    #[test]
+    fn native_call_owner_generation_emits_repeated_replacement_without_capture_clone() {
+        let (program, _types) = emit_call_owner_generation(CALL_OWNER_GENERATION_SOURCE);
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "exercise")
+            .unwrap();
+        let replacements = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter(|statement| {
+                matches!(
+                    statement.kind,
+                    StatementKind::ReplaceCallOwnerGeneration { .. }
+                )
+            })
+            .count();
+        assert_eq!(
+            replacements, 2,
+            "both independent replacements share one escrow"
+        );
+    }
+
+    #[test]
+    fn native_call_owner_generation_emits_conditional_and_early_abort_cleanup() {
+        let conditional = CALL_OWNER_GENERATION_SOURCE
+            .replace("        switchable = type.construct_start[User]()\n", "");
+        emit_call_owner_generation(&conditional);
+        let abort = conditional.replace("        default 7\n", "        return 13\n");
+        emit_call_owner_generation(&abort);
+    }
+
+    #[test]
+    fn native_call_owner_generation_rejects_changed_storage_protocol_before_emission() {
+        let (program, types) = emit_call_owner_generation(CALL_OWNER_GENERATION_SOURCE);
+        let index = program
+            .functions
+            .iter()
+            .position(|function| function.identity.declaration.name == "exercise")
+            .unwrap();
+        for corruption in 0..4 {
+            let mut changed = program.clone();
+            let function = &mut changed.functions[index];
+            let mut applied = false;
+            for block in &mut function.blocks {
+                if applied {
+                    break;
+                }
+                let position = block
+                    .statements
+                    .iter()
+                    .position(|statement| match corruption {
+                        0 => matches!(
+                            statement.kind,
+                            StatementKind::OpenCallOwnerGeneration { .. }
+                        ),
+                        1 => matches!(
+                            statement.kind,
+                            StatementKind::ReplaceCallOwnerGeneration { .. }
+                        ),
+                        2 | 3 => matches!(
+                            statement.kind,
+                            StatementKind::CloseCallOwnerGeneration { .. }
+                        ),
+                        _ => unreachable!(),
+                    });
+                let Some(position) = position else {
+                    continue;
+                };
+                match corruption {
+                    0 | 2 => {
+                        block.statements.remove(position);
+                    }
+                    1 => {
+                        let StatementKind::ReplaceCallOwnerGeneration {
+                            root, rhs_owner, ..
+                        } = &mut block.statements[position].kind
+                        else {
+                            unreachable!();
+                        };
+                        *rhs_owner = *root;
+                    }
+                    3 => {
+                        let duplicate = block.statements[position].clone();
+                        block.statements.insert(position + 1, duplicate);
+                    }
+                    _ => unreachable!(),
+                }
+                applied = true;
+            }
+            assert!(
+                applied,
+                "corruption {corruption} found its canonical operation"
+            );
+            crate::verify::verify_descriptor_bodies(&changed, &types)
+                .expect_err("original metadata gate must retain generation integrity");
+            emit_host_object(&changed, &types)
+                .expect_err("changed generation storage protocol must fail before emission");
+        }
     }
 }

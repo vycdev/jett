@@ -44,14 +44,22 @@ eligibility; this change does not store borrowed views in owned data. No runtime
 ABI, reference count, owner pin, resource clone or escaping-view permission is
 introduced.
 
-An erased owner consumed or rebound by a later operand while the first view is
-still needed remains a separate source/checker reconciliation. Actual frontend
-and interpreter admission of those overlap sources is recorded in
-`target/native-call-view-owner-overlap-audit/contract.md` and the owner-change
-witness package. Ending a loan cannot retain backing storage destroyed during
-the operation. Existing borrowed-place safety is preserved; this implementation
-selects neither a new source rejection rule nor arbitrary implicit authority
-snapshots. Whole-language parity remains unfinished at that boundary.
+The admitted owner-change path now includes an exact source-checked mutable
+plain `TypeConstruction` binding captured by written `view`. Its current binding
+and captured generation remain separate through later replacement RHS evaluation,
+assignment and complete/aborted call cleanup. Private constructor-owned original
+Source/local-header/assignment witnesses and exact CFG/loan joins authorize the
+internal generation escrow. Archival identities do not become runtime locals or
+liveness roots, and canonical preparation validates every current remap.
+
+Written views of handled owned producers preserve their exact original conversion
+and normal owning backing. For interface boxing, an occurrence-specific validated
+association permits the concrete input read while the new box remains owned.
+Runtime boxing may copy that payload; no zero-runtime-copy guarantee, source
+clone permission or ABI is added. Ending a loan alone does not preserve destroyed
+backing. Broader simultaneous cohorts and other owner kinds, persistent source
+alias owner changes, arbitrary erased-authority snapshots and whole-language
+parity remain open.
 
 Root applied the guarded 90d82701 candidate only in the isolated managed staging
 worktree. Root repaired one Rust mutable-walk diagnostic with a typed recursive

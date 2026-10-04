@@ -362,6 +362,56 @@ impl Flow<'_> {
         let block = &self.function.blocks[id.index() as usize];
         for statement in &block.statements {
             match &statement.kind {
+                StatementKind::OpenCallOwnerGeneration { root, .. } => {
+                    self.read(*root, "generation owner")?;
+                }
+                StatementKind::CloseCallOwnerGeneration { .. } => {}
+                StatementKind::ReplaceCallOwnerGeneration {
+                    generation,
+                    root,
+                    rhs_owner,
+                } => {
+                    let plan = self.caller_acquisitions.generation_storage();
+                    let slot = plan
+                        .slot(*generation)
+                        .ok_or("generation replacement has no validated storage")?;
+                    if slot.root() != *root {
+                        return Err("generation replacement changes its owner".into());
+                    }
+                    let actual_root = self.read(*root, "generation owner")?;
+                    self.read(*rhs_owner, "generation RHS owner")?;
+                    self.require_owned_definition(*root)?;
+                    self.require_owned_definition(*rhs_owner)?;
+                    if self.validate
+                        && self.aliases.iter().any(|loan| {
+                            self.call_views.get(loan) == Some(&actual_root)
+                                && !plan.covers_loan(*generation, crate::LocalId::new(*loan as u32))
+                        })
+                    {
+                        return Err(
+                            "generation replacement has an unrelated active call loan".into()
+                        );
+                    }
+                    if self.validate
+                        && self.aliases.iter().any(|alias| {
+                            !self.call_views.contains_key(alias)
+                                && self.alias_sources.get(alias) == Some(&actual_root)
+                        })
+                    {
+                        return Err("generation replacement has a persistent source alias".into());
+                    }
+                    if self.validate
+                        && self
+                            .active
+                            .iter()
+                            .any(|token| self.borrow_sources.get(token) == Some(&actual_root))
+                    {
+                        return Err("generation replacement has an active iteration loan".into());
+                    }
+                    self.reject_aliased_owner_change(rhs_owner.index() as usize)?;
+                    self.state.remove(&(rhs_owner.index() as usize));
+                    self.state.insert(root.index() as usize);
+                }
                 StatementKind::ReflectedContainerReady { source, .. } => {
                     self.read(*source, "reflected container source")?;
                 }
@@ -802,7 +852,11 @@ impl Flow<'_> {
             ExpressionKind::InterfaceCoerce { value: inner, .. } => {
                 let unbox = is_erased_interface(self.types, inner.ty)
                     && !is_erased_interface(self.types, value.ty);
-                self.expr(inner, borrowed || unbox)?;
+                let handled_input = self
+                    .caller_acquisitions
+                    .handled_conversion_input(value)
+                    .is_some_and(|proved| std::ptr::eq(proved, inner.as_ref()));
+                self.expr(inner, borrowed || unbox || handled_input)?;
             }
             ExpressionKind::OptionalNone => {}
             ExpressionKind::StructConstruct {

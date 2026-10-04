@@ -106,7 +106,9 @@ pub fn prepare_native_uninhabited_sums(program: &mut Program, types: &TypeIntern
         return;
     };
     for (function, (absent_plans, present_plans)) in program.functions.iter_mut().zip(plans) {
-        let before = (!function.breakpoint_regions.is_empty()).then(|| function.clone());
+        let before = (!function.breakpoint_regions.is_empty()
+            || crate::call_owner_generations::has_records(function))
+        .then(|| function.clone());
         let mut changed = false;
         for block in &mut function.blocks {
             let Some(Statement {
@@ -181,7 +183,8 @@ pub fn prepare_native_uninhabited_sums(program: &mut Program, types: &TypeIntern
             // Every nested tag has its own checked source type, so one scan
             // selects all eligible arms before a single dense compaction.
             let regions_valid = before.as_ref().is_none_or(|before| {
-                crate::breakpoint_regions::sum_transition(function, before, types).is_ok()
+                crate::call_owner_generations::sum_transition(function, before, types).is_ok()
+                    && crate::breakpoint_regions::sum_transition(function, before, types).is_ok()
             });
             if !regions_valid || !sequences::prune::unreachable(function) {
                 if let Some(before) = before {

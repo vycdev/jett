@@ -278,3 +278,14 @@ fn native_call_ownership_present_success_still_rejects_pending_before_extraction
         },
     );
 }
+
+#[test]
+fn native_call_ownership_converted_handled_view_reads_its_input_and_owns_the_box() {
+    run_case(
+        "15_converted_handled_view",
+        include_str!("call_ownership/15_converted_handled_view.jett"),
+        ExpectedOutcome::Success(
+            "source\ndefault:source\nlater\ndefault:later\nabsent:item:1:3\nsource\nlater\npresent:item:2:11\n",
+        ),
+    );
+}

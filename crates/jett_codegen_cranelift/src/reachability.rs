@@ -178,7 +178,12 @@ fn collect_function_references(function: &Function, references: &mut References<
                         collect_expression_references(condition, references);
                     }
                 }
-                StatementKind::EndCallView { .. }
+                // Generation operations use current Local operands only;
+                // their immutable Source archives are not callable roots.
+                StatementKind::OpenCallOwnerGeneration { .. }
+                | StatementKind::ReplaceCallOwnerGeneration { .. }
+                | StatementKind::CloseCallOwnerGeneration { .. }
+                | StatementKind::EndCallView { .. }
                 | StatementKind::ReflectedContainerReady { .. }
                 | StatementKind::IterationBorrow { .. }
                 | StatementKind::SequenceLength { .. }

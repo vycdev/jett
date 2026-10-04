@@ -33,16 +33,35 @@ pub struct ArgumentAcquisition {
 
 /// References identify already-validated occurrences in this immutable MIR.
 /// Pointer equality is only a cache lookup, never ownership authority.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct CallerAcquisitions<'a> {
     owners: BTreeMap<u32, SourceAcquisition>,
     calls: Vec<(&'a Expression, Vec<ArgumentAcquisition>)>,
     operands: Vec<(&'a Expression, LocalId)>,
+    // Exact input reads authenticated by a complete converted Source Handle.
+    handled_conversions: Vec<(&'a Expression, &'a Expression)>,
     pub(super) absent_successes: Vec<AbsentSuccessPlan>,
     pub(super) present_successes: Vec<PresentSuccessPlan>,
+    generation_storage: crate::CallGenerationStoragePlan,
 }
 
+impl Default for CallerAcquisitions<'_> {
+    fn default() -> Self {
+        Self {
+            owners: BTreeMap::new(),
+            calls: Vec::new(),
+            operands: Vec::new(),
+            handled_conversions: Vec::new(),
+            absent_successes: Vec::new(),
+            present_successes: Vec::new(),
+            generation_storage: crate::CallGenerationStoragePlan::empty(),
+        }
+    }
+}
 impl CallerAcquisitions<'_> {
+    pub(crate) fn generation_storage(&self) -> &crate::CallGenerationStoragePlan {
+        &self.generation_storage
+    }
     pub fn owner_initializer(&self, owner: LocalId) -> Option<&SourceAcquisition> {
         self.owners.get(&owner.index())
     }
@@ -57,6 +76,14 @@ impl CallerAcquisitions<'_> {
         self.owners
             .iter()
             .map(|(&local, source)| (LocalId::new(local), source))
+    }
+
+    /// Readonly occurrence lookup after full Source/CFG/Begin validation.
+    /// This does not make an unassociated View initializer owning or copyable.
+    pub(crate) fn handled_conversion_input(&self, conversion: &Expression) -> Option<&Expression> {
+        self.handled_conversions
+            .iter()
+            .find_map(|(proved, input)| std::ptr::eq(*proved, conversion).then_some(*input))
     }
 
     pub fn argument_binding(&self, expression: &Expression) -> Option<LocalId> {
@@ -264,6 +291,8 @@ fn validate_function_with_signatures<'a>(
     validator.validate_prepared_presences()?;
     validator.acquisitions.absent_successes = validator.absent_successes.into_inner();
     validator.acquisitions.present_successes = validator.present_successes.into_inner();
+    validator.acquisitions.generation_storage =
+        crate::call_owner_generations::validate(function, types)?;
     Ok(validator.acquisitions)
 }
 
@@ -349,6 +378,9 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                     | S::SequenceGet { target: local, .. }
                     | S::SumTag { target: local, .. } => {
                         define(*local, site, statement.span, Definition::Other)
+                    }
+                    S::ReplaceCallOwnerGeneration { root, .. } => {
+                        define(*root, site, statement.span, Definition::Other)
                     }
                     S::Assign { target, .. } => {
                         if let Some(local) = address_root(target) {
@@ -684,7 +716,30 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                             let (projection, begun) = self.loan(loan, value.ty, site)?;
                             let restored = self
                                 .restore_temporary_projection(projection, argument, begun.site)?;
-                            self.original(&restored, argument, &source.bridge, begun.site)?;
+                            if let Err(error) =
+                                self.original(&restored, argument, &source.bridge, begun.site)
+                            {
+                                if !self.original_handled_view_initializer(
+                                    value,
+                                    projection,
+                                    argument,
+                                    &source.bridge,
+                                    begun.site,
+                                )? {
+                                    return Err(error);
+                                }
+                            } else if hir::validate_source_handled_operand(
+                                &restored,
+                                argument,
+                                &source.bridge,
+                                self.types,
+                            )?
+                            .is_some()
+                            {
+                                self.handled_view_storage_headers(
+                                    value, projection, argument, begun.site,
+                                )?;
+                            }
                             self.claim_slot(loan)?;
                         }
                     }
@@ -1191,6 +1246,100 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
         let (initializer, _) = self.owning_let(root, ty, used)?;
         crate::call_views::replace_borrowed_root(projection, initializer.clone())
             .ok_or_else(|| "call ownership temporary projection lost its exact root type".into())
+    }
+
+    /// Rejoin only the exact converted original Handle after its owning storage
+    /// and Begin have been proved. The added physical View is not a source cast.
+    fn original_handled_view_initializer(
+        &mut self,
+        value: &Expression,
+        projection: &Expression,
+        argument: &hir::ArgumentOwnership,
+        bridge: &hir::CallBridge,
+        used: Site,
+    ) -> Result<bool, String> {
+        use jett_typecheck::{CheckedCalleeAccess as Access, CheckedCallerSyntax as Syntax};
+        if argument.origin != hir::CallerOrigin::OwnedExpression
+            || argument.syntax != Syntax::WrittenView
+            || argument.effect != CheckedCallerEffect::RetainBorrow
+            || argument.physical_access != Access::View
+        {
+            return Ok(false);
+        }
+        let E::View(_physical_loan) = &value.kind else {
+            return Ok(false);
+        };
+        let E::View(physical_owner) = &projection.kind else {
+            return Ok(false);
+        };
+        let E::Local(owner) = physical_owner.kind else {
+            return Ok(false);
+        };
+        let (initializer, defined) = self.owning_let(owner, projection.ty, used)?;
+        if !matches!(
+            initializer.kind,
+            E::InterfaceCoerce { .. } | E::FunctionAdapter { .. }
+        ) {
+            return Ok(false);
+        }
+        let Some(backing) =
+            hir::validate_source_handled_operand(initializer, argument, bridge, self.types)?
+        else {
+            return Ok(false);
+        };
+        if !matches!(backing.kind, E::Local(_)) {
+            return Ok(false);
+        }
+        self.handled_view_storage_headers(value, projection, argument, used)?;
+        self.original(initializer, argument, bridge, defined.site)?;
+        // The existing boxing operation reads its concrete payload borrowed and
+        // returns an independent owned box. Preserve the original written View;
+        // only this exact authenticated conversion/input pair models that read.
+        if let E::InterfaceCoerce { value: input, .. } = &initializer.kind
+            && matches!(self.types.resolve(initializer.ty), Type::Interface(_))
+            && !crate::move_values::is_erased_interface(self.types, input.ty)
+            && matches!(&input.kind, E::View(raw) if std::ptr::eq(raw.as_ref(), backing))
+        {
+            self.acquisitions
+                .handled_conversions
+                .push((initializer, input.as_ref()));
+        }
+        Ok(true)
+    }
+
+    fn handled_view_storage_headers(
+        &self,
+        value: &Expression,
+        projection: &Expression,
+        argument: &hir::ArgumentOwnership,
+        used: Site,
+    ) -> Result<(), String> {
+        use jett_typecheck::{CheckedCalleeAccess as Access, CheckedCallerSyntax as Syntax};
+        if argument.origin != hir::CallerOrigin::OwnedExpression
+            || argument.syntax != Syntax::WrittenView
+            || argument.effect != CheckedCallerEffect::RetainBorrow
+            || argument.physical_access != Access::View
+        {
+            return Ok(());
+        }
+        let E::View(physical_loan) = &value.kind else {
+            return Err("call ownership handled view lost its physical loan".into());
+        };
+        let E::View(physical_owner) = &projection.kind else {
+            return Err("call ownership handled view lost its physical owner".into());
+        };
+        let E::Local(owner) = physical_owner.kind else {
+            return Err("call ownership handled view has no materialized owner".into());
+        };
+        let (initializer, _) = self.owning_let(owner, projection.ty, used)?;
+        if value.span != argument.source_span
+            || physical_loan.span != argument.source_span
+            || projection.span != argument.source_span
+            || physical_owner.span != initializer.span
+        {
+            return Err("call ownership handled view changes its exact physical occurrence".into());
+        }
+        Ok(())
     }
 
     fn producer_source(

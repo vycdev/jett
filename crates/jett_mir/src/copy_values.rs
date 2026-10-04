@@ -16,8 +16,12 @@ pub struct CopyValuePlan {
     pub live_after_statement: Vec<Vec<Set>>,
     /// Bound on owned intermediates in one full expression, including formatting.
     pub temporary_slots: usize,
+    generation_storage: crate::CallGenerationStoragePlan,
 }
 impl CopyValuePlan {
+    pub fn generation_storage(&self) -> &crate::CallGenerationStoragePlan {
+        &self.generation_storage
+    }
     pub fn analyze(function: &Function, types: &TypeInterner) -> Result<Self, String> {
         Self::analyze_storage(function, types, None)
     }
@@ -26,6 +30,10 @@ impl CopyValuePlan {
         types: &TypeInterner,
         program: Option<&crate::Program>,
     ) -> Result<Self, String> {
+        let generation_storage = crate::call_owner_generations::validate(function, types)?;
+        if program.is_none() && !generation_storage.slots().is_empty() {
+            return Err("generation storage requires complete program ownership validation".into());
+        }
         plan_type(types, function.return_type, program)?;
         for local in &function.locals {
             plan_type(types, local.ty, program)?;
@@ -44,6 +52,16 @@ impl CopyValuePlan {
                 let mut temporaries = 0;
                 let mut killed = None;
                 let definition = match &statement.kind {
+                    StatementKind::OpenCallOwnerGeneration { .. }
+                    | StatementKind::CloseCallOwnerGeneration { .. } => None,
+                    StatementKind::ReplaceCallOwnerGeneration {
+                        root, rhs_owner, ..
+                    } => {
+                        reads.insert(root.index() as usize);
+                        reads.insert(rhs_owner.index() as usize);
+                        killed = Some(rhs_owner.index() as usize);
+                        Some(root.index() as usize)
+                    }
                     StatementKind::ReflectedContainerReady { source, .. } => {
                         reads.insert(source.index() as usize);
                         None
@@ -344,6 +362,7 @@ impl CopyValuePlan {
             live_out,
             live_after_statement: after,
             temporary_slots: max_temporaries,
+            generation_storage,
         })
     }
 }

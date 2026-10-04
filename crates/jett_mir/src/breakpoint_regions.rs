@@ -375,6 +375,7 @@ fn touching(all: &[Edge], blocks: &BTreeSet<BlockId>) -> Vec<Edge> {
 // Only the canonical sequence pass constructs this finite edit description.
 // Before is already authenticated; additions come from that exact ForEach,
 // never from current call context, source spans or a post-mutation search.
+#[derive(Clone)]
 pub(super) struct SequenceEdit {
     pub header: BlockId,
     pub before: Terminator,
@@ -950,7 +951,10 @@ fn validate_loop_selection(
     Ok(())
 }
 
-fn remap_snapshot(block: &mut BasicBlock, map: &[Option<LocalId>]) -> Result<(), String> {
+pub(super) fn remap_snapshot(
+    block: &mut BasicBlock,
+    map: &[Option<LocalId>],
+) -> Result<(), String> {
     let mut missing = false;
     sequences::prune::block_locals(
         block,
@@ -979,7 +983,7 @@ fn remap_snapshot(block: &mut BasicBlock, map: &[Option<LocalId>]) -> Result<(),
 
 // Typed normalization changes only f64 payloads for equality. Their exact bits
 // are compared separately, so NaN and signed zero never weaken a snapshot.
-fn statement_equal(left: &Statement, right: &Statement) -> bool {
+pub(super) fn statement_equal(left: &Statement, right: &Statement) -> bool {
     let span = left.span;
     let left = BasicBlock {
         id: BlockId(0),
@@ -999,7 +1003,7 @@ fn statement_equal(left: &Statement, right: &Statement) -> bool {
     };
     block_equal(&left, &right)
 }
-fn terminator_equal(left: &Terminator, right: &Terminator) -> bool {
+pub(super) fn terminator_equal(left: &Terminator, right: &Terminator) -> bool {
     block_equal(
         &BasicBlock {
             id: BlockId(0),
@@ -1013,7 +1017,7 @@ fn terminator_equal(left: &Terminator, right: &Terminator) -> bool {
         },
     )
 }
-fn blocks_equal(left: &[BasicBlock], right: &[BasicBlock]) -> bool {
+pub(super) fn blocks_equal(left: &[BasicBlock], right: &[BasicBlock]) -> bool {
     left.len() == right.len()
         && left
             .iter()
@@ -1051,7 +1055,10 @@ fn float_block(block: &mut BasicBlock, bits: &mut Vec<u64>) {
                     float_expression(value, bits);
                 }
             }
-            StatementKind::EndCallView { .. }
+            StatementKind::OpenCallOwnerGeneration { .. }
+            | StatementKind::ReplaceCallOwnerGeneration { .. }
+            | StatementKind::CloseCallOwnerGeneration { .. }
+            | StatementKind::EndCallView { .. }
             | StatementKind::ReflectedContainerReady { .. }
             | StatementKind::SequenceLength { .. }
             | StatementKind::SequenceGet { .. }
@@ -1245,3 +1252,17 @@ fn float_hir_block(block: &mut hir::Block, bits: &mut Vec<u64>) {
 
 #[cfg(test)]
 mod tests;
+
+// Read-only bit-exact expression comparison, sharing the constructor snapshot rule.
+pub(super) fn expression_equal(left: &Expression, right: &Expression) -> bool {
+    statement_equal(
+        &Statement {
+            kind: StatementKind::Evaluate(left.clone()),
+            span: left.span,
+        },
+        &Statement {
+            kind: StatementKind::Evaluate(right.clone()),
+            span: right.span,
+        },
+    )
+}

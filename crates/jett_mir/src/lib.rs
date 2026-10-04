@@ -2,7 +2,11 @@
 
 mod analysis;
 mod breakpoint_regions;
+mod call_owner_generations;
 mod call_ownership;
+pub use call_owner_generations::{
+    CallGenerationSlot, CallGenerationStoragePlan, CallOwnerEscrowId, CallOwnerGenerationId,
+};
 pub use call_ownership::{CallerAcquisitions, SourceAcquisition};
 mod call_views;
 pub mod copy_values;
@@ -56,6 +60,7 @@ pub struct Function {
     prepared_view_iterations: Vec<iteration_views::PreparedViewIteration>,
     original_view_iterations: Vec<iteration_views::OriginalIteration>,
     breakpoint_regions: Vec<breakpoint_regions::BreakpointRegion>,
+    call_owner_generations: Vec<call_owner_generations::CallOwnerGeneration>,
 }
 
 impl Function {
@@ -169,6 +174,21 @@ impl SequenceSource {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StatementKind {
+    /// Empty, internal generation escrow; this is not an initialized Jett value.
+    OpenCallOwnerGeneration {
+        generation: CallOwnerGenerationId,
+        root: LocalId,
+    },
+    /// Transfer the old owner once, after the independent RHS has been acquired.
+    ReplaceCallOwnerGeneration {
+        generation: CallOwnerGenerationId,
+        root: LocalId,
+        rhs_owner: LocalId,
+    },
+    /// End the matching captured generation after its last call loan.
+    CloseCallOwnerGeneration {
+        generation: CallOwnerGenerationId,
+    },
     /// A compiler-internal, call-bounded borrow with an exact eager borrow proof.
     /// Unlike a source Let alias, only this typed statement grants End authority.
     BeginCallView {
@@ -562,6 +582,16 @@ impl FunctionValidator<'_, '_> {
 
     fn statement(&mut self, statement: &Statement) {
         match &statement.kind {
+            StatementKind::OpenCallOwnerGeneration { root, .. } => {
+                self.check_local(*root, statement.span, "generation root")
+            }
+            StatementKind::ReplaceCallOwnerGeneration {
+                root, rhs_owner, ..
+            } => {
+                self.check_local(*root, statement.span, "generation root");
+                self.check_local(*rhs_owner, statement.span, "generation acquired RHS");
+            }
+            StatementKind::CloseCallOwnerGeneration { .. } => {}
             StatementKind::ReflectedContainerReady { source, .. } => {
                 self.check_local(*source, statement.span, "reflected container source");
             }
@@ -1172,6 +1202,7 @@ fn lower_function(
         builder.terminate(TerminatorKind::Return(None), function.body.span);
     }
     let breakpoint_capture = std::mem::take(&mut builder.breakpoint_capture);
+    let generation_capture = std::mem::take(&mut builder.generation_capture);
     let mut lowered = Function {
         id: function.id,
         identity: function.identity.clone(),
@@ -1188,9 +1219,17 @@ fn lower_function(
         prepared_view_iterations: Vec::new(),
         original_view_iterations: Vec::new(),
         breakpoint_regions: Vec::new(),
+        call_owner_generations: Vec::new(),
     };
     lowered.breakpoint_regions =
         breakpoint_capture
+            .seal(&lowered)
+            .map_err(|message| LowerError {
+                span: function.span,
+                message,
+            })?;
+    lowered.call_owner_generations =
+        generation_capture
             .seal(&lowered)
             .map_err(|message| LowerError {
                 span: function.span,
@@ -1212,6 +1251,7 @@ struct Builder<'a> {
     handlers: Vec<(LocalId, BlockId)>,
     view_params: Vec<LocalId>,
     breakpoint_capture: breakpoint_regions::Capture,
+    generation_capture: call_owner_generations::Capture,
 }
 
 impl<'a> Builder<'a> {
@@ -1238,6 +1278,7 @@ impl<'a> Builder<'a> {
             handlers: Vec::new(),
             view_params: Vec::new(),
             breakpoint_capture: breakpoint_regions::Capture::default(),
+            generation_capture: call_owner_generations::Capture::default(),
         }
     }
 
@@ -1252,6 +1293,7 @@ impl<'a> Builder<'a> {
             },
         });
         self.breakpoint_capture.block(id);
+        self.generation_capture.block(id);
         id
     }
 
@@ -1265,6 +1307,7 @@ impl<'a> Builder<'a> {
     fn terminate(&mut self, kind: TerminatorKind, span: Span) {
         let value = Terminator { kind, span };
         self.breakpoint_capture.terminator(self.current, &value);
+        self.generation_capture.terminator(self.current, &value);
         self.blocks[self.current.index() as usize].terminator = value;
     }
 
@@ -1272,6 +1315,8 @@ impl<'a> Builder<'a> {
         let index = self.blocks[self.current.index() as usize].statements.len();
         let value = Statement { kind, span };
         self.breakpoint_capture
+            .statement(self.current, index, &value);
+        self.generation_capture
             .statement(self.current, index, &value);
         self.blocks[self.current.index() as usize]
             .statements
@@ -1326,14 +1371,52 @@ impl<'a> Builder<'a> {
                 );
             }
             hir::StatementKind::Assign { target, value } => {
+                // Keep the current owner readable throughout the entire RHS.
+                let generation = match target.kind {
+                    hir::ExpressionKind::Local(root) => self
+                        .generation_capture
+                        .protected(root)
+                        .map(|generation| (generation, root)),
+                    _ => None,
+                };
                 let value = self.lower_value(value);
-                self.push(
-                    StatementKind::Assign {
-                        target: target.clone(),
-                        value,
-                    },
-                    statement.span,
-                );
+                if let Some((generation, root)) = generation {
+                    let rhs_owner = self.temporary(value.ty, value.span);
+                    let acquired = (
+                        self.current,
+                        self.blocks[self.current.index() as usize].statements.len(),
+                    );
+                    self.push(
+                        StatementKind::Let {
+                            local: rhs_owner,
+                            value,
+                        },
+                        statement.span,
+                    );
+                    let replacement = (
+                        self.current,
+                        self.blocks[self.current.index() as usize].statements.len(),
+                    );
+                    self.generation_capture
+                        .replacement(generation, statement, rhs_owner, acquired, replacement)
+                        .expect("constructor-selected generation preserves its checked Assign");
+                    self.push(
+                        StatementKind::ReplaceCallOwnerGeneration {
+                            generation,
+                            root,
+                            rhs_owner,
+                        },
+                        statement.span,
+                    );
+                } else {
+                    self.push(
+                        StatementKind::Assign {
+                            target: target.clone(),
+                            value,
+                        },
+                        statement.span,
+                    );
+                }
             }
             hir::StatementKind::Expression(value) => {
                 let value = self.lower_value(value);
@@ -1353,8 +1436,10 @@ impl<'a> Builder<'a> {
                 // operand may move their owner. Other CFG branches retain them.
                 self.end_call_views_since(0, statement.span);
                 let abandoned = std::mem::take(&mut self.call_view_scopes);
+                let generations = self.generation_capture.suspend();
                 let value = value.as_ref().map(|v| self.lower_value(v));
                 self.call_view_scopes = abandoned;
+                self.generation_capture.restore(generations);
                 self.terminate(TerminatorKind::Return(value), statement.span);
             }
             hir::StatementKind::Break => {

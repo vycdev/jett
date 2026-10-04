@@ -1365,6 +1365,113 @@ impl Translator<'_, '_> {
         self.builder.ins().stack_store(zero, slot, 0);
         Ok(())
     }
+    pub(super) fn call_generation_storage(
+        &self,
+        generation: jett_mir::CallOwnerGenerationId,
+        root: Option<jett_mir::LocalId>,
+        span: Span,
+    ) -> Result<NativeCallGenerationStorage, CodegenError> {
+        let mut matches = self
+            .generation_slots
+            .iter()
+            .filter(|storage| storage.generation == generation);
+        let storage = matches.next().copied().ok_or_else(|| {
+            contract_error(
+                self.symbol,
+                span,
+                "call owner generation has no validated native storage",
+            )
+        })?;
+        if matches.next().is_some() || root.is_some_and(|root| root != storage.root) {
+            return Err(contract_error(
+                self.symbol,
+                span,
+                "call owner generation changes its exact root or storage",
+            ));
+        }
+        Ok(storage)
+    }
+    pub(super) fn replace_call_generation(
+        &mut self,
+        generation: jett_mir::CallOwnerGenerationId,
+        root: jett_mir::LocalId,
+        rhs_owner: jett_mir::LocalId,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let storage = self.call_generation_storage(generation, Some(root), span)?;
+        let rhs = self
+            .local_types
+            .get(rhs_owner.index() as usize)
+            .ok_or_else(|| {
+                contract_error(
+                    self.symbol,
+                    span,
+                    "call owner generation RHS local is absent",
+                )
+            })?;
+        let rhs_slot = self
+            .local_slots
+            .get(rhs_owner.index() as usize)
+            .copied()
+            .flatten()
+            .ok_or_else(|| {
+                contract_error(
+                    self.symbol,
+                    span,
+                    "call owner generation RHS has no owning storage",
+                )
+            })?;
+        if rhs.id != rhs_owner
+            || rhs.ty != storage.ty
+            || rhs.view_source.is_some()
+            || rhs_owner == root
+            || rhs_slot == storage.root_slot
+        {
+            return Err(contract_error(
+                self.symbol,
+                span,
+                "call owner generation RHS is not its independent exact owner",
+            ));
+        }
+        // RHS acquisition already completed at its unique checked owning Let.
+        // Its slot is transferred exactly once; no source expression runs here.
+        let next = self.builder.ins().stack_load(ir::types::I64, rhs_slot, 0);
+        self.clear_slot(rhs_slot);
+        let retired = self
+            .builder
+            .ins()
+            .stack_load(ir::types::I64, storage.retired_slot, 0);
+        let has_retired = self.builder.ins().icmp_imm(IntCC::NotEqual, retired, 0);
+        let attached = self.builder.create_block();
+        let replaced = self.builder.create_block();
+        let installed = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(has_retired, replaced, &[], attached, &[]);
+
+        self.builder.switch_to_block(attached);
+        let captured = self
+            .builder
+            .ins()
+            .stack_load(ir::types::I64, storage.root_slot, 0);
+        self.clear_slot(storage.root_slot);
+        self.builder
+            .ins()
+            .stack_store(captured, storage.owner_slot, 0);
+        let one = self.builder.ins().iconst(ir::types::I64, 1);
+        self.builder.ins().stack_store(one, storage.retired_slot, 0);
+        self.builder.ins().jump(installed, &[]);
+
+        self.builder.switch_to_block(replaced);
+        // The old captured owner stays in escrow. Only the independent current
+        // generation is dropped before its ordinary replacement is installed.
+        self.drop_slot(storage.root_slot)?;
+        self.builder.ins().jump(installed, &[]);
+
+        self.builder.switch_to_block(installed);
+        self.builder.ins().stack_store(next, storage.root_slot, 0);
+        Ok(())
+    }
     pub(super) fn drop_temporaries(&mut self) -> Result<(), CodegenError> {
         for &slot in &self.temporary_slots[..self.next_temporary] {
             self.drop_slot(slot)?;
@@ -1384,7 +1491,13 @@ impl Translator<'_, '_> {
     }
     pub(super) fn drop_all(&mut self) -> Result<(), CodegenError> {
         self.drop_temporaries()?;
-        self.drop_dead_locals(&BTreeSet::new())
+        self.drop_dead_locals(&BTreeSet::new())?;
+        for index in 0..self.generation_slots.len() {
+            let storage = self.generation_slots[index];
+            self.drop_slot(storage.owner_slot)?;
+            self.clear_slot(storage.retired_slot);
+        }
+        Ok(())
     }
     pub(super) fn static_data(&mut self, bytes: &[u8]) -> Result<(Value, Value), CodegenError> {
         self.static_data_with_functions(bytes, &[])

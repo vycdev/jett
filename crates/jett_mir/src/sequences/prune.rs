@@ -4,7 +4,9 @@
 use super::*;
 
 pub(crate) fn unreachable(function: &mut Function) -> bool {
-    let before = (!function.breakpoint_regions.is_empty()).then(|| function.clone());
+    let before = (!function.breakpoint_regions.is_empty()
+        || crate::call_owner_generations::has_records(function))
+    .then(|| function.clone());
     let Ok(cfg) = ControlFlowGraph::analyze(function) else {
         return false;
     };
@@ -46,7 +48,9 @@ pub(crate) fn unreachable(function: &mut Function) -> bool {
         .original_view_iterations
         .retain_mut(|record| record.remap_blocks(&blocks));
 
-    if crate::breakpoint_regions::remap_blocks(function, &blocks).is_err()
+    if before.as_ref().is_some_and(|before| {
+        crate::call_owner_generations::remap_blocks(function, before, &blocks).is_err()
+    }) || crate::breakpoint_regions::remap_blocks(function, &blocks).is_err()
         || !unused_locals(function)
     {
         if let Some(before) = before {
@@ -60,7 +64,9 @@ pub(crate) fn unreachable(function: &mut Function) -> bool {
 /// Remove absent frame slots without changing any original control-flow block.
 /// Every parameter, binding, read, capture and debug or loan reference survives.
 pub(crate) fn unused_locals(function: &mut Function) -> bool {
-    let before = (!function.breakpoint_regions.is_empty()).then(|| function.clone());
+    let before = (!function.breakpoint_regions.is_empty()
+        || crate::call_owner_generations::has_records(function))
+    .then(|| function.clone());
     let mut used = vec![false; function.locals.len()];
     for parameter in &function.params {
         used[parameter.local.index() as usize] = true;
@@ -131,7 +137,9 @@ pub(crate) fn unused_locals(function: &mut Function) -> bool {
     function
         .original_view_iterations
         .retain_mut(|record| record.remap_locals(&locals));
-    if crate::breakpoint_regions::remap_locals(function, &locals).is_err() {
+    if crate::call_owner_generations::remap_locals(function, &locals).is_err()
+        || crate::breakpoint_regions::remap_locals(function, &locals).is_err()
+    {
         if let Some(before) = before {
             *function = before;
         }
@@ -212,6 +220,14 @@ fn visit_block_locals(
 ) {
     for statement in &mut block.statements {
         match &mut statement.kind {
+            StatementKind::OpenCallOwnerGeneration { root, .. } => visit(root),
+            StatementKind::ReplaceCallOwnerGeneration {
+                root, rhs_owner, ..
+            } => {
+                visit(root);
+                visit(rhs_owner);
+            }
+            StatementKind::CloseCallOwnerGeneration { .. } => {}
             StatementKind::ReflectedContainerReady { source, .. } => visit(source),
             StatementKind::SequenceLength { source, target } => {
                 source_local(source, visit);

@@ -1,9 +1,9 @@
 # Typed caller ownership: selected implementation contract
 
 Status: integrated candidate in the isolated native-call-view-staging worktree,
-based on `a9a6cd63db33fb29fb10f4b32607b3f82ab431bc`. The latest formatted compiler
-passes all 304 checker, 188 HIR, 181 MIR, 67 backend and 63 object-emission tests,
-plus the MIR doctest. These counts describe the current compiler-core gate.
+based on `a9a6cd63db33fb29fb10f4b32607b3f82ab431bc`. An earlier formatted repair checkpoint
+passed all 304 checker, 188 HIR, 181 MIR, 67 backend and 63 object-emission tests,
+plus the MIR doctest. These counts describe that compiler-core gate.
 
 A stable Windows native snapshot completed 472 of 479 supplemental test groups
 successfully, with seven failures. Five failures subsequently passed focused
@@ -15,11 +15,14 @@ pass source checking. Ten breakpoint-context and three intrinsic owning-staging
 regression groups pass. These native replays preceded the formatting-only pass;
 the compiler-core gate above follows it. A fresh complete native run is pending.
 
-The two unrepaired test groups concern a builder binding replaced while an earlier
-call view remains active, and a reflected read whose written-view handled producer
-needs exact temporary owner/loan staging. Their admitted source behavior remains
-required. Full workspace, fixed inventory and supported-host acceptance are also
-pending; focused replay success is not a new complete-suite count.
+The bounded builder-generation and handled-producer repairs are now implemented.
+The actual focused gate passes all 66 MIR caller acquisition groups and all seven
+generation groups; three native emission groups and the original builder native
+regression also pass. A new converted handled-view linked fixture passes in both
+profiles after source deletion, observing exact payload lengths one and two.
+All seven failures from the historical 479-group run now pass individual replays.
+A fresh complete run, full workspace, fixed inventory and supported-host acceptance
+remain pending; these focused results are not a new complete-suite count.
 
 Earlier integration receipts passed 598 frontend fixtures, 15 native caller groups
 with source deletion and exact debug/release streams, and both property replays
@@ -43,8 +46,9 @@ including a formal View destination. Exact implicitly copyable values copy.
 Field reads borrow the parent and acquire the endpoint by the already selected
 copy operation; Resource-bearing field copies remain prohibited. A view of a
 producer needs a temporary backing owner, rather than an existing binding to
-retain. No root flattening, owner-changing overlap, alias expiry or projected
-write rule is selected here.
+retain. Root flattening, general owner-changing overlap, alias expiry and projected
+write policies remain unselected. The bounded builder-generation follow-up below
+implements existing admitted source behavior.
 
 I independently read the immutable root-executed exact94 report with SHA
 `a9dbc168c298b84d75a88c15442849ede9cac182bc572af0deff713651041e04`.
@@ -372,3 +376,36 @@ remains required. The overall objective remains whole-language native parity.
 ## Exact producer and capture handoff
 
 Root selected the additive caller-origin handoff before its Rust implementation at 2026-10-03T17:28:13.4850053Z (contract SHA256 dda43905e81f5d74ce939a9e1c3ad26098e1f06c42079a84b4f9f2fd21035665). Capture facts retain exact declaration DefIds in their concrete frame and are included by in-body source call occurrences even when their declarations are outside the body span. Resolved named functions, compiler-baked namespace constants and static namespace/type members are produced expressions; they cannot supply nonexistent caller-local roots. Local function-valued variables retain Binding provenance. No signatures alone prove closure capture cloning, no root/generic maps are flattened and no Resource authority is added. The selected handoff is implemented in this candidate; the header records current verification and remaining acceptance gates.
+
+
+## Captured builder generations and handled conversion inputs
+
+The generation path is restricted to an original checked written view of an
+owned mutable plain `TypeConstruction` binding. Its complete original call,
+Source identifier fact, full declaration header and assignments remain sealed;
+only current loan/root/RHS/site identities undergo verified canonical remaps.
+The replacement RHS is evaluated before the captured old generation enters
+private escrow. The current replacement and captured backing have separate,
+once-only cleanup on completion and abandoned call paths. No builder clone,
+public carrier, source ownership rule or ABI permission is introduced. Broader
+simultaneous cohorts and other owner kinds remain unaccepted breadth.
+
+The handled-conversion path preserves original OwnedExpression/WrittenView/
+RetainBorrow authority, its private Handle witness, exact owning storage,
+Begin/End lifetime and produced-result CFG. Fresh caller acquisitions associate
+only a fully validated interface boxing occurrence with its actual concrete View
+input. Move analysis borrows that input; the boxing result is independently owned
+and the runtime may copy its payload. Other same-type/span occurrences grant no
+permission, and this does not authorize a general View-to-owner escape or a
+zero-runtime-copy claim.
+
+Root's actual focused receipts pass 66 MIR acquisition groups (2722a1), seven
+generation groups (5f71c0), three native emission groups (76179f), the original
+builder native regression (f9b4a4), and the new converted linked fixture (161f8b).
+The last fixture observes payload lengths one and two, matches both profiles and
+runs after source deletion.
+The generation gate's earlier six-of-seven result was an invalid total-local-count
+test assertion; its separate amendment checks the exact unused seed removal,
+dense current IDs and immutable archives. Full acceptance remains pending.
+Resource lifecycle/providers/native cleanup, concurrency breadth and the full
+100% objective remain whole-goal work, with the broad estimate still about 85%.

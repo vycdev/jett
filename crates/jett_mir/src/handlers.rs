@@ -251,6 +251,57 @@ enum OrderedCallViewInput {
     Unstaged,
     Borrowed,
     SourceOwningTransfer,
+    SourceHandledTemporary,
+}
+
+/// Only the private original Source Handle witness can authorize this storage.
+/// The physical View wrapper is distinct from its checked conversion endpoint.
+fn source_handled_view_endpoint<'a>(
+    types: &TypeInterner,
+    ownership: &hir::CallOwnership,
+    index: usize,
+    expression: &'a Expression,
+) -> Option<&'a Expression> {
+    use jett_typecheck::{
+        CheckedCalleeAccess as Access, CheckedCallerEffect as Effect, CheckedCallerSyntax as Syntax,
+    };
+    let hir::CallOwnership::Source(source) = ownership else {
+        return None;
+    };
+    let argument = source.arguments.get(index)?;
+    if argument.staging != hir::ArgumentStaging::Original
+        || argument.origin != hir::CallerOrigin::OwnedExpression
+        || argument.syntax != Syntax::WrittenView
+        || argument.effect != Effect::RetainBorrow
+        || argument.physical_access != Access::View
+    {
+        return None;
+    }
+    let ExpressionKind::View(endpoint) = &expression.kind else {
+        return None;
+    };
+    if endpoint.ty != expression.ty || matches!(endpoint.kind, ExpressionKind::View(_)) {
+        return None;
+    }
+    let original =
+        hir::validate_source_handled_operand(expression, argument, &source.bridge, types)
+            .ok()
+            .flatten()
+            .or_else(|| {
+                // A canonical physical View can wrap the original conversion tree.
+                // That tree must itself rejoin the same private checked occurrence.
+                hir::validate_source_handled_operand(endpoint, argument, &source.bridge, types)
+                    .ok()
+                    .flatten()
+            })?;
+    matches!(
+        original.kind,
+        ExpressionKind::Handle {
+            kind: HandleKind::Optional | HandleKind::Result,
+            ..
+        }
+    )
+    .then_some(endpoint.as_ref())
 }
 
 fn ordered_call_view_input(ownership: &hir::CallOwnership, index: usize) -> OrderedCallViewInput {
@@ -310,7 +361,11 @@ fn valid_ordered_borrowed_values(
             == values.len()
         && values.iter().enumerate().all(|(index, value)| {
             !matches!(value.kind, ExpressionKind::View(_))
-                || inputs[index] == OrderedCallViewInput::SourceOwningTransfer
+                || matches!(
+                    inputs[index],
+                    OrderedCallViewInput::SourceOwningTransfer
+                        | OrderedCallViewInput::SourceHandledTemporary
+                )
                 || can_snapshot_view(types, value.ty)
                 || stable_deferred_view(locals, value)
                 || (inputs[index] == OrderedCallViewInput::Borrowed
@@ -445,6 +500,7 @@ impl Builder<'_> {
     /// never grants retention: a relinquished input first acquires its own slot.
     fn lower_ordered_call_values(
         &mut self,
+        original_call: &Expression,
         values: &[Expression],
         order: &[usize],
         ownership: &mut hir::CallOwnership,
@@ -453,7 +509,7 @@ impl Builder<'_> {
         // Restore all of them if a later operand cannot prove its acquisition.
         let checkpoint = self.clone();
         let original_ownership = ownership.clone();
-        let result = self.try_lower_ordered_call_values(values, order, ownership);
+        let result = self.try_lower_ordered_call_values(original_call, values, order, ownership);
         if result.is_none() {
             *self = checkpoint;
             *ownership = original_ownership;
@@ -497,6 +553,7 @@ impl Builder<'_> {
 
     fn try_lower_ordered_call_values(
         &mut self,
+        original_call: &Expression,
         values: &[Expression],
         order: &[usize],
         ownership: &mut hir::CallOwnership,
@@ -504,8 +561,22 @@ impl Builder<'_> {
         if ownership.parameter_count() != values.len() {
             return None;
         }
+        // Authenticate original handled endpoints before scopes/CFG are changed.
+        let handled = values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                source_handled_view_endpoint(self.types, ownership, index, value).cloned()
+            })
+            .collect::<Vec<_>>();
         let inputs = (0..values.len())
-            .map(|index| ordered_call_view_input(ownership, index))
+            .map(|index| {
+                if handled[index].is_some() {
+                    OrderedCallViewInput::SourceHandledTemporary
+                } else {
+                    ordered_call_view_input(ownership, index)
+                }
+            })
             .collect::<Vec<_>>();
         if !valid_ordered_borrowed_values(self.types, &self.locals, values, order, &inputs) {
             return None;
@@ -530,8 +601,38 @@ impl Builder<'_> {
             return None;
         }
         self.call_view_scopes.push(Vec::new());
+        self.generation_capture
+            .begin_scope(original_call, self.types);
         let mut lowered = values.to_vec();
         for &index in order {
+            if let Some(endpoint) = &handled[index] {
+                // Keep the complete original conversion and inner Handle header.
+                // This endpoint already produces an owner; no Clone is inserted.
+                let value = self.lower_value(endpoint);
+                if value.ty != endpoint.ty || value.span != endpoint.span {
+                    return None;
+                }
+                let owner = self.temporary(value.ty, value.span);
+                self.push(
+                    StatementKind::Let {
+                        local: owner,
+                        value,
+                    },
+                    endpoint.span,
+                );
+                let projection = Expression {
+                    kind: ExpressionKind::View(Box::new(Expression {
+                        kind: ExpressionKind::Local(owner),
+                        ty: endpoint.ty,
+                        span: endpoint.span,
+                    })),
+                    ty: values[index].ty,
+                    span: values[index].span,
+                };
+                lowered[index] =
+                    self.stage_checked_call_view(index, None, owner, projection, ownership)?;
+                continue;
+            }
             if inputs[index] == OrderedCallViewInput::Borrowed
                 && matches!(ownership, hir::CallOwnership::Generated(_))
             {
@@ -790,7 +891,42 @@ impl Builder<'_> {
         projection: Expression,
         ownership: &mut hir::CallOwnership,
     ) -> Option<Expression> {
+        let generation = if acquired_owner.is_none() {
+            self.generation_capture
+                .candidate(
+                    index,
+                    source,
+                    &projection,
+                    self.current,
+                    self.blocks[self.current.index() as usize].statements.len(),
+                    &self.locals,
+                    self.types,
+                )
+                .ok()?
+        } else {
+            None
+        };
+        if let Some((generation, true)) = generation {
+            self.push(
+                StatementKind::OpenCallOwnerGeneration {
+                    generation,
+                    root: source,
+                },
+                projection.span,
+            );
+        }
         let local = self.call_view_temporary(projection.ty, source, projection.span);
+        if let Some((generation, _)) = generation {
+            self.generation_capture
+                .capture_loan(
+                    generation,
+                    local,
+                    index,
+                    self.current,
+                    self.blocks[self.current.index() as usize].statements.len(),
+                )
+                .ok()?;
+        }
         ownership
             .stage_parameter(index, acquired_owner, local)
             .ok()?;
@@ -847,7 +983,7 @@ impl Builder<'_> {
         input
     }
 
-    fn temporary(&mut self, ty: TypeId, span: Span) -> LocalId {
+    pub(super) fn temporary(&mut self, ty: TypeId, span: Span) -> LocalId {
         let id = LocalId::new(self.locals.len() as u32);
         self.locals.push(Local {
             id,
@@ -915,7 +1051,9 @@ impl Builder<'_> {
         let Some(scope) = self.call_view_scopes.pop() else {
             return expression;
         };
+        let generations = self.generation_capture.end_scope();
         if scope.is_empty() {
+            debug_assert!(generations.is_empty());
             return expression;
         }
         // Materialize the complete consuming operation before ending its loans.
@@ -929,6 +1067,13 @@ impl Builder<'_> {
         );
         for stage in scope.into_iter().rev() {
             self.push(StatementKind::EndCallView { local: stage }, expression.span);
+        }
+        for generation in generations.into_iter().rev() {
+            self.push(
+                StatementKind::CloseCallOwnerGeneration { generation },
+                expression.span,
+            );
+            self.generation_capture.stop(generation);
         }
         Expression {
             kind: ExpressionKind::Local(local),
@@ -947,6 +1092,9 @@ impl Builder<'_> {
             .collect::<Vec<_>>();
         for local in abandoned {
             self.push(StatementKind::EndCallView { local }, span);
+        }
+        for generation in self.generation_capture.abandoned(depth) {
+            self.push(StatementKind::CloseCallOwnerGeneration { generation }, span);
         }
     }
 
@@ -1512,9 +1660,12 @@ impl Builder<'_> {
                 })
                 .collect::<Vec<_>>();
             let mut ownership = ownership.clone();
-            if let Some(args) =
-                self.lower_ordered_call_values(&inputs, evaluation_order, &mut ownership)
-            {
+            if let Some(args) = self.lower_ordered_call_values(
+                expression,
+                &inputs,
+                evaluation_order,
+                &mut ownership,
+            ) {
                 let mut lowered = expression.clone();
                 lowered.kind = ExpressionKind::Intrinsic {
                     intrinsic: *intrinsic,
@@ -1613,9 +1764,12 @@ impl Builder<'_> {
             )
         {
             let mut ownership = ownership.clone();
-            let Some(args) =
-                self.lower_ordered_call_values(&inputs, evaluation_order, &mut ownership)
-            else {
+            let Some(args) = self.lower_ordered_call_values(
+                expression,
+                &inputs,
+                evaluation_order,
+                &mut ownership,
+            ) else {
                 return expression.clone();
             };
             // Source evaluates call arguments before resolving a function value
@@ -1658,9 +1812,12 @@ impl Builder<'_> {
             && let Some(inputs) = call_staging_inputs(args, modes)
         {
             let mut ownership = ownership.clone();
-            let Some(args) =
-                self.lower_ordered_call_values(&inputs, evaluation_order, &mut ownership)
-            else {
+            let Some(args) = self.lower_ordered_call_values(
+                expression,
+                &inputs,
+                evaluation_order,
+                &mut ownership,
+            ) else {
                 return expression.clone();
             };
             let mut lowered = expression.clone();
@@ -1831,7 +1988,8 @@ impl Builder<'_> {
             })
             .collect();
         let mut ownership = ownership.clone();
-        let args = self.lower_ordered_call_values(&inputs, evaluation_order, &mut ownership)?;
+        let args =
+            self.lower_ordered_call_values(expression, &inputs, evaluation_order, &mut ownership)?;
         let mut raw = expression.clone();
         if let ExpressionKind::Intrinsic {
             field_validation,
@@ -3010,7 +3168,7 @@ mod tests {
         let mut packet = ownership.clone();
         assert!(
             builder
-                .lower_ordered_call_values(&inputs, evaluation_order, &mut packet)
+                .lower_ordered_call_values(&call, &inputs, evaluation_order, &mut packet)
                 .is_none()
         );
         assert_eq!(packet, *ownership);

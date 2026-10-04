@@ -1293,9 +1293,25 @@ operand, while break/continue respect the target loop's scope depth. Original
 metadata and every Begin/End path are validated before pruning; source alias
 names cannot authorize scope expiry. The emitter allocates no destructor slot
 for the internal alias and End emits no runtime ownership action. Existing
-source alias loans remain persistent. Owner-changing overlap inside later
-arguments stays a separate reconciliation; no implicit erased-authority clone,
-owner pin, or runtime ABI is introduced. See the
+source alias loans remain persistent. For an exact source-checked mutable plain
+`TypeConstruction` root, constructor-owned records now preserve a captured
+generation across later assignments. The original call, Source binding fact,
+full local header and assignments remain sealed independently of current dense
+IDs. Exact CFG and loan checks authorize a private escrow: the replacement RHS
+is acquired before the first old generation moves there; subsequent replacement
+owners and the captured generation retain separate cleanup. Canonical preparation
+validates and remaps current records without turning archival IDs into reads.
+Broader simultaneous cohorts and other owner kinds remain separate work; no
+source clone, owner pin or runtime ABI permission is introduced.
+
+A handled owned producer under written `view` is materialized once through its
+original checked endpoint conversion and exact owning Let/Begin/End proof. A
+fresh validated `CallerAcquisitions` map associates only that exact interface
+boxing occurrence with its proved concrete View input. Move analysis reads that
+input borrowed while keeping the produced box owned; unrelated View initializers
+retain their escape refusal. Runtime boxing may copy its payload, so this is not
+a zero-runtime-copy guarantee. The original Source/Handle and produced-result CFG
+checks remain mandatory. See the
 [scoped implementation contract](active/native_scoped_call_view_staging.md).
 Interpreter function and closure invocations expose their own lexical scopes
 and the initial global environment, excluding unrelated caller locals and

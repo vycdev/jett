@@ -71,7 +71,9 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
         return;
     }
     for function in &mut program.functions {
-        let before_pass = (!function.breakpoint_regions.is_empty()).then(|| function.clone());
+        let before_pass = (!function.breakpoint_regions.is_empty()
+            || crate::call_owner_generations::has_records(function))
+        .then(|| function.clone());
         let mut valid_regions = true;
         let mut removed_uninhabited_body = false;
         let count = function.blocks.len();
@@ -144,8 +146,9 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             {
                 continue;
             }
-            let before_iteration =
-                (!function.breakpoint_regions.is_empty()).then(|| function.clone());
+            let before_iteration = (!function.breakpoint_regions.is_empty()
+                || crate::call_owner_generations::has_records(function))
+            .then(|| function.clone());
             let mut region_edit = crate::breakpoint_regions::SequenceEdit {
                 header,
                 before: function.blocks[index].terminator.clone(),
@@ -247,13 +250,20 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                 function.blocks[index].terminator.kind = TerminatorKind::Goto(exit);
                 region_edit.after = function.blocks[index].terminator.clone();
                 if let Some(before_iteration) = &before_iteration
-                    && crate::breakpoint_regions::sequence_transition(
+                    && (crate::call_owner_generations::sequence_transition(
                         function,
                         before_iteration,
-                        region_edit,
+                        &region_edit,
                         types,
                     )
                     .is_err()
+                        || crate::breakpoint_regions::sequence_transition(
+                            function,
+                            before_iteration,
+                            region_edit,
+                            types,
+                        )
+                        .is_err())
                 {
                     valid_regions = false;
                     break;
@@ -400,13 +410,20 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                 region_edit.after = old.clone();
             }
             if let Some(before_iteration) = &before_iteration
-                && crate::breakpoint_regions::sequence_transition(
+                && (crate::call_owner_generations::sequence_transition(
                     function,
                     before_iteration,
-                    region_edit,
+                    &region_edit,
                     types,
                 )
                 .is_err()
+                    || crate::breakpoint_regions::sequence_transition(
+                        function,
+                        before_iteration,
+                        region_edit,
+                        types,
+                    )
+                    .is_err())
             {
                 valid_regions = false;
                 break;

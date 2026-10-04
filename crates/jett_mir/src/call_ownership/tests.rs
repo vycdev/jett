@@ -5093,3 +5093,719 @@ fn caller_acquisition_intrinsic_map_get_refuses_missing_or_forged_owner_staging(
         }
     }
 }
+
+const HANDLED_VIEW_DIRECT_SOURCE: &str = r#"namespace app
+struct Item:
+    values: list[int64]
+function read(view value: Item, extra: int64) returns int64:
+    return extra
+function exercise(incoming: optional[Item], later: optional[int64]) returns int64:
+    return read(view(incoming handle:
+        default Item(values: list(7))
+    ), later handle:
+        default 3
+    )
+"#;
+
+const HANDLED_VIEW_CONVERTED_SOURCE: &str = r#"namespace app
+interface Named:
+    function name(view self: Named) returns string
+struct Item:
+    values: list[int64]
+implement Named for Item:
+    function name(view self: Item) returns string:
+        return "item"
+function read(view value: Named, extra: int64) returns int64:
+    return extra
+function exercise(incoming: optional[Item], later: optional[int64]) returns int64:
+    return read(view(incoming handle:
+        default Item(values: list(7))
+    ), later handle:
+        default 3
+    )
+"#;
+
+fn handled_view_read_call(function: &Function) -> &Expression {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .find_map(|statement| {
+            let (S::Let { value, .. } | S::Evaluate(value)) = &statement.kind else {
+                return None;
+            };
+            matches!(&value.kind, E::Call { ownership: hir::CallOwnership::Source(packet), .. }
+            if packet.arguments.len() == 2)
+            .then_some(value)
+        })
+        .expect("the source read invocation, not its zero-argument producer")
+}
+
+fn handled_view_read_call_mut(function: &mut Function) -> &mut Expression {
+    function
+        .blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.statements)
+        .find_map(|statement| {
+            let (S::Let { value, .. } | S::Evaluate(value)) = &mut statement.kind else {
+                return None;
+            };
+            matches!(&value.kind, E::Call { ownership: hir::CallOwnership::Source(packet), .. }
+            if packet.arguments.len() == 2)
+            .then_some(value)
+        })
+        .expect("the materialized source read invocation")
+}
+
+fn handled_view_packet(expression: &Expression) -> &hir::SourceCallOwnership {
+    let ownership = match &expression.kind {
+        E::Call { ownership, .. }
+        | E::IndirectCall { ownership, .. }
+        | E::Intrinsic { ownership, .. } => ownership,
+        _ => panic!("source invocation"),
+    };
+    let hir::CallOwnership::Source(packet) = ownership else {
+        panic!("original checked Source packet");
+    };
+    packet
+}
+
+fn handled_view_storage(
+    function: &Function,
+    call: &Expression,
+    parameter: usize,
+) -> (LocalId, LocalId) {
+    let packet = handled_view_packet(call);
+    let argument = &packet.arguments[parameter];
+    assert_eq!(argument.origin, hir::CallerOrigin::OwnedExpression);
+    assert_eq!(
+        argument.syntax,
+        jett_typecheck::CheckedCallerSyntax::WrittenView
+    );
+    assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+    assert_eq!(
+        argument.physical_access,
+        jett_typecheck::CheckedCalleeAccess::View
+    );
+    assert_eq!(argument.retained_snapshot_type(), None);
+    let hir::ArgumentStaging::Borrowed { loan } = argument.staging else {
+        panic!("handled source producer borrows its own storage");
+    };
+    let owner = function
+        .local(loan)
+        .expect("loan")
+        .view_source
+        .expect("exact owner");
+    assert_ne!(owner, loan);
+    assert_eq!(function.local(owner).expect("owner").view_source, None);
+    let initializer = observation_initializer(function, owner);
+    assert!(!matches!(initializer.kind, E::Clone(_) | E::View(_)));
+    assert_eq!(function.local(owner).unwrap().span, initializer.span);
+    assert_eq!(
+        function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter(|statement| matches!(statement.kind, S::Let { local, .. } if local == owner))
+            .count(),
+        1
+    );
+    (owner, loan)
+}
+
+fn handled_view_projection(function: &Function, loan: LocalId) -> &Expression {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .find_map(|statement| {
+            let S::BeginCallView { local, value } = &statement.kind else {
+                return None;
+            };
+            (*local == loan).then_some(value)
+        })
+        .expect("unique Begin")
+}
+
+fn handled_view_projection_mut(function: &mut Function, loan: LocalId) -> &mut Expression {
+    function
+        .blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.statements)
+        .find_map(|statement| {
+            let S::BeginCallView { local, value } = &mut statement.kind else {
+                return None;
+            };
+            (*local == loan).then_some(value)
+        })
+        .expect("unique Begin")
+}
+
+fn handled_view_initializer_mut(function: &mut Function, owner: LocalId) -> &mut Expression {
+    function
+        .blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.statements)
+        .find_map(|statement| {
+            let S::Let { local, value } = &mut statement.kind else {
+                return None;
+            };
+            (*local == owner).then_some(value)
+        })
+        .expect("unique owner Let")
+}
+
+fn handled_view_raw_result<'a>(
+    function: &'a Function,
+    call: &Expression,
+    parameter: usize,
+    types: &TypeInterner,
+) -> &'a Expression {
+    let (owner, loan) = handled_view_storage(function, call, parameter);
+    let packet = handled_view_packet(call);
+    let argument = &packet.arguments[parameter];
+    let initializer = observation_initializer(function, owner);
+    // Authenticate the original converted initializer directly. The ordinary
+    // direct path instead restores the original physical View over its result.
+    if matches!(
+        initializer.kind,
+        E::InterfaceCoerce { .. } | E::FunctionAdapter { .. }
+    ) {
+        return hir::validate_source_handled_operand(initializer, argument, &packet.bridge, types)
+            .expect("original conversion")
+            .expect("private Handle occurrence");
+    }
+    let projection = handled_view_projection(function, loan);
+    let original = crate::call_views::replace_borrowed_root(projection, initializer.clone())
+        .expect("exact original temporary root");
+    let backing = hir::validate_source_handled_operand(&original, argument, &packet.bridge, types)
+        .expect("original written View")
+        .expect("private Handle occurrence");
+    assert_eq!(backing.ty, initializer.ty);
+    assert_eq!(backing.span, initializer.span);
+    assert_eq!(backing.kind, initializer.kind);
+    initializer
+}
+
+#[test]
+fn caller_acquisition_handled_written_view_owns_the_exact_optional_and_result_endpoint() {
+    let outcome = HANDLED_VIEW_DIRECT_SOURCE
+        .replace("optional[Item]", "result[Item, string]")
+        .replace("view(incoming handle:", "view(incoming handle error:");
+    for release in [false, true] {
+        for source in [HANDLED_VIEW_DIRECT_SOURCE, outcome.as_str()] {
+            let (program, types) = transparent_retained_program(source, release);
+            let function = exercise(&program);
+            let call = handled_view_read_call(function);
+            let (owner, loan) = handled_view_storage(function, call, 0);
+            let backing = handled_view_raw_result(function, call, 0, &types);
+            let E::Local(output) = backing.kind else {
+                panic!("handled CFG output");
+            };
+            assert_ne!(output, owner);
+            assert_ne!(output, loan);
+            assert!(
+                function
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.statements)
+                    .any(|statement| matches!(statement.kind,
+                    S::SumTake { target, success: true, .. } if target == output))
+            );
+            let begin_block = function.blocks.iter().find(|block| block.statements.iter()
+                .any(|statement| matches!(statement.kind, S::BeginCallView { local, .. } if local == loan)))
+                .expect("begin block");
+            let begin = begin_block.statements.iter().position(|statement|
+                matches!(statement.kind, S::BeginCallView { local, .. } if local == loan)).unwrap();
+            let later_tag = begin_block
+                .statements
+                .iter()
+                .position(|statement| matches!(statement.kind, S::SumTag { .. }))
+                .expect("later source handler selection");
+            assert!(
+                begin < later_tag,
+                "endpoint captured before later source work"
+            );
+            assert!(function.blocks.iter().flat_map(|block| &block.statements)
+                .any(|statement| matches!(statement.kind, S::EndCallView { local } if local == loan)));
+            let acquisitions = validate_function(&program, function, &types)
+                .expect("exact Handle CFG and storage");
+            assert_eq!(
+                acquisitions.owner_initializers().count(),
+                0,
+                "written View retains caller policy"
+            );
+            crate::move_values::MoveValuePlan::analyze(&program, function, &types)
+                .expect("owned endpoint and scoped loan");
+        }
+    }
+}
+
+#[test]
+fn caller_acquisition_handled_written_view_keeps_the_full_original_interface_conversion() {
+    for release in [false, true] {
+        let (program, types) = transparent_retained_program(HANDLED_VIEW_CONVERTED_SOURCE, release);
+        let function = exercise(&program);
+        let call = handled_view_read_call(function);
+        let (owner, _) = handled_view_storage(function, call, 0);
+        let initializer = observation_initializer(function, owner);
+        assert!(matches!(initializer.kind, E::InterfaceCoerce { .. }));
+        assert!(matches!(types.resolve(initializer.ty), Type::Interface(_)));
+        assert!(!crate::handlers::can_snapshot_view(&types, initializer.ty));
+        let raw = handled_view_raw_result(function, call, 0, &types);
+        assert!(matches!(raw.kind, E::Local(_)));
+        assert!(matches!(types.resolve(raw.ty), Type::Struct(_)));
+        assert_ne!(raw.ty, initializer.ty);
+        assert_ne!(raw.span, initializer.span);
+        validate_function(&program, function, &types)
+            .expect("private raw occurrence and full conversion");
+        crate::move_values::MoveValuePlan::analyze(&program, function, &types)
+            .expect("unsnapshotable converted owner is borrowed, never cloned");
+    }
+}
+
+const HANDLED_VIEW_LIST_GET: &str = "export function get[T](view items: list[T], index: int64) returns optional[T]:\n    return list.__get_clone[T](view items, index)\n";
+
+fn handled_view_reflected_program(release: bool) -> (Program, TypeInterner) {
+    assert!(include_str!("../../../../stdlib/list.jett").contains(HANDLED_VIEW_LIST_GET));
+    let stdlib_file = jett_common::FileId::new(jett_common::STDLIB_FILE_ID_START);
+    let project_file = jett_common::FileId::new(0);
+    let mut stdlib = jett_parser::parse(
+        &format!("namespace list\n{HANDLED_VIEW_LIST_GET}"),
+        stdlib_file,
+    );
+    let mut project = jett_parser::parse(
+        include_str!(
+            "../../../jett_driver/tests/native_conformance/scoped_call_views/12_reflected_read.jett"
+        ),
+        project_file,
+    );
+    assert!(stdlib.errors.is_empty(), "{:?}", stdlib.errors);
+    assert!(project.errors.is_empty(), "{:?}", project.errors);
+    stdlib.module.items.append(&mut project.module.items);
+    let resolved = jett_resolve::resolve(&stdlib.module);
+    assert!(
+        resolved
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+        "{:?}",
+        resolved.diagnostics
+    );
+    let checked = jett_typecheck::check_with_options(
+        &stdlib.module,
+        &resolved,
+        jett_typecheck::CheckOptions { release },
+    );
+    assert!(
+        checked
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+        "{:?}",
+        checked.diagnostics
+    );
+    let origins = HashMap::from([
+        (stdlib_file, jett_common::SourceOrigin::Stdlib),
+        (project_file, jett_common::SourceOrigin::Project),
+    ]);
+    let high =
+        hir::lower(&stdlib.module, &resolved, &checked, &origins).expect("exact real source HIR");
+    let program =
+        crate::lower(&high, &checked.interner).expect("exact real reflected handled View MIR");
+    (program, checked.interner)
+}
+
+#[test]
+fn caller_acquisition_handled_written_view_rejoins_the_real_reflected_field_selector() {
+    for release in [false, true] {
+        let (program, types) = handled_view_reflected_program(release);
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "main")
+            .expect("exact real main");
+        let call = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .find_map(|statement| {
+                let (S::Let { value, .. } | S::Evaluate(value)) = &statement.kind else {
+                    return None;
+                };
+                matches!(
+                    value.kind,
+                    E::Intrinsic {
+                        intrinsic: hir::IntrinsicId::TypeFieldValue,
+                        ..
+                    }
+                )
+                .then_some(value)
+            })
+            .expect("real reflected getter");
+        let (_, loan) = handled_view_storage(function, call, 1);
+        let raw = handled_view_raw_result(function, call, 1, &types);
+        assert!(matches!(raw.kind, E::Local(_)));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .any(
+                    |statement| matches!(statement.kind, S::EndCallView { local } if local == loan)
+                )
+        );
+        validate_function(&program, function, &types)
+            .expect("original reflected bridge and handled CFG");
+        crate::move_values::MoveValuePlan::analyze(&program, function, &types)
+            .expect("caller packet remains usable after the reflected copy");
+    }
+}
+
+#[test]
+fn caller_acquisition_handled_written_view_ends_on_early_return_and_keeps_nonhandle_controls() {
+    let source = HANDLED_VIEW_DIRECT_SOURCE.replace("default 3", "return 9");
+    for release in [false, true] {
+        let (program, types) = transparent_retained_program(&source, release);
+        let function = exercise(&program);
+        let (_, loan) = handled_view_storage(function, handled_view_read_call(function), 0);
+        assert!(
+            function.blocks.iter().any(|block| {
+                matches!(&block.terminator.kind,
+            T::Return(Some(value)) if matches!(value.kind, E::Int(9)))
+            && block.statements.iter().any(|statement|
+                matches!(statement.kind, S::EndCallView { local } if local == loan))
+            }),
+            "later failure ends the live producer loan before returning"
+        );
+        crate::move_values::MoveValuePlan::analyze(&program, function, &types)
+            .expect("abort cleanup");
+        let control = HANDLED_VIEW_DIRECT_SOURCE.replace(
+            "function exercise(incoming: optional[Item], later: optional[int64]) returns int64:\n    return read(view(incoming handle:\n        default Item(values: list(7))\n    ), later handle:",
+            "function make() returns Item:\n    return Item(values: list(7))\nfunction exercise(later: optional[int64]) returns int64:\n    return read(view make(), later handle:");
+        let (ordinary, ordinary_types) = transparent_retained_program(&control, release);
+        let ordinary_function = exercise(&ordinary);
+        let ordinary_call = handled_view_read_call(ordinary_function);
+        let packet = handled_view_packet(ordinary_call);
+        let hir::ArgumentStaging::Borrowed { loan } = packet.arguments[0].staging else {
+            panic!("existing call temporary path");
+        };
+        let owner = ordinary_function.local(loan).unwrap().view_source.unwrap();
+        let initializer = observation_initializer(ordinary_function, owner);
+        assert!(matches!(initializer.kind, E::Call { .. }));
+        assert!(
+            hir::validate_source_handled_operand(
+                initializer,
+                &packet.arguments[0],
+                &packet.bridge,
+                &ordinary_types
+            )
+            .expect("nonhandled source control")
+            .is_none()
+        );
+        validate_function(&ordinary, ordinary_function, &ordinary_types)
+            .expect("unchanged original call temporary");
+    }
+}
+
+#[test]
+fn caller_acquisition_handled_written_view_refuses_storage_occurrence_conversion_and_cfg_corruption()
+ {
+    for source in [HANDLED_VIEW_DIRECT_SOURCE, HANDLED_VIEW_CONVERTED_SOURCE] {
+        let (program, types) = transparent_retained_program(source, false);
+        for mutation in [
+            "added clone",
+            "owner span",
+            "loan outer span",
+            "loan local span",
+            "begin span",
+            "inner span",
+            "inner type",
+            "foreign output",
+            "sum occurrence",
+            "wrong arm",
+            "missing initializer",
+            "missing begin",
+            "borrowed default",
+            "missing conversion",
+        ] {
+            if mutation == "missing conversion" && source == HANDLED_VIEW_DIRECT_SOURCE {
+                continue;
+            }
+            let mut changed = program.clone();
+            let function = exercise_mut(&mut changed);
+            let (owner, loan) = handled_view_storage(function, handled_view_read_call(function), 0);
+            let E::Local(output) =
+                handled_view_raw_result(function, handled_view_read_call(function), 0, &types).kind
+            else {
+                panic!("original handled output");
+            };
+            match mutation {
+                "added clone" => {
+                    let value = handled_view_initializer_mut(function, owner);
+                    value.kind = E::Clone(Box::new(value.clone()));
+                }
+                "owner span" => {
+                    let E::View(inner) = &mut handled_view_projection_mut(function, loan).kind
+                    else {
+                        panic!("projection");
+                    };
+                    inner.span.start += 1;
+                }
+                "loan outer span" | "loan local span" => {
+                    let E::Call { args, .. } = &mut handled_view_read_call_mut(function).kind
+                    else {
+                        panic!("source call");
+                    };
+                    if mutation == "loan outer span" {
+                        args[0].span.start += 1;
+                    } else {
+                        let E::View(inner) = &mut args[0].kind else {
+                            panic!("loan");
+                        };
+                        inner.span.start += 1;
+                    }
+                }
+                "begin span" => handled_view_projection_mut(function, loan).span.start += 1,
+                "inner span" | "inner type" | "foreign output" => {
+                    let spare = function.params[0].local;
+                    let raw =
+                        converted_handle_leaf_mut(handled_view_initializer_mut(function, owner));
+                    match mutation {
+                        "inner span" => raw.span.start += 1,
+                        "inner type" => raw.ty = TypeInterner::INT64,
+                        "foreign output" => raw.kind = E::Local(spare),
+                        _ => unreachable!(),
+                    }
+                }
+                "sum occurrence" | "wrong arm" => {
+                    let statement = function.blocks.iter_mut().flat_map(|block| &mut block.statements)
+                        .find(|statement| matches!(statement.kind, S::SumTake { target, success: true, .. } if target == output))
+                        .expect("original success definition");
+                    if mutation == "sum occurrence" {
+                        statement.span.start += 1;
+                    } else {
+                        let S::SumTake { success, .. } = &mut statement.kind else {
+                            unreachable!();
+                        };
+                        *success = false;
+                    }
+                }
+                "missing initializer" | "missing begin" => {
+                    for block in &mut function.blocks {
+                        block.statements.retain(|statement| if mutation == "missing initializer" {
+                            !matches!(statement.kind, S::Let { local, .. } if local == owner)
+                        } else { !matches!(statement.kind, S::BeginCallView { local, .. } if local == loan) });
+                    }
+                }
+                "borrowed default" => {
+                    let value = function
+                        .blocks
+                        .iter_mut()
+                        .flat_map(|block| &mut block.statements)
+                        .find_map(|statement| match &mut statement.kind {
+                            S::Let { local, value } if *local == output => Some(value),
+                            _ => None,
+                        })
+                        .expect("handled default definition");
+                    value.kind = E::View(Box::new(value.clone()));
+                }
+                "missing conversion" => {
+                    let value = handled_view_initializer_mut(function, owner);
+                    let E::InterfaceCoerce { value: raw, .. } = &value.kind else {
+                        panic!("conversion");
+                    };
+                    value.kind = raw.kind.clone();
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                validate_function(&changed, exercise(&changed), &types).is_err(),
+                "{mutation}"
+            );
+        }
+    }
+}
+
+#[test]
+fn caller_acquisition_converted_handled_view_input_is_exact_and_reconstructed_after_preparation() {
+    let outcome = HANDLED_VIEW_CONVERTED_SOURCE
+        .replace("optional[Item]", "result[Item, string]")
+        .replace("view(incoming handle:", "view(incoming handle error:");
+    for release in [false, true] {
+        for source in [HANDLED_VIEW_CONVERTED_SOURCE, outcome.as_str()] {
+            let (mut program, types) = transparent_retained_program(source, release);
+            for prepared in [false, true] {
+                if prepared {
+                    crate::prepare_native_sequences(&mut program, &types);
+                    crate::prepare_native_uninhabited_sums(&mut program, &types);
+                    crate::prepare_native_generated_functions(&mut program, &types);
+                }
+                let function = exercise(&program);
+                let (owner, _) =
+                    handled_view_storage(function, handled_view_read_call(function), 0);
+                let conversion = observation_initializer(function, owner);
+                let E::InterfaceCoerce { value: input, .. } = &conversion.kind else {
+                    panic!("original converted owner");
+                };
+                let E::View(raw) = &input.kind else {
+                    panic!("original written View input");
+                };
+                assert!(matches!(raw.kind, E::Local(_)));
+                let acquisitions = validate_function(&program, function, &types)
+                    .expect("complete original Source, CFG, owner and Begin proof");
+                let proved = acquisitions
+                    .handled_conversion_input(conversion)
+                    .expect("only this exact conversion has its authenticated input read");
+                assert!(std::ptr::eq(proved, input.as_ref()));
+                assert_eq!(
+                    acquisitions.owner_initializers().count(),
+                    0,
+                    "input read never acquires a source binding"
+                );
+                let independent = conversion.clone();
+                assert!(
+                    acquisitions
+                        .handled_conversion_input(&independent)
+                        .is_none(),
+                    "same type/span/tree in another occurrence is no authority"
+                );
+                crate::move_values::MoveValuePlan::analyze(&program, function, &types)
+                    .expect("borrowed conversion input and independent owned box");
+            }
+        }
+    }
+}
+
+#[test]
+fn caller_acquisition_unassociated_identical_boxing_view_keeps_the_owning_escape_refusal() {
+    for release in [false, true] {
+        let (mut program, types) =
+            transparent_retained_program(HANDLED_VIEW_CONVERTED_SOURCE, release);
+        let function = exercise_mut(&mut program);
+        let (owner, _) = handled_view_storage(function, handled_view_read_call(function), 0);
+        let initializer = observation_initializer(function, owner).clone();
+        let mut local = function
+            .local(owner)
+            .expect("converted owner metadata")
+            .clone();
+        local.id = LocalId::new(function.locals.len() as u32);
+        let extra = local.id;
+        function.locals.push(local);
+        let block = function
+            .blocks
+            .iter_mut()
+            .find(|block| {
+                block.statements.iter().any(
+                    |statement| matches!(statement.kind, S::Let { local, .. } if local == owner),
+                )
+            })
+            .expect("original converted initializer block");
+        let index = block
+            .statements
+            .iter()
+            .position(|statement| matches!(statement.kind, S::Let { local, .. } if local == owner))
+            .unwrap();
+        block.statements.insert(
+            index,
+            crate::Statement {
+                span: initializer.span,
+                kind: S::Let {
+                    local: extra,
+                    value: initializer,
+                },
+            },
+        );
+        let function = exercise(&program);
+        let acquisitions = validate_function(&program, function, &types)
+            .expect("existing Source still authenticates only its original conversion");
+        let extra_initializer = observation_initializer(function, extra);
+        assert!(
+            acquisitions
+                .handled_conversion_input(extra_initializer)
+                .is_none()
+        );
+        let error = crate::move_values::MoveValuePlan::analyze(&program, function, &types)
+            .expect_err("no blanket InterfaceCoerce or View-to-owner waiver");
+        assert!(
+            error.contains("native view cannot escape into an owning value"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn caller_acquisition_converted_handled_view_refuses_same_typed_borrowed_backing_and_lost_end() {
+    let parameter_source = HANDLED_VIEW_CONVERTED_SOURCE.replace(
+        "incoming: optional[Item], later: optional[int64])",
+        "incoming: optional[Item], later: optional[int64], view spare: Item)",
+    );
+    let body = "    return read(view(incoming handle:\n        default Item(values: list(7))\n    ), later handle:\n        default 3\n    )\n";
+    let loop_body = "    for item in view items:\n        return read(view(incoming handle:\n            default Item(values: list(7))\n        ), later handle:\n            default 3\n        )\n    return 0\n";
+    assert!(HANDLED_VIEW_CONVERTED_SOURCE.contains(body));
+    let loop_source = HANDLED_VIEW_CONVERTED_SOURCE
+        .replace(
+            "incoming: optional[Item], later: optional[int64])",
+            "incoming: optional[Item], later: optional[int64], items: list[Item])",
+        )
+        .replace(body, loop_body);
+    for release in [false, true] {
+        for (source, iteration) in [
+            (parameter_source.as_str(), false),
+            (loop_source.as_str(), true),
+        ] {
+            let (program, types) = transparent_retained_program(source, release);
+            let function = exercise(&program);
+            let (owner, _) = handled_view_storage(function, handled_view_read_call(function), 0);
+            let raw =
+                handled_view_raw_result(function, handled_view_read_call(function), 0, &types);
+            let replacement = if iteration {
+                function
+                    .blocks
+                    .iter()
+                    .find_map(|block| match block.terminator.kind {
+                        T::ForEach {
+                            key,
+                            value: None,
+                            by_view: true,
+                            ..
+                        } => Some(key),
+                        _ => None,
+                    })
+                    .expect("logical viewed-loop endpoint")
+            } else {
+                function.params[2].local
+            };
+            assert_eq!(function.local(replacement).unwrap().ty, raw.ty);
+            if iteration {
+                assert!(
+                    !function.is_view_local(replacement),
+                    "logical iteration borrowing is not an ABI/persistent view flag"
+                );
+            } else {
+                assert!(function.is_view_local(replacement));
+            }
+            let mut changed = program.clone();
+            let function = exercise_mut(&mut changed);
+            converted_handle_leaf_mut(handled_view_initializer_mut(function, owner)).kind =
+                E::Local(replacement);
+            assert!(
+                validate_function(&changed, exercise(&changed), &types).is_err(),
+                "same-typed borrowed backing cannot mint the converted input association"
+            );
+        }
+        let (mut changed, types) =
+            transparent_retained_program(HANDLED_VIEW_CONVERTED_SOURCE, release);
+        let function = exercise_mut(&mut changed);
+        let (_, loan) = handled_view_storage(function, handled_view_read_call(function), 0);
+        for block in &mut function.blocks {
+            block.statements.retain(
+                |statement| !matches!(statement.kind, S::EndCallView { local } if local == loan),
+            );
+        }
+        assert!(
+            validate_function(&changed, exercise(&changed), &types).is_err(),
+            "whole exact loan lifetime is required before input-read authority"
+        );
+    }
+}
