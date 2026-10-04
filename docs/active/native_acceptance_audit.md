@@ -1922,24 +1922,51 @@ MIR and native validation. Generated calls, temporary staging, viewed loops and
 handled defaults carry separate checked proofs. The
 [implementation contract](native_call_ownership_facts.md) records the scope.
 
-The latest formatted compiler passes all 304 checker, 188 HIR, 181 MIR, 67 backend
-and 63 object-emission tests, plus the MIR doctest. A stable Windows supplemental
-native snapshot completed 472/479 test groups; seven failed. Subsequent focused
-replays passed five of those failures: nested breakpoint conditions, primitive
-and refined interface identity, contextual secrets in both profiles, and the
-64-fixture scalar/owned-collection group. Explicit collection views preserve the
-existing output oracles. Ten breakpoint-region and three intrinsic owning-staging
-regression groups pass. The linked replays preceded the formatting-only pass;
-the complete compiler-core gate follows it. No new complete native count is claimed.
+The earlier formatted caller-core checkpoint passed 304 checker, 188 HIR,
+196 MIR, 70 backend and 63 object-emission tests, plus the MIR doctest. Focused
+handled-producer and builder-generation checks passed 66 MIR acquisition groups,
+seven generation groups, three native emission groups and both original native
+regressions. All seven failures of the historical 472/479 run subsequently
+passed their individual replays.
 
-The builder replacement and reflected handled-view read tests remain unrepaired.
-Full current workspace, complete native replay, fixed inventory and supported-host
-acceptance remain required. Earlier 598-fixture frontend, 15 caller-group source
-erasure and property-replay receipts retain their individual historical scope.
+The complete Windows native suite now passes **480/480** at exact committed
+`a63f891016fac7dc50fffdde33be8b0ce45c655f`. Root terminal `06b7f8` and
+`target/native480-after-owner-generation/receipt.json` record zero failures and
+stable HEAD/tracked sources, ending `2026-10-04T14:20:12.987780+00:00`
+(2320.39 seconds). Resource candidate changes are absent from that run.
+This is complete native-corpus acceptance for that caller head, not whole-language
+completion or new current full-workspace/platform acceptance. Fixed lowering
+remains 182 fixtures; a separate earlier stable recovery scan passed all 182.
+Current 182-object, workspace and supported-host receipts remain required.
 
 The accepted unchanged a9 baseline passed 92 workspace result groups, 464 native
 cases and all 182 object obligations. Workflow 37130142896 passed all four
-Windows/Linux build and installed jobs. Those receipts do not validate this
-candidate. The fixed inventory remains 207 with 182 object obligations and the
-rough feature estimate stays 85%. Resource providers and cleanup, async and actor
-lifetimes, and remaining capture/reflection shapes remain in the 100% objective.
+Windows/Linux build and installed jobs. Those historical receipts do not transfer
+to the Resource candidate. The fixed inventory remains 207 with 182 object
+obligations and the rough feature estimate stays 85%. Async/actor lifetimes,
+broader caller-generation/capture/reflection cases and Resource backend/provider
+execution remain in the full 100% objective.
+
+## Resource reference lifecycle execution
+
+The private reference Resource implementation over a63 passes all **36 focused
+tests** in `target/native-resource-after-checked-call-relay-focused.log`
+(root terminal `923450`; zero failures, 418 filtered, 0.07 seconds).
+The suite includes exact ordinary/mutual declaration identity, retained source
+registration, real both-profile Source construct/borrow/move/close and reverse
+cleanup, occupied returns, indirect close, later lexical actual failure,
+ordinary closure return7, exact terminal list-kernel failure and mixed cleanup
+failure precedence. Provider events and zero live custody/registry entries are
+asserted before teardown. Closed descriptor/absence and required-worker purpose
+controls do not invoke a runtime provider. The
+[detailed reference scope](native_resource_hook_identity.md#reference-lifecycle-execution)
+keeps runtime eligibility, custody and catalog authority separate.
+
+These are private reference tests with a compiler-test-only scripted provider,
+not native Resource execution. Production catalogs/providers remain disabled;
+no shipped Resource API or native hook/carrier/drop path is admitted. Whole
+scoped/reflected/indirect/worker and aggregate ownership breadth, real providers,
+async/actor cancellation and late-completion paths remain pending. Broad library,
+whole-workspace and supported-host acceptance of the Resource candidate are
+also pending. The 36 tests add no native inventory row and do not change the
+480-case caller receipt, 207/182 fixed denominators or about-85% estimate.

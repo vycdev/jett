@@ -2214,9 +2214,14 @@ Private trusted resource operations bind to the exact associated resource and
 Function declaration identities, loader-owned stdlib origin, and complete
 checked parameter ownership modes and result type. Ordinary privacy and
 declaration order still apply; a matching name or type cannot grant authority.
-The compiler's identity substrate has an empty production catalog and introduces
-no public provider API or resource value. Its checked boundary and remaining
-lifecycle work are recorded in the
+The production catalog remains empty and no public provider API is exposed.
+The private reference interpreter can execute the exact checked compiler-test
+hooks with an internal scripted provider. This does not enable a shipped
+Resource API or native Resource execution. Known absence is admitted only
+through the exact checked aggregate shape; it grants no cleanup obligation or
+provider authority. Ordinary refinement predicates remain required even when
+another field is an absent Resource container. The checked boundary and current
+reference evidence are recorded in the
 [active resource-hook note](active/native_resource_hook_identity.md).
 
 The compiler can retain one immutable checked resource program by owning the
@@ -2248,6 +2253,18 @@ install a runtime carrier or provider. Exact Resource roots cannot be ordinarily
 printed or reflected as a value. Nested printing remains a separate boundary,
 including hidden secrets, known absence and omitted values. See the
 [implemented ownership boundaries](active/native_resource_ownership_boundaries.md).
+
+Reference Resource execution retains the same successful checked program,
+exact declaration and concrete body facts through argument evaluation. Caller
+ownership follows Rule24 independently of callee access. An opaque physical
+carrier is not an owner: a separate non-cloneable ticket transfers the one
+cleanup obligation through scopes, temporaries, calls and occupied results.
+The implemented reference tests cover reverse cleanup, explicit close, owned
+returns and failure paths before context teardown. Descriptor creation is data;
+a reached hook requires runtime purpose and matching provider authority.
+Required comptime, verify and property execution do not acquire that authority.
+Broader scoped/reflected/indirect/worker cases and native drop elaboration remain
+required; the bounded tests do not establish those complete domains.
 
 Moving a resource transfers its single cleanup obligation. A `view` borrows it
 without taking cleanup responsibility. An explicit close consumes the owner;

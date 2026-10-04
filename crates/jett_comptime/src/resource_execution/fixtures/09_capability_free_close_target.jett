@@ -1,0 +1,11 @@
+namespace app
+export function close_entry(token: resource_probe.TestHandle) returns nothing:
+    use resource_probe
+    resource_probe.close(token)
+    return nothing
+export function scenario(view net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle token = resource_probe.create(view net, 901) handle error:
+        return nothing
+    close_entry(token)
+    return nothing

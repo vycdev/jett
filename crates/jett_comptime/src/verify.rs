@@ -389,6 +389,22 @@ fn run_verification(
     values: Option<Arc<crate::ExplicitComptimeValues>>,
     collect_cases: bool,
 ) -> VerificationRun {
+    // A checked worker retains the same immutable AST rather than attaching
+    // DefId facts to a freshly cloned same-span module.
+    if expression_types
+        .as_ref()
+        .and_then(|types| types.resource_program.as_ref())
+        .is_some_and(|program| !std::ptr::eq(module, program.module()))
+    {
+        return run_verify_blocks_detailed_inner(
+            module,
+            metadata,
+            expression_types,
+            breakpoint_exclusions,
+            values,
+            collect_cases,
+        );
+    }
     let module_for_thread = module.clone();
     let thread_metadata = metadata.clone();
     let thread_expression_types = expression_types.clone();
@@ -398,8 +414,14 @@ fn run_verification(
         .name("jett-verify".to_string())
         .stack_size(VERIFY_STACK_SIZE)
         .spawn(move || {
+            let retained = thread_expression_types
+                .as_ref()
+                .and_then(|types| types.resource_program.clone());
+            let worker_module = retained
+                .as_ref()
+                .map_or(&module_for_thread, |program| program.module());
             run_verify_blocks_detailed_inner(
-                &module_for_thread,
+                worker_module,
                 thread_metadata,
                 thread_expression_types,
                 thread_exclusions,
@@ -430,7 +452,40 @@ fn run_verify_blocks_detailed_inner(
     values: Option<Arc<crate::ExplicitComptimeValues>>,
     collect_cases: bool,
 ) -> VerificationRun {
+    let resource_program = expression_types
+        .as_ref()
+        .and_then(|types| types.resource_program.clone());
+    let setup_failure = |message: String| VerificationRun {
+        results: vec![VerifyResult {
+            name: "checked resource worker".to_string(),
+            span: module.span,
+            passed: false,
+            error: Some(message),
+            iterations: None,
+            is_property: false,
+            debug_events: Vec::new(),
+        }],
+        property_cases: Vec::new(),
+    };
+    if resource_program
+        .as_ref()
+        .is_some_and(|program| !std::ptr::eq(module, program.module()))
+    {
+        return setup_failure(
+            "required worker received a foreign checked source module".to_string(),
+        );
+    }
     let mut interp = Interpreter::new();
+    if let Some(program) = resource_program {
+        if let Err(error) = interp
+            .install_checked_resource_program(program, crate::ExecutionPurpose::Verify)
+            .and_then(|()| {
+                interp.authorize_checked_resource_worker(module, crate::ExecutionPurpose::Verify)
+            })
+        {
+            return setup_failure(error);
+        }
+    }
     if let Some(values) = values {
         interp.set_explicit_comptime_values(values);
     }
@@ -958,6 +1013,21 @@ struct PropertyDefinitions<'a> {
 }
 
 fn run_property_block(
+    interp: &mut Interpreter,
+    namespace: Option<&str>,
+    pb: &PropertyBlock,
+    definitions: PropertyDefinitions<'_>,
+    collected_cases: Option<&mut Vec<PropertyCase>>,
+) -> VerifyResult {
+    let previous_purpose = interp.checked_execution_purpose(crate::ExecutionPurpose::Property);
+    let result = run_property_block_inner(interp, namespace, pb, definitions, collected_cases);
+    if let Some(purpose) = previous_purpose {
+        interp.checked_execution_purpose(purpose);
+    }
+    result
+}
+
+fn run_property_block_inner(
     interp: &mut Interpreter,
     namespace: Option<&str>,
     pb: &PropertyBlock,
@@ -5023,5 +5093,139 @@ property order:
             results[1].error
         );
         assert_eq!(results[1].iterations, Some(100));
+    }
+
+    #[test]
+    fn checked_property_purpose_restores_previous_purpose_after_pass_and_failed_trial() {
+        use crate::ExecutionPurpose;
+        for release in [false, true] {
+            for purpose in [
+                ExecutionPurpose::Verify,
+                ExecutionPurpose::NamespaceConstant,
+            ] {
+                for passes in [true, false] {
+                    let source = format!(
+                        "namespace app\nproperty restored_purpose:\n    given sample: int64\n    assert {passes}\n"
+                    );
+                    let checked = crate::resource_execution::tests::program(&source, release);
+                    let property = checked
+                        .module()
+                        .items
+                        .iter()
+                        .find_map(|item| match item {
+                            Item::Property(property) => Some(property),
+                            _ => None,
+                        })
+                        .expect("exact checked property");
+                    let mut interpreter =
+                        Interpreter::from_checked_resource_program(checked.clone(), purpose)
+                            .unwrap();
+                    let result = run_property_block(
+                        &mut interpreter,
+                        Some("app"),
+                        property,
+                        PropertyDefinitions {
+                            enums: &[],
+                            structs: &[],
+                            bitfields: &[],
+                            aliases: &[],
+                        },
+                        None,
+                    );
+                    assert_eq!(result.passed, passes, "{:?}", result.error);
+                    assert_eq!(
+                        result.iterations,
+                        Some(if passes {
+                            PROPERTY_DEFAULT_ITERATIONS
+                        } else {
+                            1
+                        })
+                    );
+                    if !passes {
+                        assert!(result.error.as_deref().unwrap().contains("counterexample:"));
+                    }
+                    assert!(result.debug_events.is_empty());
+                    assert_eq!(
+                        interpreter.checked_execution_purpose(purpose),
+                        Some(purpose)
+                    );
+
+                    // Metadata-free execution still has no retained purpose.
+                    let mut raw = Interpreter::new();
+                    let raw_result = run_property_block(
+                        &mut raw,
+                        Some("app"),
+                        property,
+                        PropertyDefinitions {
+                            enums: &[],
+                            structs: &[],
+                            bitfields: &[],
+                            aliases: &[],
+                        },
+                        None,
+                    );
+                    assert_eq!(raw_result.passed, result.passed);
+                    assert_eq!(raw_result.error, result.error);
+                    assert_eq!(raw_result.iterations, result.iterations);
+                    assert!(raw_result.debug_events.is_empty());
+                    assert_eq!(raw.checked_execution_purpose(purpose), None);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn checked_property_purpose_restores_previous_purpose_after_unsupported_pool() {
+        use crate::ExecutionPurpose;
+        let source =
+            "namespace app\nproperty restored_pool:\n    given sample: int64\n    assert true\n";
+        for release in [false, true] {
+            for purpose in [
+                ExecutionPurpose::Verify,
+                ExecutionPurpose::NamespaceConstant,
+            ] {
+                let checked = crate::resource_execution::tests::program(source, release);
+                let mut property = checked
+                    .module()
+                    .items
+                    .iter()
+                    .find_map(|item| match item {
+                        Item::Property(property) => Some(property.clone()),
+                        _ => None,
+                    })
+                    .expect("checked generator control");
+                // Deliberate test-only generator recovery input. This is not a
+                // checked-source admission claim for the unsupported type.
+                property.givens[0].ty = type_named("UnsupportedPurposeProbe");
+                let mut interpreter =
+                    Interpreter::from_checked_resource_program(checked, purpose).unwrap();
+                let result = run_property_block(
+                    &mut interpreter,
+                    Some("app"),
+                    &property,
+                    PropertyDefinitions {
+                        enums: &[],
+                        structs: &[],
+                        bitfields: &[],
+                        aliases: &[],
+                    },
+                    None,
+                );
+                assert!(!result.passed);
+                assert_eq!(result.iterations, Some(0));
+                assert!(
+                    result
+                        .error
+                        .as_deref()
+                        .unwrap()
+                        .contains("cannot generate values")
+                );
+                assert!(result.debug_events.is_empty());
+                assert_eq!(
+                    interpreter.checked_execution_purpose(purpose),
+                    Some(purpose)
+                );
+            }
+        }
     }
 }

@@ -189,7 +189,38 @@ fn evaluate_collected_expressions(
     checked_expression_types: Arc<CheckedExpressionTypes>,
     breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
 ) -> ExplicitComptimeEvaluation {
+    if let Some(program) = &checked_expression_types.resource_program {
+        if !std::ptr::eq(module, program.module()) {
+            return ExplicitComptimeEvaluation {
+                diagnostics: vec![Diagnostic::error(
+                    0,
+                    "required worker received a foreign checked source module",
+                    module.span,
+                )],
+                ..ExplicitComptimeEvaluation::default()
+            };
+        }
+    }
     let mut interpreter = Interpreter::new();
+    if let Some(program) = &checked_expression_types.resource_program {
+        if let Err(error) = interpreter
+            .install_checked_resource_program(
+                program.clone(),
+                crate::ExecutionPurpose::ExplicitComptime,
+            )
+            .and_then(|()| {
+                interpreter.authorize_checked_resource_worker(
+                    module,
+                    crate::ExecutionPurpose::ExplicitComptime,
+                )
+            })
+        {
+            return ExplicitComptimeEvaluation {
+                diagnostics: vec![Diagnostic::error(0, error, module.span)],
+                ..ExplicitComptimeEvaluation::default()
+            };
+        }
+    }
     interpreter.set_reflection_metadata(reflection_metadata);
     interpreter.set_checked_expression_types(checked_expression_types.clone());
     interpreter.set_breakpoint_exclusions(breakpoint_exclusions);
@@ -197,6 +228,8 @@ fn evaluate_collected_expressions(
 
     let mut values = ExplicitComptimeValues::default();
     let mut diagnostics = Vec::new();
+    let previous_purpose =
+        interpreter.checked_execution_purpose(crate::ExecutionPurpose::NamespaceConstant);
     let mut attempted_expressions = evaluate_constants(
         module,
         &checked_expression_types,
@@ -204,6 +237,9 @@ fn evaluate_collected_expressions(
         &mut values,
         &mut diagnostics,
     );
+    if let Some(purpose) = previous_purpose {
+        interpreter.checked_execution_purpose(purpose);
+    }
     for collected in expressions {
         let contexts = evaluation_contexts(&collected, &checked_expression_types);
         let parameters = collected

@@ -2329,9 +2329,46 @@ finalizers, and rejected insertions release their consumed provider payloads.
 Suppressed panic payloads are dropped under unwind protection; if their
 destructors panic too, only that secondary payload is deliberately forgotten
 to bound cleanup while retaining the first failure for propagation.
-The checked identity substrate does not yet install interpreter trusted-hook
-dispatch, live owned Resource values or source-level scope/drop integration.
-Those remain later stages of the resource contract.
+The private reference interpreter now carries Resource and hook-descriptor
+values bound to an Arc of the successful checked program. The physical carrier
+may be copied internally without creating ownership; the separate non-cloneable
+holder ticket records custody and acquisition order. Checked argument packets
+supply source order, formal permutation and caller effects independently of
+callee View/Owned access. Nested checked calls keep those envelopes through
+ordinary function entry/return rather than unwrapping a Resource into an
+ordinary Value argument.
+
+An executable source function rejoins a unique retained AST declaration and its
+exact resolver definition. Ordinary declarations use their actual DefInfo span;
+mutual definitions additionally rejoin the actual-body resolution and retained
+forward declaration. Namespace and header checks remain exact. Runtime
+registration clones identify the original checked body and cannot replace it.
+Generic selection remains an independent concrete-body proof.
+
+The ordered ledger covers source scopes, operation temporaries, partial actuals,
+owned storage/returns and occupied result payloads. Explicit close and reverse
+scope/failure cleanup retire each owning ticket once; views keep a live checked
+backing and never gain a ticket. Cleanup completes before context teardown.
+Protected cleanup continues after a finalizer panic. A cleanup failure takes
+precedence over entry failure; clean cleanup preserves the ordinary entry error,
+and source result.fail remains data. The implemented synchronous reference
+slice does not prove task/actor cancellation or all aggregate operations.
+
+Hook descriptors grant no invocation authority. A reached exact hook must have
+ReferenceRuntime purpose, matching program/type/signature/caller facts and
+runtime capability provenance. Explicit comptime, constants, verify and property
+workers cannot execute it; purpose is restored after property evaluation.
+The production catalog remains empty, its installed provider is Disabled, and
+scripted provider installation is compiler-test-only. All 43 Resource-focused
+reference tests pass, including both-profile Source lifecycles, exact absent
+aggregate layouts, enum-constructor dispatch and required-worker controls.
+The pipeline/assignment additions currently prove checking only. Ordinary
+refinement children need predicate validation; occupied aggregate custody,
+pipeline/assignment transport and reusable entry remain required. Broader
+scoped/reflected/indirect/worker coverage and production
+providers remain pending. Native HIR hook lowering, Resource-linear MIR cleanup
+and a checked native carrier remain unsupported. See
+[the current reference record](active/native_resource_hook_identity.md#reference-lifecycle-execution).
 
 Move dataflow transfers one cleanup obligation; views never own cleanup. Scope
 exit, return, handled failure, cancellation, dropped actor messages, and runtime

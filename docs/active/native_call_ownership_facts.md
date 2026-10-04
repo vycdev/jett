@@ -1,7 +1,10 @@
 # Typed caller ownership: selected implementation contract
 
-Status: integrated candidate in the isolated native-call-view-staging worktree,
-based on `a9a6cd63db33fb29fb10f4b32607b3f82ab431bc`. An earlier formatted repair checkpoint
+Status: caller repairs are committed at
+`a63f891016fac7dc50fffdde33be8b0ce45c655f`. The complete Windows native suite
+passes 480/480 with stable HEAD/tracked sources. Current full-workspace,
+182-object inventory and supported-host acceptance remain separate obligations.
+The integration began over `a9a6cd63db33fb29fb10f4b32607b3f82ab431bc`. An earlier formatted repair checkpoint
 passed all 304 checker, 188 HIR, 181 MIR, 67 backend and 63 object-emission tests,
 plus the MIR doctest. These counts describe that compiler-core gate.
 
@@ -13,7 +16,8 @@ scalar/owned-collection group. The collection fixture corrections add explicit
 views to set/map observers and preserve their output oracles. All 64 sources also
 pass source checking. Ten breakpoint-context and three intrinsic owning-staging
 regression groups pass. These native replays preceded the formatting-only pass;
-the compiler-core gate above follows it. A fresh complete native run is pending.
+the compiler-core gate above follows it. The later complete 480-test receipt
+below supersedes the historical 472/479 result.
 
 The bounded builder-generation and handled-producer repairs are now implemented.
 The actual focused gate passes all 66 MIR caller acquisition groups and all seven
@@ -21,8 +25,12 @@ generation groups; three native emission groups and the original builder native
 regression also pass. A new converted handled-view linked fixture passes in both
 profiles after source deletion, observing exact payload lengths one and two.
 All seven failures from the historical 479-group run now pass individual replays.
-A fresh complete run, full workspace, fixed inventory and supported-host acceptance
-remain pending; these focused results are not a new complete-suite count.
+The fresh complete Windows native suite now passes all 480 tests at exact a63,
+with zero failures and stable HEAD/tracked sources, in
+`target/native480-after-owner-generation/receipt.json` (root terminal `06b7f8`),
+ending `2026-10-04T14:20:12.987780+00:00`. Full workspace, current fixed-inventory
+and supported-host acceptance remain pending. The historical focused results
+remain distinct from that new complete-suite count.
 
 Earlier integration receipts passed 598 frontend fixtures, 15 native caller groups
 with source deletion and exact debug/release streams, and both property replays
@@ -32,7 +40,11 @@ exact-a9 baseline passed 464 native cases and all 182 object obligations; workfl
 receipts do not validate this candidate.
 
 This implements the existing Rule24 contract rather than a new source ownership
-rule. No Resource carrier, provider, ticket runtime or finalizer acceptance follows.
+rule. No Resource carrier, provider, ticket runtime or finalizer acceptance follows
+from the caller/native receipt. A separate private reference Resource slice now
+passes 36 focused tests, recorded in
+[the resource-hook note](native_resource_hook_identity.md#reference-lifecycle-execution);
+production providers and native Resource support remain disabled.
 The full 100% native-codegen objective and rough 85% feature estimate remain open.
 
 ## Existing authority and actual proof

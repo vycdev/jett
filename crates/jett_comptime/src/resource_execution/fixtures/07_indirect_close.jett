@@ -1,0 +1,8 @@
+namespace app
+export function scenario(view net: Network) returns nothing:
+    use resource_probe
+    function(resource_probe.TestHandle) returns nothing dispose = resource_probe.close_descriptor()
+    resource_probe.TestHandle token = resource_probe.create(view net, 701) handle error:
+        return nothing
+    dispose(token)
+    return nothing

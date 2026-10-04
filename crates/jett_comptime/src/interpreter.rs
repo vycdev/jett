@@ -1,3 +1,9 @@
+#[path = "resource_execution/capture.rs"]
+mod resource_capture;
+#[path = "resource_execution/interpreter_transport.rs"]
+mod resource_transport;
+use crate::resource_execution::{EvaluatedValue, ResourceTransport};
+
 use crate::checked_types::{
     CheckedExpressionTypes, CheckedFunctionTypes, CheckedScopedTypes, select_scoped_types,
 };
@@ -449,7 +455,9 @@ pub type Environment = HashMap<String, Value>;
 #[derive(Debug)]
 enum Signal {
     Return(Value, Option<String>),
+    ResourceReturn(EvaluatedValue, Option<String>),
     Default(Value),
+    ResourceDefault(EvaluatedValue),
     Respond(Value),
     Break,
     Continue,
@@ -475,6 +483,7 @@ struct ProducedRefinementCheck {
 #[derive(Debug)]
 enum ExprFlow {
     Value(Value),
+    Resource(EvaluatedValue),
     Signal(Signal),
 }
 
@@ -482,6 +491,12 @@ macro_rules! value_or_signal {
     ($self:expr, $expr:expr) => {
         match $self.eval_expr_flow($expr)? {
             ExprFlow::Value(value) => value,
+            ExprFlow::Resource(_) => {
+                return Err(
+                    "Resource operand has no checked ownership transport for this operation"
+                        .to_string(),
+                )
+            }
             ExprFlow::Signal(signal) => return Ok(ExprFlow::Signal(signal)),
         }
     };
@@ -613,6 +628,11 @@ struct RegisteredFunction {
 }
 
 pub struct Interpreter {
+    resource_transport: Option<ResourceTransport>,
+    retained_resource_program: Option<(
+        Arc<jett_typecheck::CheckedResourceProgram>,
+        crate::ExecutionPurpose,
+    )>,
     /// Stack of lexical scopes. The last element is the innermost scope.
     scopes: Vec<Environment>,
     /// Runtime type annotations for variables declared in the matching scope.
@@ -718,6 +738,8 @@ impl Interpreter {
     /// Create a new interpreter with an empty global scope.
     pub fn new() -> Self {
         Self {
+            resource_transport: None,
+            retained_resource_program: None,
             scopes: vec![HashMap::new()],
             variable_type_scopes: vec![HashMap::new()],
             namespace_alias_scopes: vec![HashMap::new()],
@@ -880,12 +902,18 @@ impl Interpreter {
     // -- Scope management ---------------------------------------------------
 
     fn push_scope(&mut self) {
+        if let Some(transport) = &mut self.resource_transport {
+            transport.push_scope();
+        }
         self.scopes.push(HashMap::new());
         self.variable_type_scopes.push(HashMap::new());
         self.namespace_alias_scopes.push(HashMap::new());
     }
 
     fn pop_scope(&mut self) {
+        if let Some(transport) = &mut self.resource_transport {
+            transport.pop_scope();
+        }
         self.scopes.pop();
         self.variable_type_scopes.pop();
         self.namespace_alias_scopes.pop();
@@ -2124,7 +2152,13 @@ impl Interpreter {
     /// Evaluate an expression, returning its [`Value`].
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<Value, String> {
         match self.eval_expr_flow(expr)? {
-            ExprFlow::Value(value) => Ok(value),
+            ExprFlow::Value(value) if !value.contains_live_resource_or_grant() => Ok(value),
+            ExprFlow::Value(_) | ExprFlow::Resource(_) => {
+                Err("raw expression API cannot export live Resource custody".to_string())
+            }
+            ExprFlow::Signal(Signal::ResourceReturn(..) | Signal::ResourceDefault(..)) => {
+                Err("Resource control flow cannot escape raw expression evaluation".to_string())
+            }
             ExprFlow::Signal(Signal::Default(_)) => {
                 Err("`default` can only be used inside a `handle` block".to_string())
             }
@@ -2231,6 +2265,24 @@ impl Interpreter {
     }
 
     fn eval_expr_flow(&mut self, expr: &Expr) -> Result<ExprFlow, String> {
+        if self.resource_transport.is_some() {
+            if let Some(flow) = self.eval_resource_transport(expr)? {
+                return Ok(flow);
+            }
+        }
+        // Only the original checked call route can return a custody envelope.
+        // Retain that caller fact before actuals or a callee switch body cursors.
+        let checked_resource_call = match (&self.resource_transport, expr) {
+            (Some(transport), Expr::Call(..) | Expr::GenericCall(..))
+                if transport.checked_source_active =>
+            {
+                transport
+                    .checked
+                    .has_invocation(expr.span())
+                    .map_err(|error| error.to_string())?
+            }
+            _ => false,
+        };
         // Source calls can recurse through many small stdlib functions. Dispatch
         // them before entering the general expression match, whose aggregate
         // temporaries otherwise remain on the stack throughout each call.
@@ -2245,6 +2297,10 @@ impl Interpreter {
             ExprFlow::Value(value) => Ok(ExprFlow::Value(
                 self.normalize_value_for_checked_expr(expr, value)?,
             )),
+            ExprFlow::Resource(value) if checked_resource_call => Ok(ExprFlow::Resource(value)),
+            ExprFlow::Resource(_) => {
+                Err("Resource transport escaped its checked expression boundary".to_string())
+            }
             ExprFlow::Signal(signal) => Ok(ExprFlow::Signal(signal)),
         }
     }
@@ -2878,6 +2934,7 @@ impl Interpreter {
                     };
                     value = match self.eval_pipeline_step(&step, value, args.get(1))? {
                         ExprFlow::Value(next) => next,
+                        ExprFlow::Resource(_) => return Err("Resource operand has no checked ownership transport for this operation".to_string()),
                         ExprFlow::Signal(signal) => return Ok(ExprFlow::Signal(signal)),
                     };
                 }
@@ -2962,7 +3019,7 @@ impl Interpreter {
             }
 
             Expr::InlineFn(params, return_type, body, _) => Ok(ExprFlow::Value(
-                self.capture_closure(params, return_type.as_ref(), body),
+                self.capture_closure(params, return_type.as_ref(), body)?,
             )),
 
             // Unsupported expressions produce a clear error.
@@ -3051,14 +3108,32 @@ impl Interpreter {
         params: &[Param],
         return_type: Option<&TypeExpr>,
         body: &Block,
-    ) -> Value {
-        // Capture the current environment (all visible variables) for closure semantics.
+    ) -> Result<Value, String> {
+        // Opaque carriers require custody before any capture copy.
+        // Ordinary lexical captures preserve their existing semantics.
         let mut captures = HashMap::new();
         for (index, scope) in self.scopes.iter().enumerate() {
             if index != 0 && index < self.lexical_scope_floor {
                 continue;
             }
             for (name, value) in scope {
+                if value.contains_live_resource_or_grant() {
+                    let referenced = self
+                        .resource_transport
+                        .as_ref()
+                        .and_then(|transport| {
+                            transport.captured_resource_reference(name, body.span)
+                        })
+                        .unwrap_or_else(|| {
+                            resource_capture::raw_closure_uses_binding(params, body, name)
+                        });
+                    if referenced {
+                        return Err(
+                            "opaque capture has no checked custody transport proof".to_string()
+                        );
+                    }
+                    continue;
+                }
                 captures.insert(name.clone(), value.clone());
             }
         }
@@ -3071,7 +3146,7 @@ impl Interpreter {
             .collect();
         let type_arguments = self.current_type_arguments.clone();
         let captured_arguments = self.captured_type_arguments(&type_arguments);
-        Value::Function {
+        Ok(Value::Function {
             type_context: Box::new(ClosureTypeContext {
                 return_type: return_type.cloned(),
                 checked_scope: self.active_checked_scope.clone(),
@@ -3091,7 +3166,7 @@ impl Interpreter {
             capture_types,
             namespace_aliases: self.visible_namespace_aliases(),
             namespace: self.current_namespace.clone(),
-        }
+        })
     }
 
     fn eval_negation_flow(&mut self, operand: &Expr) -> Result<ExprFlow, String> {
@@ -3491,6 +3566,16 @@ impl Interpreter {
         args: &[CallArg],
         call_span: Span,
     ) -> Result<ExprFlow, String> {
+        if let Some(transport) = &self.resource_transport {
+            if transport.checked_source_active
+                && transport
+                    .checked
+                    .has_invocation(call_span)
+                    .map_err(|error| error.to_string())?
+            {
+                return self.eval_resource_call(callee, type_args, args, call_span);
+            }
+        }
         // Only a fact at this actual result can be reused after the call; an
         // unrelated installed map must not alter metadata-free API validation.
         let checked_producer = self.checked_refinement_source_type(call_span).is_some();
@@ -3778,6 +3863,12 @@ impl Interpreter {
         };
         let value = match flow {
             ExprFlow::Value(value) => value,
+            ExprFlow::Resource(_) => {
+                return Err(
+                    "Resource operand has no checked ownership transport for this operation"
+                        .to_string(),
+                );
+            }
             ExprFlow::Signal(signal) => return Ok(ExprFlow::Signal(signal)),
         };
         self.eval_pipeline_step_handle(value, handle, error_type)
@@ -3991,17 +4082,21 @@ impl Interpreter {
             self.set_inferred_debug_binding(name, value, bind_type);
         }
 
-        let mut signal = None;
-        for stmt in &body.stmts {
-            if let Some(next) = self.exec_stmt_inner(stmt)? {
-                signal = Some(next);
-                break;
+        let result = (|| {
+            let mut signal = None;
+            for stmt in &body.stmts {
+                if let Some(next) = self.exec_stmt_inner(stmt)? {
+                    signal = Some(next);
+                    break;
+                }
             }
-        }
+            Ok::<_, String>(signal)
+        })();
         self.pop_scope();
-
-        match signal {
+        self.check_resource_cleanup()?;
+        match result? {
             Some(Signal::Default(value)) => Ok(ExprFlow::Value(value)),
+            Some(Signal::ResourceDefault(value)) => Ok(ExprFlow::Resource(value)),
             Some(other) => Ok(ExprFlow::Signal(other)),
             None => Err("handle block must end with return or default".to_string()),
         }
@@ -4012,6 +4107,19 @@ impl Interpreter {
     /// Execute a single statement.  Returns `Ok(None)` for normal flow, or
     /// a [`Signal`] if control flow must be altered.
     fn exec_stmt_inner(&mut self, stmt: &Stmt) -> Result<Option<Signal>, String> {
+        if let (Some(transport), Stmt::VarDecl(declaration)) = (&self.resource_transport, stmt) {
+            let fact = transport
+                .checked
+                .binding(declaration.name.span)
+                .map_err(|error| error.to_string())?;
+            if transport
+                .checked
+                .type_contains_resource(fact.ty)
+                .map_err(|error| error.to_string())?
+            {
+                return self.exec_resource_binding(declaration);
+            }
+        }
         match stmt {
             Stmt::VarDecl(decl) => {
                 let declared_ty = self.substitute_type_expr(&decl.ty);
@@ -4028,6 +4136,7 @@ impl Interpreter {
                             let target_type = self.debug_expression_type(target);
                             let target_value = match self.eval_expr_flow(target)? {
                                 ExprFlow::Value(value) => value,
+                                ExprFlow::Resource(_) => return Err("Resource operand has no checked ownership transport for this operation".to_string()),
                                 ExprFlow::Signal(signal) => return Ok(Some(signal)),
                             };
                             let sum_payload = matches!(
@@ -4091,6 +4200,7 @@ impl Interpreter {
                             };
                             match flow {
                                 ExprFlow::Value(value) => value,
+                                ExprFlow::Resource(_) => return Err("Resource operand has no checked ownership transport for this operation".to_string()),
                                 ExprFlow::Signal(signal) => return Ok(Some(signal)),
                             }
                         }
@@ -4100,6 +4210,7 @@ impl Interpreter {
                                 .cloned();
                             let val = match self.eval_expr_flow(&decl.value)? {
                                 ExprFlow::Value(value) => value,
+                                ExprFlow::Resource(_) => return Err("Resource operand has no checked ownership transport for this operation".to_string()),
                                 ExprFlow::Signal(signal) => return Ok(Some(signal)),
                             };
                             self.check_refinement_from_resolved_source(
@@ -4113,6 +4224,7 @@ impl Interpreter {
                 } else {
                     match self.eval_expr_flow(&decl.value)? {
                         ExprFlow::Value(value) => value,
+                        ExprFlow::Resource(_) => return Err("Resource operand has no checked ownership transport for this operation".to_string()),
                         ExprFlow::Signal(signal) => return Ok(Some(signal)),
                     }
                 };
@@ -4126,6 +4238,10 @@ impl Interpreter {
             Stmt::Assign(assign) => {
                 let val = match self.eval_expr_flow(&assign.value)? {
                     ExprFlow::Value(value) => value,
+                    ExprFlow::Resource(_) => return Err(
+                        "Resource operand has no checked ownership transport for this operation"
+                            .to_string(),
+                    ),
                     ExprFlow::Signal(signal) => return Ok(Some(signal)),
                 };
                 match &assign.target {
@@ -4155,6 +4271,14 @@ impl Interpreter {
                 let val = match &ret.value {
                     Some(expr) => match self.eval_expr_flow(expr)? {
                         ExprFlow::Value(value) => value,
+                        ExprFlow::Resource(mut value) => {
+                            self.resource_transport
+                                .as_mut()
+                                .ok_or("missing checked Resource transport")?
+                                .preserve_return(&mut value)
+                                .map_err(|error| error.to_string())?;
+                            return Ok(Some(Signal::ResourceReturn(value, source_type)));
+                        }
                         ExprFlow::Signal(signal) => return Ok(Some(signal)),
                     },
                     None => Value::Nothing,
@@ -4165,6 +4289,10 @@ impl Interpreter {
             Stmt::If(if_stmt) => {
                 let cond = match self.eval_expr_flow(&if_stmt.condition)? {
                     ExprFlow::Value(value) => value,
+                    ExprFlow::Resource(_) => return Err(
+                        "Resource operand has no checked ownership transport for this operation"
+                            .to_string(),
+                    ),
                     ExprFlow::Signal(signal) => return Ok(Some(signal)),
                 };
                 if is_truthy(&cond)? {
@@ -4173,6 +4301,7 @@ impl Interpreter {
                 for (else_if_cond, else_if_block) in &if_stmt.else_ifs {
                     let val = match self.eval_expr_flow(else_if_cond)? {
                         ExprFlow::Value(value) => value,
+                        ExprFlow::Resource(_) => return Err("Resource operand has no checked ownership transport for this operation".to_string()),
                         ExprFlow::Signal(signal) => return Ok(Some(signal)),
                     };
                     if is_truthy(&val)? {
@@ -4201,6 +4330,10 @@ impl Interpreter {
                 let item_types = self.debug_expression_args(&for_stmt.iterable);
                 let iterable = match self.eval_expr_flow(&for_stmt.iterable)? {
                     ExprFlow::Value(value) => value,
+                    ExprFlow::Resource(_) => return Err(
+                        "Resource operand has no checked ownership transport for this operation"
+                            .to_string(),
+                    ),
                     ExprFlow::Signal(signal) => return Ok(Some(signal)),
                 };
                 match iterable.into_payload() {
@@ -4381,6 +4514,7 @@ impl Interpreter {
                 loop {
                     let cond = match self.eval_expr_flow(&while_stmt.condition)? {
                         ExprFlow::Value(value) => value,
+                        ExprFlow::Resource(_) => return Err("Resource operand has no checked ownership transport for this operation".to_string()),
                         ExprFlow::Signal(signal) => return Ok(Some(signal)),
                     };
                     if !is_truthy(&cond)? {
@@ -4403,6 +4537,10 @@ impl Interpreter {
                 let owner_type = self.debug_expression_type(&match_stmt.expr);
                 let val = match self.eval_expr_flow(&match_stmt.expr)? {
                     ExprFlow::Value(value) => value,
+                    ExprFlow::Resource(_) => return Err(
+                        "Resource operand has no checked ownership transport for this operation"
+                            .to_string(),
+                    ),
                     ExprFlow::Signal(signal) => return Ok(Some(signal)),
                 };
                 let (variant_name, fields) = match val.payload() {
@@ -4455,12 +4593,24 @@ impl Interpreter {
             }
             Stmt::Expr(expr_stmt) => match self.eval_expr_flow(&expr_stmt.expr)? {
                 ExprFlow::Value(_) => Ok(None),
+                ExprFlow::Resource(value) => {
+                    self.resource_transport
+                        .as_mut()
+                        .ok_or("missing checked Resource transport")?
+                        .discard_value(value)
+                        .map_err(|error| error.to_string())?;
+                    Ok(None)
+                }
                 ExprFlow::Signal(signal) => Ok(Some(signal)),
             },
 
             Stmt::Assert(assert_stmt) => {
                 let cond = match self.eval_expr_flow(&assert_stmt.condition)? {
                     ExprFlow::Value(value) => value,
+                    ExprFlow::Resource(_) => return Err(
+                        "Resource operand has no checked ownership transport for this operation"
+                            .to_string(),
+                    ),
                     ExprFlow::Signal(signal) => return Ok(Some(signal)),
                 };
                 match cond {
@@ -4470,6 +4620,11 @@ impl Interpreter {
                             match self.eval_expr_flow(msg_expr)? {
                                 ExprFlow::Value(Value::String(s)) => s,
                                 ExprFlow::Value(other) => other.to_string(),
+                                ExprFlow::Resource(_) => {
+                                    return Err(
+                                        "Resource cannot become an assertion message".to_string()
+                                    );
+                                }
                                 ExprFlow::Signal(signal) => return Ok(Some(signal)),
                             }
                         } else {
@@ -4492,6 +4647,9 @@ impl Interpreter {
                         ExprFlow::Value(Value::Bool(value)) => value,
                         ExprFlow::Value(other) => {
                             return Err(format!("breakpoint condition must be bool, got {other}"));
+                        }
+                        ExprFlow::Resource(_) => {
+                            return Err("Resource cannot become a breakpoint condition".to_string());
                         }
                         ExprFlow::Signal(signal) => return Ok(Some(signal)),
                     }
@@ -4528,6 +4686,9 @@ impl Interpreter {
             None | Some(Signal::Break) | Some(Signal::Continue) | Some(Signal::Return(..)) => {
                 Ok(())
             }
+            Some(Signal::ResourceReturn(..) | Signal::ResourceDefault(..)) => {
+                Err("raw statement API cannot export live Resource custody".to_string())
+            }
             Some(Signal::Default(_)) => {
                 Err("`default` can only be used inside a `handle` block".to_string())
             }
@@ -4542,22 +4703,27 @@ impl Interpreter {
     /// Execute a block (list of statements), propagating control-flow signals.
     fn exec_block_inner(&mut self, block: &Block) -> Result<Option<Signal>, String> {
         self.push_scope();
-        let mut result = None;
-        for stmt in &block.stmts {
-            if let Some(signal) = self.exec_stmt_inner(stmt)? {
-                result = Some(signal);
-                break;
+        let result = (|| {
+            for stmt in &block.stmts {
+                if let Some(signal) = self.exec_stmt_inner(stmt)? {
+                    return Ok(Some(signal));
+                }
             }
-        }
+            Ok(None)
+        })();
         self.pop_scope();
-        Ok(result)
+        self.check_resource_cleanup()?;
+        result
     }
 
     /// Execute a block, returning the value produced by a `return` statement
     /// (if any).
     pub fn exec_block(&mut self, block: &Block) -> Result<Option<Value>, String> {
         match self.exec_block_inner(block)? {
-            Some(Signal::Return(v, _)) => Ok(Some(v)),
+            Some(Signal::Return(v, _)) if !v.contains_live_resource_or_grant() => Ok(Some(v)),
+            Some(Signal::Return(..) | Signal::ResourceReturn(..) | Signal::ResourceDefault(..)) => {
+                Err("raw block API cannot export live Resource custody".to_string())
+            }
             Some(Signal::Default(_)) => {
                 Err("`default` can only be used inside a `handle` block".to_string())
             }
@@ -4643,6 +4809,12 @@ impl Interpreter {
         // Evaluate actor handle.
         let actor_val = match self.eval_expr_flow(actor_expr)? {
             ExprFlow::Value(v) => v,
+            ExprFlow::Resource(_) => {
+                return Err(
+                    "Resource operand has no checked ownership transport for this operation"
+                        .to_string(),
+                );
+            }
             ExprFlow::Signal(s) => {
                 return Err(format!("send/ask: actor expression returned signal: {s:?}"));
             }
@@ -4658,6 +4830,10 @@ impl Interpreter {
             for arg in args {
                 let val = match self.eval_expr_flow(&arg.value)? {
                     ExprFlow::Value(v) => v,
+                    ExprFlow::Resource(_) => return Err(
+                        "Resource operand has no checked ownership transport for this operation"
+                            .to_string(),
+                    ),
                     ExprFlow::Signal(s) => {
                         return Err(format!("send/ask: arg expression returned signal: {s:?}"));
                     }
@@ -4737,6 +4913,11 @@ impl Interpreter {
                     Some(Signal::Respond(val)) => {
                         respond_value = val;
                         break;
+                    }
+                    Some(Signal::ResourceReturn(..) | Signal::ResourceDefault(..)) => {
+                        return Err(
+                            "actor Resource custody has no checked transport proof".to_string()
+                        );
                     }
                     Some(Signal::Return(..)) => break,
                     Some(Signal::Break) | Some(Signal::Continue) => break,
@@ -12122,6 +12303,12 @@ impl Interpreter {
     /// Built-in standard library functions are checked first; if the name
     /// does not match a built-in, user-defined functions are consulted.
     pub fn call_function(&mut self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        if args.iter().any(Value::contains_live_resource_or_grant) {
+            return Err(
+                "raw call API cannot adopt Resource custody or runtime authority".to_string(),
+            );
+        }
+
         self.call_function_with_type_args(name, &[], args)
     }
 
@@ -12133,6 +12320,12 @@ impl Interpreter {
         name: &str,
         args: Vec<Value>,
     ) -> Result<Value, String> {
+        if args.iter().any(Value::contains_live_resource_or_grant) {
+            return Err(
+                "raw call API cannot adopt Resource custody or runtime authority".to_string(),
+            );
+        }
+
         let saved_namespace = self.current_namespace.clone();
         self.current_namespace = namespace.map(str::to_string);
         let runtime_name = self
@@ -12156,6 +12349,12 @@ impl Interpreter {
         name: &str,
         args: Vec<Value>,
     ) -> Result<Value, String> {
+        if args.iter().any(Value::contains_live_resource_or_grant) {
+            return Err(
+                "raw call API cannot adopt Resource custody or runtime authority".to_string(),
+            );
+        }
+
         let saved_namespace = self.current_namespace.clone();
         self.current_namespace = namespace.map(str::to_string);
         let runtime_name = self
@@ -12400,6 +12599,9 @@ impl Interpreter {
             let result = self.exec_block_inner(&func.body)?;
             let (mut value, return_source_type) = match result {
                 Some(Signal::Return(value, source_type)) => (value, source_type),
+                Some(Signal::ResourceReturn(..) | Signal::ResourceDefault(..)) => {
+                    return Err("raw call API cannot return Resource custody".to_string());
+                }
                 Some(Signal::Default(_)) => {
                     return Err("`default` can only be used inside a `handle` block".to_string());
                 }
@@ -12792,6 +12994,12 @@ impl Interpreter {
                     }
                     let (mut value, return_source_type) = match self.exec_block_inner(&body)? {
                         Some(Signal::Return(value, source_type)) => (value, source_type),
+                        Some(Signal::ResourceReturn(..) | Signal::ResourceDefault(..)) => {
+                            return Err(
+                                "captured Resource return has no checked custody transport proof"
+                                    .to_string(),
+                            );
+                        }
                         Some(Signal::Default(_)) => {
                             return Err(
                                 "`default` can only be used inside a `handle` block".to_string()
@@ -13967,6 +14175,9 @@ fn runtime_type_name(value: &Value) -> Option<String> {
         Value::OptionalSome(_) | Value::OptionalNone => Some("optional".to_string()),
         Value::Nothing => Some("nothing".to_string()),
         Value::Capability(name) => Some(name.clone()),
+        Value::Resource(_) => None,
+        Value::ResourceHook(_) => Some("function".to_string()),
+        Value::GrantedNetwork(_) => Some("Network".to_string()),
         Value::TypeConstruction { .. } => Some("TypeConstruction".to_string()),
         Value::Struct {
             type_name,
@@ -16890,11 +17101,13 @@ mod tests {
         }];
         let returned = reuse_source("input", 720);
         reuse_facts(&mut interpreter, &[(returned.span(), "int64")]);
-        let closure = interpreter.capture_closure(
-            &func_def("unused", vec![("input", "int64")], block(vec![])).params,
-            Some(&type_named("Field")),
-            &block(vec![return_stmt(returned)]),
-        );
+        let closure = interpreter
+            .capture_closure(
+                &func_def("unused", vec![("input", "int64")], block(vec![])).params,
+                Some(&type_named("Field")),
+                &block(vec![return_stmt(returned)]),
+            )
+            .unwrap();
         let Value::Function {
             ref type_context,
             ref namespace_aliases,
@@ -17172,7 +17385,9 @@ function main() returns string:
                 );
                 function.params[0].ty = parameter_type.clone();
                 interpreter.register_function(&function);
-                let closure = interpreter.capture_closure(&function.params, None, &function.body);
+                let closure = interpreter
+                    .capture_closure(&function.params, None, &function.body)
+                    .unwrap();
                 let wrapped_fact = type_expr_display(&parameter_type);
                 for (number, checked) in [(-1, false), (7, false), (7, true)] {
                     let input = Value::Typed {
@@ -17244,16 +17459,20 @@ function main() returns string:
         interpreter.set_namespace_alias("selected".into(), "models".into());
         interpreter.set_namespace_alias("models".into(), "shadow".into());
         let original_aliases = interpreter.visible_namespace_aliases();
-        let positive = interpreter.capture_closure(
-            &func_def("unused", vec![("input", "int64")], block(vec![])).params,
-            Some(&type_named("selected.Positive")),
-            &block(vec![return_stmt(var("input"))]),
-        );
-        let small = interpreter.capture_closure(
-            &[],
-            Some(&type_named("selected.Small")),
-            &block(vec![return_stmt(int(42))]),
-        );
+        let positive = interpreter
+            .capture_closure(
+                &func_def("unused", vec![("input", "int64")], block(vec![])).params,
+                Some(&type_named("selected.Positive")),
+                &block(vec![return_stmt(var("input"))]),
+            )
+            .unwrap();
+        let small = interpreter
+            .capture_closure(
+                &[],
+                Some(&type_named("selected.Small")),
+                &block(vec![return_stmt(int(42))]),
+            )
+            .unwrap();
         for input in [7, -1] {
             let result = interpreter.call_fn_value_from_source(
                 positive.clone(),
@@ -17281,11 +17500,13 @@ function main() returns string:
             Ok(Value::Int64(42))
         );
         assert_eq!(interpreter.visible_namespace_aliases(), original_aliases);
-        let overflow = interpreter.capture_closure(
-            &[],
-            Some(&type_named("selected.Small")),
-            &block(vec![return_stmt(int(128))]),
-        );
+        let overflow = interpreter
+            .capture_closure(
+                &[],
+                Some(&type_named("selected.Small")),
+                &block(vec![return_stmt(int(128))]),
+            )
+            .unwrap();
         assert!(
             interpreter
                 .call_fn_value_from_source(overflow, vec![], Some(&[]))
@@ -17414,11 +17635,13 @@ function main() returns string:
         let returned = reuse_source("input", 620);
         let params = func_def("unused", vec![("input", "models.Positive")], block(vec![])).params;
         reuse_facts(&mut interpreter, &[(returned.span(), "models.Positive")]);
-        let closure = interpreter.capture_closure(
-            &params,
-            Some(&type_named("models.Positive")),
-            &block(vec![return_stmt(returned)]),
-        );
+        let closure = interpreter
+            .capture_closure(
+                &params,
+                Some(&type_named("models.Positive")),
+                &block(vec![return_stmt(returned)]),
+            )
+            .unwrap();
         for (input, facts, expected_markers, succeeds) in [
             (7, Some(vec![Some("models.Positive".into())]), vec![], true),
             (
@@ -17464,11 +17687,13 @@ function main() returns string:
         let returned = reuse_source("input", 630);
         let params = func_def("unused", vec![("input", "models.Positive")], block(vec![])).params;
         reuse_facts(&mut interpreter, &[(returned.span(), "models.Positive")]);
-        let closure = interpreter.capture_closure(
-            &params,
-            Some(&type_named("models.Large")),
-            &block(vec![return_stmt(returned)]),
-        );
+        let closure = interpreter
+            .capture_closure(
+                &params,
+                Some(&type_named("models.Large")),
+                &block(vec![return_stmt(returned)]),
+            )
+            .unwrap();
         let facts = [Some("models.Positive".into())];
         for input in [7, 2] {
             let result = interpreter.call_fn_value_from_source(
@@ -17524,16 +17749,20 @@ function main() returns string:
         });
         interpreter.active_checked_function = Some(captured_function);
         interpreter.active_checked_scope = Some(captured_scope);
-        let successful = interpreter.capture_closure(
-            &[],
-            Some(&type_named("Field")),
-            &block(vec![return_stmt(returned.clone())]),
-        );
-        let failed = interpreter.capture_closure(
-            &[],
-            Some(&type_named("Field")),
-            &block(vec![return_stmt(Expr::IntLiteral(2, returned.span()))]),
-        );
+        let successful = interpreter
+            .capture_closure(
+                &[],
+                Some(&type_named("Field")),
+                &block(vec![return_stmt(returned.clone())]),
+            )
+            .unwrap();
+        let failed = interpreter
+            .capture_closure(
+                &[],
+                Some(&type_named("Field")),
+                &block(vec![return_stmt(Expr::IntLiteral(2, returned.span()))]),
+            )
+            .unwrap();
         let caller_function = Arc::new(CheckedFunctionTypes::default());
         let caller_scope = Arc::new(CheckedScopedTypes::default());
         interpreter.active_checked_function = Some(caller_function.clone());
@@ -17636,14 +17865,16 @@ function main() returns string:
             let mut params = func_def("unused", vec![("input", &canonical)], block(vec![])).params;
             params[0].view = true;
             reuse_facts(&mut interpreter, &[(returned.span(), &canonical)]);
-            let closure = interpreter.capture_closure(
-                &params,
-                Some(&type_named(&canonical)),
-                &block(vec![return_stmt(Expr::Clone(
-                    Box::new(returned),
-                    Span::new(FileId::new(0), 651, 652),
-                ))]),
-            );
+            let closure = interpreter
+                .capture_closure(
+                    &params,
+                    Some(&type_named(&canonical)),
+                    &block(vec![return_stmt(Expr::Clone(
+                        Box::new(returned),
+                        Span::new(FileId::new(0), 651, 652),
+                    ))]),
+                )
+                .unwrap();
             reuse_facts(
                 &mut interpreter,
                 &[(Span::new(FileId::new(0), 651, 652), &canonical)],
@@ -17698,11 +17929,13 @@ function main() returns string:
             },
         );
         reuse_facts(&mut interpreter, &[(returned.span(), "models.Positive")]);
-        let closure = interpreter.capture_closure(
-            &[],
-            Some(&type_named("models.Positive")),
-            &block(vec![return_stmt(returned)]),
-        );
+        let closure = interpreter
+            .capture_closure(
+                &[],
+                Some(&type_named("models.Positive")),
+                &block(vec![return_stmt(returned)]),
+            )
+            .unwrap();
         for previously_enabled in [true, false] {
             interpreter.allow_checked_refinement_proofs = previously_enabled;
             assert_eq!(

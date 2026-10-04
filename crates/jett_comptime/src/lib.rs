@@ -2,6 +2,7 @@ pub mod checked_types;
 pub mod debug;
 pub mod explicit;
 pub mod interpreter;
+mod resource_execution;
 pub mod value;
 pub mod verify;
 
@@ -17,6 +18,7 @@ pub use interpreter::{
     ClockTestSample, EnvironmentTestEntry, EnvironmentTestSnapshot, EnvironmentTestText,
     GraphicsTestEvent, GraphicsTestKey, GraphicsTestObservation, Interpreter, RandomTestSample,
 };
+pub use resource_execution::ExecutionPurpose;
 pub use value::Value;
 pub use verify::{
     ComptimeError, eval_assert, eval_function, run_verify_blocks,

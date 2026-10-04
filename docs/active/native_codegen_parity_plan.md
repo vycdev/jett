@@ -2300,8 +2300,37 @@ simultaneous cohorts and other owner kinds remain open.
 
 The [contract](native_call_ownership_facts.md) and
 [acceptance record](native_acceptance_audit.md#typed-caller-ownership-integration)
-separate these focused results from pending full-workspace, fresh complete native
-corpus, 182-object inventory and supported-host checks. The a9 predecessor is accepted locally
+separate these focused results from the later complete Windows native receipt:
+480/480 pass at exact committed `a63f891016fac7dc50fffdde33be8b0ce45c655f`,
+with stable HEAD/tracked sources in
+`target/native480-after-owner-generation/receipt.json`, ending
+`2026-10-04T14:20:12.987780+00:00`. Resource changes are absent. Full-workspace,
+current 182-object inventory and supported-host acceptance remain pending. The a9 predecessor is accepted locally
 and on all four supported-host jobs. The fixed 207 inventory, about 85% tracking
-and 100% whole-language goal remain unchanged. Actual Resource lifecycle and
-provider dispatch, followed by native ownership/cleanup, are the next work.
+and 100% whole-language goal remain unchanged. A separate private reference Resource lifecycle now passes 36 focused tests,
+including actual Source cleanup and required-worker controls. Production
+provider dispatch and native ownership/cleanup remain required.
+
+
+### Private reference Resource lifecycle
+
+The exact checked program now supports private reference hook descriptors,
+runtime-purpose invocation gates, non-cloneable owning tickets and ordered
+custody through Source calls, scopes, temporaries and occupied results.
+Ordinary/mutual declarations rejoin their retained executable AST and exact
+resolver metadata; registration clones cannot replace checked bodies. Caller
+source order and formal permutation remain separate. Explicit close and reverse
+cleanup retire owners before context teardown. Cleanup failure overrides entry
+failure; clean cleanup preserves an ordinary entry error and source result.fail
+remains data. The public production catalog and provider remain disabled.
+
+Root terminal `923450` passes all 36 Resource-focused reference tests in
+`target/native-resource-after-checked-call-relay-focused.log`, including real
+both-profile Source lifecycles, failed later actuals, indirect close, terminal
+failure and required-worker/purpose controls. This is separate from the committed
+caller native480 receipt and adds no native inventory case. Broad library,
+full-workspace and supported-host acceptance of this Resource candidate remain
+pending. See [the exact scope](native_resource_hook_identity.md#reference-lifecycle-execution).
+Whole scoped/reflected/indirect/worker and aggregate ownership breadth, real
+providers, native hook/carrier/drop integration and task/actor cancellation remain
+required. The about-85% estimate, fixed 207/182 inventory and 100% goal are unchanged.

@@ -3215,7 +3215,9 @@ fn prepare_reference_file(
 
     // Phase 5: Execute verify blocks at compile time
     let reflection_metadata = check_result.reflection_metadata.clone();
-    let checked_expression_types = Arc::new(expression_type_names(check_result, resolve_result));
+    let mut checked_type_names = expression_type_names(check_result, resolve_result);
+    checked_type_names.resource_program = Some(program.clone());
+    let checked_expression_types = Arc::new(checked_type_names);
     let evaluation = evaluate_explicit_comptime_expressions_capture(
         program.module(),
         reflection_metadata.clone(),
@@ -3443,6 +3445,7 @@ fn expression_type_names(
             }));
     }
     CheckedExpressionTypes {
+        resource_program: None,
         bindings,
         expressions: names,
         functions,
@@ -4245,6 +4248,12 @@ fn run_prepared_reference(
     } else {
         Interpreter::new()
     };
+    interp
+        .install_checked_resource_program(
+            program.clone(),
+            jett_comptime::ExecutionPurpose::ReferenceRuntime,
+        )
+        .map_err(&frontend_failure)?;
     if main_func
         .params
         .iter()

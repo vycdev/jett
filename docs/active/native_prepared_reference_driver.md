@@ -1,7 +1,8 @@
 # Retained checked-program reference execution
 
-Status: implemented isolated follow-up over
-`94bb6b2e021181ec283489c9a02f29a09497fbc7`. The contract was selected before
+Status: implemented retained reference driver boundary. The original isolated
+follow-up was over `94bb6b2e021181ec283489c9a02f29a09497fbc7`.
+The contract was selected before
 tracked Rust changes. All 46 focused Resource groups and four new driver groups
 pass with unchanged source hashes. The broader 544 driver/HIR/resolver/typechecker
 tests, 598 frontend fixtures and eight backend-lowering regressions also pass.
@@ -62,10 +63,13 @@ No test needs a live Resource or native archive. The focused gates below are
 executed; new full-workspace/platform acceptance remains pending.
 
 Driver build_source and backend lowering are outside this bounded preparation
-repair. Their existing paths are not claimed unified. Required-evaluation
-runtime-only Resource invocation eligibility remains a separate prerequisite.
-The whole-language 100% objective, about-85% estimate, fixed 207 inventory/182
-object obligations and 464 supplemental cases remain unchanged.
+repair. Their existing paths are not claimed unified. Runtime-only Resource
+invocation eligibility was separate at this checkpoint; the later private
+reference implementation and its remaining breadth are recorded below.
+At this earlier driver checkpoint the whole-language 100% objective, about-85%
+estimate, fixed 207 inventory/182 object obligations and 464 supplemental cases
+were unchanged. The later caller native receipt passes 480 cases, separately
+from the Resource reference tests.
 
 
 ## Verification and remaining boundaries
@@ -96,9 +100,12 @@ historical `616b51b9` platform result, are centralized in
 [the acceptance audit](native_acceptance_audit.md#retained-reference-preparation).
 This follow-up adds no native inventory case and changes no coverage metric.
 
-Runtime-only required-evaluation effects, program-bound Resource callable
-identity, caller ownership retention, Resource carriers/providers, ordered
-cleanup and native lifecycle remain prerequisites. The sealed snapshot and
+The later [reference Resource lifecycle](native_resource_hook_identity.md#reference-lifecycle-execution)
+implements program-bound callable identity, runtime-only hook eligibility,
+checked caller effects, carriers and ordered cleanup under a compiler-test-only
+scripted provider. Its 36 focused tests are separate from this driver receipt.
+Broader scoped/reflected/indirect/worker coverage, production providers and
+native lifecycle remain prerequisites. The sealed snapshot and
 private reference bridge alone grant none of that authority. build_source and
 backend lowering keep their existing independent paths. A formal View mode is
 not proof of the caller's retained owner; no new generic borrowing policy is

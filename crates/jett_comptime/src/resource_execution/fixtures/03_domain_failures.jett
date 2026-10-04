@@ -1,0 +1,9 @@
+namespace app
+export function scenario(view net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle token = resource_probe.create(view net, 301) handle error:
+        return nothing
+    int64 observed = resource_probe.borrow(view net, view token) handle error:
+        default -1
+    resource_probe.close(token)
+    return nothing
