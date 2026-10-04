@@ -2061,3 +2061,42 @@ The broader driver/frontend gate also passes **693/693**: 87 driver library,
 commit's Windows CI job failed its CLI native-setup capture test with a main-thread
 stack overflow; that separate platform regression is under investigation and is
 not represented as current ownership or whole-workspace acceptance.
+
+## Native context adapter and custody operations
+
+The private runtime adapter connects the existing authenticated stationary
+context lease, bounded layout issuer, registry and custody core. Exact current
+attempt, frame, owner, loan, prepared hook and Resource sum records retain the
+non-cloneable core tokens. Ordinary and Resource lookup IDs share one checked
+monotonic allocator. Installation publishes a scripted provider and paired
+ordinary Network grant transactionally after preflight; that provider is test
+only. Production state starts absent with disabled providers and no new exported
+Resource leaf.
+
+Real core operations now cover root entry, Operation frames, direct/descriptor
+hooks, acquisition, moves, bounded borrowing, close/drop, occupied sums, staged
+replacement and protected reverse cleanup. Completion preserves the observed
+body status verbatim and separately selects cleanup, host panic and current
+ordinary/Resource body failure. Ordinary FailureTake is neither invoked nor
+reset by the adapter. Refused transfers retain the old owner; a cleanup fault
+cannot publish success. Borrow domain Fail stays ordinary Result data.
+
+Initial compilation found three private API/field-name integration errors. The
+first runnable focused check passed 13/14 and exposed string-only cleanup being
+used for an ordinary borrow Result. The bridge now uses the existing recursive
+native destructor, and an additional real-provider BorrowFail control checks
+sum/string retirement, duplicate-drop refusal, clean completion and exact events.
+All **15/15 focused groups** pass (`fd8577`,
+`target/native-resource-state-adapter-companion-fixed-focused.log`). After
+formatting, the full runtime package passes **182 unit + 13 integration tests**
+(`96d995`, `target/native-resource-state-adapter-formatted-runtime.log`). The
+earlier compile/failure logs remain diagnostic evidence.
+
+These are runtime host-protocol controls, not linked Source execution. Exact
+Source child Scope/Return activation, resident incoming views, connected C leaves
+and emission, operational compiler cleanup, the matched archive and linked
+source-deleted binaries in both profiles remain required. The current Windows
+CLI setup-capture stack overflow remains a separate pending regression. Broader
+aggregate/reflection/refinement, provider and concurrency coverage remains part
+of the full goal. Native caller 480/480, the fixed 207/182 inventory and the
+approximate **85%** feature estimate retain their separate scopes.

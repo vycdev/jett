@@ -2288,9 +2288,16 @@ and borrowed tokens, checked frame destinations and reverse acquisition
 cleanup. Its protocol tests cover generation/provenance refusal and
 cleanup after failure or panic. A private bounded registration path validates
 all layout rows before issuing context-bound nominal kinds and slot metadata.
-It installs no payload, provider, grant or owning token. Compiler transfer/drop
-proofs, native ABI, linked source execution and real providers remain required;
-these runtime tests do not enable native Resource operations.
+Registration installs no payload, provider, grant or owning token. A separate
+private context adapter now connects that registration to the custody core with
+exact frame, owner, loan, sum and prepared-operation records. Scripted providers
+and a paired Network grant are available only to compiler tests; production
+state remains absent and providers disabled. Completion cleans obligations
+before recording the outcome, preserving observed body status and separate
+ordinary, Resource body and cleanup errors. Ordinary Result companions use the
+existing recursive destruction path. Connected Source-call ABI, compiler
+transfer/drop execution, linked source execution and real providers remain
+required; these runtime protocol tests do not enable native Resource operations.
 
 Moving a resource transfers its single cleanup obligation. A `view` borrows it
 without taking cleanup responsibility. An explicit close consumes the owner;

@@ -2391,10 +2391,26 @@ context and rejects second installation, shutdown and live registry entries.
 Frame signature consistency follows the containing function independently of
 instruction site. A separate physical acquisition preflight checks/reserves
 storage before a future provider effect; core and opaque-table preflights remain
-mandatory. All 167 runtime library tests pass, including 13 custody protocol
-controls and ten registration controls. The context adapter, typed provider
-grants, exported ABI, operational MIR cleanup and linked Resource execution
-remain pending; registration itself creates no owner, loan, payload or provider.
+mandatory. Registration itself creates no owner, loan, payload or provider.
+The private native context adapter now uses the existing stationary context
+lease and registry for exact installed layout, attempt, frame, owner, loan,
+prepared hook and sum records. Ordinary and Resource lookup IDs share one checked
+monotonic allocator; lookup bits alone cannot supply custody. Moves consume the
+old carrier only after successful core transfer, and refused transfers restore
+it. Test-only provider installation stages its paired Network publication after
+fallible preflight. Production state remains absent and providers disabled.
+
+Completion performs protected reverse cleanup before retaining outcome messages
+and counts. The caller's observed body status remains unchanged; ordinary first
+error, Resource body faults, host panic and cleanup failures determine the
+separate selected outcome. A legal ordinary FailureTake cannot erase a Resource
+fault. Ordinary borrow Result carriers and their error strings use the existing
+recursive native destruction path. The formatted runtime package passes 182
+unit tests and 13 integration tests, including 15 adapter controls, ten
+registration controls and thirteen core custody controls. Source child-scope and
+provisional-return activation, incoming-view forwarding, exported ABI,
+operational compiler cleanup and linked Resource execution remain pending. See
+[the adapter record](active/native_resource_hook_identity.md#native-context-adapter-and-custody-operations).
 
 Move dataflow transfers one cleanup obligation; views never own cleanup. Scope
 exit, return, handled failure, cancellation, dropped actor messages, and runtime

@@ -54,6 +54,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 
 use crate::{ResourceRegistry, discard_panic_payload};
 
+mod resource;
 pub mod values;
 
 /// The native runtime ABI version implemented by this module.
@@ -190,13 +191,15 @@ const _: () = {
 
 struct NativeContextState {
     values: values::NativeValues,
-    _resources: ResourceRegistry,
+    resources: ResourceRegistry,
+    resource_state: Option<resource::NativeResourceState>,
 }
 
 impl NativeContextState {
     fn new() -> Self {
         Self {
-            _resources: ResourceRegistry::new(),
+            resources: ResourceRegistry::new(),
+            resource_state: None,
             values: values::NativeValues::default(),
         }
     }
@@ -517,9 +520,14 @@ pub unsafe extern "C" fn jett_rt_v1_context_destroy(
         let Some(mut state) = entry.wait_for_leases_and_take_state() else {
             return JettRuntimeResultV1::failure(JettRuntimeStatusV1::PANIC, PANIC_MESSAGE);
         };
+        let resource_cleanup_failed = if let Some(resource) = &mut state.resource_state {
+            resource.safety_unwind(&mut state.values, &mut state.resources)
+        } else {
+            false
+        };
         let graphics_cleanup_failed = state.values.release_graphics_session().is_err();
         let actor_cleanup_failed = state.values.release_actors().is_err();
-        if graphics_cleanup_failed || actor_cleanup_failed {
+        if resource_cleanup_failed || graphics_cleanup_failed || actor_cleanup_failed {
             state.values.cleanup_failed = true;
         }
         let leaked = !state.values.is_empty();
@@ -718,7 +726,7 @@ mod tests {
         state
             .as_mut()
             .unwrap()
-            ._resources
+            .resources
             .insert(
                 ResourceTypeId::new(1),
                 (),
@@ -924,7 +932,7 @@ mod tests {
         lock_unpoisoned(&lease.entry.state)
             .as_mut()
             .unwrap()
-            ._resources
+            .resources
             .insert(
                 ResourceTypeId::new(1),
                 (),

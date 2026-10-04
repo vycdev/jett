@@ -4859,9 +4859,152 @@ fn native_lines(text: &str) -> Vec<String> {
     parts
 }
 fn next_identity() -> LeafResult<u64> {
+    reserve_native_identities(1)?.take()
+}
+
+// Resource machinery samples the ordinary channel; it never takes or resets it.
+pub(super) struct ResourceOrdinaryFailure<'a> {
+    pub(super) status: JettRuntimeStatusV1,
+    pub(super) message: &'a [u8],
+    pub(super) prefix: Option<&'a [u8]>,
+}
+
+pub(super) struct ReservedNativeIdentities {
+    next: u64,
+    end: u64,
+}
+
+pub(super) fn reserve_native_identities(count: u64) -> LeafResult<ReservedNativeIdentities> {
     static NEXT: AtomicU64 = AtomicU64::new(1);
-    NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
-        .map_err(|_| EXHAUSTED)
+    if count == 0 {
+        return Err(EXHAUSTED);
+    }
+    let next = NEXT
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            if next == 0 {
+                None
+            } else {
+                next.checked_add(count)
+            }
+        })
+        .map_err(|_| EXHAUSTED)?;
+    Ok(ReservedNativeIdentities {
+        next,
+        end: next + count,
+    })
+}
+
+impl ReservedNativeIdentities {
+    pub(super) fn take(&mut self) -> LeafResult<u64> {
+        if self.next == 0 || self.next >= self.end {
+            return Err(EXHAUSTED);
+        }
+        let value = self.next;
+        self.next += 1;
+        Ok(value)
+    }
+}
+
+// A staged record cannot be created from an independently supplied Network bit.
+pub(super) struct PreparedResourceNetwork {
+    authority: u64,
+}
+
+impl NativeValues {
+    pub(super) fn resource_failure(&self) -> Option<ResourceOrdinaryFailure<'_>> {
+        self.failure
+            .map(|(status, message)| ResourceOrdinaryFailure {
+                status,
+                message: self.dynamic_failure_message.as_deref().unwrap_or(message),
+                prefix: self.property_case_context.as_deref(),
+            })
+    }
+
+    pub(super) fn prepare_resource_network(
+        &mut self,
+        identities: &mut ReservedNativeIdentities,
+    ) -> LeafResult<PreparedResourceNetwork> {
+        if self.opaque_capabilities.contains_key("Network") {
+            return Err(INVALID_HANDLE);
+        }
+        self.opaque_capabilities
+            .try_reserve(1)
+            .map_err(|_| EXHAUSTED)?;
+        Ok(PreparedResourceNetwork {
+            authority: identities.take()?,
+        })
+    }
+
+    pub(super) fn commit_resource_network(&mut self, prepared: PreparedResourceNetwork) -> u64 {
+        let authority = prepared.authority;
+        // The caller holds the same state mutex from preparation through publication.
+        self.opaque_capabilities.insert("Network", authority);
+        authority
+    }
+
+    pub(super) fn validates_resource_network(&self, authority: u64) -> bool {
+        authority != 0 && self.opaque_capabilities.get("Network") == Some(&authority)
+    }
+
+    pub(super) fn prepare_resource_ordinary_output(
+        &mut self,
+    ) -> LeafResult<ReservedNativeIdentities> {
+        #[cfg(test)]
+        self.allocation_checkpoint()?;
+        self.strings.try_reserve(1).map_err(|_| EXHAUSTED)?;
+        self.sums.try_reserve(1).map_err(|_| EXHAUSTED)?;
+        self.sums_created.checked_add(1).ok_or(EXHAUSTED)?;
+        reserve_native_identities(2)
+    }
+
+    pub(super) fn publish_resource_error(
+        &mut self,
+        text: String,
+        identities: &mut ReservedNativeIdentities,
+    ) -> LeafResult<u64> {
+        let id = identities.take()?;
+        self.strings.insert(
+            id,
+            NativeString {
+                text,
+                references: 1,
+                pending_depth: 0,
+            },
+        );
+        Ok(id)
+    }
+
+    pub(super) fn publish_resource_borrow_result(
+        &mut self,
+        result: Result<i64, String>,
+        identities: &mut ReservedNativeIdentities,
+    ) -> LeafResult<u64> {
+        let (tag, bits, owned) = match result {
+            Ok(value) => (SUM_SUCCESS, value as u64, false),
+            Err(text) => (
+                SUM_FAILURE,
+                self.publish_resource_error(text, identities)?,
+                true,
+            ),
+        };
+        let id = identities.take()?;
+        self.sums.insert(
+            id,
+            NativeSum {
+                tag,
+                bits,
+                owned,
+                pending_depth: 0,
+                payload_pending_depth: 0,
+            },
+        );
+        self.sums_created += 1;
+        Ok(id)
+    }
+
+    pub(super) fn drop_resource_ordinary_companion(&mut self, handle: u64) -> LeafResult<()> {
+        self.drop_value(handle).map(|_| ())
+    }
 }
 
 // Hold the existing context lease through the operation. Cleanup is permitted
@@ -7638,7 +7781,7 @@ mod tests {
 
     #[test]
     fn display_result_check_preserves_strings_and_requires_every_pending_layer_to_join() {
-        for text in ["", "shown", "é🦀", "pending(shown)"] {
+        for text in ["", "shown", "ÃƒÂ©Ã°Å¸Â¦â‚¬", "pending(shown)"] {
             let mut values = NativeValues::default();
             let ready = values.insert(text.into()).unwrap();
             let alias = values.retain(ready).unwrap();
@@ -7730,7 +7873,7 @@ mod tests {
 
     #[test]
     fn display_result_check_leaf_preserves_ownership_status_and_first_failure() {
-        for text in ["", "shown", "é🦀"] {
+        for text in ["", "shown", "ÃƒÂ©Ã°Å¸Â¦â‚¬"] {
             for (selected, rendered) in [
                 (0, None),
                 (1, Some(format!("pending({text})"))),
@@ -8266,7 +8409,7 @@ mod tests {
     #[test]
     fn strings_release_immediately_and_retain_preserves_aliases() {
         let context = Context::new();
-        let value = context.text("hé\0llo");
+        let value = context.text("hÃƒÂ©\0llo");
         assert_ne!(value, 0);
         assert_eq!(context.count(), 1);
         unsafe {
@@ -8431,16 +8574,16 @@ mod tests {
                 if clear {
                     assert_eq!(jett_rt_v1_property_case_clear(context.pointer()), 0);
                 }
-                let message = context.text("backend 🧪");
+                let message = context.text("backend Ã°Å¸Â§Âª");
                 assert_ne!(
                     jett_rt_v1_assert_fail_message(context.pointer(), message),
                     0
                 );
                 assert_eq!(jett_rt_v1_string_release(context.pointer(), message), 0);
                 let expected = if clear {
-                    "backend 🧪"
+                    "backend Ã°Å¸Â§Âª"
                 } else {
-                    "property 'target' trial 4: backend 🧪"
+                    "property 'target' trial 4: backend Ã°Å¸Â§Âª"
                 };
                 for _ in 0..2 {
                     assert_eq!(
@@ -8487,7 +8630,7 @@ mod tests {
     #[test]
     fn native_assert_failure_copies_dynamic_message_without_changing_v1_static_result() {
         let context = Context::new();
-        let message = "expected 42, got 🧪";
+        let message = "expected 42, got Ã°Å¸Â§Âª";
         let handle = context.text(message);
         unsafe {
             assert_ne!(jett_rt_v1_assert_fail_message(context.pointer(), handle), 0);
@@ -10198,7 +10341,7 @@ mod tests {
         let mut values = NativeValues::default();
         let zebra = values.insert("zebra".into()).unwrap();
         let apple = values.insert("apple".into()).unwrap();
-        let eclair = values.insert("éclair".into()).unwrap();
+        let eclair = values.insert("ÃƒÂ©clair".into()).unwrap();
         let list = values.new_list(true).unwrap();
         values.lists.get_mut(&list).unwrap().elements =
             vec![Some(zebra), Some(eclair), Some(apple)];
