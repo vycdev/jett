@@ -1989,3 +1989,19 @@ controls do not execute native Resource values. The 480-case native caller recei
 fixed 207/182 inventory and approximate 85% estimate keep their separate scopes;
 full providers, aggregates, capture/reflection/refinement breadth and
 async/actor/cancellation native execution remain whole-goal requirements.
+
+## Checked Resource HIR/MIR handoff
+
+The original checked Resource manifest and exact Source hook calls now survive
+HIR-to-MIR lowering, including unused hook validation and lexical argument
+order. The five focused Source groups pass (`852dfc`). The formatted complete
+phase gate passes **522/522**: 191 HIR, 198 MIR, 70 codegen and 63 object-emission
+tests (`961b04`, `target/native-resource-manifest-metadata-fixed-phase.log`).
+Earlier foreign nested-type rejection is pinned at manifest validation, with
+the lower native type gate still tested independently.
+
+This is checked metadata preservation. Native Resource custody operations,
+ownership/drop CFG, registration/ABI and linked Source execution remain pending.
+These phase receipts do not extend the separate 480-case native caller receipt
+or foundation-only platform acceptance. The fixed 207/182 inventory, approximate
+85% feature estimate and whole-language 100% objective remain unchanged.

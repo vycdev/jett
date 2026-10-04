@@ -167,6 +167,14 @@ impl MoveValuePlan {
         function: &Function,
         types: &TypeInterner,
     ) -> Result<CopyValuePlan, String> {
+        if crate::resource_type_pending(types, function.return_type)
+            || function
+                .locals
+                .iter()
+                .any(|local| crate::resource_type_pending(types, local.ty))
+        {
+            return Err("pending ResourceOwnershipPlan: ordinary MoveValuePlan cannot transfer or drop Resource custody".into());
+        }
         validate_local_view_initializers(function, types)?;
         let call_views = crate::call_views::validate(function, types)?;
         let caller_acquisitions = crate::validate_caller_acquisitions(program, function, types)?;
@@ -939,6 +947,7 @@ impl Flow<'_> {
                     }
                 }
             }
+            ExpressionKind::ResourceHookValue { .. } | ExpressionKind::ResourceInvoke { .. } => return Err("pending ResourceOwnershipPlan: ordinary move expression cannot own Resource descriptors or invokes".into()),
             ExpressionKind::Int(_)
             | ExpressionKind::Float(_)
             | ExpressionKind::Bool(_)

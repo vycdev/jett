@@ -4,6 +4,9 @@ assertion_line: 7225
 expression: program
 ---
 Program {
+    resource_manifest: ResourceManifest {
+        data: None,
+    },
     functions: [
         Function {
             id: FunctionId(

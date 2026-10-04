@@ -505,6 +505,13 @@ impl Builder<'_> {
         order: &[usize],
         ownership: &mut hir::CallOwnership,
     ) -> Option<Vec<Expression>> {
+        if values
+            .iter()
+            .any(|value| crate::resource_type_pending(self.types, value.ty))
+        {
+            self.resource_error = Some(LowerError { span: original_call.span, message: "pending ResourceOwnershipPlan: ordinary call-view staging cannot acquire Resource custody".into() });
+            return None;
+        }
         // A staging attempt changes CFG, locals, handlers and active scopes.
         // Restore all of them if a later operand cannot prove its acquisition.
         let checkpoint = self.clone();
@@ -1103,6 +1110,13 @@ impl Builder<'_> {
         values: &[Expression],
         order: &[usize],
     ) -> Option<Vec<Expression>> {
+        if let Some(value) = values
+            .iter()
+            .find(|value| crate::resource_type_pending(self.types, value.ty))
+        {
+            self.resource_error = Some(LowerError { span: value.span, message: "pending ResourceOwnershipPlan: ordinary owning operand staging cannot acquire Resource custody".into() });
+            return None;
+        }
         if !valid_ordered_owned_values(self.types, &self.locals, values, order) {
             return None;
         }
@@ -1139,6 +1153,14 @@ impl Builder<'_> {
     }
 
     pub(super) fn lower_value(&mut self, expression: &Expression) -> Expression {
+        if let ExpressionKind::ResourceInvoke { args, .. } = &expression.kind {
+            // Typed preservation only. Extracting actuals would require the dedicated owner plan.
+            if args.iter().any(needs_eager_lowering) {
+                self.resource_error = Some(LowerError { span: expression.span, message: "pending ResourceOwnershipPlan: Resource actual extraction requires dedicated custody staging".into() });
+            }
+            return expression.clone();
+        }
+
         if let ExpressionKind::FunctionAdapter { value, function } = &expression.kind {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::FunctionAdapter {

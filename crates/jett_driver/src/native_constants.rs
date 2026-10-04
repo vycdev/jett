@@ -219,6 +219,10 @@ impl Baker<'_> {
             return;
         }
         match &mut expr.kind {
+            E::ResourceInvoke { .. } | E::ResourceHookValue { .. } => self.errors.push(LowerError {
+                span: expr.span,
+                message: "pending ResourceOwnershipPlan: native constant materialization cannot represent a Resource operation or descriptor".into(),
+            }),
             E::Binary { left, right, .. } => {
                 self.expression(left);
                 self.expression(right);

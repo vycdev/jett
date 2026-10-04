@@ -1551,6 +1551,7 @@ impl Verifier<'_> {
             format!("expression in `{}`", self.function_name(function)),
         )?;
         match &expression.kind {
+            ExpressionKind::ResourceHookValue { .. } | ExpressionKind::ResourceInvoke { .. } => Err(self.contract_error(function, expression.span, "pending ResourceOwnershipPlan: native Resource descriptor and invocation ABI are not admitted")),
             ExpressionKind::Int(value) => self.integer_literal(function, expression, *value, kind),
             ExpressionKind::Float(_) => {
                 if matches!(kind, ScalarKind::Float(_)) {

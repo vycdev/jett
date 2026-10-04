@@ -339,7 +339,8 @@ fn expression(
         let packet = match &mut value.kind {
             ExpressionKind::Call { ownership, .. }
             | ExpressionKind::IndirectCall { ownership, .. }
-            | ExpressionKind::Intrinsic { ownership, .. } => Some(ownership),
+            | ExpressionKind::Intrinsic { ownership, .. }
+            | ExpressionKind::ResourceInvoke { ownership, .. } => Some(ownership),
             _ => None,
         };
         if let Some(packet) = packet {
@@ -387,6 +388,7 @@ fn expression(
         | ExpressionKind::View(value)
         | ExpressionKind::Clone(value) => expression(value, visit, floor, metadata),
         ExpressionKind::Call { args, .. }
+        | ExpressionKind::ResourceInvoke { args, .. }
         | ExpressionKind::Intrinsic { args, .. }
         | ExpressionKind::ActorSpawn { args, .. }
         | ExpressionKind::StructConstruct { fields: args, .. }
@@ -458,6 +460,7 @@ fn expression(
         | ExpressionKind::Bool(_)
         | ExpressionKind::Nothing
         | ExpressionKind::Constant { .. }
+        | ExpressionKind::ResourceHookValue { .. }
         | ExpressionKind::FunctionRef(_)
         | ExpressionKind::OptionalNone
         | ExpressionKind::RuntimeFailure(_)

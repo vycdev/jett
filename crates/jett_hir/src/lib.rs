@@ -5,6 +5,7 @@
 //! they never survive as embedded AST nodes.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use jett_common::{FileId, SourceOrigin, Span};
 pub use jett_intrinsics::IntrinsicId;
@@ -25,6 +26,10 @@ use jett_types::{
 };
 
 mod call_ownership;
+mod resource_manifest;
+pub use resource_manifest::{
+    ResourceHookRef, ResourceKind, ResourceKindId, ResourceKindRef, ResourceManifest,
+};
 mod iteration_bindings;
 pub use iteration_bindings::{IterationPart, ViewIterationBinding, checked_view_iteration_binding};
 #[cfg(test)]
@@ -175,6 +180,7 @@ pub struct ScopedTypeBinding {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
+    pub resource_manifest: ResourceManifest,
     pub functions: Vec<Function>,
     pub equality_methods: HashMap<TypeId, FunctionId>,
 }
@@ -355,6 +361,17 @@ pub enum ExpressionKind {
     },
     /// A checked, concrete source function used as a first-class value.
     FunctionRef(FunctionId),
+    /// Compiler-owned descriptor; no opaque runtime representation is implied.
+    ResourceHookValue {
+        hook: ResourceHookRef,
+    },
+    /// Original Source invocation; ordinary owner/drop plans cannot execute it.
+    ResourceInvoke {
+        hook: ResourceHookRef,
+        args: Vec<Expression>,
+        evaluation_order: Vec<usize>,
+        ownership: CallOwnership,
+    },
     /// A checked inline function with an environment copied from caller locals.
     ClosureRef {
         function: FunctionId,
@@ -894,6 +911,31 @@ impl Validator<'_> {
                 }
                 self.expression(value);
             }
+            ExpressionKind::ResourceHookValue { hook } => {
+                if !self.program.resource_manifest.contains_hook(hook) {
+                    self.error(
+                        expression.span,
+                        "Resource descriptor has no original program manifest",
+                    );
+                }
+            }
+            ExpressionKind::ResourceInvoke {
+                hook,
+                args,
+                evaluation_order,
+                ..
+            } => {
+                if !self.program.resource_manifest.contains_hook(hook) {
+                    self.error(
+                        expression.span,
+                        "Resource invocation has no original program manifest",
+                    );
+                }
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
+                for argument in args {
+                    self.expression(argument);
+                }
+            }
             ExpressionKind::Call {
                 function,
                 args,
@@ -1193,6 +1235,38 @@ pub fn lower_with_test_bodies(
     Lowerer::new(module, resolve, check, origins, true).lower()
 }
 
+/// Lower the original immutable checked Resource envelope, including unused hooks.
+pub fn lower_checked_resource_program(
+    original: &Arc<jett_typecheck::CheckedResourceProgram>,
+) -> Result<Program, Vec<LowerError>> {
+    lower_resource_program(original, false)
+}
+pub fn lower_checked_resource_program_with_test_bodies(
+    original: &Arc<jett_typecheck::CheckedResourceProgram>,
+) -> Result<Program, Vec<LowerError>> {
+    lower_resource_program(original, true)
+}
+fn lower_resource_program(
+    original: &Arc<jett_typecheck::CheckedResourceProgram>,
+    tests: bool,
+) -> Result<Program, Vec<LowerError>> {
+    let manifest = ResourceManifest::checked(original).map_err(|message| {
+        vec![LowerError {
+            span: Span::new(FileId::new(0), 0, 0),
+            message,
+        }]
+    })?;
+    let mut lowerer = Lowerer::new(
+        original.module(),
+        original.resolved(),
+        original.checked(),
+        original.source_origins(),
+        tests,
+    );
+    lowerer.resource_manifest = manifest;
+    lowerer.lower()
+}
+
 struct FunctionSource<'a> {
     id: FunctionId,
     definition: Option<DefId>,
@@ -1240,6 +1314,7 @@ enum FunctionKey {
 }
 
 struct Lowerer<'a> {
+    resource_manifest: ResourceManifest,
     module: &'a Module,
     resolve: &'a ResolveResult,
     check: &'a CheckResult,
@@ -1284,6 +1359,7 @@ impl<'a> Lowerer<'a> {
             })
             .collect();
         Self {
+            resource_manifest: ResourceManifest::empty(),
             module,
             resolve,
             check,
@@ -1395,6 +1471,7 @@ impl<'a> Lowerer<'a> {
                 })
                 .collect::<Result<HashMap<_, _>, _>>()?;
             let mut program = Program {
+                resource_manifest: self.resource_manifest.clone(),
                 functions,
                 equality_methods,
             };
@@ -3578,6 +3655,12 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     ExpressionKind::Constant {
                         declaration: *declaration,
                     }
+                } else if let Some(hook) = self
+                    .parent
+                    .resource_manifest
+                    .hook_for_definition(definition)
+                {
+                    ExpressionKind::ResourceHookValue { hook }
                 } else if self.parent.resolve.scope_table.def(definition).kind == DefKind::Function
                 {
                     ExpressionKind::FunctionRef(self.resolve_function_value_target(expression)?)
@@ -3655,6 +3738,19 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 value: Box::new(self.lower_expression(value)?),
             },
             Expr::FieldAccess(base, field, _) => {
+                if let Some(definition) = self.parent.resolve.resolutions.get(&span)
+                    && let Some(hook) = self
+                        .parent
+                        .resource_manifest
+                        .hook_for_definition(*definition)
+                {
+                    return Some(Expression {
+                        kind: ExpressionKind::ResourceHookValue { hook },
+                        ty,
+                        span,
+                    });
+                }
+
                 if self.method_values.contains_key(&span)
                     || self.resolved_expression_kind(expression) == Some(DefKind::Function)
                 {
@@ -4311,6 +4407,19 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             self.lower_arguments_in_parameter_order(args, call_span)?;
         self.check_source_actuals(call_span, args)?;
         let ownership = self.source_ownership(call_span, &lowered_args, &evaluation_order)?;
+        if let CallOwnership::Source(source) = &ownership
+            && let CallTarget::ResourceHook(hook) = &source.target
+        {
+            let hook = hook.clone();
+            let ownership =
+                self.finish_resource_call_ownership(ownership, &hook, &lowered_args, call_span)?;
+            return Some(ExpressionKind::ResourceInvoke {
+                hook,
+                ownership,
+                args: lowered_args,
+                evaluation_order,
+            });
+        }
         let source_call = self.is_source_call(callee, call_span);
         // A callee can be any checked function value, including a projected
         // field or another call's result. Declaration and intrinsic identities
@@ -6528,6 +6637,14 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 payloads: args,
                 evaluation_order,
             }
+        } else if self.call_ownership.get(&step.span).is_some_and(|packet| {
+            matches!(&packet.target, jett_typecheck::CheckedInvocationTarget::Resolved(definition) if self.parent.resource_manifest.hook_for_definition(*definition).is_some())
+        }) {
+            let ownership = self.source_ownership(step.span, &args, &evaluation_order)?;
+            let CallOwnership::Source(source) = &ownership else { return None; };
+            let CallTarget::ResourceHook(hook) = &source.target else { return None; };
+            let hook = hook.clone();
+            ExpressionKind::ResourceInvoke { ownership: self.finish_resource_call_ownership(ownership, &hook, &args, step.span)?, hook, args, evaluation_order }
         } else if !source_call
             && !self.intrinsic_ids.contains_key(&step.span)
             && self.is_checked_function_value(callee)

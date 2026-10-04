@@ -2270,6 +2270,14 @@ Broader captured/reflected/worker contexts, ordinary refinement predicates,
 occupied aggregate custody and native drop elaboration remain required; the
 bounded tests do not establish those complete domains.
 
+Checked Resource lowering now preserves the original immutable program's
+manifest, nominal kinds and exact hook signatures through HIR and MIR. Typed
+descriptor and invocation nodes retain original caller facts and lexical actual
+order. Raw lowering cannot create those identities, and all manifest entries,
+including unused hooks, are validated. These nodes carry metadata only; ordinary
+copy, move, borrow, drop and native emission still require a dedicated Resource
+ownership plan and ABI.
+
 The private native runtime custody core separately tracks non-cloneable owned
 and borrowed tokens, checked frame destinations and reverse acquisition
 cleanup. Its protocol tests cover generation/provenance refusal and

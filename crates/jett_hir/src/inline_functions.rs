@@ -289,6 +289,9 @@ impl Extractor<'_> {
             }
             | ExpressionKind::Intrinsic {
                 args, ownership, ..
+            }
+            | ExpressionKind::ResourceInvoke {
+                args, ownership, ..
             } => {
                 for argument in args {
                     self.expression(argument, parent);
@@ -371,6 +374,7 @@ impl Extractor<'_> {
             | ExpressionKind::PropertyCaseContext(_)
             | ExpressionKind::RuntimeFailure(_)
             | ExpressionKind::Local(_)
+            | ExpressionKind::ResourceHookValue { .. }
             | ExpressionKind::FunctionRef(_)
             | ExpressionKind::ClosureRef { .. }
             | ExpressionKind::OptionalNone
@@ -466,7 +470,8 @@ fn expression_mentions_local(expression: &Expression, target: u32, include_bindi
     if include_bindings {
         if let ExpressionKind::Call { ownership, .. }
         | ExpressionKind::IndirectCall { ownership, .. }
-        | ExpressionKind::Intrinsic { ownership, .. } = &expression.kind
+        | ExpressionKind::Intrinsic { ownership, .. }
+        | ExpressionKind::ResourceInvoke { ownership, .. } = &expression.kind
         {
             let mut mentioned = false;
             ownership.metadata_local_ids(|local| mentioned |= local.index() == target);
@@ -505,6 +510,7 @@ fn expression_mentions_local(expression: &Expression, target: u32, include_bindi
             expression_mentions_local(value, target, include_bindings)
         }
         ExpressionKind::Call { args, .. }
+        | ExpressionKind::ResourceInvoke { args, .. }
         | ExpressionKind::Intrinsic { args, .. }
         | ExpressionKind::ActorSpawn { args, .. } => args
             .iter()
@@ -572,6 +578,7 @@ fn expression_mentions_local(expression: &Expression, target: u32, include_bindi
         | ExpressionKind::Nothing
         | ExpressionKind::PropertyCaseContext(_)
         | ExpressionKind::RuntimeFailure(_)
+        | ExpressionKind::ResourceHookValue { .. }
         | ExpressionKind::FunctionRef(_)
         | ExpressionKind::OptionalNone => false,
     }

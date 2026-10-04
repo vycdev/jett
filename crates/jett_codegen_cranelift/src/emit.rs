@@ -1901,6 +1901,13 @@ impl Translator<'_, '_> {
     fn expression_inner(&mut self, expression: &Expression) -> Result<LoweredValue, CodegenError> {
         let kind = scalar_kind(self.types, expression.ty, "native expression")?;
         match &expression.kind {
+            ExpressionKind::ResourceHookValue { .. } | ExpressionKind::ResourceInvoke { .. } => {
+                Err(contract_error(
+                    self.symbol,
+                    expression.span,
+                    "pending ResourceOwnershipPlan: native Resource custody and descriptor emission are not admitted",
+                ))
+            }
             ExpressionKind::Int(value) => {
                 let ty = self.required_clif_type(expression.ty, expression.span)?;
                 let immediate = integer_immediate(*value, kind).ok_or_else(|| {
@@ -4084,7 +4091,7 @@ function root() returns int64:
                 assert!(
                     matches!(result, Err(CodegenError::InvalidMir(errors))
                         if errors.len() == 1 && errors[0].message
-                            == "call ownership local metadata is outside its function or interner"),
+                            == "Resource manifest type visitor is outside its interner"),
                     "enclosing metadata corruption {corruption}"
                 );
                 assert!(matches!(
@@ -4575,12 +4582,26 @@ function root() returns nothing:
                 } else {
                     local.ty = wrapped;
                 }
+                let result = emit_host_object(&program, &types);
+                if matches!(corruption, 1 | 2) {
+                    assert!(
+                        matches!(result, Err(CodegenError::InvalidMir(errors))
+                            if errors.len() == 1 && errors[0].message
+                                == "Resource manifest type visitor is outside its interner"),
+                        "debug={debug_type}, corruption={corruption}"
+                    );
+                } else {
+                    assert!(
+                        matches!(result, Err(CodegenError::UnsupportedType { .. })),
+                        "debug={debug_type}, corruption={corruption}"
+                    );
+                }
                 assert!(
                     matches!(
-                        emit_host_object(&program, &types),
+                        crate::verify::scalar_kind(&types, wrapped, "absent original metadata"),
                         Err(CodegenError::UnsupportedType { .. })
                     ),
-                    "debug={debug_type}, corruption={corruption}"
+                    "native wrapped metadata debug={debug_type}, corruption={corruption}"
                 );
             }
         }
@@ -4857,12 +4878,26 @@ function root() returns int64:
                     local.ty = wrapped;
                 }
                 latent.locals.push(local);
+                let result = emit_host_object(&program, &types);
+                if corruption == 1 {
+                    assert!(
+                        matches!(result, Err(CodegenError::InvalidMir(errors))
+                            if errors.len() == 1 && errors[0].message
+                                == "Resource manifest type visitor is outside its interner"),
+                        "debug={debug_type}, corruption={corruption}"
+                    );
+                } else {
+                    assert!(
+                        matches!(result, Err(CodegenError::UnsupportedType { .. })),
+                        "debug={debug_type}, corruption={corruption}"
+                    );
+                }
                 assert!(
                     matches!(
-                        emit_host_object(&program, &types),
+                        crate::verify::scalar_kind(&types, wrapped, "latent original metadata"),
                         Err(CodegenError::UnsupportedType { .. })
                     ),
-                    "debug={debug_type}, corruption={corruption}"
+                    "native wrapped metadata debug={debug_type}, corruption={corruption}"
                 );
             }
         }

@@ -4,6 +4,8 @@ mod analysis;
 mod breakpoint_regions;
 mod call_owner_generations;
 mod call_ownership;
+#[cfg(test)]
+mod resource_manifest_tests;
 pub use call_owner_generations::{
     CallGenerationSlot, CallGenerationStoragePlan, CallOwnerEscrowId, CallOwnerGenerationId,
 };
@@ -25,7 +27,7 @@ pub use jett_hir::{FunctionId, Local, LocalId, Param, ParamMode};
 
 use jett_common::Span;
 use jett_hir::{self as hir, Expression, FieldId, FunctionIdentity, VariantId};
-use jett_types::{TypeId, TypeInterner};
+use jett_types::{Type, TypeId, TypeInterner};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlockId(u32);
@@ -38,6 +40,7 @@ impl BlockId {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
+    pub resource_manifest: hir::ResourceManifest,
     pub functions: Vec<Function>,
     pub equality_methods: std::collections::HashMap<TypeId, FunctionId>,
 }
@@ -347,6 +350,7 @@ pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
             function,
             functions: &program.functions,
             function_count: program.functions.len(),
+            resource_manifest: &program.resource_manifest,
             errors: &mut errors,
         }
         .validate();
@@ -358,10 +362,62 @@ pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
     }
 }
 
+/// Conservative operational refusal until the separate Resource CFG plan exists.
+pub(crate) fn resource_type_pending(types: &TypeInterner, ty: TypeId) -> bool {
+    fn visit(
+        types: &TypeInterner,
+        ty: TypeId,
+        seen: &mut std::collections::HashSet<TypeId>,
+    ) -> bool {
+        if ty.index() as usize >= types.len() {
+            return true;
+        }
+        if !seen.insert(ty) {
+            return false;
+        }
+        match types.resolve(ty) {
+            Type::Resource(_) => true,
+            Type::List(inner)
+            | Type::Set(inner)
+            | Type::Optional(inner)
+            | Type::Secret(inner)
+            | Type::Refinement { base: inner, .. } => visit(types, *inner, seen),
+            Type::Map(key, value) | Type::Result(key, value) => {
+                visit(types, *key, seen) || visit(types, *value, seen)
+            }
+            Type::Function {
+                params,
+                return_type,
+                ..
+            } => {
+                params.iter().any(|ty| visit(types, *ty, seen)) || visit(types, *return_type, seen)
+            }
+            Type::Struct(id) => types
+                .resolve_struct(*id)
+                .fields
+                .iter()
+                .any(|(_, ty)| visit(types, *ty, seen)),
+            Type::Enum(id) => types
+                .resolve_enum(*id)
+                .variants
+                .iter()
+                .any(|variant| variant.fields.iter().any(|(_, ty)| visit(types, *ty, seen))),
+            Type::Machine(id) | Type::MachineState { machine: id, .. } => types
+                .resolve_machine(*id)
+                .states
+                .iter()
+                .any(|state| state.fields.iter().any(|(_, ty)| visit(types, *ty, seen))),
+            _ => false,
+        }
+    }
+    visit(types, ty, &mut std::collections::HashSet::new())
+}
+
 struct FunctionValidator<'function, 'errors> {
     function: &'function Function,
     functions: &'function [Function],
     function_count: usize,
+    resource_manifest: &'function hir::ResourceManifest,
     errors: &'errors mut Vec<ValidationError>,
 }
 
@@ -373,6 +429,12 @@ pub fn validate_call_ownership(
 ) -> Result<(), Vec<ValidationError>> {
     validate(program)?;
     let mut errors = Vec::new();
+    if let Err(message) = program.resource_manifest.validate(types) {
+        errors.push(ValidationError {
+            span: Span::new(jett_common::FileId::new(0), 0, 0),
+            message,
+        });
+    }
     let validation = call_ownership::ProgramValidation::new(program);
     for function in &program.functions {
         if let Err(message) = validation.validate_function(function, types) {
@@ -395,7 +457,17 @@ pub fn validate_caller_acquisitions<'a>(
     function: &'a Function,
     types: &TypeInterner,
 ) -> Result<CallerAcquisitions<'a>, String> {
-    call_ownership::validate_function(program, function, types)
+    let acquisitions = call_ownership::validate_function(program, function, types)?;
+    if acquisitions.resource_pending
+        || function
+            .locals
+            .iter()
+            .any(|local| resource_type_pending(types, local.ty))
+        || resource_type_pending(types, function.return_type)
+    {
+        return Err("pending ResourceOwnershipPlan: typed Resource nodes grant no ordinary move, copy, borrow or drop authority".into());
+    }
+    Ok(acquisitions)
 }
 
 impl FunctionValidator<'_, '_> {
@@ -899,7 +971,8 @@ impl FunctionValidator<'_, '_> {
         let ownership = match &expression.kind {
             hir::ExpressionKind::Call { ownership, .. }
             | hir::ExpressionKind::Intrinsic { ownership, .. }
-            | hir::ExpressionKind::IndirectCall { ownership, .. } => Some(ownership),
+            | hir::ExpressionKind::IndirectCall { ownership, .. }
+            | hir::ExpressionKind::ResourceInvoke { ownership, .. } => Some(ownership),
             _ => None,
         };
         if let Some(ownership) = ownership {
@@ -910,6 +983,31 @@ impl FunctionValidator<'_, '_> {
         match &expression.kind {
             hir::ExpressionKind::Local(local) => {
                 self.check_local(*local, expression.span, "expression");
+            }
+            hir::ExpressionKind::ResourceHookValue { hook } => {
+                if !self.resource_manifest.contains_hook(hook) {
+                    self.error(
+                        expression.span,
+                        "MIR Resource descriptor has no original manifest",
+                    );
+                }
+            }
+            hir::ExpressionKind::ResourceInvoke {
+                hook,
+                args,
+                evaluation_order,
+                ..
+            } => {
+                if !self.resource_manifest.contains_hook(hook) {
+                    self.error(
+                        expression.span,
+                        "MIR Resource invocation has no original manifest",
+                    );
+                }
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
+                for value in args {
+                    self.expression(value);
+                }
             }
             hir::ExpressionKind::FunctionRef(function) => {
                 self.check_function(*function, expression.span);
@@ -1157,6 +1255,7 @@ pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Ve
         })
         .collect();
     let lowered = Program {
+        resource_manifest: program.resource_manifest.clone(),
         equality_methods: program.equality_methods.clone(),
         functions: program
             .functions
@@ -1198,6 +1297,9 @@ fn lower_function(
             .map(|local| local.id),
     );
     builder.lower_block(&function.body);
+    if let Some(error) = builder.resource_error.take() {
+        return Err(error);
+    }
     if builder.open() && function.return_type == jett_types::TypeInterner::NOTHING {
         builder.terminate(TerminatorKind::Return(None), function.body.span);
     }
@@ -1241,6 +1343,7 @@ fn lower_function(
 
 #[derive(Clone)]
 struct Builder<'a> {
+    resource_error: Option<LowerError>,
     types: &'a TypeInterner,
     function_param_modes: &'a std::collections::HashMap<FunctionId, Vec<ParamMode>>,
     blocks: Vec<BasicBlock>,
@@ -1277,6 +1380,7 @@ impl<'a> Builder<'a> {
             locals: Vec::new(),
             handlers: Vec::new(),
             view_params: Vec::new(),
+            resource_error: None,
             breakpoint_capture: breakpoint_regions::Capture::default(),
             generation_capture: call_owner_generations::Capture::default(),
         }

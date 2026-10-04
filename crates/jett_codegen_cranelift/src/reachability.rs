@@ -292,6 +292,12 @@ fn collect_hir_block_references(block: &hir::Block, references: &mut References<
 /// to traverse it.
 fn collect_expression_references(expression: &Expression, references: &mut References<'_>) {
     match &expression.kind {
+        ExpressionKind::ResourceHookValue { .. } => {}
+        ExpressionKind::ResourceInvoke { args, .. } => {
+            for argument in args {
+                collect_expression_references(argument, references);
+            }
+        }
         ExpressionKind::FunctionRef(function) => references.push((*function, expression.span)),
         ExpressionKind::FunctionAdapter { value, function } => {
             references.push((*function, expression.span));

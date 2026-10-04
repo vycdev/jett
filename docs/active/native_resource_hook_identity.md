@@ -287,8 +287,8 @@ Production hook catalogs remain empty; no Resource declaration/provider is
 installed in the stdlib. Scripted provider installation is compiler-test-only.
 Whole scoped/reflected/indirect/worker breadth, other aggregate ownership paths,
 real providers, task/actor cancellation and late completion remain required.
-HIR hook identity/operation lowering, Resource-linear MIR transfer/drop proofs
-and native carriers/providers are still missing. Nested ordinary printing,
+At that reference checkpoint, HIR hook identity/operation lowering, Resource-linear
+MIR transfer/drop proofs and native carriers/providers were still missing. Nested ordinary printing,
 hidden Secret, known absence and omitted rendering policy is unchanged.
 
 ## Native custody core protocol
@@ -351,3 +351,32 @@ That receipt excludes these later transport changes and custody core `92421063`.
 Ordinary refinement children, complete capture/reflection/worker contexts,
 occupied aggregates and real providers remain required. This is reference
 execution; it adds no native inventory case or native Resource admission.
+
+## Checked HIR/MIR Resource manifest handoff
+
+The checked lowering entry accepts the original immutable
+`Arc<CheckedResourceProgram>`. Its private manifest retains every nominal
+Resource declaration and trusted hook, including unused entries, and validates
+exact declaration origin, type identity, closed recipe and complete signature.
+Program-bound kind and hook references cannot be minted by raw lowering or a
+matching name/signature. HIR descriptor and invocation nodes preserve the exact
+original Source call facts, operands and lexical argument order; MIR retains the
+same manifest through its visitors and remaps.
+
+This is a metadata handoff. Resource actuals that require unsupported eager
+staging fail transactionally. Ordinary acquisitions, copy/move/drop plans,
+native constants and emission retain explicit pending Resource refusals.
+Descriptor retention does not issue runtime storage, a provider or ownership.
+
+The focused original Source gate passes all five groups (`852dfc`). After
+formatting and the reviewed diagnostic successor, the complete phase gate passes
+**522/522**: 191 HIR, 198 MIR, 70 codegen and 63 object-emission tests
+(`961b04`, `target/native-resource-manifest-metadata-fixed-phase.log`). Foreign
+nested type IDs are now rejected by recursive manifest validation before the
+ordinary native type gate; the controls pin that exact diagnostic and separately
+retain lower-level malformed-type refusal coverage. All other Source fixtures,
+corruption inputs and expected values are unchanged.
+
+Resource CFG ownership/drop plans, native registration/ABI, real providers and
+linked source-deleted Resource execution remain required. These checks add no
+native execution case and do not increase the approximate 85% coverage estimate.

@@ -2367,9 +2367,15 @@ concrete intrinsic metadata. Pipelines preserve original steps and lexical actua
 order; mutable assignment retains declaration slots and replaces owners only
 after RHS evaluation. Repeated entry restores metadata and body cursors.
 Ordinary refinement predicates, occupied aggregate custody, broader captured/
-reflected/worker coverage and production providers remain pending. Native HIR
-hook lowering, Resource-linear MIR cleanup and a checked native carrier remain
-unsupported. See
+reflected/worker coverage and production providers remain pending. Checked HIR
+lowering now retains an Arc-bound Resource manifest, exact hook descriptors and
+original Source invocation packets; MIR preserves that same manifest and lexical
+argument order. Whole-program validation checks unused hooks, nominal types and
+complete signatures. Raw lowering has an empty manifest and cannot authorize a
+Resource layout. Ordinary staging, acquisition, copy, move and native emission
+refuse Resource operations until the separate CFG ownership/drop plan and ABI
+exist. Five focused Source handoff groups and all 522 HIR/MIR/codegen/object
+emission tests pass; this does not establish native Resource execution. See
 [the current reference record](active/native_resource_hook_identity.md#reference-lifecycle-execution).
 
 A separate private `jett_runtime::resource_custody` core now keeps program/kind/

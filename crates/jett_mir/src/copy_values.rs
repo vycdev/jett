@@ -30,6 +30,14 @@ impl CopyValuePlan {
         types: &TypeInterner,
         program: Option<&crate::Program>,
     ) -> Result<Self, String> {
+        if crate::resource_type_pending(types, function.return_type)
+            || function
+                .locals
+                .iter()
+                .any(|local| crate::resource_type_pending(types, local.ty))
+        {
+            return Err("pending ResourceOwnershipPlan: ordinary CopyValuePlan cannot plan Resource carriers or descriptors".into());
+        }
         let generation_storage = crate::call_owner_generations::validate(function, types)?;
         if program.is_none() && !generation_storage.slots().is_empty() {
             return Err("generation storage requires complete program ownership validation".into());
@@ -569,6 +577,7 @@ fn visit(
         _ => {}
     }
     match &value.kind {
+        ExpressionKind::ResourceInvoke { .. } | ExpressionKind::ResourceHookValue { .. } => return Err("pending ResourceOwnershipPlan: ordinary expression liveness cannot own Resource operation or descriptor temporaries".into()),
         ExpressionKind::Local(l) => {
             reads.insert(l.index() as usize);
             if program.is_some() && !borrowed && crate::move_values::is_linear(types, value.ty) {

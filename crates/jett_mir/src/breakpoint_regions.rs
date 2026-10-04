@@ -1124,6 +1124,7 @@ fn float_expression(value: &mut Expression, bits: &mut Vec<u64>) {
         | E::View(value)
         | E::Clone(value) => float_expression(value, bits),
         E::Call { args, .. }
+        | E::ResourceInvoke { args, .. }
         | E::Intrinsic { args, .. }
         | E::ActorSpawn { args, .. }
         | E::StructConstruct { fields: args, .. }
@@ -1177,6 +1178,7 @@ fn float_expression(value: &mut Expression, bits: &mut Vec<u64>) {
         | E::Nothing
         | E::Local(_)
         | E::Constant { .. }
+        | E::ResourceHookValue { .. }
         | E::FunctionRef(_)
         | E::ClosureRef { .. }
         | E::OptionalNone
