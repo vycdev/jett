@@ -7,6 +7,7 @@ use jett_diagnostics::Diagnostic;
 use jett_parser::ast::{Block, Expr, Item, Module, Stmt, StringPart};
 use jett_types::{ReflectionMetadata, ReflectionTypeInfo};
 
+use crate::resource_execution::{CheckedAttemptKey, PreparedRequiredExpression};
 use crate::value::ClosureScopedTypeBinding;
 use crate::{DebugEvent, Interpreter, Value};
 
@@ -42,6 +43,10 @@ impl ComptimeContext {
 pub struct ExplicitComptimeValues {
     values: HashMap<(Span, ComptimeContext), Value>,
     constants: HashMap<Span, Value>,
+    // Private authority association. Each successful insertion below also
+    // mirrors the value into values or constants in that same branch, so the
+    // existing public collection views count reusable values once.
+    checked_values: HashMap<CheckedAttemptKey, Value>,
 }
 
 impl ExplicitComptimeValues {
@@ -63,6 +68,35 @@ impl ExplicitComptimeValues {
 
     pub fn insert(&mut self, span: Span, context: ComptimeContext, value: Value) {
         self.values.insert((span, context), value);
+    }
+
+    pub(crate) fn checked_get(&self, key: &CheckedAttemptKey) -> Option<&Value> {
+        self.checked_values.get(key)
+    }
+
+    fn checked_insert(&mut self, key: CheckedAttemptKey, value: Value) -> Result<(), String> {
+        if value.contains_live_resource_or_grant() {
+            return Err(
+                "required value cannot cache runtime authority or Resource custody".to_string(),
+            );
+        }
+        self.checked_values.insert(key, value);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn checked_values_are_mirrored(&self) -> bool {
+        self.checked_values.values().all(|checked| {
+            self.values()
+                .any(|value| match (value.payload(), checked.payload()) {
+                    (Value::ResourceHook(left), Value::ResourceHook(right)) => {
+                        crate::resource_execution::tests::same_resource_hook_descriptor_identity(
+                            left, right,
+                        )
+                    }
+                    _ => value == checked,
+                })
+        })
     }
 
     /// A checked namespace constant, independent of any function instantiation.
@@ -91,6 +125,7 @@ struct CollectedExpression<'a> {
 
 #[derive(Clone, Default)]
 struct EvaluationContext {
+    required: Option<PreparedRequiredExpression>,
     function: Option<Arc<CheckedFunctionTypes>>,
     scope: Option<Arc<CheckedScopedTypes>>,
     bindings: Vec<ClosureScopedTypeBinding>,
@@ -230,42 +265,88 @@ fn evaluate_collected_expressions(
     let mut diagnostics = Vec::new();
     let previous_purpose =
         interpreter.checked_execution_purpose(crate::ExecutionPurpose::NamespaceConstant);
+    let mut attempted_checked = HashSet::new();
     let mut attempted_expressions = evaluate_constants(
         module,
         &checked_expression_types,
         &mut interpreter,
         &mut values,
         &mut diagnostics,
+        &mut attempted_checked,
     );
     if let Some(purpose) = previous_purpose {
         interpreter.checked_execution_purpose(purpose);
     }
     for collected in expressions {
-        let contexts = evaluation_contexts(&collected, &checked_expression_types);
+        let contexts = match interpreter.checked_explicit_contexts(
+            collected.expression,
+            collected.span,
+            collected.owner.as_ref().map(|(span, _)| *span),
+            &collected.bindings,
+        ) {
+            Ok(Some(contexts)) => contexts
+                .into_iter()
+                .map(|required| EvaluationContext {
+                    function: required.function_projection(),
+                    scope: required.scope_projection(),
+                    bindings: required.bindings(),
+                    required: Some(required),
+                })
+                .collect(),
+            Ok(None) => evaluation_contexts(&collected, &checked_expression_types),
+            Err(error) => {
+                diagnostics.push(Diagnostic::error(9001, error, collected.span));
+                continue;
+            }
+        };
         let parameters = collected
             .owner
             .as_ref()
             .map_or(&[][..], |(_, names)| names.as_slice());
         for context in contexts {
             let key = context.key();
-            if values.get(collected.span, &key).is_some() {
-                continue;
+            let checked_key = context.required.as_ref().map(|required| required.key());
+            if let Some(identity) = &checked_key {
+                if values.checked_get(identity).is_some()
+                    || !attempted_checked.insert(identity.clone())
+                {
+                    continue;
+                }
+            } else {
+                if values.get(collected.span, &key).is_some() {
+                    continue;
+                }
+                if !attempted_expressions.insert((collected.span, key.clone())) {
+                    continue;
+                }
             }
-            // Identical checked contexts also share a failed attempt, without
-            // inventing a baked value or suppressing independent contexts.
-            if !attempted_expressions.insert((collected.span, key.clone())) {
-                continue;
-            }
-            match interpreter.eval_closed_comptime_expression(
-                collected.namespace.as_deref(),
-                &collected.aliases,
-                collected.expression,
-                parameters,
-                context.function,
-                context.scope,
-                context.bindings,
-            ) {
-                Ok(value) => values.insert(collected.span, key, value),
+            let evaluated = if let Some(required) = &context.required {
+                interpreter.eval_checked_required_expression(
+                    required,
+                    collected.namespace.as_deref(),
+                    &collected.aliases,
+                    parameters,
+                )
+            } else {
+                interpreter.eval_closed_comptime_expression(
+                    collected.namespace.as_deref(),
+                    &collected.aliases,
+                    collected.expression,
+                    parameters,
+                    context.function,
+                    context.scope,
+                    context.bindings,
+                )
+            };
+            match evaluated {
+                Ok(value) => {
+                    if let Some(identity) = checked_key {
+                        if let Err(error) = values.checked_insert(identity, value.clone()) {
+                            diagnostics.push(Diagnostic::error(9001, error, collected.span)); continue;
+                        }
+                    }
+                    values.insert(collected.span, key, value);
+                }
                 Err(error) => diagnostics.push(Diagnostic::error(
                     9001,
                     format!("`comptime` expression must be closed and evaluable during compilation: {error}"),
@@ -287,6 +368,7 @@ fn evaluate_constants(
     interpreter: &mut Interpreter,
     values: &mut ExplicitComptimeValues,
     diagnostics: &mut Vec<Diagnostic>,
+    attempted_checked: &mut HashSet<CheckedAttemptKey>,
 ) -> HashSet<(Span, ComptimeContext)> {
     let mut attempted = HashSet::new();
     let mut current_file = None;
@@ -339,15 +421,35 @@ fn evaluate_constants(
         if let Expr::Comptime(_, span) = &declaration.value {
             attempted.insert((*span, ComptimeContext::default()));
         }
-        match interpreter.eval_closed_comptime_expression(
-            namespace.as_deref(),
-            &HashMap::new(),
-            expression,
-            &[],
-            None,
-            None,
-            Vec::new(),
-        ) {
+        let prepared = match interpreter.checked_namespace_initializer(declaration) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                diagnostics.push(Diagnostic::error(9001, error, declaration.value.span()));
+                continue;
+            }
+        };
+        if let Some(prepared) = &prepared {
+            attempted_checked.insert(prepared.key());
+        }
+        let evaluated = if let Some(prepared) = &prepared {
+            interpreter.eval_checked_required_expression(
+                prepared,
+                namespace.as_deref(),
+                &HashMap::new(),
+                &[],
+            )
+        } else {
+            interpreter.eval_closed_comptime_expression(
+                namespace.as_deref(),
+                &HashMap::new(),
+                expression,
+                &[],
+                None,
+                None,
+                Vec::new(),
+            )
+        };
+        match evaluated {
             Ok(value) => {
                 if !constant_value_matches_type(&value, ty) {
                     diagnostics.push(Diagnostic::error(
@@ -356,6 +458,12 @@ fn evaluate_constants(
                         declaration.value.span(),
                     ));
                     continue;
+                }
+                if let Some(prepared) = &prepared {
+                    if let Err(error) = values.checked_insert(prepared.key(), value.clone()) {
+                        diagnostics.push(Diagnostic::error(9001, error, declaration.value.span()));
+                        continue;
+                    }
                 }
                 interpreter.register_constant_in_namespace(
                     namespace.as_deref(),

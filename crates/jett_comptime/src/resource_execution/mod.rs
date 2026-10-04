@@ -15,7 +15,9 @@ use jett_types::TypeId;
 
 pub use checked::ExecutionPurpose;
 pub(crate) use checked::{
-    CheckedBodyCursor, CheckedExecution, CheckedInvocation, FunctionInvocation,
+    CheckedAttemptKey, CheckedBodyCursor, CheckedBodyReference, CheckedExecution,
+    CheckedInvocation, FunctionInvocation, PreparedIntrinsicArguments, PreparedPipelineStep,
+    PreparedRequiredExpression,
 };
 pub(crate) use custody::{
     EvaluatedValue, FrameId, OwnerHolder, OwnerLedger, PayloadStep, ValueCustody,

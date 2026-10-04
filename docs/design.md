@@ -2263,8 +2263,12 @@ The implemented reference tests cover reverse cleanup, explicit close, owned
 returns and failure paths before context teardown. Descriptor creation is data;
 a reached hook requires runtime purpose and matching provider authority.
 Required comptime, verify and property execution do not acquire that authority.
-Broader scoped/reflected/indirect/worker cases and native drop elaboration remain
-required; the bounded tests do not establish those complete domains.
+Direct scoped bodies, concrete generic type metadata, pipelines and mutable
+assignment retain their exact original checked body, step or statement facts.
+Repeated entry restores its metadata and body cursor before another invocation.
+Broader captured/reflected/worker contexts, ordinary refinement predicates,
+occupied aggregate custody and native drop elaboration remain required; the
+bounded tests do not establish those complete domains.
 
 The private native runtime custody core separately tracks non-cloneable owned
 and borrowed tokens, checked frame destinations and reverse acquisition

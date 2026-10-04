@@ -31,3 +31,14 @@ fn checked_source_pipeline_frontend_prerequisites() {
         }
     }
 }
+
+#[test]
+fn checked_source_pipeline_required_regions_frontend_prerequisites() {
+    for release in [false, true] {
+        let checked = program(
+            include_str!("fixtures/28_pipeline_absence_regions.jett"),
+            release,
+        );
+        let _ = entry(&checked, "explicit_marker");
+    }
+}

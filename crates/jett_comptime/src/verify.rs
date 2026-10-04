@@ -504,9 +504,9 @@ fn run_verify_blocks_detailed_inner(
     // First pass: register all functions and type aliases so verify blocks
     // can call them and use refinement types.
     interp.register_module(module);
-    let mut legacy_verify_functions: Vec<(Option<String>, FunctionDef)> = Vec::new();
-    let mut verify_blocks: Vec<(Option<String>, VerifyBlock)> = Vec::new();
-    let mut property_blocks: Vec<(Option<String>, PropertyBlock)> = Vec::new();
+    let mut legacy_verify_functions: Vec<(Option<String>, &FunctionDef)> = Vec::new();
+    let mut verify_blocks: Vec<(Option<String>, &VerifyBlock)> = Vec::new();
+    let mut property_blocks: Vec<(Option<String>, &PropertyBlock)> = Vec::new();
     let mut property_enums: Vec<PropertyEnumDef> = Vec::new();
     let mut property_structs: Vec<PropertyStructDef> = Vec::new();
     let mut property_bitfields: Vec<PropertyBitfieldDef> = Vec::new();
@@ -562,14 +562,14 @@ fn run_verify_blocks_detailed_inner(
             }
             Item::Function(func) => {
                 if has_assert_stmts(func) && func.params.is_empty() && func.name.name != "main" {
-                    legacy_verify_functions.push((current_namespace.clone(), func.clone()));
+                    legacy_verify_functions.push((current_namespace.clone(), func));
                 }
             }
             Item::Verify(vb) => {
-                verify_blocks.push((current_namespace.clone(), vb.clone()));
+                verify_blocks.push((current_namespace.clone(), vb));
             }
             Item::Property(pb) => {
-                property_blocks.push((current_namespace.clone(), pb.clone()));
+                property_blocks.push((current_namespace.clone(), pb));
             }
             _ => {}
         }
@@ -577,7 +577,7 @@ fn run_verify_blocks_detailed_inner(
 
     // Execute proper verify blocks.
     for (namespace, vb) in &verify_blocks {
-        match interp.exec_block_in_namespace(namespace.as_deref(), &vb.body) {
+        match interp.exec_checked_verify_region(namespace.as_deref(), vb) {
             Ok(_) => {
                 results.push(VerifyResult {
                     name: vb.name.name.clone(),
@@ -1020,7 +1020,26 @@ fn run_property_block(
     collected_cases: Option<&mut Vec<PropertyCase>>,
 ) -> VerifyResult {
     let previous_purpose = interp.checked_execution_purpose(crate::ExecutionPurpose::Property);
-    let result = run_property_block_inner(interp, namespace, pb, definitions, collected_cases);
+    let result = match interp.with_checked_property_region(pb, |interp| {
+        Ok(run_property_block_inner(
+            interp,
+            namespace,
+            pb,
+            definitions,
+            collected_cases,
+        ))
+    }) {
+        Ok(result) => result,
+        Err(error) => VerifyResult {
+            name: pb.name.name.clone(),
+            span: pb.name.span,
+            passed: false,
+            error: Some(error),
+            iterations: Some(0),
+            is_property: true,
+            debug_events: interp.take_debug_events(),
+        },
+    };
     if let Some(purpose) = previous_purpose {
         interp.checked_execution_purpose(purpose);
     }
@@ -5177,32 +5196,30 @@ property order:
     #[test]
     fn checked_property_purpose_restores_previous_purpose_after_unsupported_pool() {
         use crate::ExecutionPurpose;
-        let source =
-            "namespace app\nproperty restored_pool:\n    given sample: int64\n    assert true\n";
+        let source = "namespace app\nstruct UnsupportedPurposeProbe:\n    marker: int64\nproperty restored_pool:\n    given sample: UnsupportedPurposeProbe\n    assert true\n";
         for release in [false, true] {
             for purpose in [
                 ExecutionPurpose::Verify,
                 ExecutionPurpose::NamespaceConstant,
             ] {
                 let checked = crate::resource_execution::tests::program(source, release);
-                let mut property = checked
+                let property = checked
                     .module()
                     .items
                     .iter()
                     .find_map(|item| match item {
-                        Item::Property(property) => Some(property.clone()),
+                        Item::Property(property) => Some(property),
                         _ => None,
                     })
                     .expect("checked generator control");
-                // Deliberate test-only generator recovery input. This is not a
-                // checked-source admission claim for the unsupported type.
-                property.givens[0].ty = type_named("UnsupportedPurposeProbe");
+                // Retain the original checked property and omit its generator
+                // definition below to exercise unsupported-pool recovery.
                 let mut interpreter =
-                    Interpreter::from_checked_resource_program(checked, purpose).unwrap();
+                    Interpreter::from_checked_resource_program(checked.clone(), purpose).unwrap();
                 let result = run_property_block(
                     &mut interpreter,
                     Some("app"),
-                    &property,
+                    property,
                     PropertyDefinitions {
                         enums: &[],
                         structs: &[],

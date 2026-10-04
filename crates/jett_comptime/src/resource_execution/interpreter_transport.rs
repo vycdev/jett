@@ -1,14 +1,28 @@
 //! Envelope transport in the existing checked source evaluator.
+#[path = "interpreter_transport/assignment.rs"]
+mod assignment;
+
 use super::*;
 use crate::resource_execution::FunctionInvocation;
 use crate::resource_execution::{
     CheckedInvocation, EvaluatedValue, ExecutionPurpose, FrameId, OperationFrame, PayloadStep,
-    ResourceHookDescriptor, ResourceTransport,
+    PreparedIntrinsicArguments, ResourceHookDescriptor, ResourceTransport,
 };
 use jett_parser::ast::VarDecl;
 use jett_resolve::DefId;
 use jett_typecheck::{CheckedCalleeAccess, CheckedInvocationTarget};
 use jett_types::Type;
+
+#[path = "interpreter_transport/entry_context.rs"]
+mod entry_context;
+use entry_context::SavedResourceEntryContext;
+
+#[path = "interpreter_transport/intrinsic.rs"]
+mod intrinsic;
+#[path = "interpreter_transport/pipeline.rs"]
+mod pipeline;
+#[path = "interpreter_transport/required.rs"]
+mod required;
 
 // Runtime registration identifies a retained declaration; its cloned body is
 // deliberately excluded because only the retained checked body is executed.
@@ -73,6 +87,62 @@ impl Interpreter {
         }
     }
 
+    pub(super) fn exec_checked_resource_type_bind(
+        &mut self,
+        bind: &jett_parser::ast::ComptimeTypeBindStmt,
+    ) -> Result<Option<Signal>, String> {
+        // Every fallible source/type/body join precedes interpreter mutation.
+        let prepared = self
+            .resource_transport
+            .as_ref()
+            .ok_or("missing checked Resource transport")?
+            .checked
+            .prepare_direct_scope(bind)
+            .map_err(|error| error.to_string())?;
+        let body = prepared.body().map_err(|error| error.to_string())?;
+        let bound_type_expr =
+            Self::simple_type_expr_from_name(&prepared.reflection().type_name, bind.value.span())
+                .ok_or("checked scoped type has no canonical interpreter syntax")?;
+        let projection = prepared.projection();
+        let binding = ClosureScopedTypeBinding {
+            name: bind.name.name.clone(),
+            canonical_name: prepared.bound_name().to_string(),
+            reflection: Some(prepared.reflection().clone()),
+        };
+        let saved_cursor = self
+            .resource_transport
+            .as_ref()
+            .ok_or("missing checked Resource transport")?
+            .cursor();
+        self.resource_transport
+            .as_mut()
+            .ok_or("missing checked Resource transport")?
+            .checked
+            .install_direct_scope(&prepared)
+            .map_err(|error| error.to_string())?;
+        let saved_checked_scope = self.active_checked_scope.replace(projection);
+        self.scoped_type_bindings.push(binding);
+        self.type_arg_scopes
+            .push(HashMap::from([(bind.name.name.clone(), bound_type_expr)]));
+        let result = self.exec_block_inner(body);
+        self.type_arg_scopes.pop();
+        self.scoped_type_bindings.pop();
+        self.active_checked_scope = saved_checked_scope;
+        let cleanup = self.check_resource_cleanup();
+        let restore = match &mut self.resource_transport {
+            Some(transport) => transport
+                .checked
+                .restore_cursor(saved_cursor)
+                .map_err(|error| error.to_string()),
+            None => Err("missing checked Resource transport".to_string()),
+        };
+        match (result, cleanup, restore) {
+            (_, Err(error), _) => Err(error),
+            (Err(error), Ok(()), _) | (_, Ok(()), Err(error)) => Err(error),
+            (Ok(value), Ok(()), Ok(())) => Ok(value),
+        }
+    }
+
     fn resource_flow(value: EvaluatedValue) -> ExprFlow {
         if value.custody.is_empty() && !value.value.contains_live_resource_or_grant() {
             ExprFlow::Value(value.value)
@@ -94,7 +164,7 @@ impl Interpreter {
         }
     }
 
-    fn resource_type_at(&self, span: Span) -> Result<bool, String> {
+    pub(super) fn resource_type_at(&self, span: Span) -> Result<bool, String> {
         let transport = self
             .resource_transport
             .as_ref()
@@ -273,6 +343,7 @@ impl Interpreter {
                 }
                 Ok(Some(flow))
             }
+            Expr::Pipeline(..) => self.eval_resource_pipeline(expression).map(Some),
             // All other ordinary expressions remain the established evaluator.
             // Its operand extraction rejects a transported Resource envelope.
             _ => Ok(None),
@@ -365,6 +436,18 @@ impl Interpreter {
         {
             return Err("checked call lost its original source argument occurrence".to_string());
         }
+        let intrinsic = if matches!(invocation.target(), CheckedInvocationTarget::Intrinsic(_)) {
+            Some(
+                self.resource_transport
+                    .as_ref()
+                    .ok_or("missing checked Resource transport")?
+                    .checked
+                    .prepare_intrinsic_arguments(callee, type_arguments, arguments, &invocation)
+                    .map_err(|error| error.to_string())?,
+            )
+        } else {
+            None
+        };
         // Variant construction has a checked function-shaped packet, but its
         // Source endpoint is not a runtime callable value. Prepare its exact
         // nominal schema before evaluating any actuals.
@@ -401,163 +484,218 @@ impl Interpreter {
                     .map_err(|error| error.to_string())?;
                 actuals.push(value);
             }
-            // Source lexical order is retained above. Ownership adoption below
-            // follows that same order even when destination parameters permute.
-            let mut formal: Vec<Option<EvaluatedValue>> =
-                (0..actuals.len()).map(|_| None).collect();
-            for (actual, fact) in actuals.into_iter().zip(invocation.arguments()) {
-                let borrowed = self
+            self.dispatch_resource_actuals(
+                &invocation,
+                callee,
+                type_arguments,
+                actuals,
+                constructor,
+                operation.frame,
+                intrinsic.as_ref(),
+            )
+        })();
+        self.finish_resource_operation(operation, result)
+    }
+
+    // Both routes provide original checked identity and already-evaluated
+    // source-order envelopes. This dispatcher never re-evaluates an actual.
+    fn dispatch_resource_actuals(
+        &mut self,
+        invocation: &CheckedInvocation,
+        callee: &Expr,
+        type_arguments: &[TypeExpr],
+        actuals: Vec<EvaluatedValue>,
+        constructor: Option<(String, String, jett_types::TypeId)>,
+        return_destination: FrameId,
+        intrinsic: Option<&PreparedIntrinsicArguments>,
+    ) -> Result<ExprFlow, String> {
+        if matches!(invocation.target(), CheckedInvocationTarget::Intrinsic(_))
+            != intrinsic.is_some()
+        {
+            return Err("checked intrinsic lost its prepared concrete argument packet".to_string());
+        }
+        if let Some(prepared) = intrinsic {
+            prepared
+                .validate(
+                    &self
+                        .resource_transport
+                        .as_ref()
+                        .ok_or("missing checked Resource transport")?
+                        .checked,
+                    invocation,
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        if actuals.len() != invocation.arguments().len() {
+            return Err("checked call lost its evaluated source argument count".to_string());
+        }
+        // Source lexical order is retained above. Ownership adoption below
+        // follows that same order even when destination parameters permute.
+        let mut formal: Vec<Option<EvaluatedValue>> = (0..actuals.len()).map(|_| None).collect();
+        for (actual, fact) in actuals.into_iter().zip(invocation.arguments()) {
+            let borrowed = self
+                .resource_transport
+                .as_ref()
+                .ok_or("missing checked Resource transport")?
+                .formal_value(&actual, fact.callee_access)
+                .map_err(|error| error.to_string())?;
+            formal[fact.parameter_index] = Some(borrowed.unwrap_or(actual));
+        }
+        let formal = formal
+            .into_iter()
+            .map(|value| value.ok_or("checked call has no exact parameter value".to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        if let Some((type_name, variant, ty)) = constructor {
+            if formal.iter().any(|value| {
+                !value.custody.is_empty() || value.value.contains_live_resource_or_grant()
+            }) {
+                return Err(
+                    "occupied Resource enum construction has no selected custody transport"
+                        .to_string(),
+                );
+            }
+            let value = EvaluatedValue::ordinary(Value::Enum {
+                type_name,
+                variant,
+                fields: formal.into_iter().map(|value| value.value).collect(),
+            });
+            self.resource_transport
+                .as_ref()
+                .ok_or("missing checked Resource transport")?
+                .validate_value_type(&value, ty)
+                .map_err(|error| error.to_string())?;
+            return Ok(Self::resource_flow(value));
+        }
+        let bare_callee = Self::unparenthesized(callee);
+        match invocation.target() {
+            CheckedInvocationTarget::Resolved(definition)
+                if self
                     .resource_transport
                     .as_ref()
                     .ok_or("missing checked Resource transport")?
-                    .formal_value(&actual, fact.callee_access)
+                    .checked
+                    .has_hook(*definition) =>
+            {
+                let resolved = self
+                    .resource_transport
+                    .as_ref()
+                    .ok_or("missing checked Resource transport")?
+                    .checked
+                    .resolved_definition(bare_callee.span())
                     .map_err(|error| error.to_string())?;
-                formal[fact.parameter_index] = Some(borrowed.unwrap_or(actual));
+                if resolved != *definition {
+                    return Err("checked Resource hook lost its exact declaration".to_string());
+                }
+                let descriptor = self
+                    .resource_transport
+                    .as_ref()
+                    .ok_or("missing checked Resource transport")?
+                    .checked
+                    .descriptor(*definition)
+                    .map_err(|error| error.to_string())?;
+                let value = self
+                    .resource_transport
+                    .as_mut()
+                    .ok_or("missing checked Resource transport")?
+                    .invoke_hook(invocation, &descriptor, formal)
+                    .map_err(|error| error.to_string())?;
+                Ok(Self::resource_flow(value))
             }
-            let formal = formal
-                .into_iter()
-                .map(|value| value.ok_or("checked call has no exact parameter value".to_string()))
-                .collect::<Result<Vec<_>, _>>()?;
-            if let Some((type_name, variant, ty)) = constructor {
+            CheckedInvocationTarget::Resolved(definition)
+            | CheckedInvocationTarget::Generic(jett_typecheck::CheckedGenericCall {
+                definition,
+                ..
+            }) => {
+                let name = self.exact_registered_resource_function(*definition)?;
+                let resolved_arguments = match invocation.target() {
+                    CheckedInvocationTarget::Generic(call) => call
+                        .concrete_args
+                        .iter()
+                        .map(|ty| {
+                            let types = &self
+                                .resource_transport
+                                .as_ref()
+                                .ok_or("missing checked Resource transport")?
+                                .checked
+                                .program()
+                                .checked()
+                                .interner;
+                            Self::debug_type(&types.type_name(*ty)).ok_or(
+                                "checked generic argument has no canonical interpreter type"
+                                    .to_string(),
+                            )
+                        })
+                        .collect::<Result<Vec<_>, String>>()?,
+                    _ => type_arguments
+                        .iter()
+                        .map(|ty| self.substitute_type_expr(ty))
+                        .collect(),
+                };
+                let value = self.call_registered_function_envelopes(
+                    &name,
+                    &resolved_arguments,
+                    formal,
+                    &FunctionInvocation::Source(invocation),
+                    return_destination,
+                )?;
+                Ok(Self::resource_flow(value))
+            }
+            CheckedInvocationTarget::Indirect(_) => {
+                let function = match Self::resource_envelope(self.eval_expr_flow(bare_callee)?)? {
+                    Ok(value) => value,
+                    Err(signal) => return Ok(ExprFlow::Signal(signal)),
+                };
+                match function.value {
+                    Value::ResourceHook(descriptor) if function.custody.is_empty() => {
+                        let value = self.resource_transport.as_mut().ok_or("missing checked Resource transport")?
+                            .invoke_hook(invocation, &descriptor, formal).map_err(|error| error.to_string())?;
+                        Ok(Self::resource_flow(value))
+                    }
+                    value if function.custody.is_empty() && !value.contains_live_resource_or_grant()
+                        && formal.iter().all(|argument| argument.custody.is_empty() && !argument.value.contains_live_resource_or_grant()) => {
+                        Ok(ExprFlow::Value(self.call_fn_value_from_source(value, formal.into_iter().map(|value| value.value).collect(), None)?))
+                    }
+                    _ => Err("Resource-bearing captured invocation has no checked custody transfer proof".to_string()),
+                }
+            }
+            CheckedInvocationTarget::Intrinsic(_) => {
                 if formal.iter().any(|value| {
                     !value.custody.is_empty() || value.value.contains_live_resource_or_grant()
                 }) {
                     return Err(
-                        "occupied Resource enum construction has no selected custody transport"
+                        "Resource-bearing intrinsic transport has no selected acquisition proof"
                             .to_string(),
                     );
                 }
-                let value = EvaluatedValue::ordinary(Value::Enum {
-                    type_name,
-                    variant,
-                    fields: formal.into_iter().map(|value| value.value).collect(),
-                });
-                self.resource_transport
-                    .as_ref()
-                    .ok_or("missing checked Resource transport")?
-                    .validate_value_type(&value, ty)
-                    .map_err(|error| error.to_string())?;
-                return Ok(Self::resource_flow(value));
+                let prepared =
+                    intrinsic.ok_or("checked intrinsic has no prepared concrete arguments")?;
+                let values = formal.into_iter().map(|value| value.value).collect();
+                Ok(ExprFlow::Value(
+                    self.call_resource_intrinsic(invocation, prepared, values)?,
+                ))
             }
-            let bare_callee = Self::unparenthesized(callee);
-            match invocation.target() {
-                CheckedInvocationTarget::Resolved(definition)
-                    if self
-                        .resource_transport
-                        .as_ref()
-                        .ok_or("missing checked Resource transport")?
-                        .checked
-                        .has_hook(*definition) =>
-                {
-                    let resolved = self
-                        .resource_transport
-                        .as_ref()
-                        .ok_or("missing checked Resource transport")?
-                        .checked
-                        .resolved_definition(bare_callee.span())
-                        .map_err(|error| error.to_string())?;
-                    if resolved != *definition {
-                        return Err("checked Resource hook lost its exact declaration".to_string());
-                    }
-                    let descriptor = self
-                        .resource_transport
-                        .as_ref()
-                        .ok_or("missing checked Resource transport")?
-                        .checked
-                        .descriptor(*definition)
-                        .map_err(|error| error.to_string())?;
-                    let value = self
-                        .resource_transport
-                        .as_mut()
-                        .ok_or("missing checked Resource transport")?
-                        .invoke_hook(&invocation, &descriptor, formal)
-                        .map_err(|error| error.to_string())?;
-                    Ok(Self::resource_flow(value))
+            CheckedInvocationTarget::Method(_) | CheckedInvocationTarget::Interface(_) => {
+                if formal.iter().any(|value| {
+                    !value.custody.is_empty() || value.value.contains_live_resource_or_grant()
+                }) {
+                    return Err("Resource-bearing intrinsic/method transport has no selected acquisition proof".to_string());
                 }
-                CheckedInvocationTarget::Resolved(definition)
-                | CheckedInvocationTarget::Generic(jett_typecheck::CheckedGenericCall {
-                    definition,
-                    ..
-                }) => {
-                    let name = self.exact_registered_resource_function(*definition)?;
-                    let resolved_arguments = match invocation.target() {
-                        CheckedInvocationTarget::Generic(call) => call
-                            .concrete_args
-                            .iter()
-                            .map(|ty| {
-                                let types = &self
-                                    .resource_transport
-                                    .as_ref()
-                                    .ok_or("missing checked Resource transport")?
-                                    .checked
-                                    .program()
-                                    .checked()
-                                    .interner;
-                                Self::debug_type(&types.type_name(*ty)).ok_or(
-                                    "checked generic argument has no canonical interpreter type"
-                                        .to_string(),
-                                )
-                            })
-                            .collect::<Result<Vec<_>, String>>()?,
-                        _ => type_arguments
-                            .iter()
-                            .map(|ty| self.substitute_type_expr(ty))
-                            .collect(),
-                    };
-                    let value = self.call_registered_function_envelopes(
-                        &name,
-                        &resolved_arguments,
-                        formal,
-                        &FunctionInvocation::Source(&invocation),
-                        operation.frame,
-                    )?;
-                    Ok(Self::resource_flow(value))
-                }
-                CheckedInvocationTarget::Indirect(_) => {
-                    let function = match Self::resource_envelope(self.eval_expr_flow(bare_callee)?)?
-                    {
-                        Ok(value) => value,
-                        Err(signal) => return Ok(ExprFlow::Signal(signal)),
-                    };
-                    match function.value {
-                        Value::ResourceHook(descriptor) if function.custody.is_empty() => {
-                            let value = self.resource_transport.as_mut().ok_or("missing checked Resource transport")?
-                                .invoke_hook(&invocation, &descriptor, formal).map_err(|error| error.to_string())?;
-                            Ok(Self::resource_flow(value))
-                        }
-                        value if function.custody.is_empty() && !value.contains_live_resource_or_grant()
-                            && formal.iter().all(|argument| argument.custody.is_empty() && !argument.value.contains_live_resource_or_grant()) => {
-                            Ok(ExprFlow::Value(self.call_fn_value_from_source(value, formal.into_iter().map(|value| value.value).collect(), None)?))
-                        }
-                        _ => Err("Resource-bearing captured invocation has no checked custody transfer proof".to_string()),
-                    }
-                }
-                CheckedInvocationTarget::Intrinsic(_)
-                | CheckedInvocationTarget::Method(_)
-                | CheckedInvocationTarget::Interface(_) => {
-                    if formal.iter().any(|value| {
-                        !value.custody.is_empty() || value.value.contains_live_resource_or_grant()
-                    }) {
-                        return Err("Resource-bearing intrinsic/method transport has no selected acquisition proof".to_string());
-                    }
-                    // Evaluate the selected ordinary operation with the already
-                    // evaluated actual values. No source actual is evaluated twice.
-                    let values = formal
-                        .into_iter()
-                        .map(|value| value.value)
-                        .collect::<Vec<_>>();
-                    let name = Self::dotted_expr_name(bare_callee)
-                        .ok_or("ordinary checked intrinsic has no source operation")?;
-                    Ok(ExprFlow::Value(self.call_function_from_resolved_source(
-                        &name,
-                        type_arguments,
-                        values,
-                        None,
-                    )?))
-                }
+                // Evaluate the selected ordinary operation with the already
+                // evaluated actual values. No source actual is evaluated twice.
+                let values = formal
+                    .into_iter()
+                    .map(|value| value.value)
+                    .collect::<Vec<_>>();
+                let name = Self::dotted_expr_name(bare_callee)
+                    .ok_or("ordinary checked intrinsic has no source operation")?;
+                Ok(ExprFlow::Value(self.call_function_from_resolved_source(
+                    &name,
+                    type_arguments,
+                    values,
+                    None,
+                )?))
             }
-        })();
-        self.finish_resource_operation(operation, result)
+        }
     }
 
     fn exact_registered_resource_function(&self, definition: DefId) -> Result<String, String> {
@@ -661,7 +799,13 @@ impl Interpreter {
         }
         // The original checked AST supplies both header and executable body.
         // A host-edited registration clone is never executable authority.
-        let func = Arc::new(original.clone());
+        let body_reference = transport
+            .checked
+            .prepare_function_body(invocation)
+            .map_err(|error| error.to_string())?;
+        let func = body_reference
+            .function()
+            .map_err(|error| error.to_string())?;
 
         if args.len() != func.params.len() {
             return Err(format!(
@@ -693,7 +837,8 @@ impl Interpreter {
         self.resource_transport
             .as_mut()
             .ok_or("missing checked Resource transport")?
-            .enter_callee(invocation)
+            .checked
+            .install_function_body(&body_reference)
             .map_err(|error| error.to_string())?;
         let saved_expression_types =
             std::mem::replace(&mut self.active_checked_function, expression_types);
@@ -1001,11 +1146,16 @@ impl Interpreter {
                     .to_string(),
             );
         }
+        transport
+            .validate_entry_scopes(self.scopes.len())
+            .map_err(|error| error.to_string())?;
         let invocation = transport
             .checked
             .entry(definition)
             .map_err(|error| error.to_string())?;
         let name = self.exact_registered_resource_function(definition)?;
+        let saved_context = SavedResourceEntryContext::capture(self)?;
+        let scope_depth = saved_context.scope_depth();
         let operation = self
             .resource_transport
             .as_mut()
@@ -1044,17 +1194,49 @@ impl Interpreter {
                 .unwind_all()
                 .map_err(|error| error.to_string())
         }));
-        self.resource_transport
-            .as_mut()
-            .ok_or("missing checked Resource transport")?
-            .checked_source_active = false;
+        // A panic may skip ordinary callee/scope restoration. Restore the exact
+        // entry metadata before choosing/resuming any result or cleanup outcome.
+        let restore = saved_context.restore(self);
+        let completion = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.resource_transport
+                .as_mut()
+                .ok_or("missing checked Resource transport")?
+                .restore_entry_scopes(scope_depth)
+                .map_err(|error| error.to_string())
+        }));
+        let cleanup = Self::complete_resource_cleanup(cleanup, completion);
+        let result = match (result, restore) {
+            (Ok(Ok(_)), Err(error)) => Ok(Err(error)),
+            (result, _) => result,
+        };
         Self::complete_resource_entry(result, cleanup)
     }
 
-    fn complete_resource_entry(
-        result: std::thread::Result<Result<Value, String>>,
+    fn complete_resource_cleanup(
         cleanup: std::thread::Result<Result<(), String>>,
-    ) -> Result<Value, String> {
+        completion: std::thread::Result<Result<(), String>>,
+    ) -> std::thread::Result<Result<(), String>> {
+        match (cleanup, completion) {
+            (Err(panic), completion) => {
+                if let Err(other) = completion {
+                    std::mem::forget(other);
+                }
+                Err(panic)
+            }
+            (Ok(Err(error)), completion) => {
+                if let Err(panic) = completion {
+                    std::mem::forget(panic);
+                }
+                Ok(Err(error))
+            }
+            (Ok(Ok(())), completion) => completion,
+        }
+    }
+
+    fn complete_resource_entry<T>(
+        result: std::thread::Result<Result<T, String>>,
+        cleanup: std::thread::Result<Result<(), String>>,
+    ) -> Result<T, String> {
         match (result, cleanup) {
             (Err(entry_panic), Err(cleanup_panic)) => {
                 std::mem::forget(entry_panic);
@@ -1085,6 +1267,28 @@ impl Interpreter {
             .install_script(operations)
             .map_err(|error| error.to_string())?;
         Ok(Value::GrantedNetwork(grant))
+    }
+    pub(crate) fn resource_test_scoped_context(
+        &self,
+    ) -> Result<(bool, usize, usize, usize, Option<usize>), String> {
+        let transport = self
+            .resource_transport
+            .as_ref()
+            .ok_or("missing checked Resource transport")?;
+        Ok((
+            self.active_checked_scope.is_some(),
+            self.scoped_type_bindings.len(),
+            self.current_type_arguments.len(),
+            self.type_arg_scopes.len(),
+            transport.checked.original_body_scope_depth(),
+        ))
+    }
+    pub(crate) fn resource_test_custody_counts(&self) -> Result<(usize, usize), String> {
+        let transport = self
+            .resource_transport
+            .as_ref()
+            .ok_or("missing checked Resource transport")?;
+        Ok((transport.live_owners(), transport.registry_live_count()))
     }
     pub(crate) fn resource_test_observations(
         &self,
@@ -1349,6 +1553,158 @@ export function scenario() returns int64:
                 Value::Int64(7)
             );
             empty_before_teardown(&mut interpreter);
+        }
+    }
+}
+
+#[cfg(test)]
+mod entry_readiness_tests {
+    use super::*;
+    use crate::resource_execution::{
+        ProviderEvent, ResourceExecutionError, ScriptOperation, tests::program,
+    };
+    use jett_types::ResourceHookKind;
+
+    #[test]
+    fn checked_host_entry_refusal_preserves_an_outer_operation_and_real_owner() {
+        for release in [false, true] {
+            let program = program(
+                include_str!("fixtures/25_repeated_scoped_entry.jett"),
+                release,
+            );
+            let mut interpreter = Interpreter::from_checked_resource_program(
+                program.clone(),
+                ExecutionPurpose::ReferenceRuntime,
+            )
+            .unwrap();
+            let original = program
+                .module()
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::Function(function)
+                        if function.name.name == "clean"
+                            && function.name.span.file == jett_common::FileId::new(0) =>
+                    {
+                        Some(function)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let target = interpreter
+                .resource_transport
+                .as_ref()
+                .unwrap()
+                .checked
+                .declaration_definition(original.name.span)
+                .unwrap();
+            let grant = interpreter
+                .install_resource_test_script(vec![
+                    ScriptOperation::Construct {
+                        label: 1801,
+                        outcome: Ok(()),
+                    },
+                    ScriptOperation::Construct {
+                        label: 1801,
+                        outcome: Ok(()),
+                    },
+                    ScriptOperation::Borrow {
+                        label: 1801,
+                        outcome: Ok(21),
+                    },
+                ])
+                .unwrap();
+            let Value::GrantedNetwork(network) = &grant else {
+                panic!("actual private grant");
+            };
+            let runtime = interpreter.resource_transport.as_mut().unwrap();
+            runtime.checked_source_active = true;
+            let operation = runtime.begin_operation().unwrap();
+            let hook = runtime
+                .checked
+                .program()
+                .checked()
+                .resource_hooks
+                .values()
+                .find(|hook| hook.kind == ResourceHookKind::Construct)
+                .unwrap()
+                .definition;
+            let occurrence = *runtime
+                .checked
+                .program()
+                .checked()
+                .call_ownership
+                .iter()
+                .find(|(_, packet)| packet.target == CheckedInvocationTarget::Resolved(hook))
+                .unwrap()
+                .0;
+            let invocation = runtime.checked.invocation(occurrence).unwrap();
+            let descriptor = runtime.checked.descriptor(hook).unwrap();
+            let owner = runtime
+                .invoke_hook(
+                    &invocation,
+                    &descriptor,
+                    vec![
+                        EvaluatedValue::ordinary(Value::GrantedNetwork(network.clone())),
+                        EvaluatedValue::ordinary(Value::Int64(1801)),
+                    ],
+                )
+                .unwrap();
+            assert!(!owner.custody.is_empty());
+            let context = interpreter.resource_test_entry_context().unwrap();
+            assert_eq!(
+                interpreter.call_checked_program_entry(target, vec![grant.clone()]),
+                Err(ResourceExecutionError::InvalidFrame.to_string())
+            );
+            assert_eq!(interpreter.resource_test_entry_context().unwrap(), context);
+            assert_eq!(
+                interpreter.resource_test_observations().unwrap(),
+                (vec![ProviderEvent::Constructed(1801)], 1, 1)
+            );
+            interpreter
+                .resource_transport
+                .as_mut()
+                .unwrap()
+                .end_operation(operation, None)
+                .unwrap();
+            drop(owner);
+            interpreter
+                .resource_transport
+                .as_mut()
+                .unwrap()
+                .checked_source_active = false;
+            assert_eq!(
+                interpreter.resource_test_observations().unwrap(),
+                (
+                    vec![
+                        ProviderEvent::Constructed(1801),
+                        ProviderEvent::Finalized(1801)
+                    ],
+                    0,
+                    0
+                )
+            );
+            assert_eq!(
+                interpreter
+                    .call_checked_program_entry(target, vec![grant])
+                    .unwrap(),
+                Value::Int64(21)
+            );
+            assert_eq!(
+                interpreter.resource_test_observations().unwrap(),
+                (
+                    vec![
+                        ProviderEvent::Constructed(1801),
+                        ProviderEvent::Finalized(1801),
+                        ProviderEvent::Constructed(1801),
+                        ProviderEvent::Borrowed(1801),
+                        ProviderEvent::Finalized(1801)
+                    ],
+                    0,
+                    0
+                )
+            );
+            assert!(interpreter.take_debug_events().is_empty());
         }
     }
 }

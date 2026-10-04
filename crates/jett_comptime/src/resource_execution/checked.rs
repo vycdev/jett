@@ -1,3 +1,13 @@
+#[path = "checked/assignment.rs"]
+mod assignment;
+pub(crate) use assignment::CheckedAssignment;
+
+#[path = "checked/body_reference.rs"]
+mod body_reference;
+pub(crate) use body_reference::{
+    CheckedAttemptKey, CheckedBodyReference, PreparedDirectScope, PreparedIntrinsicArguments,
+    PreparedPipelineStep, PreparedRequiredExpression,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -42,6 +52,7 @@ struct ScopedSelection {
 pub(crate) struct CheckedBodyCursor {
     root: BodyRoot,
     scopes: Vec<ScopedSelection>,
+    executable: Option<body_reference::ExecutableIdentity>,
 }
 
 impl CheckedBodyCursor {
@@ -49,6 +60,7 @@ impl CheckedBodyCursor {
         Self {
             root: BodyRoot::Ordinary,
             scopes: Vec::new(),
+            executable: None,
         }
     }
 }
@@ -164,7 +176,12 @@ struct BodyFacts<'a> {
     types: &'a HashMap<Span, TypeId>,
     source_types: &'a HashMap<Span, TypeId>,
     pipeline_inputs: &'a HashMap<Span, TypeId>,
+    pipeline_calls: &'a HashMap<Span, TypeId>,
     scopes: &'a HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
+    intrinsics: &'a HashMap<Span, jett_intrinsics::IntrinsicId>,
+    intrinsic_types: &'a HashMap<Span, Vec<TypeId>>,
+    intrinsic_reflections: &'a HashMap<Span, Vec<ReflectionTypeInfo>>,
+    constructions: &'a HashMap<Span, jett_typecheck::CheckedStructConstruction>,
 }
 
 impl<'a> BodyFacts<'a> {
@@ -175,7 +192,12 @@ impl<'a> BodyFacts<'a> {
             types: &body.type_map,
             source_types: &body.source_type_map,
             pipeline_inputs: &body.pipeline_step_input_types,
+            pipeline_calls: &body.pipeline_step_call_types,
             scopes: &body.comptime_type_bindings,
+            intrinsics: &body.intrinsic_ids,
+            intrinsic_types: &body.intrinsic_type_arguments,
+            intrinsic_reflections: &body.intrinsic_reflection_arguments,
+            constructions: &body.struct_constructions,
         }
     }
 }
@@ -335,7 +357,12 @@ impl CheckedExecution {
                 types: &checked.type_map,
                 source_types: &checked.source_type_map,
                 pipeline_inputs: &checked.pipeline_step_input_types,
+                pipeline_calls: &checked.pipeline_step_call_types,
                 scopes: &checked.comptime_type_bindings,
+                intrinsics: &checked.intrinsic_ids,
+                intrinsic_types: &checked.intrinsic_type_arguments,
+                intrinsic_reflections: &checked.intrinsic_reflection_arguments,
+                constructions: &checked.struct_constructions,
             },
             BodyRoot::Generic(index) => {
                 let body = checked
@@ -348,7 +375,12 @@ impl CheckedExecution {
                     types: &body.type_map,
                     source_types: &body.source_type_map,
                     pipeline_inputs: &body.pipeline_step_input_types,
+                    pipeline_calls: &body.pipeline_step_call_types,
                     scopes: &body.comptime_type_bindings,
+                    intrinsics: &body.intrinsic_ids,
+                    intrinsic_types: &body.intrinsic_type_arguments,
+                    intrinsic_reflections: &body.intrinsic_reflection_arguments,
+                    constructions: &body.struct_constructions,
                 }
             }
         };
@@ -374,6 +406,9 @@ impl CheckedExecution {
         cursor: CheckedBodyCursor,
     ) -> Result<(), ResourceExecutionError> {
         self.facts(&cursor)?;
+        if cursor.executable.is_some() {
+            self.validate_executable_cursor(&cursor)?;
+        }
         self.body = cursor;
         Ok(())
     }
@@ -405,46 +440,8 @@ impl CheckedExecution {
         self.body = CheckedBodyCursor {
             root: BodyRoot::Generic(*index),
             scopes: Vec::new(),
+            executable: None,
         };
-        Ok(())
-    }
-
-    pub(crate) fn enter_scoped(
-        &mut self,
-        owner: Span,
-        bound_type: TypeId,
-        reflection: &ReflectionTypeInfo,
-        selected_iteration: Option<usize>,
-    ) -> Result<(), ResourceExecutionError> {
-        let scopes = self
-            .facts(&self.body)?
-            .scopes
-            .get(&owner)
-            .ok_or(ResourceExecutionError::MissingCheckedBody)?;
-        let expected = selected_iteration.map_or(
-            CheckedComptimeTypeSelection::Unconditional,
-            CheckedComptimeTypeSelection::ReflectedIteration,
-        );
-        let matches = scopes
-            .iter()
-            .enumerate()
-            .filter(|(_, scope)| {
-                scope.bound_type == bound_type
-                    && scope.reflection == *reflection
-                    && scope.selection == expected
-            })
-            .map(|(index, scope)| ScopedSelection {
-                owner,
-                index,
-                bound_type,
-                selection: scope.selection,
-                reflection: scope.reflection.clone(),
-            })
-            .collect::<Vec<_>>();
-        let [selection] = matches.as_slice() else {
-            return Err(ResourceExecutionError::MissingCheckedBody);
-        };
-        self.body.scopes.push(selection.clone());
         Ok(())
     }
 

@@ -2359,15 +2359,17 @@ ReferenceRuntime purpose, matching program/type/signature/caller facts and
 runtime capability provenance. Explicit comptime, constants, verify and property
 workers cannot execute it; purpose is restored after property evaluation.
 The production catalog remains empty, its installed provider is Disabled, and
-scripted provider installation is compiler-test-only. All 43 Resource-focused
+scripted provider installation is compiler-test-only. All 83 Resource-focused
 reference tests pass, including both-profile Source lifecycles, exact absent
 aggregate layouts, enum-constructor dispatch and required-worker controls.
-The pipeline/assignment additions currently prove checking only. Ordinary
-refinement children need predicate validation; occupied aggregate custody,
-pipeline/assignment transport and reusable entry remain required. Broader
-scoped/reflected/indirect/worker coverage and production
-providers remain pending. Native HIR hook lowering, Resource-linear MIR cleanup
-and a checked native carrier remain unsupported. See
+Direct scoped/generic/required regions retain original body identity and complete
+concrete intrinsic metadata. Pipelines preserve original steps and lexical actual
+order; mutable assignment retains declaration slots and replaces owners only
+after RHS evaluation. Repeated entry restores metadata and body cursors.
+Ordinary refinement predicates, occupied aggregate custody, broader captured/
+reflected/worker coverage and production providers remain pending. Native HIR
+hook lowering, Resource-linear MIR cleanup and a checked native carrier remain
+unsupported. See
 [the current reference record](active/native_resource_hook_identity.md#reference-lifecycle-execution).
 
 A separate private `jett_runtime::resource_custody` core now keeps program/kind/

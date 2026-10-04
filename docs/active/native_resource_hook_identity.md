@@ -5,8 +5,8 @@ passes all 14 tests, and that earlier compiler/object/driver/frontend/lowering
 checkpoint passes. The subsequent clean `616b51b9` workspace and all four
 supported-host jobs also pass. These are historical identity/static-guard
 receipts, not broader acceptance of the later reference lifecycle.
-The private reference follow-up now passes 36 Resource-focused tests; its scope
-is recorded below. The production catalog stays empty. Whole-language native
+The private reference follow-up now passes 83 Resource-focused tests; its latest
+scope is recorded below. The production catalog stays empty. Whole-language native
 coverage remains about 85%, with the fixed 207-fixture inventory and 100%
 objective unchanged. The [acceptance audit](native_acceptance_audit.md)
 keeps local, reference and platform evidence separate.
@@ -318,3 +318,36 @@ Resource CFG ownership/drop plans, linked source-deleted lifecycle execution
 and real providers remain required. This protocol core adds no native inventory
 case; the broad feature estimate remains **85%** and the whole-language objective
 remains 100%.
+
+## Checked required, scoped, pipeline and assignment transport
+
+The expanded reference transport preserves the immutable checked program and
+original function, generic/scoped body, namespace initializer, explicit comptime,
+verify or property region. Entry selection and metadata installation are
+transactional; normal return, failure and re-entry restore the previous body
+cursor and complete concrete type/reflection facts. A cloned AST or another
+program/context cannot replace the original source occurrence.
+
+Pipelines stage actuals in source order using original step identities before
+formal permutation. Mutable assignment keeps its declaration slot after a move
+or Close, evaluates RHS while the previous owner remains observable, then retires
+and publishes owners exactly once. Reverse cleanup still completes after an
+eligible finalizer panic. Generic intrinsic arguments use the exact selected
+body's concrete type IDs and complete reflection records, preserving alias names;
+no ambient metadata or unresolved source type name supplies that proof.
+
+Root receipt `61a351` passes **83/83** focused tests in
+`target/native-resource-concrete-intrinsic-pipeline-syntax-fixed-focused.log`.
+This includes all 12 pipeline and seven assignment groups, the preserved generic
+Source27 oracle and four new both-profile metadata/corruption groups. The two
+test helper API corrections and canonical `into` fixture spelling preserve all
+expected values and refusal oracles. The complete formatted reference/driver/frontend gate also passes all **1,186 tests** (501 Comptime, 87 driver, 598 frontend; `4ba85c`) in `target/native-resource-transport-formatted-property-fixed-broad.log`. Rust formatting and all eight new Jett
+fixture format checks pass (`658c63`). Earlier failed gates remain in target logs.
+
+The foundation `7157f564` supported-host run
+[37217759157](https://github.com/vycdev/jett/actions/runs/37217759157) completed all
+four Windows/Linux workspace, package and relocated installed-runtime jobs.
+That receipt excludes these later transport changes and custody core `92421063`.
+Ordinary refinement children, complete capture/reflection/worker contexts,
+occupied aggregates and real providers remain required. This is reference
+execution; it adds no native inventory case or native Resource admission.

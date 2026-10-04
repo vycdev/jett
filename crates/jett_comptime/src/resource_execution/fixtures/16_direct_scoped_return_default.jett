@@ -1,0 +1,12 @@
+namespace app
+function observed_or_default(view net: Network, label: int64) returns int64:
+    use resource_probe
+    comptime type Element = type.info[int64]():
+        resource_probe.TestHandle owner = resource_probe.create(view net, label) handle error:
+            return -1
+        Element observed = resource_probe.borrow(view net, view owner) handle error:
+            default 17
+        return observed
+    return -2
+export function scenario(view net: Network) returns int64:
+    return observed_or_default(view net, 1601)

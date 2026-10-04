@@ -1970,3 +1970,22 @@ async/actor cancellation and late-completion paths remain pending. Broad library
 whole-workspace and supported-host acceptance of the Resource candidate are
 also pending. The 36 tests add no native inventory row and do not change the
 480-case caller receipt, 207/182 fixed denominators or about-85% estimate.
+
+## Checked Resource reference transport follow-up
+
+The later scoped/required/generic, pipeline and mutable-assignment transport
+passes **83/83** focused reference groups (`61a351`) in
+`target/native-resource-concrete-intrinsic-pipeline-syntax-fixed-focused.log`.
+Exact original region/body/step/statement proofs survive nested entry and restore
+metadata/cursors. Concrete intrinsic metadata preserves generic substitutions
+and alias names; copied source packets and foreign contexts remain refused.
+The complete formatted gate passes **1,186/1,186** (501 Comptime, 87 driver, 598 frontend; `4ba85c`) in `target/native-resource-transport-formatted-property-fixed-broad.log`. Pipeline actuals retain lexical order, and assignment replacement retains the
+previous owner until RHS succeeds and cleanup/publication complete.
+
+The prior 36/43 receipts remain historical. The foundation `7157f564`
+[supported-host run](https://github.com/vycdev/jett/actions/runs/37217759157) passed
+all four jobs and excludes this follow-up and custody core `92421063`. These reference
+controls do not execute native Resource values. The 480-case native caller receipt,
+fixed 207/182 inventory and approximate 85% estimate keep their separate scopes;
+full providers, aggregates, capture/reflection/refinement breadth and
+async/actor/cancellation native execution remain whole-goal requirements.

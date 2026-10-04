@@ -1,0 +1,16 @@
+namespace app
+function absent_token() returns optional[resource_probe.TestHandle]:
+    return none
+function forward_absent(token: optional[resource_probe.TestHandle]) returns optional[resource_probe.TestHandle]:
+    return token
+function marker(token: optional[resource_probe.TestHandle]) returns int64:
+    return 17
+int64 namespace_marker = comptime(absent_token() into forward_absent() into marker())
+export function explicit_marker() returns int64:
+    return comptime(absent_token() into forward_absent() into marker())
+verify absent_pipeline_verify:
+    assert(absent_token() into forward_absent() into marker()) == 17
+property absent_pipeline_property:
+    given count: int64
+    assert(absent_token() into forward_absent() into marker()) == 17
+    assert count == count

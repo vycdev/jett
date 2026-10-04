@@ -1,0 +1,21 @@
+namespace app
+function seven() returns int64:
+    return 7
+int64 baked = comptime seven()
+export function scenario() returns int64:
+    use resource_probe
+    function(resource_probe.TestHandle) returns nothing dispose = comptime resource_probe.close_descriptor()
+    optional[resource_probe.TestHandle] absent = comptime resource_probe.empty()
+    return baked
+verify original_required_verify:
+    use resource_probe
+    int64 observed = comptime seven()
+    function(resource_probe.TestHandle) returns nothing dispose = resource_probe.close_descriptor()
+    assert observed == 7
+property original_required_property:
+    given marker: int64
+    use resource_probe
+    int64 observed = comptime seven()
+    optional[resource_probe.TestHandle] absent = resource_probe.empty()
+    assert observed == 7
+    assert marker == marker

@@ -1,3 +1,6 @@
+#[path = "runtime/assignment.rs"]
+mod assignment;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -5,7 +8,8 @@ use jett_common::Span;
 use jett_resolve::DefId;
 use jett_runtime::ResourceRegistry;
 use jett_typecheck::{
-    CheckedCalleeAccess, CheckedCallerEffect, CheckedInvocationTarget, CheckedResourceProgram,
+    CheckedBindingFact, CheckedCalleeAccess, CheckedCallerEffect, CheckedInvocationTarget,
+    CheckedResourceProgram,
 };
 use jett_types::ResourceKernelRecipe;
 
@@ -37,6 +41,13 @@ impl ActiveFrame {
     }
 }
 
+/// The lexical declaration survives consuming its value. No copied physical
+/// carrier can repopulate this slot or restore an owning cleanup ticket.
+struct ResourceBindingSlot {
+    fact: CheckedBindingFact,
+    value: Option<EvaluatedValue>,
+}
+
 /// Internal transport only. Neither ordinary Value copies nor a raw interpreter
 /// constructor can install a provider or mint an owning ticket.
 pub(crate) struct ResourceTransport {
@@ -45,7 +56,7 @@ pub(crate) struct ResourceTransport {
     ledger: OwnerLedger,
     registry: ResourceRegistry,
     provider: InstalledResourceProvider,
-    scopes: Vec<(FrameId, HashMap<DefId, EvaluatedValue>)>,
+    scopes: Vec<(FrameId, HashMap<DefId, ResourceBindingSlot>)>,
     operations: Vec<FrameId>,
     active_frames: Vec<ActiveFrame>,
     returns: Vec<FrameId>,
@@ -249,17 +260,23 @@ impl ResourceTransport {
             let value = self.scopes[index]
                 .1
                 .get(&definition)
+                .and_then(|slot| slot.value.as_ref())
                 .ok_or(ResourceExecutionError::InvalidOwner)?;
             self.ledger.borrow(value)
         } else {
             let mut value = self.scopes[index]
                 .1
-                .remove(&definition)
+                .get_mut(&definition)
+                .and_then(|slot| slot.value.take())
                 .ok_or(ResourceExecutionError::InvalidOwner)?;
             // A borrowed alias is a physical carrier only; it cannot mint a
             // ticket merely by being used with owned syntax.
             if !value.custody.is_empty() && !value.custody.has_owners() {
-                self.scopes[index].1.insert(definition, value);
+                self.scopes[index]
+                    .1
+                    .get_mut(&definition)
+                    .ok_or(ResourceExecutionError::InvalidOwner)?
+                    .value = Some(value);
                 return Err(ResourceExecutionError::InvalidOwner);
             }
             self.hold_actual(&mut value)?;
@@ -294,7 +311,13 @@ impl ResourceTransport {
             .last_mut()
             .ok_or(ResourceExecutionError::InvalidFrame)?
             .1
-            .insert(fact.definition, value);
+            .insert(
+                fact.definition,
+                ResourceBindingSlot {
+                    fact,
+                    value: Some(value),
+                },
+            );
         Ok(fact.definition)
     }
 
@@ -865,6 +888,54 @@ impl ResourceTransport {
             resume_unwind(payload);
         }
         first_error.map_or_else(|| self.check_cleanup(), Err)
+    }
+
+    pub(crate) fn validate_entry_scopes(
+        &self,
+        scope_depth: usize,
+    ) -> Result<(), ResourceExecutionError> {
+        if !self.operations.is_empty()
+            || !self.returns.is_empty()
+            || !self.defaults.is_empty()
+            || self.ledger.live_owners() != 0
+            || self.ledger.has_live_borrows()
+            || self.registry.live_count() != 0
+            || self.scopes.len() != scope_depth
+            || self.active_frames.len() != scope_depth
+            || self.ledger.live_frame_count() != scope_depth
+        {
+            return Err(ResourceExecutionError::InvalidFrame);
+        }
+        for ((frame, bindings), active) in self.scopes.iter().zip(&self.active_frames) {
+            if !bindings.is_empty()
+                || *active != ActiveFrame::Scope(*frame)
+                || !self.ledger.frame_is_live(*frame)
+            {
+                return Err(ResourceExecutionError::InvalidFrame);
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn restore_entry_scopes(
+        &mut self,
+        scope_depth: usize,
+    ) -> Result<(), ResourceExecutionError> {
+        if !self.active_frames.is_empty()
+            || !self.operations.is_empty()
+            || !self.scopes.is_empty()
+            || self.ledger.has_live_frames()
+            || self.ledger.live_owners() != 0
+            || self.registry.live_count() != 0
+        {
+            return Err(ResourceExecutionError::InvalidFrame);
+        }
+        self.returns.clear();
+        self.defaults.clear();
+        let prior_cleanup = self.check_cleanup();
+        for _ in 0..scope_depth {
+            self.push_scope();
+        }
+        prior_cleanup
     }
 
     pub(crate) fn live_owners(&self) -> usize {

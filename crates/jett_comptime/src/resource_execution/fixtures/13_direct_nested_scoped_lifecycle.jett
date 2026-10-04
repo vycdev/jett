@@ -1,0 +1,26 @@
+namespace app
+function move_scoped_owner(token: resource_probe.TestHandle) returns resource_probe.TestHandle:
+    return token
+export function scenario(view net: Network) returns nothing:
+    use resource_probe
+    comptime type Token = type.info[resource_probe.TestHandle]():
+        Token first = resource_probe.create(view net, 1301) handle error:
+            return nothing
+        int64 before = resource_probe.borrow(view net, view first) handle error:
+            return nothing
+        Token moved = move_scoped_owner(first)
+        resource_probe.close(moved)
+        comptime type Element = type.arg[list[int64]](0):
+            Element label = 1302
+            resource_probe.TestHandle second = resource_probe.create(view net, label) handle error:
+                return nothing
+            Element observed = resource_probe.borrow(view net, view second) handle error:
+                return nothing
+            resource_probe.close(second)
+        Token restored = resource_probe.create(view net, 1304) handle error:
+            return nothing
+        resource_probe.close(restored)
+    resource_probe.TestHandle after = resource_probe.create(view net, 1303) handle error:
+        return nothing
+    resource_probe.close(after)
+    return nothing

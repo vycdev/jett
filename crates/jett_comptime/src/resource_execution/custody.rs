@@ -476,6 +476,16 @@ impl OwnerLedger {
         failure.map_or(Ok(()), Err)
     }
 
+    pub(crate) fn has_live_frames(&self) -> bool {
+        self.frames.iter().any(|frame| frame.live)
+    }
+    pub(crate) fn live_frame_count(&self) -> usize {
+        self.frames.iter().filter(|frame| frame.live).count()
+    }
+    pub(crate) fn has_live_borrows(&self) -> bool {
+        self.frames.iter().any(|frame| !frame.borrows.is_empty())
+    }
+
     pub(crate) fn live_owners(&self) -> usize {
         self.records
             .iter()

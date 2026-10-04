@@ -2309,6 +2309,13 @@ impl Interpreter {
         &mut self,
         bind: &jett_parser::ast::ComptimeTypeBindStmt,
     ) -> Result<Option<Signal>, String> {
+        if self
+            .resource_transport
+            .as_ref()
+            .is_some_and(|transport| transport.checked_source_active)
+        {
+            return self.exec_checked_resource_type_bind(bind);
+        }
         let bound_type_expr = if let Some(bound_type_expr) = comptime_type_info_binding(&bind.value)
         {
             self.substitute_type_expr(bound_type_expr)
@@ -2721,6 +2728,16 @@ impl Interpreter {
             Expr::View(inner, _) => self.eval_expr_flow(inner),
             Expr::Comptime(inner, span) => {
                 if let Some(values) = &self.explicit_comptime_values {
+                    if let Some(transport) = &self.resource_transport {
+                        if transport.checked_source_active {
+                            let identity = transport
+                                .checked
+                                .original_comptime_key(expr)
+                                .map_err(|error| error.to_string())?;
+                            return values.checked_get(&identity).cloned().map(ExprFlow::Value)
+                                .ok_or_else(|| "explicit comptime expression has no exact checked original value".to_string());
+                        }
+                    }
                     let mut context = crate::ComptimeContext::from_checked(
                         self.active_checked_function.as_deref(),
                     );
@@ -3567,13 +3584,14 @@ impl Interpreter {
         call_span: Span,
     ) -> Result<ExprFlow, String> {
         if let Some(transport) = &self.resource_transport {
-            if transport.checked_source_active
-                && transport
+            if transport.checked_source_active {
+                if transport
                     .checked
-                    .has_invocation(call_span)
+                    .source_call_dispatch(callee, args, call_span)
                     .map_err(|error| error.to_string())?
-            {
-                return self.eval_resource_call(callee, type_args, args, call_span);
+                {
+                    return self.eval_resource_call(callee, type_args, args, call_span);
+                }
             }
         }
         // Only a fact at this actual result can be reused after the call; an
@@ -4236,6 +4254,14 @@ impl Interpreter {
             Stmt::ComptimeTypeBind(bind) => self.exec_comptime_type_bind(bind),
 
             Stmt::Assign(assign) => {
+                if self
+                    .resource_transport
+                    .as_ref()
+                    .is_some_and(|transport| transport.checked_source_active)
+                    && self.resource_type_at(assign.target.span())?
+                {
+                    return self.exec_resource_assignment(assign);
+                }
                 let val = match self.eval_expr_flow(&assign.value)? {
                     ExprFlow::Value(value) => value,
                     ExprFlow::Resource(_) => return Err(

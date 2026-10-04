@@ -742,3 +742,416 @@ fn checked_source_clean_cleanup_preserves_ordinary_protocol_error() {
 
 #[path = "prerequisite_tests.rs"]
 mod frontend_prerequisites;
+
+#[test]
+fn checked_direct_and_nested_type_scopes_execute_original_lifecycle_and_restore_caller() {
+    lifecycle(
+        include_str!("fixtures/13_direct_nested_scoped_lifecycle.jett"),
+        vec![
+            ScriptOperation::Construct {
+                label: 1301,
+                outcome: Ok(()),
+            },
+            ScriptOperation::Borrow {
+                label: 1301,
+                outcome: Ok(1),
+            },
+            ScriptOperation::Construct {
+                label: 1302,
+                outcome: Ok(()),
+            },
+            ScriptOperation::Borrow {
+                label: 1302,
+                outcome: Ok(2),
+            },
+            ScriptOperation::Construct {
+                label: 1304,
+                outcome: Ok(()),
+            },
+            ScriptOperation::Construct {
+                label: 1303,
+                outcome: Ok(()),
+            },
+        ],
+        vec![
+            ProviderEvent::Constructed(1301),
+            ProviderEvent::Borrowed(1301),
+            ProviderEvent::Finalized(1301),
+            ProviderEvent::Constructed(1302),
+            ProviderEvent::Borrowed(1302),
+            ProviderEvent::Finalized(1302),
+            ProviderEvent::Constructed(1304),
+            ProviderEvent::Finalized(1304),
+            ProviderEvent::Constructed(1303),
+            ProviderEvent::Finalized(1303),
+        ],
+    );
+}
+
+#[test]
+fn checked_direct_scopes_keep_named_worker_descriptor_and_absence_entries_provider_free() {
+    let source = include_str!("fixtures/14_direct_scoped_descriptor_absence.jett");
+    for release in [false, true] {
+        for purpose in [
+            ExecutionPurpose::NamespaceConstant,
+            ExecutionPurpose::ExplicitComptime,
+            ExecutionPurpose::Verify,
+            ExecutionPurpose::Property,
+        ] {
+            for name in ["descriptor_storage", "absent_close_path"] {
+                let program = program(source, release);
+                let target = entry(&program, name);
+                let mut interpreter =
+                    Interpreter::from_checked_resource_program(program.clone(), purpose).unwrap();
+                interpreter
+                    .authorize_checked_resource_worker(program.module(), purpose)
+                    .unwrap();
+                let context = interpreter.resource_test_entry_context().unwrap();
+                assert!(
+                    interpreter
+                        .install_resource_test_script(Vec::new())
+                        .is_err()
+                );
+                assert_eq!(
+                    interpreter
+                        .call_checked_program_entry(target, Vec::new())
+                        .unwrap(),
+                    Value::Nothing
+                );
+                assert_eq!(interpreter.resource_test_custody_counts().unwrap(), (0, 0));
+                assert_eq!(interpreter.resource_test_entry_context().unwrap(), context);
+                assert!(interpreter.take_debug_events().is_empty());
+            }
+        }
+    }
+    // This is a checked named-entry test. Collected required expressions and
+    // callable/cache body references remain a separate mandatory later layer.
+}
+
+#[test]
+fn checked_direct_scope_error_restores_typed_and_legacy_context_before_reentry() {
+    let source = include_str!("fixtures/15_direct_scoped_ordinary_error.jett");
+    for release in [false, true] {
+        let program = program(source, release);
+        let target = entry(&program, "scenario");
+        let mut interpreter =
+            Interpreter::from_checked_resource_program(program, ExecutionPurpose::ReferenceRuntime)
+                .unwrap();
+        let grant = interpreter
+            .install_resource_test_script(vec![
+                ScriptOperation::Construct {
+                    label: 1501,
+                    outcome: Ok(()),
+                },
+                ScriptOperation::Borrow {
+                    label: 1501,
+                    outcome: Ok(1),
+                },
+                ScriptOperation::Construct {
+                    label: 1501,
+                    outcome: Ok(()),
+                },
+                ScriptOperation::Borrow {
+                    label: 1501,
+                    outcome: Ok(2),
+                },
+            ])
+            .unwrap();
+        for attempt in 0..2 {
+            let error = interpreter
+                .call_checked_program_entry(target, vec![grant.clone()])
+                .unwrap_err();
+            assert_eq!(error, "list.__remove_at: index -1 out of bounds");
+            let mut expected = vec![
+                ProviderEvent::Constructed(1501),
+                ProviderEvent::Borrowed(1501),
+                ProviderEvent::Finalized(1501),
+            ];
+            if attempt == 1 {
+                expected.extend(expected.clone());
+            }
+            assert_eq!(
+                interpreter.resource_test_observations().unwrap(),
+                (expected, 0, 0)
+            );
+            assert_eq!(
+                interpreter.resource_test_scoped_context().unwrap(),
+                (false, 0, 0, 0, None)
+            );
+            assert!(interpreter.take_debug_events().is_empty());
+        }
+    }
+}
+
+#[test]
+fn checked_direct_scopes_restore_after_return_and_default_with_live_owner() {
+    let source = include_str!("fixtures/16_direct_scoped_return_default.jett");
+    for release in [false, true] {
+        for outcome in [Ok(19), Err("unavailable".to_string())] {
+            let program = program(source, release);
+            let target = entry(&program, "scenario");
+            let mut interpreter = Interpreter::from_checked_resource_program(
+                program,
+                ExecutionPurpose::ReferenceRuntime,
+            )
+            .unwrap();
+            let grant = interpreter
+                .install_resource_test_script(vec![
+                    ScriptOperation::Construct {
+                        label: 1601,
+                        outcome: Ok(()),
+                    },
+                    ScriptOperation::Borrow {
+                        label: 1601,
+                        outcome: outcome.clone(),
+                    },
+                ])
+                .unwrap();
+            assert_eq!(
+                interpreter
+                    .call_checked_program_entry(target, vec![grant])
+                    .unwrap(),
+                Value::Int64(if outcome.is_ok() { 19 } else { 17 })
+            );
+            assert_eq!(
+                interpreter.resource_test_observations().unwrap(),
+                (
+                    vec![
+                        ProviderEvent::Constructed(1601),
+                        if outcome.is_ok() {
+                            ProviderEvent::Borrowed(1601)
+                        } else {
+                            ProviderEvent::BorrowFailed(1601)
+                        },
+                        ProviderEvent::Finalized(1601)
+                    ],
+                    0,
+                    0
+                )
+            );
+            assert_eq!(
+                interpreter.resource_test_scoped_context().unwrap(),
+                (false, 0, 0, 0, None)
+            );
+            assert!(interpreter.take_debug_events().is_empty());
+        }
+    }
+}
+
+#[test]
+fn checked_entries_reuse_the_same_provider_after_clean_and_ordinary_error_completion() {
+    let source = include_str!("fixtures/25_repeated_scoped_entry.jett");
+    for release in [false, true] {
+        for first_errors in [false, true] {
+            let program = program(source, release);
+            let clean = entry(&program, "clean");
+            let first = if first_errors {
+                entry(&program, "terminal_error")
+            } else {
+                clean
+            };
+            let mut interpreter = Interpreter::from_checked_resource_program(
+                program,
+                ExecutionPurpose::ReferenceRuntime,
+            )
+            .unwrap();
+            let first_label = if first_errors { 1802 } else { 1801 };
+            let grant = interpreter
+                .install_resource_test_script(vec![
+                    ScriptOperation::Construct {
+                        label: first_label,
+                        outcome: Ok(()),
+                    },
+                    ScriptOperation::Borrow {
+                        label: first_label,
+                        outcome: Ok(11),
+                    },
+                    ScriptOperation::Construct {
+                        label: 1801,
+                        outcome: Ok(()),
+                    },
+                    ScriptOperation::Borrow {
+                        label: 1801,
+                        outcome: Ok(12),
+                    },
+                ])
+                .unwrap();
+            let context = interpreter.resource_test_entry_context().unwrap();
+            let first_result = interpreter.call_checked_program_entry(first, vec![grant.clone()]);
+            if first_errors {
+                assert_eq!(
+                    first_result,
+                    Err("list.__remove_at: index -1 out of bounds".to_string())
+                );
+            } else {
+                assert_eq!(first_result.unwrap(), Value::Int64(11));
+            }
+            let mut events = vec![
+                ProviderEvent::Constructed(first_label),
+                ProviderEvent::Borrowed(first_label),
+                ProviderEvent::Finalized(first_label),
+            ];
+            assert_eq!(
+                interpreter.resource_test_observations().unwrap(),
+                (events.clone(), 0, 0)
+            );
+            assert_eq!(interpreter.resource_test_entry_context().unwrap(), context);
+            assert_eq!(
+                interpreter
+                    .call_checked_program_entry(clean, vec![grant])
+                    .unwrap(),
+                Value::Int64(12)
+            );
+            events.extend([
+                ProviderEvent::Constructed(1801),
+                ProviderEvent::Borrowed(1801),
+                ProviderEvent::Finalized(1801),
+            ]);
+            assert_eq!(
+                interpreter.resource_test_observations().unwrap(),
+                (events, 0, 0)
+            );
+            assert_eq!(interpreter.resource_test_entry_context().unwrap(), context);
+            assert!(interpreter.take_debug_events().is_empty());
+        }
+    }
+}
+
+#[test]
+fn checked_entries_restore_after_provider_or_finalizer_panic_before_same_grant_reentry() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let source = include_str!("fixtures/25_repeated_scoped_entry.jett");
+    for release in [false, true] {
+        for cleanup_panics in [false, true] {
+            let program = program(source, release);
+            let target = entry(&program, "clean");
+            let mut interpreter = Interpreter::from_checked_resource_program(
+                program,
+                ExecutionPurpose::ReferenceRuntime,
+            )
+            .unwrap();
+            let grant = interpreter
+                .install_resource_test_script(vec![
+                    if cleanup_panics {
+                        ScriptOperation::ConstructFinalizerPanic { label: 1801 }
+                    } else {
+                        ScriptOperation::Construct {
+                            label: 1801,
+                            outcome: Ok(()),
+                        }
+                    },
+                    if cleanup_panics {
+                        ScriptOperation::Borrow {
+                            label: 1801,
+                            outcome: Ok(7),
+                        }
+                    } else {
+                        ScriptOperation::BorrowPanic { label: 1801 }
+                    },
+                    ScriptOperation::Construct {
+                        label: 1801,
+                        outcome: Ok(()),
+                    },
+                    ScriptOperation::Borrow {
+                        label: 1801,
+                        outcome: Ok(19),
+                    },
+                ])
+                .unwrap();
+            let context = interpreter.resource_test_entry_context().unwrap();
+            let panic = catch_unwind(AssertUnwindSafe(|| {
+                interpreter.call_checked_program_entry(target, vec![grant.clone()])
+            }))
+            .expect_err("private scripted host panic remains observable");
+            assert_eq!(
+                mixed_failure_panic_message(panic.as_ref()),
+                if cleanup_panics {
+                    "selected test resource cleanup panic"
+                } else {
+                    "selected test borrow provider panic"
+                }
+            );
+            let mut events = vec![
+                ProviderEvent::Constructed(1801),
+                ProviderEvent::Borrowed(1801),
+                ProviderEvent::Finalized(1801),
+            ];
+            assert_eq!(
+                interpreter.resource_test_observations().unwrap(),
+                (events.clone(), 0, 0)
+            );
+            assert_eq!(interpreter.resource_test_entry_context().unwrap(), context);
+            assert_eq!(
+                interpreter
+                    .call_checked_program_entry(target, vec![grant])
+                    .unwrap(),
+                Value::Int64(19)
+            );
+            events.extend([
+                ProviderEvent::Constructed(1801),
+                ProviderEvent::Borrowed(1801),
+                ProviderEvent::Finalized(1801),
+            ]);
+            assert_eq!(
+                interpreter.resource_test_observations().unwrap(),
+                (events, 0, 0)
+            );
+            assert_eq!(interpreter.resource_test_entry_context().unwrap(), context);
+            assert!(interpreter.take_debug_events().is_empty());
+        }
+    }
+}
+
+pub(crate) fn same_resource_hook_descriptor_identity(
+    left: &super::ResourceHookDescriptor,
+    right: &super::ResourceHookDescriptor,
+) -> bool {
+    Arc::ptr_eq(&left.program, &right.program) && left.definition == right.definition
+}
+
+#[test]
+fn closed_descriptor_mirror_identity_preserves_function_inequality_and_program_boundary() {
+    use super::CheckedExecution;
+    use jett_types::ResourceHookKind;
+    const SOURCE: &str = include_str!("fixtures/27_original_generic_scoped_required.jett");
+    for release in [false, true] {
+        let checked_program = program(SOURCE, release);
+        let checked =
+            CheckedExecution::new(checked_program.clone(), ExecutionPurpose::ReferenceRuntime)
+                .unwrap();
+        let hook = |kind| {
+            checked_program
+                .checked()
+                .resource_hooks
+                .values()
+                .find(|hook| hook.kind == kind)
+                .unwrap()
+                .definition
+        };
+        let closed = checked.descriptor(hook(ResourceHookKind::Close)).unwrap();
+        assert!(same_resource_hook_descriptor_identity(
+            &closed,
+            &closed.clone()
+        ));
+        assert!(!same_resource_hook_descriptor_identity(
+            &closed,
+            &checked
+                .descriptor(hook(ResourceHookKind::BorrowOperation))
+                .unwrap()
+        ));
+        let foreign =
+            CheckedExecution::new(program(SOURCE, release), ExecutionPurpose::ReferenceRuntime)
+                .unwrap();
+        assert!(!same_resource_hook_descriptor_identity(
+            &closed,
+            &foreign.descriptor(hook(ResourceHookKind::Close)).unwrap()
+        ));
+        assert_ne!(
+            Value::ResourceHook(closed.clone()),
+            Value::ResourceHook(closed)
+        );
+    }
+}
+
+#[path = "assignment_tests.rs"]
+mod mutable_assignment;
