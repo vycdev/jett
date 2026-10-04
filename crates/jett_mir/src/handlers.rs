@@ -1002,6 +1002,8 @@ impl Builder<'_> {
             view_source: None,
             span,
         });
+        self.resource_capture
+            .local(&self.locals[id.index() as usize]);
         id
     }
 
@@ -1018,6 +1020,8 @@ impl Builder<'_> {
             span,
         });
         self.view_params.push(id);
+        self.resource_capture
+            .local(&self.locals[id.index() as usize]);
         id
     }
 
@@ -1153,6 +1157,20 @@ impl Builder<'_> {
     }
 
     pub(super) fn lower_value(&mut self, expression: &Expression) -> Expression {
+        match self
+            .resource_capture
+            .preserve_original_call(expression, self.types)
+        {
+            Ok(true) => return expression.clone(),
+            Err(message) => {
+                self.resource_error = Some(LowerError {
+                    span: expression.span,
+                    message,
+                });
+                return expression.clone();
+            }
+            Ok(false) => {}
+        }
         if let ExpressionKind::ResourceInvoke { args, .. } = &expression.kind {
             // Typed preservation only. Extracting actuals would require the dedicated owner plan.
             if args.iter().any(needs_eager_lowering) {

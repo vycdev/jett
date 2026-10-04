@@ -4,6 +4,14 @@ mod analysis;
 mod breakpoint_regions;
 mod call_owner_generations;
 mod call_ownership;
+mod resource_ownership;
+pub use resource_ownership::{
+    ResourceCallOperand, ResourceCallResult, ResourceCompletion, ResourceFrame, ResourceFrameId,
+    ResourceFrameRole, ResourceFunctionPlan, ResourceLoan, ResourceLoanId, ResourceLoanSource,
+    ResourceOccupancy, ResourceOperation, ResourceOperationId, ResourceOperationRole,
+    ResourceOwnerSlot, ResourceOwnerSlotId, ResourceOwnershipPlan, ResourcePath, ResourcePosition,
+    ResourceShape, ResourceSite, ResourceSlotStorage, validate_resource_ownership,
+};
 #[cfg(test)]
 mod resource_manifest_tests;
 pub use call_owner_generations::{
@@ -64,6 +72,7 @@ pub struct Function {
     original_view_iterations: Vec<iteration_views::OriginalIteration>,
     breakpoint_regions: Vec<breakpoint_regions::BreakpointRegion>,
     call_owner_generations: Vec<call_owner_generations::CallOwnerGeneration>,
+    resource_lowering: Option<resource_ownership::ResourceLoweringWitness>,
 }
 
 impl Function {
@@ -430,10 +439,12 @@ pub fn validate_call_ownership(
     validate(program)?;
     let mut errors = Vec::new();
     if let Err(message) = program.resource_manifest.validate(types) {
-        errors.push(ValidationError {
+        // Type bounds are a prerequisite for custody and invocation queries.
+        // A malformed type cannot establish that a Resource witness is needed.
+        return Err(vec![ValidationError {
             span: Span::new(jett_common::FileId::new(0), 0, 0),
             message,
-        });
+        }]);
     }
     let validation = call_ownership::ProgramValidation::new(program);
     for function in &program.functions {
@@ -443,6 +454,13 @@ pub fn validate_call_ownership(
                 message,
             });
         }
+    }
+    // Custody queries depend on valid invocation and original type metadata.
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    if let Err(mut witness_errors) = resource_ownership::validate_witnesses(program, types) {
+        errors.append(&mut witness_errors);
     }
     if errors.is_empty() {
         Ok(())
@@ -1244,6 +1262,17 @@ pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Ve
             })
             .collect());
     }
+    resource_ownership::authenticate_original(program, types).map_err(|message| {
+        vec![LowerError {
+            span: program
+                .functions
+                .first()
+                .map_or(Span::new(jett_common::FileId::new(0), 0, 0), |function| {
+                    function.span
+                }),
+            message,
+        }]
+    })?;
     let function_param_modes = program
         .functions
         .iter()
@@ -1260,7 +1289,15 @@ pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Ve
         functions: program
             .functions
             .iter()
-            .map(|function| lower_function(function, types, &function_param_modes))
+            .map(|function| {
+                lower_function(
+                    function,
+                    types,
+                    &function_param_modes,
+                    &program.resource_manifest,
+                    &program.resource_source,
+                )
+            })
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| vec![error])?,
     };
@@ -1280,9 +1317,17 @@ fn lower_function(
     function: &hir::Function,
     types: &TypeInterner,
     function_param_modes: &std::collections::HashMap<FunctionId, Vec<ParamMode>>,
+    resource_manifest: &hir::ResourceManifest,
+    resource_source: &hir::ResourceSourceArchive,
 ) -> Result<Function, LowerError> {
     let mut builder = Builder::new(function.body.span, types, function_param_modes);
     builder.locals = function.locals.clone();
+    builder.resource_capture = resource_ownership::Capture::authenticated(
+        function,
+        resource_manifest,
+        resource_source,
+        types,
+    );
     builder.view_params = function
         .params
         .iter()
@@ -1305,6 +1350,7 @@ fn lower_function(
     }
     let breakpoint_capture = std::mem::take(&mut builder.breakpoint_capture);
     let generation_capture = std::mem::take(&mut builder.generation_capture);
+    let resource_capture = std::mem::take(&mut builder.resource_capture);
     let mut lowered = Function {
         id: function.id,
         identity: function.identity.clone(),
@@ -1322,6 +1368,7 @@ fn lower_function(
         original_view_iterations: Vec::new(),
         breakpoint_regions: Vec::new(),
         call_owner_generations: Vec::new(),
+        resource_lowering: None,
     };
     lowered.breakpoint_regions =
         breakpoint_capture
@@ -1333,6 +1380,13 @@ fn lower_function(
     lowered.call_owner_generations =
         generation_capture
             .seal(&lowered)
+            .map_err(|message| LowerError {
+                span: function.span,
+                message,
+            })?;
+    lowered.resource_lowering =
+        resource_capture
+            .finish(&lowered)
             .map_err(|message| LowerError {
                 span: function.span,
                 message,
@@ -1355,6 +1409,7 @@ struct Builder<'a> {
     view_params: Vec<LocalId>,
     breakpoint_capture: breakpoint_regions::Capture,
     generation_capture: call_owner_generations::Capture,
+    resource_capture: resource_ownership::Capture,
 }
 
 impl<'a> Builder<'a> {
@@ -1383,6 +1438,7 @@ impl<'a> Builder<'a> {
             resource_error: None,
             breakpoint_capture: breakpoint_regions::Capture::default(),
             generation_capture: call_owner_generations::Capture::default(),
+            resource_capture: resource_ownership::Capture::default(),
         }
     }
 
@@ -1398,6 +1454,7 @@ impl<'a> Builder<'a> {
         });
         self.breakpoint_capture.block(id);
         self.generation_capture.block(id);
+        self.resource_capture.block(id, span);
         id
     }
 
@@ -1412,6 +1469,7 @@ impl<'a> Builder<'a> {
         let value = Terminator { kind, span };
         self.breakpoint_capture.terminator(self.current, &value);
         self.generation_capture.terminator(self.current, &value);
+        self.resource_capture.terminator(self.current, &value);
         self.blocks[self.current.index() as usize].terminator = value;
     }
 
@@ -1422,6 +1480,7 @@ impl<'a> Builder<'a> {
             .statement(self.current, index, &value);
         self.generation_capture
             .statement(self.current, index, &value);
+        self.resource_capture.statement(self.current, index, &value);
         self.blocks[self.current.index() as usize]
             .statements
             .push(value);

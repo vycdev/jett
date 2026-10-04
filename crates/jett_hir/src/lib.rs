@@ -27,9 +27,11 @@ use jett_types::{
 
 mod call_ownership;
 mod resource_manifest;
+mod resource_source;
 pub use resource_manifest::{
     ResourceHookRef, ResourceKind, ResourceKindId, ResourceKindRef, ResourceManifest,
 };
+pub use resource_source::ResourceSourceArchive;
 mod iteration_bindings;
 pub use iteration_bindings::{IterationPart, ViewIterationBinding, checked_view_iteration_binding};
 #[cfg(test)]
@@ -181,6 +183,7 @@ pub struct ScopedTypeBinding {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub resource_manifest: ResourceManifest,
+    pub resource_source: ResourceSourceArchive,
     pub functions: Vec<Function>,
     pub equality_methods: HashMap<TypeId, FunctionId>,
 }
@@ -1264,7 +1267,10 @@ fn lower_resource_program(
         tests,
     );
     lowerer.resource_manifest = manifest;
-    lowerer.lower()
+    let mut program = lowerer.lower()?;
+    program.resource_source =
+        ResourceSourceArchive::checked(&program, &original.checked().interner);
+    Ok(program)
 }
 
 struct FunctionSource<'a> {
@@ -1472,6 +1478,7 @@ impl<'a> Lowerer<'a> {
                 .collect::<Result<HashMap<_, _>, _>>()?;
             let mut program = Program {
                 resource_manifest: self.resource_manifest.clone(),
+                resource_source: ResourceSourceArchive::empty(),
                 functions,
                 equality_methods,
             };

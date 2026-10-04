@@ -2274,9 +2274,14 @@ Checked Resource lowering now preserves the original immutable program's
 manifest, nominal kinds and exact hook signatures through HIR and MIR. Typed
 descriptor and invocation nodes retain original caller facts and lexical actual
 order. Raw lowering cannot create those identities, and all manifest entries,
-including unused hooks, are validated. These nodes carry metadata only; ordinary
-copy, move, borrow, drop and native emission still require a dedicated Resource
-ownership plan and ABI.
+including unused hooks, are validated. A separate Source-authenticated ownership analysis now records scope, operation
+and provisional-return frames, exact owner slots, loans, transfers, occupied sum
+arms and cleanup obligations. It retains the original checked HIR and complete
+original type meanings; edited public HIR cannot recreate that authority. An
+original bare owned Resource actual passed to a view formal belongs to an owning
+argument holder and a bounded loan, rather than an ordinary acquisition record.
+This analysis is compiler metadata. Native execution still requires the emitted
+layout, connected custody ABI and cleanup on every control-flow edge.
 
 The private native runtime custody core separately tracks non-cloneable owned
 and borrowed tokens, checked frame destinations and reverse acquisition

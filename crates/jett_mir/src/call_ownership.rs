@@ -601,6 +601,17 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
             false,
         )?;
         hir::validate_invocation_target(self.signatures, expression, self.types, context)?;
+        let resource_original = crate::resource_ownership::original_call_at(
+            self.function,
+            self.manifest,
+            self.types,
+            expression,
+            site.block,
+            site.statement,
+        )?;
+        if resource_original {
+            self.acquisitions.resource_pending = true;
+        }
         match ownership {
             hir::CallOwnership::Source(source) => {
                 let mut original = Vec::new();
@@ -609,7 +620,14 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                     let acquisition = self.source_acquisition(argument, value.ty);
                     match argument.staging {
                         hir::ArgumentStaging::Original => {
-                            if argument.effect == CheckedCallerEffect::RelinquishOwned
+                            let resource_actual = resource_original
+                                && crate::resource_ownership::original_resource_actual(
+                                    self.manifest,
+                                    self.types,
+                                    argument.actual_type,
+                                );
+                            if (argument.effect == CheckedCallerEffect::RelinquishOwned
+                                && !resource_actual)
                                 || (argument.effect == CheckedCallerEffect::ObserveData
                                     && argument.physical_access
                                         == jett_typecheck::CheckedCalleeAccess::Owned)
@@ -617,7 +635,7 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                                 return Err("call ownership requires explicit owning staging at this physical boundary".into());
                             }
                             self.original(value, argument, &source.bridge, site)?;
-                            if consumes(argument.effect) {
+                            if consumes(argument.effect) && !resource_actual {
                                 if let Some(binding) = acquisition.binding {
                                     self.acquisitions.operands.push((value, binding));
                                 }

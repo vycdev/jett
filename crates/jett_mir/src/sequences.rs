@@ -71,7 +71,8 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
         return;
     }
     for function in &mut program.functions {
-        let before_pass = (!function.breakpoint_regions.is_empty()
+        let before_pass = (crate::resource_ownership::has_records(function)
+            || !function.breakpoint_regions.is_empty()
             || crate::call_owner_generations::has_records(function))
         .then(|| function.clone());
         let mut valid_regions = true;
@@ -440,7 +441,10 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                 );
             }
         }
-        if !valid_regions || (removed_uninhabited_body && !prune::unreachable(function)) {
+        if !valid_regions
+            || crate::resource_ownership::validate_current(function).is_err()
+            || (removed_uninhabited_body && !prune::unreachable(function))
+        {
             if let Some(before_pass) = before_pass {
                 *function = before_pass;
             }

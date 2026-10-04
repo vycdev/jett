@@ -2023,3 +2023,41 @@ without the dedicated ownership/drop plan. They do not enlarge the separate
 480-case native caller acceptance, fixed 207/182 inventory or approximate 85%
 estimate. Matching native Resource linked execution in both profiles, then full
 providers, aggregates and concurrency breadth, remain required.
+
+## Source-authenticated ownership handoff
+
+The original checked HIR/type archive and constructor-emitted MIR witness now
+support a separate `ResourceOwnershipPlan`. It records exact scopes, operation
+and provisional-return frames, owner holders, incoming views, bounded loans,
+transfers, occupied sum extraction and cleanup obligations. Original/current
+Source call associations preserve bare owned Resource-to-view custody without
+creating ordinary owning operand claims. Copied queries, changed call sites,
+operands, Source certificates, evaluation order and nominal type meanings are
+refused. Unnamed Resource-bearing intermediate expressions retain their witness.
+Canonical block/local compaction retains exact current associations.
+
+All **12 focused ownership groups** pass (`155203`,
+`target/native-resource-ownership-associated-focused.log`). The Source-derived
+missing nominal-table regression passes (`fe7b0a`), returning the precise error
+without a panic. The original nominal fixture retains both field-corruption
+oracles after copying the complete original nominal tables and selecting its
+actual Source Holder type. The malformed-type phase controls exposed a validation
+ordering bug; valid type/invocation metadata is now required before custody
+queries, preserving the exact manifest diagnostic and independent scalar refusals.
+
+The complete formatted affected gate passes **535/535** (192 HIR, 210 MIR,
+70 codegen, 63 object-emission), plus 32 type-library tests and one MIR doctest
+(`3c6a8a`, `target/native-resource-ownership-valid-metadata-phase.log`). Earlier
+failed runs remain diagnostic evidence. This is initial compiler ownership
+analysis: connected native frames, provider/ABI operations, operational cleanup,
+handled actual normalization, complete aggregates/reflection and linked binaries
+executed after source deletion remain required. The separate 480-case caller
+receipt, fixed 207/182 inventory and approximate 85% estimate are unchanged.
+
+The broader driver/frontend gate also passes **693/693**: 87 driver library,
+8 backend-lowering tests (including all 182 run-pass lowering obligations) and
+598 frontend fixtures (`450ea4`,
+`target/native-resource-ownership-driver-frontend.log`). The previous registration
+commit's Windows CI job failed its CLI native-setup capture test with a main-thread
+stack overflow; that separate platform regression is under investigation and is
+not represented as current ownership or whole-workspace acceptance.

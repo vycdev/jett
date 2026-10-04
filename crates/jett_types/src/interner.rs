@@ -207,6 +207,24 @@ impl TypeInterner {
         (0..self.types.len()).map(|index| TypeId(index as u32))
     }
 
+    /// Whether this nominal header addresses an existing definition and state.
+    /// This is bounds validation only, never Source or ownership authority.
+    pub fn contains_nominal_definition(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Struct(id) => (id.index() as usize) < self.structs.len(),
+            Type::Bitfield(id) => (id.index() as usize) < self.bitfields.len(),
+            Type::Enum(id) => (id.index() as usize) < self.enums.len(),
+            Type::Interface(id) => (id.index() as usize) < self.interfaces.len(),
+            Type::Actor(id) => (id.index() as usize) < self.actors.len(),
+            Type::Machine(id) => (id.index() as usize) < self.machines.len(),
+            Type::MachineState { machine, state } => self
+                .machines
+                .get(machine.index() as usize)
+                .is_some_and(|definition| (state.index() as usize) < definition.states.len()),
+            _ => true,
+        }
+    }
+
     /// Register a new struct definition and return its [`StructId`].
     pub fn add_struct(&mut self, def: StructDef) -> StructId {
         let id = StructId(self.structs.len() as u32);

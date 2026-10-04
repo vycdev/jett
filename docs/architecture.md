@@ -2393,7 +2393,7 @@ instruction site. A separate physical acquisition preflight checks/reserves
 storage before a future provider effect; core and opaque-table preflights remain
 mandatory. All 167 runtime library tests pass, including 13 custody protocol
 controls and ten registration controls. The context adapter, typed provider
-grants, exported ABI, MIR ownership/drop plans and linked Resource execution
+grants, exported ABI, operational MIR cleanup and linked Resource execution
 remain pending; registration itself creates no owner, loan, payload or provider.
 
 Move dataflow transfers one cleanup obligation; views never own cleanup. Scope
@@ -4090,3 +4090,30 @@ The native move planner borrows only explicitly viewed Join operands for that
 copy operation and ends the temporary loan before returning the owning result.
 Ordinary Join operands retain their consumption checks, including view-parameter
 rejection without an explicit `view`.
+
+### Source-authenticated Resource ownership analysis
+
+Successful checked HIR lowering captures an immutable archive of the complete
+original functions, equality map and type meanings, including nominal definitions
+and generic arguments. MIR authenticates it before constructor capture. A private
+per-function witness records the initially emitted graph and exact original/current
+Source call associations. Full Source operands, target, access, lexical context and
+evaluation order remain independently checked. Canonical block/local compaction
+remaps current records; other unsupported rewrites roll back transactionally.
+Nominal bounds are checked before archive getters, and malformed type metadata
+is rejected before dependent custody queries.
+
+`ResourceOwnershipPlan` separately analyzes scope/operation/provisional-return
+frames, exact local/expression/argument holders, incoming views, bounded loans,
+moves, occupied Optional/Result arms and cleanup obligations. A relinquished
+Resource actual has no ordinary caller owning-operand claim. The dynamic runtime
+acquisition log must determine reverse cleanup order; local-number order is not
+cleanup order. The plan's entry block is distinct from the driver-selected program
+entry function. The initial plain/Optional/Result analysis does not yet implement
+the emitted native layout or execution ABI. Handled actual normalization, complete
+aggregate/scoped/reflected custody and concurrency remain required.
+
+The formatted affected gate passes 535 HIR/MIR/codegen/object-emission tests,
+32 type-library tests and the MIR doctest. Twelve focused ownership groups and
+the missing-nominal-table regression pass. These are compiler checks, not linked
+native Resource execution. See the [ownership handoff record](active/native_resource_hook_identity.md#source-authenticated-ownership-handoff).

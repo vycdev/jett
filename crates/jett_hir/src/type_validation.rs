@@ -1041,6 +1041,7 @@ mod tests {
         let span = test_span();
         Program {
             resource_manifest: crate::ResourceManifest::empty(),
+            resource_source: crate::ResourceSourceArchive::empty(),
             equality_methods: Default::default(),
             functions: vec![Function {
                 id: FunctionId(0),

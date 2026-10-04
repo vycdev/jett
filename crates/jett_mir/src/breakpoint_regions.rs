@@ -1024,6 +1024,20 @@ pub(super) fn blocks_equal(left: &[BasicBlock], right: &[BasicBlock]) -> bool {
             .zip(right)
             .all(|(left, right)| block_equal(left, right))
 }
+pub(super) fn expressions_equal(left: &Expression, right: &Expression) -> bool {
+    let (mut left, mut right) = (left.clone(), right.clone());
+    let (mut left_bits, mut right_bits) = (Vec::new(), Vec::new());
+    float_expression(&mut left, &mut left_bits);
+    float_expression(&mut right, &mut right_bits);
+    left == right && left_bits == right_bits
+}
+pub(super) fn hir_blocks_equal(left: &hir::Block, right: &hir::Block) -> bool {
+    let (mut left, mut right) = (left.clone(), right.clone());
+    let (mut left_bits, mut right_bits) = (Vec::new(), Vec::new());
+    float_hir_block(&mut left, &mut left_bits);
+    float_hir_block(&mut right, &mut right_bits);
+    left == right && left_bits == right_bits
+}
 fn block_equal(left: &BasicBlock, right: &BasicBlock) -> bool {
     let (mut left, mut right) = (left.clone(), right.clone());
     let (mut left_bits, mut right_bits) = (Vec::new(), Vec::new());

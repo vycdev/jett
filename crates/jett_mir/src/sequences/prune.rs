@@ -5,7 +5,8 @@ use super::*;
 
 pub(crate) fn unreachable(function: &mut Function) -> bool {
     let before = (!function.breakpoint_regions.is_empty()
-        || crate::call_owner_generations::has_records(function))
+        || crate::call_owner_generations::has_records(function)
+        || crate::resource_ownership::has_records(function))
     .then(|| function.clone());
     let Ok(cfg) = ControlFlowGraph::analyze(function) else {
         return false;
@@ -50,6 +51,7 @@ pub(crate) fn unreachable(function: &mut Function) -> bool {
 
     if before.as_ref().is_some_and(|before| {
         crate::call_owner_generations::remap_blocks(function, before, &blocks).is_err()
+            || crate::resource_ownership::remap_blocks(function, before, &blocks).is_err()
     }) || crate::breakpoint_regions::remap_blocks(function, &blocks).is_err()
         || !unused_locals(function)
     {
@@ -65,7 +67,8 @@ pub(crate) fn unreachable(function: &mut Function) -> bool {
 /// Every parameter, binding, read, capture and debug or loan reference survives.
 pub(crate) fn unused_locals(function: &mut Function) -> bool {
     let before = (!function.breakpoint_regions.is_empty()
-        || crate::call_owner_generations::has_records(function))
+        || crate::call_owner_generations::has_records(function)
+        || crate::resource_ownership::has_records(function))
     .then(|| function.clone());
     let mut used = vec![false; function.locals.len()];
     for parameter in &function.params {
@@ -137,7 +140,9 @@ pub(crate) fn unused_locals(function: &mut Function) -> bool {
     function
         .original_view_iterations
         .retain_mut(|record| record.remap_locals(&locals));
-    if crate::call_owner_generations::remap_locals(function, &locals).is_err()
+    if before.as_ref().is_some_and(|before| {
+        crate::resource_ownership::remap_locals(function, before, &locals).is_err()
+    }) || crate::call_owner_generations::remap_locals(function, &locals).is_err()
         || crate::breakpoint_regions::remap_locals(function, &locals).is_err()
     {
         if let Some(before) = before {
