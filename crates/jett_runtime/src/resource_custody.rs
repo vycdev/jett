@@ -1,5 +1,5 @@
 //! Registry-backed ownership protocol, independent of compiler/interpreter data.
-//! Production layout registration and native ABI transport are separate boundaries.
+//! Native ABI transport remains a separate boundary from layout registration.
 
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -13,6 +13,16 @@ use crate::{
 
 static NEXT_CUSTODY: AtomicU64 = AtomicU64::new(1);
 
+#[path = "resource_custody/registration.rs"]
+mod registration;
+pub(crate) use registration::{
+    JettResourceCallResultV1, NativeAccess, NativeFormal, NativeFrame, NativeFrameRole, NativeHook,
+    NativeLayoutInstallation, NativeLoanSource, NativeOperation, NativeOperationRecord,
+    NativeParent, NativePayloadStep, NativePosition, NativeRecipe, NativeShape, NativeSignature,
+    NativeSite, NativeSlot, RESOURCE_DOMAIN_ERROR, RESOURCE_DOMAIN_OK, RegisteredNativeLayout,
+    ResourceLayoutError,
+};
+
 #[derive(Debug)]
 struct ProgramLayout {
     context: u64,
@@ -21,7 +31,8 @@ struct ProgramLayout {
 }
 
 /// Only a constructor-owned registration can create this immutable identity.
-/// The first packet has a test-only issuer; production registration is pending.
+/// The private registration child is the sole production issuer; tests also
+/// have a private issuer. Neither accepts a registry key as an owner.
 #[derive(Debug, Clone)]
 pub(crate) struct RegisteredResourceProgram(Arc<ProgramLayout>);
 

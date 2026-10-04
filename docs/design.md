@@ -2281,8 +2281,10 @@ ownership plan and ABI.
 The private native runtime custody core separately tracks non-cloneable owned
 and borrowed tokens, checked frame destinations and reverse acquisition
 cleanup. Its protocol tests cover generation/provenance refusal and
-cleanup after failure or panic. Production registration, compiler transfer
-and drop proofs, linked source execution and real providers remain required;
+cleanup after failure or panic. A private bounded registration path validates
+all layout rows before issuing context-bound nominal kinds and slot metadata.
+It installs no payload, provider, grant or owning token. Compiler transfer/drop
+proofs, native ABI, linked source execution and real providers remain required;
 these runtime tests do not enable native Resource operations.
 
 Moving a resource transfers its single cleanup obligation. A `view` borrows it

@@ -313,9 +313,10 @@ Root's actual focused receipt `7b0e8f` passes **13/13** protocol tests in
 `target/native-resource-runtime-custody-core-first-focused.log`. After runtime
 formatting, `9e9957` passes **157/157** complete runtime library tests in
 `target/native-resource-runtime-custody-core-formatted-library.log`.
-Registration is still test-only. Production layout issuance, native ABI,
-Resource CFG ownership/drop plans, linked source-deleted lifecycle execution
-and real providers remain required. This protocol core adds no native inventory
+At the92421063 checkpoint, registration was test-only. Its later private
+metadata implementation is recorded below. Native ABI, Resource CFG ownership/
+drop plans, linked source-deleted lifecycle execution and real providers
+remain required. This protocol core adds no native inventory
 case; the broad feature estimate remains **85%** and the whole-language objective
 remains 100%.
 
@@ -380,3 +381,37 @@ corruption inputs and expected values are unchanged.
 Resource CFG ownership/drop plans, native registration/ABI, real providers and
 linked source-deleted Resource execution remain required. These checks add no
 native execution case and do not increase the approximate 85% coverage estimate.
+
+## Bounded native registration and nominal issuance
+
+The private runtime registration path now owns and validates the complete
+`JTRSC001` layout blob. A 56-byte header, explicit little-endian tags, bounded
+section sizes and dense ordinals reject malformed/truncated/trailing data.
+Every unused hook, canonical signature/shape, occupied path, frame and operation
+reference is checked before the sole production-capable issuer creates fresh
+nonzero nominal kinds and the complete slot-kind projection. One context-bound
+installation holder rejects repeated installation, foreign context, shutdown
+and nonempty registry state. Metadata agreement cannot create Source authority,
+a provider grant, a resident loan or ownership from carrier bits.
+
+Scope, Operation and Return signatures all describe the containing Source
+function. Signature agreement is checked across that function's frames even at
+different instruction sites; hook and callee signatures remain separate. The
+new refusal control also corrupts an unused Return frame. Physical acquisition
+preflight checks slot bounds, generation/creation exhaustion and storage
+capacity before a later provider runs. The core preparation and future opaque
+token-table preflights remain separate mandatory checks.
+
+The exact six-file/eight-hunk packet and eleven inputs passed Root guarded
+application (`58a435`) after independent byte/API review. The initial nine
+registration groups pass (`f753aa`). After the selected frame-signature
+strengthening and formatting, the complete runtime passes **167/167**
+(`56e7ac`, `target/native-resource-registration-formatted-library.log`), including
+ten registration and the existing thirteen custody protocol controls.
+
+The context/ABI adapter, typed grants, provider installation, compiler ownership
+and cleanup CFG, occupied sums and linked source-deleted execution are still
+required. These are runtime metadata/protocol tests; they add no native Source
+execution case and keep the approximate coverage estimate at 85%. Full aggregate,
+capture/reflection/refinement, real-provider and async/actor/cancellation breadth
+remain part of the 100% objective.

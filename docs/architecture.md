@@ -2383,9 +2383,18 @@ owner-slot identity, non-cloneable owner and loan tokens, and scope/operation/
 return frames. Moves advance holder generations; copied physical carriers
 cannot adopt an owner. Protected reverse cleanup continues after a finalizer
 panic and records Resource cleanup failures separately from ordinary native
-first-error state. Its 13 protocol tests and all 157 runtime library tests
-pass. Registration is test-only: production layout issuance, native ABI,
-MIR Resource ownership/drop plans and linked source execution remain pending.
+first-error state. A private native registration module now decodes bounded
+owned little-endian layout tables and validates every row, including unused
+hooks, complete signatures, occupied paths and operation references, before
+issuing fresh nominal kinds. Its single installation holder binds the registry
+context and rejects second installation, shutdown and live registry entries.
+Frame signature consistency follows the containing function independently of
+instruction site. A separate physical acquisition preflight checks/reserves
+storage before a future provider effect; core and opaque-table preflights remain
+mandatory. All 167 runtime library tests pass, including 13 custody protocol
+controls and ten registration controls. The context adapter, typed provider
+grants, exported ABI, MIR ownership/drop plans and linked Resource execution
+remain pending; registration itself creates no owner, loan, payload or provider.
 
 Move dataflow transfers one cleanup obligation; views never own cleanup. Scope
 exit, return, handled failure, cancellation, dropped actor messages, and runtime

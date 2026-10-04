@@ -2005,3 +2005,21 @@ ownership/drop CFG, registration/ABI and linked Source execution remain pending.
 These phase receipts do not extend the separate 480-case native caller receipt
 or foundation-only platform acceptance. The fixed 207/182 inventory, approximate
 85% feature estimate and whole-language 100% objective remain unchanged.
+
+## Native Resource registration protocol
+
+The bounded private runtime metadata issuer now validates every layout row and
+issues context-bound nominal kind/slot metadata without creating a provider,
+payload, grant, owner or loan. Exact guarded application and independent
+byte/API review precede the initial **9/9** registration replay (`f753aa`). A
+separate containing-function signature consistency correction adds an unused
+Return-frame refusal control. The formatted full runtime passes **167/167**,
+including ten registration and thirteen core custody controls (`56e7ac`,
+`target/native-resource-registration-formatted-library.log`).
+
+These are runtime Rust protocol tests. The new metadata issuer has no connected
+native Source ABI or provider, and the compiler still refuses Resource execution
+without the dedicated ownership/drop plan. They do not enlarge the separate
+480-case native caller acceptance, fixed 207/182 inventory or approximate 85%
+estimate. Matching native Resource linked execution in both profiles, then full
+providers, aggregates and concurrency breadth, remain required.
