@@ -122,7 +122,7 @@ fn live_captured_callback_discards_parent_never_slots_without_changing_capture_a
         .filter(|function| function.debug_kind != hir::FunctionDebugKind::Inline)
         .cloned()
         .collect::<Vec<_>>();
-    prepare_native_generated_functions(&mut program);
+    prepare_native_generated_functions(&mut program, &types);
     validate(&program).unwrap();
     let function = &program.functions[original.id.index() as usize];
     assert_dense_reachable(function);
@@ -173,7 +173,7 @@ fn live_captured_callback_discards_parent_never_slots_without_changing_capture_a
     move_values::MoveValuePlan::analyze(&program, function, &types)
         .expect("captured parameter and body references remain valid");
     let prepared = program.clone();
-    prepare_native_generated_functions(&mut program);
+    prepare_native_generated_functions(&mut program, &types);
     assert_eq!(program, prepared);
 }
 
@@ -199,7 +199,7 @@ function main() returns int64:
             .count(),
         2
     );
-    prepare_native_generated_functions(&mut program);
+    prepare_native_generated_functions(&mut program, &types);
     validate(&program).unwrap();
     assert_eq!(program.functions.len(), original.functions.len());
     for (function, previous) in program.functions.iter().zip(&original.functions) {
@@ -260,7 +260,7 @@ function main() returns int64:
         .unwrap()
         .clone();
     assert_eq!(original.params[0].ty, TypeInterner::NEVER);
-    prepare_native_generated_functions(&mut program);
+    prepare_native_generated_functions(&mut program, &types);
     validate(&program).unwrap();
     let function = &program.functions[original.id.index() as usize];
     assert_dense_reachable(function);
@@ -277,7 +277,7 @@ function main() returns int64:
 
 #[test]
 fn generated_metadata_selection_preserves_named_functions_even_with_inline_like_names() {
-    let (mut program, _) = lower_source(AFTER_LOOP);
+    let (mut program, types) = lower_source(AFTER_LOOP);
     let function = program
         .functions
         .iter_mut()
@@ -287,7 +287,7 @@ fn generated_metadata_selection_preserves_named_functions_even_with_inline_like_
     function.debug_kind = hir::FunctionDebugKind::Named("app.source_visible_name".into());
     validate(&program).unwrap();
     let original = program.clone();
-    prepare_native_generated_functions(&mut program);
+    prepare_native_generated_functions(&mut program, &types);
     validate(&program).unwrap();
     for (function, previous) in program.functions.iter().zip(&original.functions) {
         assert_named_control_flow_and_abi_preserved(function, previous);
@@ -297,7 +297,7 @@ fn generated_metadata_selection_preserves_named_functions_even_with_inline_like_
 #[test]
 fn generated_compaction_does_not_hide_invalid_unreachable_or_parameter_ids() {
     for corruption in 0..3 {
-        let (mut program, _) = lower_source(AFTER_LOOP);
+        let (mut program, types) = lower_source(AFTER_LOOP);
         let function = program
             .functions
             .iter_mut()
@@ -320,7 +320,7 @@ fn generated_compaction_does_not_hide_invalid_unreachable_or_parameter_ids() {
         }
         assert!(validate(&program).is_err());
         let original = program.clone();
-        prepare_native_generated_functions(&mut program);
+        prepare_native_generated_functions(&mut program, &types);
         assert_eq!(program, original);
         assert!(validate(&program).is_err());
     }
@@ -362,7 +362,7 @@ function root() returns int64:
     assert_eq!(descriptor.params[1].mode, ParamMode::Owned);
 
     let mut compacted = original.clone();
-    prepare_native_generated_functions(&mut compacted);
+    prepare_native_generated_functions(&mut compacted, &types);
     validate(&compacted).unwrap();
     let compacted_factory = &compacted.functions[factory_id.index() as usize];
     assert_named_control_flow_and_abi_preserved(compacted_factory, factory);
@@ -420,7 +420,7 @@ function root() returns int64:
     });
     validate(&with_dependency).unwrap();
     let before = with_dependency.functions[factory_id.index() as usize].clone();
-    prepare_native_generated_functions(&mut with_dependency);
+    prepare_native_generated_functions(&mut with_dependency, &types);
     validate(&with_dependency).unwrap();
     let factory = &with_dependency.functions[factory_id.index() as usize];
     assert_named_control_flow_and_abi_preserved(factory, &before);

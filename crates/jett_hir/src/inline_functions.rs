@@ -14,6 +14,7 @@ pub(super) fn extract_inline_functions(functions: &mut Vec<Function>, types: &Ty
         next_id: functions.len() as u32,
         pending: Vec::new(),
         detached_aliases: HashSet::new(),
+        generated_shape_rewrites: Vec::new(),
     };
     let mut index = 0;
     while index < functions.len() {
@@ -23,6 +24,7 @@ pub(super) fn extract_inline_functions(functions: &mut Vec<Function>, types: &Ty
             locals: &function.locals,
         };
         extractor.detached_aliases.clear();
+        extractor.generated_shape_rewrites.clear();
         extractor.block(&mut function.body, &parent);
         // Only bodies actually transferred into extracted functions can leave
         // stale origins here. Arbitrary orphan metadata must remain an error.
@@ -46,6 +48,7 @@ struct Extractor<'a> {
     next_id: u32,
     pending: Vec<Function>,
     detached_aliases: HashSet<LocalId>,
+    generated_shape_rewrites: Vec<crate::call_ownership::GeneratedInlineExtraction>,
 }
 
 impl Extractor<'_> {
@@ -182,6 +185,7 @@ impl Extractor<'_> {
             let Some(mut capture_parameters) = capture_parameters else {
                 return;
             };
+            let original_shape = expression.clone();
             let capture_count = capture_parameters.len();
             capture_parameters.extend(parameters);
             let id = FunctionId(self.next_id);
@@ -247,6 +251,11 @@ impl Extractor<'_> {
                     captures,
                 }
             };
+            if let Some(record) =
+                crate::call_ownership::generated_inline_extraction(&original_shape, expression)
+            {
+                self.generated_shape_rewrites.push(record);
+            }
             return;
         }
         match &mut expression.kind {
@@ -275,18 +284,33 @@ impl Extractor<'_> {
             | ExpressionKind::Field { base: value, .. }
             | ExpressionKind::View(value)
             | ExpressionKind::Clone(value) => self.expression(value, parent),
-            ExpressionKind::Call { args, .. }
-            | ExpressionKind::Intrinsic { args, .. }
-            | ExpressionKind::ActorSpawn { args, .. } => {
+            ExpressionKind::Call {
+                args, ownership, ..
+            }
+            | ExpressionKind::Intrinsic {
+                args, ownership, ..
+            } => {
+                for argument in args {
+                    self.expression(argument, parent);
+                }
+                ownership.apply_generated_inline_extractions(&self.generated_shape_rewrites);
+            }
+            ExpressionKind::ActorSpawn { args, .. } => {
                 for argument in args {
                     self.expression(argument, parent);
                 }
             }
-            ExpressionKind::IndirectCall { callee, args, .. } => {
+            ExpressionKind::IndirectCall {
+                callee,
+                args,
+                ownership,
+                ..
+            } => {
                 self.expression(callee, parent);
                 for argument in args {
                     self.expression(argument, parent);
                 }
+                ownership.apply_generated_inline_extractions(&self.generated_shape_rewrites);
             }
             ExpressionKind::StructConstruct { fields, .. }
             | ExpressionKind::BitfieldConstruct { fields, .. } => {
@@ -353,6 +377,10 @@ impl Extractor<'_> {
             | ExpressionKind::InlineFunction { .. } => {}
         }
     }
+}
+
+pub(crate) fn body_uses_local(block: &Block, target: LocalId) -> bool {
+    block_uses_local(block, target.index())
 }
 
 fn block_uses_local(block: &Block, target: u32) -> bool {
@@ -435,6 +463,18 @@ fn block_mentions_local(block: &Block, target: u32, include_bindings: bool) -> b
 }
 
 fn expression_mentions_local(expression: &Expression, target: u32, include_bindings: bool) -> bool {
+    if include_bindings {
+        if let ExpressionKind::Call { ownership, .. }
+        | ExpressionKind::IndirectCall { ownership, .. }
+        | ExpressionKind::Intrinsic { ownership, .. } = &expression.kind
+        {
+            let mut mentioned = false;
+            ownership.metadata_local_ids(|local| mentioned |= local.index() == target);
+            if mentioned {
+                return true;
+            }
+        }
+    }
     match &expression.kind {
         ExpressionKind::Local(local) => local.index() == target,
         ExpressionKind::Binary { left, right, .. } => {

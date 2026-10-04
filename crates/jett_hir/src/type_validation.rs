@@ -23,12 +23,16 @@ pub fn validate_backend_types(
 ) -> Result<(), Vec<ValidationError>> {
     let mut validator = BackendTypeValidator {
         interner,
+        functions: &program.functions,
+        ownership_locals: Vec::new(),
+        ownership_context: jett_typecheck::CheckedOwnershipContext::Ordinary,
         visited_types: HashSet::new(),
         visited_definitions: HashSet::new(),
         local_views: Vec::new(),
         local_types: Vec::new(),
         local_view_initializers: HashSet::new(),
         borrowed_parameters: HashSet::new(),
+        iteration_binders: HashSet::new(),
         errors: Vec::new(),
     };
     for function in &program.functions {
@@ -83,12 +87,16 @@ enum DefinitionKey {
 
 struct BackendTypeValidator<'a> {
     interner: &'a TypeInterner,
+    functions: &'a [Function],
+    ownership_locals: Vec<crate::OwnershipLocalInfo>,
+    ownership_context: jett_typecheck::CheckedOwnershipContext,
     visited_types: HashSet<TypeId>,
     visited_definitions: HashSet<DefinitionKey>,
     local_views: Vec<Option<crate::LocalId>>,
     local_types: Vec<TypeId>,
     local_view_initializers: HashSet<crate::LocalId>,
     borrowed_parameters: HashSet<crate::LocalId>,
+    iteration_binders: HashSet<crate::LocalId>,
     errors: Vec<ValidationError>,
 }
 
@@ -101,6 +109,33 @@ impl BackendTypeValidator<'_> {
     }
 
     fn function(&mut self, function: &Function) {
+        self.iteration_binders.clear();
+        self.ownership_locals = function
+            .locals
+            .iter()
+            .map(|local| crate::OwnershipLocalInfo {
+                ty: local.ty,
+                mutable: local.mutable,
+                span: local.span,
+                view_source: local.view_source,
+                is_view_parameter: function
+                    .params
+                    .iter()
+                    .any(|param| param.local == local.id && param.mode == crate::ParamMode::View),
+                view_iteration: None,
+            })
+            .collect();
+        self.ownership_context = if function.debug_kind == crate::FunctionDebugKind::Inline {
+            jett_typecheck::CheckedOwnershipContext::Ordinary
+        } else {
+            match function.identity.declaration.kind {
+                crate::DeclarationKind::Verify => jett_typecheck::CheckedOwnershipContext::Verify,
+                crate::DeclarationKind::Property => {
+                    jett_typecheck::CheckedOwnershipContext::Property
+                }
+                _ => jett_typecheck::CheckedOwnershipContext::Ordinary,
+            }
+        };
         self.local_views = function
             .locals
             .iter()
@@ -218,9 +253,59 @@ impl BackendTypeValidator<'_> {
                 self.expression(condition, function_name);
                 self.block(body, function_name);
             }
-            StatementKind::For { iterable, body, .. } => {
+            StatementKind::For {
+                key,
+                value,
+                by_view,
+                iterable,
+                body,
+            } => {
                 self.expression(iterable, function_name);
+                let saved_locals = self.ownership_locals.clone();
+                for id in [*key].into_iter().chain(*value) {
+                    if !self.iteration_binders.insert(id) {
+                        self.error(
+                            statement.span,
+                            "iteration binding is declared more than once in its exact function",
+                        );
+                    }
+                }
+                if *by_view {
+                    let part = if (iterable.ty.index() as usize) < self.interner.len()
+                        && matches!(self.interner.resolve(iterable.ty), Type::Map(..))
+                    {
+                        crate::IterationPart::Key
+                    } else {
+                        crate::IterationPart::Element
+                    };
+                    let bindings = [(*key, part)]
+                        .into_iter()
+                        .chain(value.map(|value| (value, crate::IterationPart::Value)));
+                    for (id, part) in bindings {
+                        let result = self.ownership_locals.get(id.index() as usize).copied().ok_or_else(|| "viewed iteration binder is outside its function".to_string()).and_then(|local| {
+                            if local.mutable || local.view_source.is_some() || local.is_view_parameter || local.view_iteration.is_some()
+                                || local.span.file != statement.span.file || local.span.start < statement.span.start || local.span.end > statement.span.end {
+                                return Err("viewed iteration binder is not a fresh immutable local in its exact For".into());
+                            }
+                            crate::checked_view_iteration_binding(self.interner, statement.span, iterable.ty, local.ty, part)
+                        });
+                        match result {
+                            Ok(proof)
+                                if !jett_typecheck::ownership::is_implicitly_copyable(
+                                    self.interner,
+                                    proof.binder_type(),
+                                ) =>
+                            {
+                                self.ownership_locals[id.index() as usize].view_iteration =
+                                    Some(proof)
+                            }
+                            Ok(_) => {}
+                            Err(message) => self.error(statement.span, message),
+                        }
+                    }
+                }
                 self.block(body, function_name);
+                self.ownership_locals = saved_locals;
             }
             StatementKind::Match { scrutinee, arms } => {
                 self.expression(scrutinee, function_name);
@@ -235,9 +320,14 @@ impl BackendTypeValidator<'_> {
                 }
             }
             StatementKind::Breakpoint { condition, .. } => {
+                let context = std::mem::replace(
+                    &mut self.ownership_context,
+                    jett_typecheck::CheckedOwnershipContext::BreakpointExpression,
+                );
                 if let Some(condition) = condition {
                     self.expression(condition, function_name);
                 }
+                self.ownership_context = context;
             }
             StatementKind::Scope(block) => self.block(block, function_name),
             StatementKind::ReflectedTypeDispatch { type_info, arms } => {
@@ -259,6 +349,26 @@ impl BackendTypeValidator<'_> {
     }
 
     fn expression(&mut self, expression: &Expression, function_name: &str) {
+        if let ExpressionKind::Call { ownership, .. }
+        | ExpressionKind::IndirectCall { ownership, .. }
+        | ExpressionKind::Intrinsic { ownership, .. } = &expression.kind
+        {
+            let mut metadata_types = Vec::new();
+            ownership.metadata_types(|ty| metadata_types.push(ty));
+            for ty in metadata_types {
+                self.type_id(ty, expression.span, "call ownership metadata type".into());
+            }
+            // Source and generated authority is checked before dead bodies/locals can be pruned.
+            if let Err(message) = crate::call_ownership::validate_hir_invocation(
+                self.functions,
+                &self.ownership_locals,
+                expression,
+                self.interner,
+                self.ownership_context,
+            ) {
+                self.error(expression.span, message);
+            }
+        }
         self.type_id(
             expression.ty,
             expression.span,
@@ -515,6 +625,8 @@ impl BackendTypeValidator<'_> {
             ExpressionKind::StateIs { value, .. } => self.expression(value, function_name),
             ExpressionKind::InlineFunction {
                 scoped_type_bindings,
+                params,
+                view_params,
                 body,
                 ..
             } => {
@@ -528,7 +640,25 @@ impl BackendTypeValidator<'_> {
                         ),
                     );
                 }
+                let saved_locals = self.ownership_locals.clone();
+                for local in &mut self.ownership_locals {
+                    local.view_iteration = None;
+                    local.is_view_parameter = false;
+                }
+                for parameter in params {
+                    if let Some(local) = self.ownership_locals.get_mut(parameter.index() as usize) {
+                        local.is_view_parameter = view_params.contains(parameter);
+                    }
+                }
+                let context = std::mem::replace(
+                    &mut self.ownership_context,
+                    jett_typecheck::CheckedOwnershipContext::Ordinary,
+                );
+                let enclosing_iteration_binders = std::mem::take(&mut self.iteration_binders);
                 self.block(body, function_name);
+                self.iteration_binders = enclosing_iteration_binders;
+                self.ownership_context = context;
+                self.ownership_locals = saved_locals;
             }
             ExpressionKind::ActorSpawn { args, .. } => {
                 for argument in args {
@@ -554,9 +684,13 @@ impl BackendTypeValidator<'_> {
             ExpressionKind::ClosureRef { captures, .. } => {
                 if captures.iter().any(|id| {
                     (self
-                        .local_views
+                        .ownership_locals
                         .get(id.index() as usize)
-                        .is_some_and(Option::is_some)
+                        .is_some_and(|local| local.view_iteration.is_some())
+                        || self
+                            .local_views
+                            .get(id.index() as usize)
+                            .is_some_and(Option::is_some)
                         || self.borrowed_parameters.contains(id))
                         && self.local_types.get(id.index() as usize).is_some_and(|ty| {
                             (ty.index() as usize) < self.interner.len()
@@ -1193,6 +1327,18 @@ mod tests {
         let statement = Statement {
             kind: StatementKind::Expression(Expression {
                 kind: ExpressionKind::Intrinsic {
+                    ownership: crate::CallOwnership::generated(
+                        crate::GeneratedOperation::ReflectionMetadata {
+                            intrinsic: IntrinsicId::TypeName,
+                        },
+                        &[],
+                        &[],
+                        &[],
+                        TypeInterner::STRING,
+                        &[],
+                        &interner,
+                    )
+                    .unwrap(),
                     intrinsic: IntrinsicId::TypeName,
                     type_arguments: vec![nested_error],
                     reflection_arguments: Vec::new(),

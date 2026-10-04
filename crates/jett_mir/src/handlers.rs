@@ -5,80 +5,106 @@ use jett_types::{Type, TypeInterner};
 
 mod reflected;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LoweringRequirement {
+    #[cfg(test)]
+    Handlers,
+    HandlersAndCallOwnership,
+}
+
+#[cfg(test)]
 fn has_extractable_handle(expression: &Expression) -> bool {
+    expression_needs_lowering(expression, LoweringRequirement::Handlers)
+}
+
+fn needs_eager_lowering(expression: &Expression) -> bool {
+    expression_needs_lowering(expression, LoweringRequirement::HandlersAndCallOwnership)
+}
+
+fn expression_needs_lowering(expression: &Expression, requirement: LoweringRequirement) -> bool {
+    let needs = |value: &Expression| expression_needs_lowering(value, requirement);
+    let includes_call_ownership = requirement == LoweringRequirement::HandlersAndCallOwnership;
     match &expression.kind {
         ExpressionKind::Handle {
             kind: HandleKind::Result | HandleKind::Optional | HandleKind::Refinement { .. },
             ..
         } => true,
-        ExpressionKind::View(value) | ExpressionKind::FunctionAdapter { value, .. } => has_extractable_handle(value),
-        ExpressionKind::Clone(value) => has_extractable_handle(value),
-        ExpressionKind::Run(value) | ExpressionKind::Join(value) => has_extractable_handle(value),
-        ExpressionKind::Coarsen(value) | ExpressionKind::Declassify(value)
+        ExpressionKind::View(value) | ExpressionKind::FunctionAdapter { value, .. } => needs(value),
+        ExpressionKind::Clone(value) => needs(value),
+        ExpressionKind::Run(value) | ExpressionKind::Join(value) => needs(value),
+        ExpressionKind::Coarsen(value)
+        | ExpressionKind::Declassify(value)
         | ExpressionKind::RefinementValidated(value)
         | ExpressionKind::DisplayResult(value)
         | ExpressionKind::EquatableResult(value)
-    | ExpressionKind::RuntimeFailureMessage(value)
-        | ExpressionKind::InterfaceCoerce { value, .. } | ExpressionKind::InterfaceType(value) => {
-            has_extractable_handle(value)
+        | ExpressionKind::RuntimeFailureMessage(value)
+        | ExpressionKind::InterfaceCoerce { value, .. }
+        | ExpressionKind::InterfaceType(value) => needs(value),
+        ExpressionKind::Field { base, .. } => needs(base),
+        ExpressionKind::StateIs { value, .. } => needs(value),
+        ExpressionKind::Unary { value, .. } => needs(value),
+        ExpressionKind::Binary { left, right, .. } => needs(left) || needs(right),
+        ExpressionKind::Call {
+            args, ownership, ..
+        } => {
+            (includes_call_ownership && needs_call_owner_staging(ownership))
+                || args.iter().any(needs)
         }
-        ExpressionKind::Field { base, .. } => has_extractable_handle(base),
-        ExpressionKind::StateIs { value, .. } => has_extractable_handle(value),
-        ExpressionKind::Unary { value, .. } => has_extractable_handle(value),
-        ExpressionKind::Binary { left, right, .. } => {
-            has_extractable_handle(left) || has_extractable_handle(right)
-        }
-        ExpressionKind::Call { args, .. } => args.iter().any(has_extractable_handle),
-        ExpressionKind::ActorSpawn { args, .. } => args.iter().any(has_extractable_handle),
-        ExpressionKind::ActorMessage { actor, args, .. } => {
-            has_extractable_handle(actor) || args.iter().any(has_extractable_handle)
-        }
+        ExpressionKind::ActorSpawn { args, .. } => args.iter().any(needs),
+        ExpressionKind::ActorMessage { actor, args, .. } => needs(actor) || args.iter().any(needs),
         ExpressionKind::Intrinsic {
             args,
             refinement_predicates,
             field_validation,
+            ownership,
             ..
         } => {
-            args.iter().any(has_extractable_handle)
+            (includes_call_ownership && needs_call_owner_staging(ownership))
+                || args.iter().any(needs)
                 || refinement_predicates.iter().any(|chain| !chain.is_empty())
-                || matches!(field_validation, Some(hir::ReflectedFieldValidation::Validate(_)))
+                || matches!(
+                    field_validation,
+                    Some(hir::ReflectedFieldValidation::Validate(_))
+                )
         }
-        ExpressionKind::IndirectCall { callee, args, .. } => {
-            has_extractable_handle(callee) || args.iter().any(has_extractable_handle)
+        ExpressionKind::IndirectCall {
+            callee,
+            args,
+            ownership,
+            ..
+        } => {
+            (includes_call_ownership && needs_call_owner_staging(ownership))
+                || needs(callee)
+                || args.iter().any(needs)
         }
-        ExpressionKind::ListConstruct { elements } => elements.iter().any(has_extractable_handle),
-        ExpressionKind::StringInterpolation(segments) => segments.iter().any(|segment| {
-            matches!(segment, hir::StringSegment::Value(value) if has_extractable_handle(value))
-        }),
-        ExpressionKind::MapConstruct { entries } => entries.iter().any(|entry| {
-            has_extractable_handle(&entry.key) || has_extractable_handle(&entry.value)
-        }),
+        ExpressionKind::ListConstruct { elements } => elements.iter().any(needs),
+        ExpressionKind::StringInterpolation(segments) => segments
+            .iter()
+            .any(|segment| matches!(segment, hir::StringSegment::Value(value) if needs(value))),
+        ExpressionKind::MapConstruct { entries } => entries
+            .iter()
+            .any(|entry| needs(&entry.key) || needs(&entry.value)),
         ExpressionKind::StructConstruct {
             fields,
             refinement_predicates,
             ..
         } => {
-            fields.iter().any(has_extractable_handle)
-                || refinement_predicates.iter().any(|chain| !chain.is_empty())
+            fields.iter().any(needs) || refinement_predicates.iter().any(|chain| !chain.is_empty())
         }
-        ExpressionKind::BitfieldConstruct { fields, .. } => {
-            fields.iter().any(has_extractable_handle)
-        }
+        ExpressionKind::BitfieldConstruct { fields, .. } => fields.iter().any(needs),
         ExpressionKind::EnumConstruct { payloads, .. }
-        | ExpressionKind::MachineConstruct { payloads, .. } => {
-            payloads.iter().any(has_extractable_handle)
-        }
+        | ExpressionKind::MachineConstruct { payloads, .. } => payloads.iter().any(needs),
         ExpressionKind::MachineTransition {
             source, payloads, ..
-        } => has_extractable_handle(source) || payloads.iter().any(has_extractable_handle),
+        } => needs(source) || payloads.iter().any(needs),
         ExpressionKind::ResultOk(value)
         | ExpressionKind::ResultFail(value)
-        | ExpressionKind::OptionalSome(value) => has_extractable_handle(value),
+        | ExpressionKind::OptionalSome(value) => needs(value),
         _ => false,
     }
 }
 
-fn can_snapshot_view(types: &TypeInterner, ty: TypeId) -> bool {
+pub(super) fn can_snapshot_view(types: &TypeInterner, ty: TypeId) -> bool {
     fn supported(
         types: &TypeInterner,
         ty: TypeId,
@@ -229,6 +255,49 @@ fn valid_ordered_borrowed_values(
         })
 }
 
+#[derive(Clone, Copy)]
+enum ObservationSnapshot {
+    Direct,
+    Converted {
+        actual_type: TypeId,
+        source_span: Span,
+    },
+}
+
+fn observation_snapshot(
+    types: &TypeInterner,
+    value: &Expression,
+    ownership: &hir::CallOwnership,
+    index: usize,
+) -> Option<ObservationSnapshot> {
+    let hir::CallOwnership::Source(source) = ownership else {
+        return None;
+    };
+    let argument = source.arguments.get(index)?;
+    argument.observation_proof()?;
+    if can_snapshot_view(types, value.ty) {
+        return Some(ObservationSnapshot::Direct);
+    }
+    let ExpressionKind::InterfaceCoerce { .. } = &value.kind else {
+        return None;
+    };
+    let mut raw = value;
+    while let ExpressionKind::InterfaceCoerce { value, .. } = &raw.kind {
+        raw = value;
+    }
+    if raw.ty != argument.actual_type
+        || raw.span != argument.source_span
+        || !hir::observation_data_type(types, raw.ty)
+        || !can_snapshot_view(types, raw.ty)
+    {
+        return None;
+    }
+    Some(ObservationSnapshot::Converted {
+        actual_type: argument.actual_type,
+        source_span: argument.source_span,
+    })
+}
+
 fn snapshotable_local(types: &TypeInterner, expression: &Expression) -> bool {
     if let ExpressionKind::InterfaceCoerce { value, .. } = &expression.kind {
         return snapshotable_local(types, value);
@@ -291,7 +360,361 @@ fn call_staging_inputs(values: &[Expression], modes: &[ParamMode]) -> Option<Vec
         .collect()
 }
 
+fn needs_call_owner_staging(ownership: &hir::CallOwnership) -> bool {
+    (0..ownership.parameter_count()).any(|index| {
+        ownership.source_parameter_effect(index)
+            == Some(jett_typecheck::CheckedCallerEffect::ObserveData)
+            || (ownership.parameter_physical_access(index)
+                == Some(jett_typecheck::CheckedCalleeAccess::View)
+                && matches!(
+                    ownership.source_parameter_effect(index),
+                    Some(
+                        jett_typecheck::CheckedCallerEffect::RelinquishOwned
+                            | jett_typecheck::CheckedCallerEffect::TransferOwned
+                    )
+                ))
+    })
+}
+
 impl Builder<'_> {
+    /// Stage a checked invocation in lexical source order. Physical borrowing
+    /// never grants retention: a relinquished input first acquires its own slot.
+    fn lower_ordered_call_values(
+        &mut self,
+        values: &[Expression],
+        order: &[usize],
+        ownership: &mut hir::CallOwnership,
+    ) -> Option<Vec<Expression>> {
+        // A staging attempt changes CFG, locals, handlers and active scopes.
+        // Restore all of them if a later operand cannot prove its acquisition.
+        let checkpoint = self.clone();
+        let original_ownership = ownership.clone();
+        let result = self.try_lower_ordered_call_values(values, order, ownership);
+        if result.is_none() {
+            *self = checkpoint;
+            *ownership = original_ownership;
+        }
+        result
+    }
+
+    fn lower_converted_observation_snapshot(
+        &mut self,
+        value: &Expression,
+        actual_type: TypeId,
+        source_span: Span,
+    ) -> Option<Expression> {
+        if let ExpressionKind::InterfaceCoerce {
+            value: raw,
+            adapters,
+        } = &value.kind
+        {
+            return Some(Expression {
+                kind: ExpressionKind::InterfaceCoerce {
+                    value: Box::new(self.lower_converted_observation_snapshot(
+                        raw,
+                        actual_type,
+                        source_span,
+                    )?),
+                    adapters: adapters.clone(),
+                },
+                ty: value.ty,
+                span: value.span,
+            });
+        }
+        if value.ty != actual_type || value.span != source_span {
+            return None;
+        }
+        Some(Expression {
+            kind: ExpressionKind::Clone(Box::new(self.lower_value(value))),
+            ty: value.ty,
+            span: value.span,
+        })
+    }
+
+    fn try_lower_ordered_call_values(
+        &mut self,
+        values: &[Expression],
+        order: &[usize],
+        ownership: &mut hir::CallOwnership,
+    ) -> Option<Vec<Expression>> {
+        if ownership.parameter_count() != values.len() {
+            return None;
+        }
+        let eligible = values.iter().enumerate().map(|(index, _)| {
+            ownership.parameter_physical_access(index)
+                == Some(jett_typecheck::CheckedCalleeAccess::View)
+                && matches!(ownership.source_parameter_effect(index),
+                    Some(jett_typecheck::CheckedCallerEffect::RetainBorrow
+                        | jett_typecheck::CheckedCallerEffect::ObserveData
+                        | jett_typecheck::CheckedCallerEffect::RelinquishOwned
+                        | jett_typecheck::CheckedCallerEffect::TransferOwned))
+                || matches!(ownership, hir::CallOwnership::Generated(generated)
+                    if generated.arguments.get(index).is_some_and(|argument|
+                        argument.callee_access == jett_typecheck::CheckedCalleeAccess::View
+                            && matches!(argument.acquisition, hir::GeneratedAcquisition::Borrow { .. }
+                                | hir::GeneratedAcquisition::Copy)))
+        }).collect::<Vec<_>>();
+        if !valid_ordered_borrowed_values(self.types, &self.locals, values, order, &eligible) {
+            return None;
+        }
+        if let hir::CallOwnership::Source(source) = ownership {
+            if source
+                .arguments
+                .iter()
+                .any(|argument| argument.staging != hir::ArgumentStaging::Original)
+            {
+                return None;
+            }
+        }
+        // Refuse an unsupported snapshot before changing the builder or scopes.
+        if values.iter().enumerate().any(|(index, value)| {
+            ownership.source_parameter_effect(index)
+                == Some(jett_typecheck::CheckedCallerEffect::ObserveData)
+                && ownership.parameter_physical_access(index)
+                    == Some(jett_typecheck::CheckedCalleeAccess::Owned)
+                && observation_snapshot(self.types, value, ownership, index).is_none()
+        }) {
+            return None;
+        }
+        self.call_view_scopes.push(Vec::new());
+        let mut lowered = values.to_vec();
+        for &index in order {
+            if eligible[index] && matches!(ownership, hir::CallOwnership::Generated(_)) {
+                lowered[index] =
+                    self.lower_generated_call_view(index, &values[index], ownership)?;
+                continue;
+            }
+            if ownership.source_parameter_effect(index)
+                == Some(jett_typecheck::CheckedCallerEffect::ObserveData)
+                && ownership.parameter_physical_access(index)
+                    == Some(jett_typecheck::CheckedCalleeAccess::Owned)
+            {
+                let snapshot = observation_snapshot(self.types, &values[index], ownership, index)?;
+                let value = match snapshot {
+                    ObservationSnapshot::Direct => Expression {
+                        kind: ExpressionKind::Clone(Box::new(self.lower_value(&values[index]))),
+                        ty: values[index].ty,
+                        span: values[index].span,
+                    },
+                    ObservationSnapshot::Converted {
+                        actual_type,
+                        source_span,
+                    } => self.lower_converted_observation_snapshot(
+                        &values[index],
+                        actual_type,
+                        source_span,
+                    )?,
+                };
+                let owner = self.temporary(value.ty, value.span);
+                ownership.stage_observation(index, owner).ok()?;
+                self.push(
+                    StatementKind::Let {
+                        local: owner,
+                        value,
+                    },
+                    values[index].span,
+                );
+                lowered[index] = Expression {
+                    kind: ExpressionKind::Local(owner),
+                    ty: values[index].ty,
+                    span: values[index].span,
+                };
+                continue;
+            }
+            let consumes = matches!(
+                ownership.source_parameter_effect(index),
+                Some(
+                    jett_typecheck::CheckedCallerEffect::RelinquishOwned
+                        | jett_typecheck::CheckedCallerEffect::TransferOwned
+                )
+            );
+            if eligible[index] && consumes {
+                let ExpressionKind::View(original) = &values[index].kind else {
+                    return None;
+                };
+                // Evaluate the full endpoint/producer, not a projected parent.
+                // An ordinary Let moves a linear owner; no snapshot is inserted.
+                let value = self.lower_value(original);
+                let owner = self.temporary(value.ty, value.span);
+                self.push(
+                    StatementKind::Let {
+                        local: owner,
+                        value,
+                    },
+                    original.span,
+                );
+                let projection = Expression {
+                    kind: ExpressionKind::View(Box::new(Expression {
+                        kind: ExpressionKind::Local(owner),
+                        ty: original.ty,
+                        span: original.span,
+                    })),
+                    ty: values[index].ty,
+                    span: values[index].span,
+                };
+                lowered[index] =
+                    self.stage_checked_call_view(index, Some(owner), owner, projection, ownership)?;
+                continue;
+            }
+            if eligible[index]
+                && let Some((source, projection)) = self.call_view_initializer(&values[index])
+            {
+                lowered[index] =
+                    self.stage_checked_call_view(index, None, source, projection, ownership)?;
+                continue;
+            }
+            if ownership.source_parameter_effect(index)
+                == Some(jett_typecheck::CheckedCallerEffect::TransferOwned)
+                && ownership.parameter_physical_access(index)
+                    == Some(jett_typecheck::CheckedCalleeAccess::Owned)
+            {
+                // Acquire the endpoint at this source position. A later
+                // handler cannot turn a required transfer into a snapshot.
+                let value = self.lower_value(&values[index]);
+                let owner = self.temporary(value.ty, value.span);
+                self.push(
+                    StatementKind::Let {
+                        local: owner,
+                        value,
+                    },
+                    values[index].span,
+                );
+                ownership.stage_acquisition(index, owner).ok()?;
+                lowered[index] = Expression {
+                    kind: ExpressionKind::Local(owner),
+                    ty: values[index].ty,
+                    span: values[index].span,
+                };
+                continue;
+            }
+            let single =
+                self.lower_ordered_owned_values(std::slice::from_ref(&values[index]), &[0])?;
+            lowered[index] = single.into_iter().next()?;
+            if matches!(
+                ownership.source_parameter_effect(index),
+                Some(
+                    jett_typecheck::CheckedCallerEffect::TransferOwned
+                        | jett_typecheck::CheckedCallerEffect::Copy
+                )
+            ) && let ExpressionKind::Local(local) = lowered[index].kind
+            {
+                ownership.stage_acquisition(index, local).ok()?;
+            }
+        }
+        Some(lowered)
+    }
+
+    fn lower_generated_call_view(
+        &mut self,
+        index: usize,
+        value: &Expression,
+        ownership: &mut hir::CallOwnership,
+    ) -> Option<Expression> {
+        let hir::CallOwnership::Generated(generated) = ownership else {
+            return None;
+        };
+        let argument = generated.arguments.get(index)?;
+        if argument.staging != (hir::GeneratedArgumentStaging::Existing { loan: None }) {
+            return None;
+        }
+        let witness = argument.original_witness();
+        let producer = witness.owned_producer();
+        let snapshot =
+            witness.ordinary_snapshot_proof().is_some() && can_snapshot_view(self.types, value.ty);
+        let ExpressionKind::View(endpoint) = &value.kind else {
+            return None;
+        };
+        let (source, projection, backing) = if producer || snapshot {
+            // Capture the full endpoint at this lexical argument position.
+            // A produced owner moves once; ordinary data uses its sealed copy.
+            let initial = if producer {
+                self.lower_value(endpoint)
+            } else {
+                Expression {
+                    kind: ExpressionKind::Clone(Box::new(self.lower_value(value))),
+                    ty: value.ty,
+                    span: value.span,
+                }
+            };
+            let owner = self.temporary(initial.ty, initial.span);
+            self.push(
+                StatementKind::Let {
+                    local: owner,
+                    value: initial,
+                },
+                value.span,
+            );
+            let projection = Expression {
+                kind: ExpressionKind::View(Box::new(Expression {
+                    kind: ExpressionKind::Local(owner),
+                    ty: value.ty,
+                    span: endpoint.span,
+                })),
+                ty: value.ty,
+                span: value.span,
+            };
+            (owner, projection, Some((owner, producer)))
+        } else {
+            let source = crate::call_views::borrowed_source(self.types, &self.locals, value)?;
+            (source, value.clone(), None)
+        };
+        let loan = self.call_view_temporary(projection.ty, source, projection.span);
+        let staging = match backing {
+            Some((owner, true)) => hir::GeneratedArgumentStaging::OwnedProducer { owner, loan },
+            Some((owner, false)) => hir::GeneratedArgumentStaging::OrdinarySnapshot { owner, loan },
+            None => hir::GeneratedArgumentStaging::Existing { loan: Some(loan) },
+        };
+        ownership.stage_generated_parameter(index, staging).ok()?;
+        self.push(
+            StatementKind::BeginCallView {
+                local: loan,
+                value: projection.clone(),
+            },
+            projection.span,
+        );
+        self.call_view_scopes.last_mut()?.push(loan);
+        Some(Expression {
+            kind: ExpressionKind::View(Box::new(Expression {
+                kind: ExpressionKind::Local(loan),
+                ty: projection.ty,
+                span: projection.span,
+            })),
+            ty: projection.ty,
+            span: projection.span,
+        })
+    }
+
+    fn stage_checked_call_view(
+        &mut self,
+        index: usize,
+        acquired_owner: Option<LocalId>,
+        source: LocalId,
+        projection: Expression,
+        ownership: &mut hir::CallOwnership,
+    ) -> Option<Expression> {
+        let local = self.call_view_temporary(projection.ty, source, projection.span);
+        ownership
+            .stage_parameter(index, acquired_owner, local)
+            .ok()?;
+        self.push(
+            StatementKind::BeginCallView {
+                local,
+                value: projection.clone(),
+            },
+            projection.span,
+        );
+        self.call_view_scopes.last_mut()?.push(local);
+        Some(Expression {
+            kind: ExpressionKind::View(Box::new(Expression {
+                kind: ExpressionKind::Local(local),
+                ty: projection.ty,
+                span: projection.span,
+            })),
+            ty: projection.ty,
+            span: projection.span,
+        })
+    }
+
     fn refinement_predicate_input(
         &self,
         source: LocalId,
@@ -388,59 +811,6 @@ impl Builder<'_> {
             return None;
         }
         Some((source, rewritten))
-    }
-
-    fn lower_ordered_borrowed_values(
-        &mut self,
-        values: &[Expression],
-        order: &[usize],
-        eligible: &[bool],
-    ) -> Option<Vec<Expression>> {
-        if !valid_ordered_borrowed_values(self.types, &self.locals, values, order, eligible) {
-            return None;
-        }
-        self.call_view_scopes.push(Vec::new());
-        let mut lowered = values.to_vec();
-        for &index in order {
-            if eligible[index]
-                && !can_snapshot_view(self.types, values[index].ty)
-                && let Some((source, projection)) = self.call_view_initializer(&values[index])
-            {
-                let local = self.call_view_temporary(values[index].ty, source, values[index].span);
-                self.push(
-                    StatementKind::BeginCallView {
-                        local,
-                        value: projection,
-                    },
-                    values[index].span,
-                );
-                if let Some(scope) = self.call_view_scopes.last_mut() {
-                    scope.push(local);
-                }
-                lowered[index] = Expression {
-                    kind: ExpressionKind::View(Box::new(Expression {
-                        kind: ExpressionKind::Local(local),
-                        ty: values[index].ty,
-                        span: values[index].span,
-                    })),
-                    ty: values[index].ty,
-                    span: values[index].span,
-                };
-                continue;
-            }
-            // The established snapshot/deferred-local route is unchanged for
-            // every other value. Global eligibility above validates this input.
-            let Some(single) =
-                self.lower_ordered_owned_values(std::slice::from_ref(&values[index]), &[0])
-            else {
-                self.call_view_scopes.pop();
-                return None;
-            };
-            if let Some(value) = single.into_iter().next() {
-                lowered[index] = value;
-            }
-        }
-        Some(lowered)
     }
 
     fn finish_call_view_scope(&mut self, expression: Expression) -> Expression {
@@ -570,7 +940,7 @@ impl Builder<'_> {
             return lowered;
         }
         if let ExpressionKind::Clone(value) = &expression.kind
-            && has_extractable_handle(value)
+            && needs_eager_lowering(value)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::Clone(Box::new(self.lower_value(value)));
@@ -578,7 +948,7 @@ impl Builder<'_> {
         }
         if let ExpressionKind::Run(value) = &expression.kind {
             let needs_snapshot = snapshotable_local(self.types, value);
-            if has_extractable_handle(value) || needs_snapshot {
+            if needs_eager_lowering(value) || needs_snapshot {
                 let mut lowered = expression.clone();
                 let source = self.lower_value(value);
                 // `run` does not consume a cloneable local in the interpreter.
@@ -592,14 +962,14 @@ impl Builder<'_> {
             }
         }
         if let ExpressionKind::Join(value) = &expression.kind
-            && has_extractable_handle(value)
+            && needs_eager_lowering(value)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::Join(Box::new(self.lower_value(value)));
             return lowered;
         }
         if let ExpressionKind::Coarsen(value) = &expression.kind
-            && (has_extractable_handle(value) || snapshotable_local(self.types, value))
+            && (needs_eager_lowering(value) || snapshotable_local(self.types, value))
         {
             let mut lowered = expression.clone();
             let source = self.lower_value(value);
@@ -612,7 +982,7 @@ impl Builder<'_> {
             return lowered;
         }
         if let ExpressionKind::Declassify(value) = &expression.kind
-            && (has_extractable_handle(value) || snapshotable_local(self.types, value))
+            && (needs_eager_lowering(value) || snapshotable_local(self.types, value))
         {
             let mut lowered = expression.clone();
             let source = self.lower_value(value);
@@ -629,7 +999,7 @@ impl Builder<'_> {
             owner_type,
             field,
         } = &expression.kind
-            && has_extractable_handle(base)
+            && needs_eager_lowering(base)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::Field {
@@ -640,7 +1010,7 @@ impl Builder<'_> {
             return lowered;
         }
         if let ExpressionKind::StateIs { value, state } = &expression.kind
-            && has_extractable_handle(value)
+            && needs_eager_lowering(value)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::StateIs {
@@ -650,7 +1020,7 @@ impl Builder<'_> {
             return lowered;
         }
         if let ExpressionKind::Unary { op, value } = &expression.kind
-            && has_extractable_handle(value)
+            && needs_eager_lowering(value)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::Unary {
@@ -661,10 +1031,10 @@ impl Builder<'_> {
         }
         if let ExpressionKind::Binary { left, op, right } = &expression.kind
             && matches!(op, hir::BinaryOp::And | hir::BinaryOp::Or)
-            && (has_extractable_handle(left) || has_extractable_handle(right))
+            && (needs_eager_lowering(left) || needs_eager_lowering(right))
         {
             let left_value = self.lower_value(left);
-            if !has_extractable_handle(right) {
+            if !needs_eager_lowering(right) {
                 let mut lowered = expression.clone();
                 lowered.kind = ExpressionKind::Binary {
                     left: Box::new(left_value),
@@ -736,7 +1106,7 @@ impl Builder<'_> {
         if let ExpressionKind::Binary { left, op, right } = &expression.kind
             && !matches!(op, hir::BinaryOp::And | hir::BinaryOp::Or)
             && can_snapshot_view(self.types, left.ty)
-            && (has_extractable_handle(left) || has_extractable_handle(right))
+            && (needs_eager_lowering(left) || needs_eager_lowering(right))
         {
             // Save the left value before extracting a handler from the right.
             // Its failure block may mutate locals that the left side reads.
@@ -832,7 +1202,7 @@ impl Builder<'_> {
             return self.lower_refinement_builder_finish(expression, refinement_predicates);
         }
         if let ExpressionKind::ListConstruct { elements } = &expression.kind
-            && elements.iter().any(has_extractable_handle)
+            && elements.iter().any(needs_eager_lowering)
             && let Some(elements) =
                 self.lower_ordered_owned_values(elements, &(0..elements.len()).collect::<Vec<_>>())
         {
@@ -842,7 +1212,7 @@ impl Builder<'_> {
         }
         if let ExpressionKind::StringInterpolation(segments) = &expression.kind
             && segments.iter().any(|segment| {
-                matches!(segment, hir::StringSegment::Value(value) if has_extractable_handle(value))
+                matches!(segment, hir::StringSegment::Value(value) if needs_eager_lowering(value))
             })
         {
             let values = segments
@@ -871,9 +1241,9 @@ impl Builder<'_> {
             }
         }
         if let ExpressionKind::MapConstruct { entries } = &expression.kind
-            && entries.iter().any(|entry| {
-                has_extractable_handle(&entry.key) || has_extractable_handle(&entry.value)
-            })
+            && entries
+                .iter()
+                .any(|entry| needs_eager_lowering(&entry.key) || needs_eager_lowering(&entry.value))
         {
             let values: Vec<_> = entries
                 .iter()
@@ -901,7 +1271,7 @@ impl Builder<'_> {
             validates_refinements,
             refinement_predicates,
         } = &expression.kind
-            && fields.iter().any(has_extractable_handle)
+            && fields.iter().any(needs_eager_lowering)
             && let Some(fields) = self.lower_ordered_owned_values(fields, evaluation_order)
         {
             let mut lowered = expression.clone();
@@ -920,7 +1290,7 @@ impl Builder<'_> {
             evaluation_order,
             validates_widths,
         } = &expression.kind
-            && fields.iter().any(has_extractable_handle)
+            && fields.iter().any(needs_eager_lowering)
             && let Some(fields) = self.lower_ordered_owned_values(fields, evaluation_order)
         {
             let mut lowered = expression.clone();
@@ -938,7 +1308,7 @@ impl Builder<'_> {
             payloads,
             evaluation_order,
         } = &expression.kind
-            && payloads.iter().any(has_extractable_handle)
+            && payloads.iter().any(needs_eager_lowering)
             && let Some(payloads) = self.lower_ordered_owned_values(payloads, evaluation_order)
         {
             let mut lowered = expression.clone();
@@ -955,7 +1325,7 @@ impl Builder<'_> {
             state,
             payloads,
         } = &expression.kind
-            && payloads.iter().any(has_extractable_handle)
+            && payloads.iter().any(needs_eager_lowering)
             && let Some(payloads) =
                 self.lower_ordered_owned_values(payloads, &(0..payloads.len()).collect::<Vec<_>>())
         {
@@ -973,7 +1343,7 @@ impl Builder<'_> {
             target,
             payloads,
         } = &expression.kind
-            && (has_extractable_handle(source) || payloads.iter().any(has_extractable_handle))
+            && (needs_eager_lowering(source) || payloads.iter().any(needs_eager_lowering))
         {
             let values = std::iter::once(source.as_ref().clone())
                 .chain(payloads.iter().cloned())
@@ -991,21 +1361,21 @@ impl Builder<'_> {
             }
         }
         if let ExpressionKind::ResultOk(value) = &expression.kind
-            && has_extractable_handle(value)
+            && needs_eager_lowering(value)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::ResultOk(Box::new(self.lower_value(value)));
             return lowered;
         }
         if let ExpressionKind::ResultFail(value) = &expression.kind
-            && has_extractable_handle(value)
+            && needs_eager_lowering(value)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::ResultFail(Box::new(self.lower_value(value)));
             return lowered;
         }
         if let ExpressionKind::OptionalSome(value) = &expression.kind
-            && has_extractable_handle(value)
+            && needs_eager_lowering(value)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::OptionalSome(Box::new(self.lower_value(value)));
@@ -1019,8 +1389,9 @@ impl Builder<'_> {
             field_validation,
             args,
             evaluation_order,
+            ownership,
         } = &expression.kind
-            && args.iter().any(has_extractable_handle)
+            && (args.iter().any(needs_eager_lowering) || needs_call_owner_staging(ownership))
             && args.iter().enumerate().all(|(index, arg)| {
                 !crate::move_values::intrinsic_borrows(*intrinsic, index, arg)
                     || can_snapshot_view(self.types, arg.ty)
@@ -1033,8 +1404,8 @@ impl Builder<'_> {
                 .iter()
                 .enumerate()
                 .map(|(index, arg)| {
-                    if crate::move_values::intrinsic_borrows(*intrinsic, index, arg)
-                        && crate::move_values::is_linear(self.types, arg.ty)
+                    if ownership.parameter_physical_access(index)
+                        == Some(jett_typecheck::CheckedCalleeAccess::View)
                         && !matches!(arg.kind, ExpressionKind::View(_))
                     {
                         Expression {
@@ -1047,16 +1418,9 @@ impl Builder<'_> {
                     }
                 })
                 .collect::<Vec<_>>();
-            let eligible = args
-                .iter()
-                .enumerate()
-                .map(|(index, arg)| {
-                    crate::move_values::intrinsic_borrows(*intrinsic, index, arg)
-                        && matches!(arg.kind, ExpressionKind::View(_))
-                })
-                .collect::<Vec<_>>();
+            let mut ownership = ownership.clone();
             if let Some(args) =
-                self.lower_ordered_borrowed_values(&inputs, evaluation_order, &eligible)
+                self.lower_ordered_call_values(&inputs, evaluation_order, &mut ownership)
             {
                 let mut lowered = expression.clone();
                 lowered.kind = ExpressionKind::Intrinsic {
@@ -1067,6 +1431,7 @@ impl Builder<'_> {
                     field_validation: field_validation.clone(),
                     args,
                     evaluation_order: evaluation_order.clone(),
+                    ownership,
                 };
                 return self.finish_call_view_scope(lowered);
             }
@@ -1077,7 +1442,7 @@ impl Builder<'_> {
             evaluation_order,
             constructor,
         } = &expression.kind
-            && args.iter().any(has_extractable_handle)
+            && args.iter().any(needs_eager_lowering)
             && let Some(args) = self.lower_ordered_owned_values(args, evaluation_order)
         {
             let mut lowered = expression.clone();
@@ -1097,7 +1462,7 @@ impl Builder<'_> {
             evaluation_order,
             kind,
         } = &expression.kind
-            && (has_extractable_handle(actor) || args.iter().any(has_extractable_handle))
+            && (needs_eager_lowering(actor) || args.iter().any(needs_eager_lowering))
             && valid_ordered_owned_values(self.types, &self.locals, args, evaluation_order)
         {
             let actor_value = self.lower_value(actor);
@@ -1131,8 +1496,11 @@ impl Builder<'_> {
             callee,
             args,
             evaluation_order,
+            ownership,
         } = &expression.kind
-            && (has_extractable_handle(callee) || args.iter().any(has_extractable_handle))
+            && (needs_eager_lowering(callee)
+                || args.iter().any(needs_eager_lowering)
+                || needs_call_owner_staging(ownership))
             && !matches!(callee.kind, ExpressionKind::View(_))
             && let Type::Function { view_params, .. } = self.types.resolve(
                 crate::move_values::representation_type(self.types, callee.ty),
@@ -1151,12 +1519,9 @@ impl Builder<'_> {
                     .collect::<Vec<_>>(),
             )
         {
-            let eligible = args
-                .iter()
-                .map(|arg| matches!(arg.kind, ExpressionKind::View(_)))
-                .collect::<Vec<_>>();
+            let mut ownership = ownership.clone();
             let Some(args) =
-                self.lower_ordered_borrowed_values(&inputs, evaluation_order, &eligible)
+                self.lower_ordered_call_values(&inputs, evaluation_order, &mut ownership)
             else {
                 return expression.clone();
             };
@@ -1185,6 +1550,7 @@ impl Builder<'_> {
                 }),
                 args,
                 evaluation_order: evaluation_order.clone(),
+                ownership,
             };
             return self.finish_call_view_scope(lowered);
         }
@@ -1192,20 +1558,15 @@ impl Builder<'_> {
             function,
             args,
             evaluation_order,
+            ownership,
         } = &expression.kind
-            && args.iter().any(has_extractable_handle)
+            && (args.iter().any(needs_eager_lowering) || needs_call_owner_staging(ownership))
             && let Some(modes) = self.function_param_modes.get(function)
             && let Some(inputs) = call_staging_inputs(args, modes)
         {
-            let eligible = args
-                .iter()
-                .zip(modes)
-                .map(|(arg, mode)| {
-                    *mode == ParamMode::View && matches!(arg.kind, ExpressionKind::View(_))
-                })
-                .collect::<Vec<_>>();
+            let mut ownership = ownership.clone();
             let Some(args) =
-                self.lower_ordered_borrowed_values(&inputs, evaluation_order, &eligible)
+                self.lower_ordered_call_values(&inputs, evaluation_order, &mut ownership)
             else {
                 return expression.clone();
             };
@@ -1214,6 +1575,7 @@ impl Builder<'_> {
                 function: *function,
                 args,
                 evaluation_order: evaluation_order.clone(),
+                ownership,
             };
             return self.finish_call_view_scope(lowered);
         }
@@ -1314,6 +1676,7 @@ impl Builder<'_> {
             type_arguments,
             args,
             evaluation_order,
+            ownership,
             ..
         } = &expression.kind
         else {
@@ -1360,7 +1723,8 @@ impl Builder<'_> {
             .iter()
             .enumerate()
             .map(|(index, arg)| {
-                if crate::move_values::intrinsic_borrows(*intrinsic, index, arg)
+                if ownership.parameter_physical_access(index)
+                    == Some(jett_typecheck::CheckedCalleeAccess::View)
                     && !matches!(arg.kind, ExpressionKind::View(_))
                 {
                     Expression {
@@ -1373,24 +1737,19 @@ impl Builder<'_> {
                 }
             })
             .collect();
-        let eligible = args
-            .iter()
-            .enumerate()
-            .map(|(index, arg)| {
-                crate::move_values::intrinsic_borrows(*intrinsic, index, arg)
-                    && matches!(arg.kind, ExpressionKind::View(_))
-            })
-            .collect::<Vec<_>>();
-        let args = self.lower_ordered_borrowed_values(&inputs, evaluation_order, &eligible)?;
+        let mut ownership = ownership.clone();
+        let args = self.lower_ordered_call_values(&inputs, evaluation_order, &mut ownership)?;
         let mut raw = expression.clone();
         if let ExpressionKind::Intrinsic {
             field_validation,
             args: raw_args,
+            ownership: raw_ownership,
             ..
         } = &mut raw.kind
         {
             *field_validation = Some(hir::ReflectedFieldValidation::Read);
             *raw_args = args.clone();
+            *raw_ownership = ownership;
         }
         let span = expression.span;
         let candidate = self.temporary(expression.ty, span);
@@ -1548,6 +1907,19 @@ impl Builder<'_> {
         predicate: &hir::RefinementPredicate,
         span: Span,
     ) -> (LocalId, LocalId) {
+        let args = vec![input];
+        let ownership = hir::CallOwnership::generated(
+            hir::GeneratedOperation::RefinementPredicate {
+                function: predicate.function,
+            },
+            &args,
+            &[predicate.input_type],
+            &[jett_typecheck::CheckedCalleeAccess::Owned],
+            TypeInterner::BOOL,
+            &[0],
+            self.types,
+        )
+        .expect("checked refinement predicate has a unary owned input");
         let error_text = self.temporary(TypeInterner::STRING, span);
         self.push(
             StatementKind::CheckRefinement {
@@ -1555,8 +1927,9 @@ impl Builder<'_> {
                 call: Expression {
                     kind: ExpressionKind::Call {
                         function: predicate.function,
-                        args: vec![input],
+                        args,
                         evaluation_order: vec![0],
+                        ownership,
                     },
                     ty: TypeInterner::BOOL,
                     span,
@@ -2494,6 +2867,70 @@ mod tests {
     }
 
     #[test]
+    fn failed_checked_call_staging_restores_all_builder_state() {
+        let source = "function take(view first: list[int64], view second: list[int64]) returns int64:\n    return 7\nfunction exercise(first: list[int64], second: list[int64]) returns int64:\n    return take(first, second)\n";
+        let (program, types) = handler_source_hir(source);
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "exercise")
+            .unwrap();
+        let call = function
+            .body
+            .statements
+            .iter()
+            .find_map(|statement| match &statement.kind {
+                hir::StatementKind::Return(Some(value)) => Some(value),
+                _ => None,
+            })
+            .unwrap();
+        let ExpressionKind::Call {
+            function: target,
+            args,
+            evaluation_order,
+            ownership,
+        } = &call.kind
+        else {
+            panic!("checked source invocation");
+        };
+        let modes = program
+            .functions
+            .iter()
+            .map(|function| {
+                (
+                    function.id,
+                    function
+                        .params
+                        .iter()
+                        .map(|param| param.mode)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut inputs = call_staging_inputs(args, &modes[target]).unwrap();
+        // The first argument will already have acquired an owner and loan
+        // when the later malformed physical operand fails its stage proof.
+        inputs[1] = args[1].clone();
+        let mut builder = Builder::new(function.span, &types, &modes);
+        builder.locals = function.locals.clone();
+        let previous = builder.clone();
+        let mut packet = ownership.clone();
+        assert!(
+            builder
+                .lower_ordered_call_values(&inputs, evaluation_order, &mut packet)
+                .is_none()
+        );
+        assert_eq!(packet, *ownership);
+        assert_eq!(builder.blocks, previous.blocks);
+        assert_eq!(builder.current, previous.current);
+        assert_eq!(builder.locals, previous.locals);
+        assert_eq!(builder.loops, previous.loops);
+        assert_eq!(builder.handlers, previous.handlers);
+        assert_eq!(builder.view_params, previous.view_params);
+        assert_eq!(builder.call_view_scopes, previous.call_view_scopes);
+    }
+
+    #[test]
     fn native_reflected_root_reads_run_selector_guards_before_slot_predicates() {
         for (owner, getter, declaration, expected) in [
             (
@@ -2775,10 +3212,13 @@ function inspect(view source: Record, view field: TypeField) returns Positive:
             panic!("source plans");
         };
         plans[0].source_type = TypeInterner::BOOL;
-        let malformed = lower(&hir, &types).unwrap();
+        let errors = lower(&hir, &types)
+            .expect_err("malformed source type plan cannot become unchecked Read");
         assert!(
-            validate(&malformed).is_err(),
-            "malformed source type plan cannot become unchecked Read"
+            errors.iter().any(|error| error
+                .message
+                .contains("reflected validation types disagree with declared field and request")),
+            "{errors:?}"
         );
     }
 
@@ -2979,6 +3419,255 @@ function inspect(items: list[int64]) returns Nonempty:
         assert!(plan.owned_locals.contains(&(output.index() as usize)));
     }
 
+    const NESTED_BYTE_CALL_SOURCE: &str = r#"namespace app
+function render(view value: bytes) returns string:
+    return "hex"
+function quote(value: string) returns string:
+    return value
+function inspect(view value: bytes) returns string:
+    bytes item = clone value
+    return quote("0x{render(item)}")
+"#;
+
+    fn nested_byte_calls(
+        function: &Function,
+        target: hir::FunctionId,
+    ) -> Vec<(BlockId, usize, &Expression)> {
+        function
+            .blocks
+            .iter()
+            .flat_map(|block| {
+                block.statements.iter().enumerate().filter_map(move |(index, statement)| {
+                let StatementKind::Let { value, .. } = &statement.kind else { return None; };
+                matches!(value.kind, ExpressionKind::Call { function, .. } if function == target)
+                    .then_some((block.id, index, value))
+            })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn nested_checked_byte_call_stages_owned_input_inside_interpolation_and_outer_call() {
+        let (hir, types) = handler_source_hir(NESTED_BYTE_CALL_SOURCE);
+        let original = hir
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "inspect")
+            .unwrap();
+        let result = original
+            .body
+            .statements
+            .iter()
+            .find_map(|statement| match &statement.kind {
+                hir::StatementKind::Return(Some(value)) => Some(value),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            !has_extractable_handle(result),
+            "no source handler caused the original refusal"
+        );
+        assert!(needs_eager_lowering(result));
+        let target = hir
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "render")
+            .unwrap()
+            .id;
+        let program = lower(&hir, &types).expect("nested ownership demand must reach render");
+        let function = inspected_handler_function(&program);
+        let calls = nested_byte_calls(function, target);
+        assert_eq!(calls.len(), 1);
+        let (block, call_index, call) = calls[0];
+        let ExpressionKind::Call {
+            ownership: hir::CallOwnership::Source(packet),
+            ..
+        } = &call.kind
+        else {
+            panic!("source-backed render call");
+        };
+        assert_eq!(
+            packet.arguments[0].effect,
+            jett_typecheck::CheckedCallerEffect::RelinquishOwned
+        );
+        let hir::ArgumentStaging::Relinquished { owner, loan } = packet.arguments[0].staging else {
+            panic!("bare byte input acquired once before its physical View");
+        };
+        let item = function
+            .locals
+            .iter()
+            .find(|local| local.name == "item")
+            .unwrap()
+            .id;
+        let acquisitions = crate::validate_caller_acquisitions(&program, function, &types).unwrap();
+        assert_eq!(
+            acquisitions.owner_initializer(owner).unwrap().binding,
+            Some(item)
+        );
+        assert_eq!(function.local(loan).unwrap().view_source, Some(owner));
+        let statements = &function.blocks[block.index() as usize].statements;
+        let owner_index = statements
+            .iter()
+            .position(|statement| {
+                matches!(&statement.kind,
+            StatementKind::Let { local, value } if *local == owner
+                && matches!(value.kind, ExpressionKind::Local(source) if source == item))
+            })
+            .expect("full endpoint moves without Clone");
+        let begin = statements
+            .iter()
+            .position(|statement| {
+                matches!(statement.kind,
+            StatementKind::BeginCallView { local, .. } if local == loan)
+            })
+            .unwrap();
+        let end = statements
+            .iter()
+            .position(|statement| {
+                matches!(statement.kind,
+            StatementKind::EndCallView { local } if local == loan)
+            })
+            .unwrap();
+        assert!(owner_index < begin && begin < call_index && call_index < end);
+        crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
+    }
+
+    #[test]
+    fn nested_checked_byte_call_keeps_written_view_before_last_bare_consumption() {
+        let source = NESTED_BYTE_CALL_SOURCE
+            .replace("0x{render(item)}", "0x{render(view item)}:{render(item)}");
+        let (hir, types) = handler_source_hir(&source);
+        let target = hir
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "render")
+            .unwrap()
+            .id;
+        let program = lower(&hir, &types).expect("written view followed by one last owning input");
+        let function = inspected_handler_function(&program);
+        let calls = nested_byte_calls(function, target);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, calls[1].0);
+        assert!(
+            calls[0].1 < calls[1].1,
+            "interpolation retains lexical evaluation order"
+        );
+        let effects = calls
+            .iter()
+            .map(|(_, _, call)| {
+                let ExpressionKind::Call {
+                    ownership: hir::CallOwnership::Source(packet),
+                    ..
+                } = &call.kind
+                else {
+                    panic!("source call");
+                };
+                (packet.arguments[0].effect, packet.arguments[0].staging)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            effects[0],
+            (
+                jett_typecheck::CheckedCallerEffect::RetainBorrow,
+                hir::ArgumentStaging::Original
+            )
+        );
+        assert_eq!(
+            effects[1].0,
+            jett_typecheck::CheckedCallerEffect::RelinquishOwned
+        );
+        assert!(matches!(
+            effects[1].1,
+            hir::ArgumentStaging::Relinquished { .. }
+        ));
+        crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
+    }
+
+    #[test]
+    fn nested_checked_byte_call_cannot_revert_to_original_owning_stage() {
+        let (hir, types) = handler_source_hir(NESTED_BYTE_CALL_SOURCE);
+        let target = hir
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "render")
+            .unwrap()
+            .id;
+        let mut program = lower(&hir, &types).expect("valid staged control");
+        let function = inspected_handler_function(&program);
+        let (block, index, _) = nested_byte_calls(function, target)[0];
+        let identity = function.id;
+        let function = program
+            .functions
+            .iter_mut()
+            .find(|function| function.id == identity)
+            .unwrap();
+        let StatementKind::Let { value, .. } =
+            &mut function.blocks[block.index() as usize].statements[index].kind
+        else {
+            panic!("eager result");
+        };
+        let ExpressionKind::Call {
+            ownership: hir::CallOwnership::Source(packet),
+            ..
+        } = &mut value.kind
+        else {
+            panic!("render call");
+        };
+        packet.arguments[0].staging = hir::ArgumentStaging::Original;
+        let errors = crate::validate_call_ownership(&program, &types)
+            .expect_err("mandatory owning stage still enforced");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message.contains("requires explicit owning staging")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn nested_checked_byte_call_keeps_lazy_boolean_rhs_in_its_selected_cfg_arm() {
+        for operator in ["&&", "||"] {
+            let source = r#"namespace app
+function check(view value: bytes) returns bool:
+    return true
+function inspect(gate: bool, item: bytes) returns bool:
+    return gate OPERATOR check(item)
+"#
+            .replace("OPERATOR", operator);
+            let (hir, types) = handler_source_hir(&source);
+            let target = hir
+                .functions
+                .iter()
+                .find(|function| function.identity.declaration.name == "check")
+                .unwrap()
+                .id;
+            let program = lower(&hir, &types).expect("lazy checked call demand");
+            let function = inspected_handler_function(&program);
+            let calls = nested_byte_calls(function, target);
+            assert_eq!(calls.len(), 1);
+            let entry = &function.blocks[function.entry.index() as usize];
+            let TerminatorKind::Branch {
+                then_block,
+                else_block,
+                ..
+            } = entry.terminator.kind
+            else {
+                panic!("lazy branch required");
+            };
+            let (selected, bypass) = if operator == "&&" {
+                (then_block, else_block)
+            } else {
+                (else_block, then_block)
+            };
+            assert_eq!(calls[0].0, selected);
+            assert_ne!(calls[0].0, function.entry);
+            assert!(function.blocks[bypass.index() as usize].statements.iter().any(|statement|
+                matches!(statement.kind, StatementKind::Let { value: Expression { kind: ExpressionKind::Bool(value), .. }, .. }
+                    if value == (operator == "||"))));
+            crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
+        }
+    }
+
     #[test]
     fn equatable_result_precedes_later_handlers_without_extra_owned_storage() {
         for operator in ["==", "!="] {
@@ -3080,6 +3769,91 @@ function inspect(view left: Item, view right: Item) returns bool:
         }
     }
 
+    fn eager_generated_boundary_call<'a>(
+        function: &'a Function,
+        block: BlockId,
+        boundary_index: usize,
+        result: &Expression,
+        equality: bool,
+    ) -> &'a Expression {
+        let ExpressionKind::Local(output) = result.kind else {
+            panic!("checked boundary must observe its eagerly completed call result");
+        };
+        let metadata = function.local(output).expect("exact call result metadata");
+        assert_eq!(metadata.ty, result.ty);
+        assert_eq!(metadata.debug_ty, result.ty);
+        assert_eq!(metadata.span, result.span);
+        assert!(metadata.view_source.is_none());
+        assert!(function.parameter_for_local(output).is_none());
+        let definitions = function
+            .blocks
+            .iter()
+            .flat_map(|block| {
+                block
+                    .statements
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(index, statement)| {
+                        let StatementKind::Let { local, value } = &statement.kind else {
+                            return None;
+                        };
+                        (*local == output).then_some((block.id, index, value))
+                    })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(definitions.len(), 1, "one eagerly completed operation");
+        let (defined_block, call_index, call) = definitions[0];
+        assert_eq!(defined_block, block);
+        assert!(call_index < boundary_index);
+        assert_eq!(call.ty, result.ty);
+        assert_eq!(call.span, result.span);
+        let ExpressionKind::Call {
+            function: method,
+            args,
+            ownership: hir::CallOwnership::Generated(packet),
+            ..
+        } = &call.kind
+        else {
+            panic!("exact eagerly materialized generated method call");
+        };
+        match (&packet.operation, equality) {
+            (hir::GeneratedOperation::Equality { method: expected }, true)
+            | (hir::GeneratedOperation::Display { method: expected }, false) => {
+                assert_eq!(method, expected)
+            }
+            _ => panic!("result must belong to its exact checked boundary operation"),
+        }
+        assert_eq!(args.len(), if equality { 2 } else { 1 });
+        assert_eq!(packet.arguments.len(), args.len());
+        let statements = &function.blocks[block.index() as usize].statements;
+        for (value, argument) in args.iter().zip(&packet.arguments) {
+            let loan = match argument.staging {
+                hir::GeneratedArgumentStaging::Existing { loan: Some(loan) }
+                | hir::GeneratedArgumentStaging::OwnedProducer { loan, .. }
+                | hir::GeneratedArgumentStaging::OrdinarySnapshot { loan, .. } => loan,
+                _ => panic!("eager call operand must retain its exact scoped loan"),
+            };
+            assert!(matches!(&value.kind, ExpressionKind::View(inner)
+                if matches!(inner.kind, ExpressionKind::Local(local) if local == loan)));
+            let begins = statements.iter().enumerate().filter_map(|(index, statement)|
+                matches!(statement.kind, StatementKind::BeginCallView { local, .. } if local == loan)
+                    .then_some(index)).collect::<Vec<_>>();
+            let ends = statements
+                .iter()
+                .enumerate()
+                .filter_map(|(index, statement)| {
+                    matches!(statement.kind, StatementKind::EndCallView { local } if local == loan)
+                        .then_some(index)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(begins.len(), 1);
+            assert_eq!(ends.len(), 1);
+            assert!(begins[0] < call_index);
+            assert!(call_index < ends[0] && ends[0] < boundary_index);
+        }
+        call
+    }
+
     #[test]
     fn equatable_result_retains_operand_handlers_before_call_and_negation() {
         for operator in ["==", "!="] {
@@ -3111,6 +3885,16 @@ function inspect(view left: optional[Item], view right: Item) returns bool:
                     let TerminatorKind::Return(Some(value)) = &block.terminator.kind else {
                         return None;
                     };
+                    assert_eq!(
+                        matches!(
+                            value.kind,
+                            ExpressionKind::Unary {
+                                op: hir::UnaryOp::Not,
+                                ..
+                            }
+                        ),
+                        operator == "!="
+                    );
                     let boundary = if let ExpressionKind::Unary {
                         op: hir::UnaryOp::Not,
                         value,
@@ -3129,7 +3913,15 @@ function inspect(view left: optional[Item], view right: Item) returns bool:
             assert_eq!(guards.len(), 1, "{operator}");
             let (block, boundary, call) = guards[0];
             assert_ne!(block, function.entry);
+            let call = eager_generated_boundary_call(
+                function,
+                block,
+                function.blocks[block.index() as usize].statements.len(),
+                call,
+                true,
+            );
             assert!(matches!(call.kind, ExpressionKind::Call { .. }));
+            assert!(!has_extractable_handle(call));
             assert!(!has_extractable_handle(boundary));
         }
     }
@@ -3252,24 +4044,27 @@ function inspect(view item: optional[Item]) returns string:
                 block
                     .statements
                     .iter()
-                    .map(move |statement| (block.id, statement))
+                    .enumerate()
+                    .map(move |(index, statement)| (block.id, index, statement))
             })
-            .filter_map(|(block, statement)| match &statement.kind {
+            .filter_map(|(block, index, statement)| match &statement.kind {
                 StatementKind::Let { value, .. }
                     if matches!(value.kind, ExpressionKind::DisplayResult(_)) =>
                 {
-                    Some((block, value))
+                    Some((block, index, value))
                 }
                 _ => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(guards.len(), 1);
-        let (block, guard) = guards[0];
+        let (block, guard_index, guard) = guards[0];
         assert_ne!(block, function.entry);
         let ExpressionKind::DisplayResult(call) = &guard.kind else {
             unreachable!();
         };
+        let call = eager_generated_boundary_call(function, block, guard_index, call, false);
         assert!(matches!(call.kind, ExpressionKind::Call { .. }));
+        assert!(!has_extractable_handle(call));
         assert!(!has_extractable_handle(guard));
     }
 
@@ -3457,20 +4252,42 @@ function inspect(view source: list[int64], view other: list[int64]) returns list
                 hir::validate_backend_types(&hir, &types).is_err(),
                 "{invalid}"
             );
-            let program = lower(&hir, &types).expect("structural HIR lowering");
-            validate(&program).expect("malformed alias remains structurally valid MIR");
-            let error = crate::move_values::MoveValuePlan::analyze(
-                &program,
-                inspected_handler_function(&program),
-                &types,
-            )
-            .unwrap_err();
-            assert!(error.contains("stable backing local"), "{invalid}: {error}");
+            let errors =
+                lower(&hir, &types).expect_err("malformed alias refused before MIR acquisition");
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.message.contains("stable backing local")),
+                "{invalid}: {errors:?}"
+            );
         }
     }
 
+    fn assert_staged_alias_is_borrowed(function: &Function, alias: LocalId) {
+        let statements = || function.blocks.iter().flat_map(|block| &block.statements);
+        let loans = statements()
+            .filter_map(|statement| match &statement.kind {
+                StatementKind::BeginCallView { local, value }
+                    if matches!(&value.kind, ExpressionKind::View(value)
+                    if matches!(value.kind, ExpressionKind::Local(id) if id == alias)) =>
+                {
+                    Some(*local)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(loans.len(), 1, "exact alias loan");
+        assert!(statements().any(|statement| matches!(statement.kind,
+            StatementKind::EndCallView { local } if local == loans[0])));
+        assert!(!statements().any(|statement| matches!(&statement.kind,
+            StatementKind::Let { value, .. } if matches!(&value.kind,
+                ExpressionKind::Clone(value) if matches!(&value.kind,
+                    ExpressionKind::View(value) if matches!(value.kind,
+                        ExpressionKind::Local(id) if id == alias))))));
+    }
+
     #[test]
-    fn handler_call_staging_preserves_bare_local_alias_view_parameters() {
+    fn handler_call_staging_preserves_explicit_local_alias_view_parameters() {
         let (program, types) = lower_handler_source(
             r#"namespace app
 function take(view values: list[int64], amount: int64) returns int64:
@@ -3479,7 +4296,7 @@ function inspect() returns int64:
     list[int64] source = list(1)
     list[int64] borrowed = view source
     list[int64] forwarded = borrowed
-    int64 answer = take(forwarded, (none handle: default 3))
+    int64 answer = take(view forwarded, (none handle: default 3))
     trace source
     return answer
 "#,
@@ -3493,18 +4310,7 @@ function inspect() returns int64:
             .find(|local| local.name == "forwarded")
             .unwrap()
             .id;
-        assert!(
-            function
-                .blocks
-                .iter()
-                .flat_map(|block| &block.statements)
-                .any(|statement| {
-                    matches!(&statement.kind, StatementKind::Let { value, .. }
-                if matches!(&value.kind, ExpressionKind::Clone(view)
-                    if matches!(&view.kind, ExpressionKind::View(local)
-                        if matches!(local.kind, ExpressionKind::Local(id) if id == forwarded))))
-                })
-        );
+        assert_staged_alias_is_borrowed(function, forwarded);
     }
 
     #[test]
@@ -3518,7 +4324,7 @@ function inspect() returns int64:
     list[int64] borrowed = view source
     function(view list[int64], int64) returns int64 callback = take
     function(view list[int64], int64) returns int64 callable = view callback
-    int64 answer = callable(borrowed, (none handle: default 4))
+    int64 answer = callable(view borrowed, (none handle: default 4))
     trace source
     trace callback
     trace callable
@@ -3571,7 +4377,7 @@ function inspect() returns int64:
     }
 
     #[test]
-    fn handler_call_staging_snapshots_copy_owned_view_carriers() {
+    fn handler_call_staging_keeps_copy_owned_view_carriers_borrowed() {
         let (program, types) = lower_handler_source(
             r#"namespace app
 function increment(value: int64) returns int64:
@@ -3599,19 +4405,7 @@ function inspect() returns int64:
                 .find(|local| local.name == name)
                 .unwrap()
                 .id;
-            assert!(
-                function
-                    .blocks
-                    .iter()
-                    .flat_map(|block| &block.statements)
-                    .any(|statement| {
-                        matches!(&statement.kind, StatementKind::Let { value, .. }
-                    if matches!(&value.kind, ExpressionKind::Clone(view)
-                        if matches!(&view.kind, ExpressionKind::View(local)
-                            if matches!(local.kind, ExpressionKind::Local(id) if id == alias))))
-                    }),
-                "{name}"
-            );
+            assert_staged_alias_is_borrowed(function, alias);
         }
     }
 
@@ -3625,7 +4419,7 @@ function take(view values: list[int64], amount: int64) returns int64:
 function inspect() returns int64:
     list[int64] source = list(1)
     list[int64] borrowed = view source
-    return take(borrowed, (none handle: default 3))
+    return take(view borrowed, (none handle: default 3))
 "#,
             file,
         );
@@ -3653,16 +4447,13 @@ function inspect() returns int64:
             .unwrap()
             .params[0]
             .mode = ParamMode::Owned;
-        let program = lower(&hir, &checked.interner).unwrap();
-        let error = crate::move_values::MoveValuePlan::analyze(
-            &program,
-            inspected_handler_function(&program),
-            &checked.interner,
-        )
-        .unwrap_err();
+        let errors = lower(&hir, &checked.interner)
+            .expect_err("physical formal mutation refused before staging");
         assert!(
-            error.contains("cannot move borrowed native place"),
-            "{error}"
+            errors.iter().any(|error| error.message.contains(
+                "source function ownership signature differs from the exact HIR declaration"
+            )),
+            "{errors:?}"
         );
 
         let span = Span::new(file, 0, 1);

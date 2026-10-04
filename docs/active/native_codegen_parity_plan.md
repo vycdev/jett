@@ -2271,3 +2271,22 @@ native case passes an isolated rerun, not whole-workspace acceptance. See
 [centralized acceptance context](native_acceptance_audit.md#retained-reference-preparation).
 The about-85% estimate, fixed 207 inventory/182 obligations, 464 supplemental
 native cases and whole-language 100% goal are unchanged.
+
+### Typed caller ownership integration
+
+The caller disposition selected by Rule24 now survives exact typed source,
+HIR, MIR and native handoffs. Separate sealed proofs cover generated calls,
+temporary staging, viewed loops and handled defaults; Rule25 data snapshots
+preserve existing interface conversion. The formatted candidate passes
+293 checker, 598 frontend, 168 HIR, 147 MIR, 67 backend and 63 object tests.
+All 15 linked caller groups pass in both profiles after source deletion, and
+the two failed driver property replays pass independently. Per-pass signature
+projection reuse preserves all validation boundaries and exact diagnostics.
+
+The [contract](native_call_ownership_facts.md) and
+[acceptance record](native_acceptance_audit.md#typed-caller-ownership-integration)
+separate these results from pending full-workspace, 479-case corpus, 182-object
+inventory and supported-host checks. The a9 predecessor is accepted locally
+and on all four supported-host jobs. The fixed 207 inventory, about 85% tracking
+and 100% whole-language goal remain unchanged. Actual Resource lifecycle and
+provider dispatch, followed by native ownership/cleanup, are the next work.

@@ -22,6 +22,12 @@ use jett_types::{
     StructDef as TypeStructDef, StructId, Type, TypeId, TypeInterner, VariantDef,
 };
 
+use crate::caller_ownership::{
+    CheckedArgumentOwnership, CheckedBindingFact, CheckedCallOwnership, CheckedCalleeAccess,
+    CheckedCallerEffect, CheckedCallerOrigin, CheckedCallerSyntax, CheckedIntrinsicOperandRole,
+    CheckedInvocationShape, CheckedInvocationTarget, CheckedOwnershipContext,
+    intrinsic_operand_access,
+};
 use crate::capability;
 use crate::errors;
 use crate::resource_hooks::{CheckedResourceHook, ResourceHookError};
@@ -54,10 +60,14 @@ pub struct CheckedGenericFunctionInstantiation {
     pub return_type: TypeId,
     /// Expression types captured while checking this concrete body.
     pub type_map: HashMap<Span, TypeId>,
+    /// Contextually inferred source type before expectation-added outer Secret promotion.
+    pub source_type_map: HashMap<Span, TypeId>,
     /// Checked declared type labels, retaining aliases per concrete body.
     pub debug_type_names: HashMap<Span, String>,
     /// Physical copy/borrow facts, keyed by local declaration-name span.
     pub binding_modes: HashMap<Span, CheckedBindingMode>,
+    pub binding_facts: HashMap<Span, CheckedBindingFact>,
+    pub call_ownership: HashMap<Span, CheckedCallOwnership>,
     /// Nested generic calls selected while checking this concrete body.
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
     /// Closed compiler operation selected for each accepted intrinsic call.
@@ -79,6 +89,8 @@ pub struct CheckedGenericFunctionInstantiation {
     pub method_values: HashMap<Span, CheckedMethodValue>,
     /// Concrete struct construction targets selected in this body.
     pub struct_constructions: HashMap<Span, CheckedStructConstruction>,
+    /// Physical incoming pipeline types sealed before callee checking.
+    pub pipeline_step_input_types: HashMap<Span, TypeId>,
     /// Raw call-result types for pipeline steps before any step-local handle.
     pub pipeline_step_call_types: HashMap<Span, TypeId>,
     /// Checker-owned compile-time control-flow choices for this concrete body.
@@ -126,9 +138,13 @@ pub enum CheckedComptimeTypeSelection {
 #[derive(Debug, Clone, Default)]
 pub struct CheckedBodyFacts {
     pub type_map: HashMap<Span, TypeId>,
+    /// Contextually inferred source type before expectation-added outer Secret promotion.
+    pub source_type_map: HashMap<Span, TypeId>,
     /// Checked declared type labels, retaining aliases per concrete body.
     pub debug_type_names: HashMap<Span, String>,
     pub binding_modes: HashMap<Span, CheckedBindingMode>,
+    pub binding_facts: HashMap<Span, CheckedBindingFact>,
+    pub call_ownership: HashMap<Span, CheckedCallOwnership>,
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
     pub intrinsic_ids: HashMap<Span, IntrinsicId>,
     pub intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -138,6 +154,8 @@ pub struct CheckedBodyFacts {
     pub interface_calls: HashMap<Span, CheckedInterfaceCall>,
     pub method_values: HashMap<Span, CheckedMethodValue>,
     pub struct_constructions: HashMap<Span, CheckedStructConstruction>,
+    /// Physical incoming pipeline types sealed before callee checking.
+    pub pipeline_step_input_types: HashMap<Span, TypeId>,
     pub pipeline_step_call_types: HashMap<Span, TypeId>,
     pub static_selections: HashMap<Span, CheckedStaticSelection>,
     pub comptime_type_bindings: HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
@@ -258,10 +276,14 @@ pub struct CheckResult {
     pub diagnostics: Vec<Diagnostic>,
     /// Map from expression spans to their inferred type.
     pub type_map: HashMap<Span, TypeId>,
+    /// Contextually inferred source type before expectation-added outer Secret promotion.
+    pub source_type_map: HashMap<Span, TypeId>,
     /// Checked declared type labels, retaining aliases per concrete body.
     pub debug_type_names: HashMap<Span, String>,
     /// Physical copy/borrow facts outside generic bodies, by declaration name.
     pub binding_modes: HashMap<Span, CheckedBindingMode>,
+    pub binding_facts: HashMap<Span, CheckedBindingFact>,
+    pub call_ownership: HashMap<Span, CheckedCallOwnership>,
     /// Session-local resolved definitions and their checked types.
     ///
     /// Lowering uses this map with the resolver's `DefId` join keys. Durable
@@ -294,6 +316,8 @@ pub struct CheckResult {
     pub method_value_definitions: HashSet<Span>,
     /// Checked struct construction targets, keyed by call span.
     pub struct_constructions: HashMap<Span, CheckedStructConstruction>,
+    /// Physical incoming pipeline types sealed before callee checking.
+    pub pipeline_step_input_types: HashMap<Span, TypeId>,
     /// Raw call-result types for pipeline steps before any step-local handle.
     pub pipeline_step_call_types: HashMap<Span, TypeId>,
     /// Accepted concrete generic bodies in deterministic discovery order.
@@ -378,17 +402,13 @@ fn finish_check(
     // Run ownership analysis (linear type checking) after type checking.
     let (ownership_diagnostics, breakpoint_exclusions) = if checked_bodies {
         crate::ownership::OwnershipChecker::new(&checker.interner)
-            .with_debug_types(
-                checker
-                    .type_map
-                    .iter()
-                    .chain(
-                        checker
-                            .generic_function_instantiations
-                            .iter()
-                            .flat_map(|body| body.type_map.iter()),
-                    )
-                    .map(|(&span, &ty)| (span, ty)),
+            .with_checked_facts(
+                checker.resolve,
+                &checker.binding_facts,
+                &checker.call_ownership,
+                &checker.type_map,
+                &checker.comptime_type_bindings,
+                &checker.generic_function_instantiations,
             )
             .check_module_with_debug(module)
     } else {
@@ -420,6 +440,11 @@ fn finish_check(
 
     let mut diagnostics = checker.sink.into_diagnostics();
     diagnostics.extend(complexity_diagnostics);
+    let typed_rebinding_errors = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code.code() == 404)
+        .map(|diagnostic| (diagnostic.span, diagnostic.code, diagnostic.message.clone()))
+        .collect::<Vec<_>>();
     diagnostics.extend(ownership_diagnostics.into_iter().filter(|diagnostic| {
         // The typed boundary check has the precise declaration provenance and
         // guidance. Suppress only its exact legacy consume-view counterpart.
@@ -429,6 +454,12 @@ fn finish_check(
             .is_some_and(|previous| {
                 previous.code == diagnostic.code && previous.message == diagnostic.message
             })
+            && !(diagnostic.code.code() == 404
+                && typed_rebinding_errors.iter().any(|(span, code, message)| {
+                    *span == diagnostic.span
+                        && *code == diagnostic.code
+                        && *message == diagnostic.message
+                }))
     }));
 
     let method_value_definitions = checker
@@ -444,8 +475,11 @@ fn finish_check(
         breakpoint_exclusions,
         diagnostics,
         type_map: checker.type_map,
+        source_type_map: checker.source_type_map,
         debug_type_names: checker.debug_type_names,
         binding_modes: checker.binding_modes,
+        binding_facts: checker.binding_facts,
+        call_ownership: checker.call_ownership,
         definition_types: checker.type_env,
         resource_hooks: checker.resource_hooks,
         generic_calls: checker.generic_calls,
@@ -460,6 +494,7 @@ fn finish_check(
         method_values: checker.method_values,
         method_value_definitions,
         struct_constructions: checker.struct_constructions,
+        pipeline_step_input_types: checker.pipeline_step_input_types,
         pipeline_step_call_types: checker.pipeline_step_call_types,
         generic_function_instantiations: checker.generic_function_instantiations,
         comptime_type_bindings: checker.comptime_type_bindings,
@@ -537,8 +572,12 @@ struct ClosureCaptureScope {
 struct ActiveGenericInstantiation {
     manifest_index: usize,
     type_map: HashMap<Span, TypeId>,
+    source_type_map: HashMap<Span, TypeId>,
     debug_type_names: HashMap<Span, String>,
     binding_modes: HashMap<Span, CheckedBindingMode>,
+    binding_facts: HashMap<Span, CheckedBindingFact>,
+    call_ownership: HashMap<Span, CheckedCallOwnership>,
+    invocation_signatures: HashMap<Span, (Vec<TypeId>, TypeId)>,
     generic_calls: HashMap<Span, CheckedGenericCall>,
     intrinsic_ids: HashMap<Span, IntrinsicId>,
     intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -548,6 +587,7 @@ struct ActiveGenericInstantiation {
     interface_calls: HashMap<Span, CheckedInterfaceCall>,
     method_values: HashMap<Span, CheckedMethodValue>,
     struct_constructions: HashMap<Span, CheckedStructConstruction>,
+    pipeline_step_input_types: HashMap<Span, TypeId>,
     pipeline_step_call_types: HashMap<Span, TypeId>,
     static_selections: HashMap<Span, CheckedStaticSelection>,
     comptime_type_bindings: HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
@@ -594,6 +634,7 @@ struct TypeChecker<'a> {
     resolving_type_aliases: HashSet<String>,
     /// Expression span → TypeId (the output type map).
     type_map: HashMap<Span, TypeId>,
+    source_type_map: HashMap<Span, TypeId>,
     debug_type_names: HashMap<Span, String>,
     /// Source declarations retain nested aliases when inferring generic witnesses.
     declared_source_types: HashMap<DefId, TypeExpr>,
@@ -636,6 +677,7 @@ struct TypeChecker<'a> {
     assignment_bindings: HashMap<Span, AssignmentBinding>,
     /// Exact legacy consume-view diagnostics replaced by typed boundary errors.
     diagnosed_owned_view_consumptions: HashMap<Span, Diagnostic>,
+    diagnosed_caller_view_arguments: HashSet<Span>,
     /// A generic recheck may revisit the same invalid owning payload source.
     diagnosed_resource_payload_views: HashSet<Span>,
     /// A written return annotation may be resolved in several specializations.
@@ -644,6 +686,7 @@ struct TypeChecker<'a> {
     current_function_pure: bool,
     /// Whether we are inside a verify block.
     in_verify_block: bool,
+    ownership_context: CheckedOwnershipContext,
     /// Whether we are inside a property block.
     in_property_block: bool,
     /// Nesting depth inside an explicit `comptime` expression.
@@ -726,6 +769,8 @@ struct TypeChecker<'a> {
     call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     /// Source method bodies exported to HIR.
     method_definitions: Vec<CheckedMethodDefinition>,
+    /// Exact source-formal access selected with each checked method body.
+    method_parameter_modes: HashMap<Span, Vec<bool>>,
     /// (owner type, method name) -> exported method definition index.
     method_definitions_by_owner: HashMap<(TypeId, String), usize>,
     /// (interface type, owner type, method name) -> definition index.
@@ -737,8 +782,13 @@ struct TypeChecker<'a> {
     method_values: HashMap<Span, CheckedMethodValue>,
     /// Physical local binding modes outside generic bodies.
     binding_modes: HashMap<Span, CheckedBindingMode>,
+    binding_facts: HashMap<Span, CheckedBindingFact>,
+    call_ownership: HashMap<Span, CheckedCallOwnership>,
+    invocation_signatures: HashMap<Span, (Vec<TypeId>, TypeId)>,
     /// Checked struct constructions outside generic bodies.
     struct_constructions: HashMap<Span, CheckedStructConstruction>,
+    /// Physical incoming pipeline types outside generic bodies.
+    pipeline_step_input_types: HashMap<Span, TypeId>,
     /// Raw pipeline call-result types outside generic bodies.
     pipeline_step_call_types: HashMap<Span, TypeId>,
     /// Trusted `comptime type` expansions outside generic function bodies.
@@ -780,6 +830,7 @@ impl<'a> TypeChecker<'a> {
             type_aliases: HashMap::new(),
             resolving_type_aliases: HashSet::new(),
             type_map: HashMap::new(),
+            source_type_map: HashMap::new(),
             debug_type_names: HashMap::new(),
             declared_source_types: HashMap::new(),
             current_return_type: None,
@@ -802,10 +853,12 @@ impl<'a> TypeChecker<'a> {
             constant_declarations: HashSet::new(),
             assignment_bindings: HashMap::new(),
             diagnosed_owned_view_consumptions: HashMap::new(),
+            diagnosed_caller_view_arguments: HashSet::new(),
             diagnosed_resource_payload_views: HashSet::new(),
             diagnosed_view_return_annotations: HashSet::new(),
             current_function_pure: false,
             in_verify_block: false,
+            ownership_context: CheckedOwnershipContext::Ordinary,
             in_property_block: false,
             comptime_expr_depth: 0,
             nonzero_fact_scopes: Vec::new(),
@@ -841,13 +894,18 @@ impl<'a> TypeChecker<'a> {
             intrinsic_reflection_arguments: HashMap::new(),
             call_argument_orders: HashMap::new(),
             method_definitions: Vec::new(),
+            method_parameter_modes: HashMap::new(),
             method_definitions_by_owner: HashMap::new(),
             interface_method_definitions: HashMap::new(),
             method_calls: HashMap::new(),
             interface_calls: HashMap::new(),
             method_values: HashMap::new(),
             binding_modes: HashMap::new(),
+            binding_facts: HashMap::new(),
+            call_ownership: HashMap::new(),
+            invocation_signatures: HashMap::new(),
             struct_constructions: HashMap::new(),
+            pipeline_step_input_types: HashMap::new(),
             pipeline_step_call_types: HashMap::new(),
             comptime_type_bindings: HashMap::new(),
             active_generic_instantiations: Vec::new(),
@@ -3937,7 +3995,14 @@ impl<'a> TypeChecker<'a> {
         return_type: TypeId,
     ) -> Option<(Vec<TypeId>, TypeId)> {
         self.expect_no_type_args(builtin_name, type_args, span);
-        Some((params, return_type))
+        // Keep the operand shape for independent checking, but an invalid
+        // invocation cannot select an ownership handoff or a usable result.
+        let checked_return = if type_args.is_empty() {
+            return_type
+        } else {
+            TypeInterner::ERROR
+        };
+        Some((params, checked_return))
     }
 
     /// Extract T from an optional single-argument builtin type list.
@@ -4059,6 +4124,23 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn builtin_signature(
+        &mut self,
+        callee: &Expr,
+        type_args: &[TypeExpr],
+        span: Span,
+    ) -> Option<(Vec<TypeId>, TypeId)> {
+        let signature = self.builtin_signature_unrecorded(callee, type_args, span);
+        if let Some(signature) = &signature {
+            if let Some(active) = self.active_generic_instantiations.last_mut() {
+                active.invocation_signatures.insert(span, signature.clone());
+            } else {
+                self.invocation_signatures.insert(span, signature.clone());
+            }
+        }
+        signature
+    }
+
+    fn builtin_signature_unrecorded(
         &mut self,
         callee: &Expr,
         type_args: &[TypeExpr],
@@ -7190,8 +7272,11 @@ impl<'a> TypeChecker<'a> {
                         parameter_types: parameter_types.clone(),
                         return_type,
                         type_map: HashMap::new(),
+                        source_type_map: HashMap::new(),
                         debug_type_names: HashMap::new(),
                         binding_modes: HashMap::new(),
+                        binding_facts: HashMap::new(),
+                        call_ownership: HashMap::new(),
                         generic_calls: HashMap::new(),
                         intrinsic_ids: HashMap::new(),
                         intrinsic_type_arguments: HashMap::new(),
@@ -7201,6 +7286,7 @@ impl<'a> TypeChecker<'a> {
                         interface_calls: HashMap::new(),
                         method_values: HashMap::new(),
                         struct_constructions: HashMap::new(),
+                        pipeline_step_input_types: HashMap::new(),
                         pipeline_step_call_types: HashMap::new(),
                         static_selections: HashMap::new(),
                         comptime_type_bindings: HashMap::new(),
@@ -7236,8 +7322,12 @@ impl<'a> TypeChecker<'a> {
                 .push(ActiveGenericInstantiation {
                     manifest_index,
                     type_map: HashMap::new(),
+                    source_type_map: HashMap::new(),
                     debug_type_names: HashMap::new(),
                     binding_modes: HashMap::new(),
+                    binding_facts: HashMap::new(),
+                    call_ownership: HashMap::new(),
+                    invocation_signatures: HashMap::new(),
                     generic_calls: HashMap::new(),
                     intrinsic_ids: HashMap::new(),
                     intrinsic_type_arguments: HashMap::new(),
@@ -7247,6 +7337,7 @@ impl<'a> TypeChecker<'a> {
                     interface_calls: HashMap::new(),
                     method_values: HashMap::new(),
                     struct_constructions: HashMap::new(),
+                    pipeline_step_input_types: HashMap::new(),
                     pipeline_step_call_types: HashMap::new(),
                     static_selections: HashMap::new(),
                     comptime_type_bindings: HashMap::new(),
@@ -7265,8 +7356,11 @@ impl<'a> TypeChecker<'a> {
             let conflicts = {
                 let entry = &mut self.generic_function_instantiations[active.manifest_index];
                 entry.type_map.extend(active.type_map);
+                entry.source_type_map.extend(active.source_type_map);
                 entry.debug_type_names.extend(active.debug_type_names);
                 entry.binding_modes.extend(active.binding_modes);
+                entry.binding_facts.extend(active.binding_facts);
+                entry.call_ownership.extend(active.call_ownership);
                 entry.generic_calls.extend(active.generic_calls);
                 entry.intrinsic_ids.extend(active.intrinsic_ids);
                 entry
@@ -7284,6 +7378,9 @@ impl<'a> TypeChecker<'a> {
                 entry
                     .struct_constructions
                     .extend(active.struct_constructions);
+                entry
+                    .pipeline_step_input_types
+                    .extend(active.pipeline_step_input_types);
                 entry
                     .pipeline_step_call_types
                     .extend(active.pipeline_step_call_types);
@@ -7336,6 +7433,21 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn record_source_expression_type(&mut self, span: Span, ty: TypeId) {
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.source_type_map.insert(span, ty);
+        } else {
+            self.source_type_map.insert(span, ty);
+        }
+    }
+
+    fn checked_source_expression_type(&self, span: Span) -> Option<TypeId> {
+        match self.active_generic_instantiations.last() {
+            Some(active) => active.source_type_map.get(&span).copied(),
+            None => self.source_type_map.get(&span).copied(),
+        }
+    }
+
     fn register_checked_method_definition(
         &mut self,
         owner_type: TypeId,
@@ -7345,6 +7457,10 @@ impl<'a> TypeChecker<'a> {
         interface_type: Option<TypeId>,
     ) {
         let index = self.method_definitions.len();
+        self.method_parameter_modes.insert(
+            method.span,
+            signature.params.iter().map(|(_, _, view)| *view).collect(),
+        );
         self.method_definitions.push(CheckedMethodDefinition {
             source_span: method.span,
             owner_type,
@@ -7480,6 +7596,524 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn checked_expression_type(&self, span: Span) -> Option<TypeId> {
+        match self.active_generic_instantiations.last() {
+            Some(active) => active.type_map.get(&span).copied(),
+            None => self.type_map.get(&span).copied(),
+        }
+    }
+
+    fn record_binding_fact(&mut self, fact: CheckedBindingFact) {
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.binding_facts.insert(fact.declaration_span, fact);
+        } else {
+            self.binding_facts.insert(fact.declaration_span, fact);
+        }
+    }
+
+    fn caller_binding_fact(&self, definition: DefId) -> Option<CheckedBindingFact> {
+        let span = self.resolve.scope_table.def(definition).span;
+        let recorded = match self.active_generic_instantiations.last() {
+            Some(active) => active.binding_facts.get(&span),
+            None => self.binding_facts.get(&span),
+        };
+        if let Some(fact) = recorded {
+            return Some(*fact);
+        }
+        // Captures may be declared outside this body.
+        // Their identity and concrete type still come from this checked session.
+        let ty = *self.type_env.get(&definition)?;
+        let assignment = self.assignment_bindings.get(&span);
+        Some(CheckedBindingFact {
+            definition,
+            declaration_span: span,
+            ty,
+            mode: if assignment == Some(&AssignmentBinding::View)
+                && !crate::ownership::is_implicitly_copyable(&self.interner, ty)
+            {
+                CheckedBindingMode::View {
+                    source: CheckedViewSource::Other,
+                }
+            } else {
+                CheckedBindingMode::Owned
+            },
+            mutable: assignment == Some(&AssignmentBinding::OwnedMutable),
+        })
+    }
+
+    fn caller_definition_is_producer(&self, definition: DefId) -> bool {
+        let declared = self.resolve.scope_table.def(definition);
+        matches!(declared.kind, DefKind::Function | DefKind::Constant)
+            || self.constant_declarations.contains(&declared.span)
+    }
+
+    fn caller_origin(
+        &mut self,
+        expression: Option<&Expr>,
+        written_view: bool,
+    ) -> CheckedCallerOrigin {
+        let Some(mut expression) = expression else {
+            return CheckedCallerOrigin::OwnedExpression;
+        };
+        while let Expr::Paren(inner, _)
+        | Expr::View(inner, _)
+        | Expr::Coarsen(inner, _)
+        | Expr::Declassify(inner, _) = expression
+        {
+            expression = inner;
+        }
+        let root = Self::assignment_root(expression).and_then(|ident| self.ident_def_id(ident));
+        if root.is_some_and(|definition| {
+            self.caller_definition_is_producer(definition)
+                || !matches!(
+                    self.resolve.scope_table.def(definition).kind,
+                    DefKind::Variable | DefKind::Param
+                )
+        }) {
+            // Named descriptors, baked constants and static type/namespace
+            // projections produce values; none supplies a caller-local root.
+            return CheckedCallerOrigin::OwnedExpression;
+        }
+        let binding = root.and_then(|definition| self.caller_binding_fact(definition));
+        if let Some(fact) = binding {
+            // Captured roots may be declared outside this body. Retain only the
+            // exact fact referenced by this occurrence in its concrete frame.
+            self.record_binding_fact(fact);
+        }
+        let source = root
+            .map(CheckedViewSource::Binding)
+            .unwrap_or(CheckedViewSource::Other);
+        match expression {
+            Expr::Ident(_) => binding
+                .map(CheckedCallerOrigin::Binding)
+                .unwrap_or(CheckedCallerOrigin::OwnedExpression),
+            Expr::FieldAccess(..) if written_view => {
+                CheckedCallerOrigin::BorrowedProjection { source }
+            }
+            Expr::FieldAccess(..) => CheckedCallerOrigin::OwnedFieldCopy { parent: source },
+            _ => CheckedCallerOrigin::OwnedExpression,
+        }
+    }
+
+    fn invocation_facts(
+        &self,
+        span: Span,
+    ) -> (
+        Option<CheckedGenericCall>,
+        Option<CheckedMethodCall>,
+        Option<CheckedInterfaceCall>,
+        Option<IntrinsicId>,
+        Option<CheckedCallArgumentOrder>,
+        Option<(Vec<TypeId>, TypeId)>,
+    ) {
+        if let Some(active) = self.active_generic_instantiations.last() {
+            (
+                active.generic_calls.get(&span).cloned(),
+                active.method_calls.get(&span).cloned(),
+                active.interface_calls.get(&span).cloned(),
+                active.intrinsic_ids.get(&span).copied(),
+                active.call_argument_orders.get(&span).cloned(),
+                active.invocation_signatures.get(&span).cloned(),
+            )
+        } else {
+            (
+                self.generic_calls.get(&span).cloned(),
+                self.method_calls.get(&span).cloned(),
+                self.interface_calls.get(&span).cloned(),
+                self.intrinsic_ids.get(&span).copied(),
+                self.call_argument_orders.get(&span).cloned(),
+                self.invocation_signatures.get(&span).cloned(),
+            )
+        }
+    }
+
+    fn caller_observation_data(&self, ty: TypeId, visited: &mut HashSet<TypeId>) -> bool {
+        if !visited.insert(ty) {
+            return true;
+        }
+        match self.interner.resolve(ty) {
+            Type::Capability(_)
+            | Type::Resource(_)
+            | Type::Actor(_)
+            | Type::Interface(_)
+            | Type::TypeConstruction => false,
+            Type::Secret(inner)
+            | Type::Refinement { base: inner, .. }
+            | Type::List(inner)
+            | Type::Set(inner)
+            | Type::Optional(inner) => self.caller_observation_data(*inner, visited),
+            Type::Map(left, right) | Type::Result(left, right) => {
+                self.caller_observation_data(*left, visited)
+                    && self.caller_observation_data(*right, visited)
+            }
+            Type::Struct(id) => self
+                .interner
+                .resolve_struct(*id)
+                .fields
+                .iter()
+                .all(|(_, ty)| self.caller_observation_data(*ty, visited)),
+            Type::Enum(id) => self
+                .interner
+                .resolve_enum(*id)
+                .variants
+                .iter()
+                .all(|variant| {
+                    variant
+                        .fields
+                        .iter()
+                        .all(|(_, ty)| self.caller_observation_data(*ty, visited))
+                }),
+            Type::Machine(id) => self
+                .interner
+                .resolve_machine(*id)
+                .states
+                .iter()
+                .all(|state| {
+                    state
+                        .fields
+                        .iter()
+                        .all(|(_, ty)| self.caller_observation_data(*ty, visited))
+                }),
+            Type::MachineState { machine, state } => self
+                .interner
+                .resolve_machine(*machine)
+                .state(*state)
+                .is_some_and(|state| {
+                    state
+                        .fields
+                        .iter()
+                        .all(|(_, ty)| self.caller_observation_data(*ty, visited))
+                }),
+            Type::Bitfield(_)
+            | Type::Function { .. }
+            | Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64
+            | Type::Float32
+            | Type::Float64
+            | Type::String
+            | Type::Bool
+            | Type::Bytes
+            | Type::Nothing
+            | Type::Never
+            | Type::Error => true,
+        }
+    }
+
+    fn record_invocation_ownership(
+        &mut self,
+        callee: &Expr,
+        span: Span,
+        result: TypeId,
+        occurrences: &[(Option<&Expr>, Span, bool, Option<TypeId>)],
+    ) {
+        if result == TypeInterner::ERROR {
+            return;
+        }
+        let callee = Self::unparenthesized(callee);
+        let (mut generic, method, interface, intrinsic, order, intrinsic_signature) =
+            self.invocation_facts(span);
+        // The closed public JSON operation owns the source disposition. Its
+        // checked generic helper is an independent implementation handoff.
+        if intrinsic.is_some_and(|id| {
+            matches!(
+                id,
+                IntrinsicId::JsonSerialize
+                    | IntrinsicId::JsonSerializePublic
+                    | IntrinsicId::JsonParse
+                    | IntrinsicId::JsonParseExact
+            )
+        }) {
+            generic = None;
+        }
+        let (target, mut params, modes, intrinsic_shape, signature_result) = if let Some(call) =
+            generic
+        {
+            let Some(body) = self.generic_function_instantiations.iter().find(|body| {
+                body.definition == call.definition
+                    && body.concrete_args == call.concrete_args
+                    && body.specialization == call.specialization
+            }) else {
+                return;
+            };
+            let definition_span = self.resolve.scope_table.def(call.definition).span;
+            let Some(template) = self
+                .generic_function_templates
+                .values()
+                .find(|template| template.name.span == definition_span)
+            else {
+                return;
+            };
+            (
+                CheckedInvocationTarget::Generic(call),
+                body.parameter_types.clone(),
+                template
+                    .params
+                    .iter()
+                    .map(|param| param.view || Self::type_is_view(&param.ty))
+                    .collect::<Vec<_>>(),
+                None,
+                body.return_type,
+            )
+        } else if let Some(call) = method {
+            let Some(definition) = self
+                .method_definitions
+                .iter()
+                .find(|definition| definition.source_span == call.source_span)
+            else {
+                return;
+            };
+            let Some(modes) = self.method_parameter_modes.get(&call.source_span).cloned() else {
+                return;
+            };
+            (
+                CheckedInvocationTarget::Method(call),
+                definition.parameter_types.clone(),
+                modes,
+                None,
+                definition.return_type,
+            )
+        } else if let Some(call) = interface {
+            let Type::Interface(id) = self.interner.resolve(call.interface_type) else {
+                return;
+            };
+            let Some(signature) = self
+                .interner
+                .resolve_interface(*id)
+                .methods
+                .get(call.method_index)
+            else {
+                return;
+            };
+            (
+                CheckedInvocationTarget::Interface(call),
+                signature.params.iter().map(|(_, ty, _)| *ty).collect(),
+                signature.params.iter().map(|(_, _, view)| *view).collect(),
+                None,
+                signature.return_type,
+            )
+        } else if let Some(intrinsic) = intrinsic {
+            let params = if let Some((params, _)) = intrinsic_signature {
+                params
+            } else if matches!(
+                intrinsic,
+                IntrinsicId::Print
+                    | IntrinsicId::Println
+                    | IntrinsicId::Range
+                    | IntrinsicId::MathAbs
+                    | IntrinsicId::MathMin
+                    | IntrinsicId::MathMax
+            ) {
+                let Some(types) = occurrences
+                    .iter()
+                    .map(|(_, _, _, ty)| *ty)
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    return;
+                };
+                types
+            } else {
+                return;
+            };
+            let Some(modes) = (0..params.len())
+                .map(|index| {
+                    intrinsic_operand_access(intrinsic, index, params.len())
+                        .map(|access| access == CheckedCalleeAccess::View)
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                return;
+            };
+            (
+                CheckedInvocationTarget::Intrinsic(intrinsic),
+                params,
+                modes,
+                Some(intrinsic),
+                result,
+            )
+        } else {
+            let definition = self.resolve.resolutions.get(&callee.span()).copied();
+            let signature_type = definition
+                .and_then(|definition| self.type_env.get(&definition).copied())
+                .or_else(|| self.checked_expression_type(callee.span()));
+            let Some(signature_type) = signature_type else {
+                return;
+            };
+            let Type::Function {
+                params,
+                view_params,
+                return_type,
+            } = self.interner.resolve(signature_type).clone()
+            else {
+                return;
+            };
+            let target = if let Some(definition) = definition.filter(|definition| {
+                self.resolve.scope_table.def(*definition).kind == DefKind::Function
+            }) {
+                CheckedInvocationTarget::Resolved(definition)
+            } else {
+                CheckedInvocationTarget::Indirect(signature_type)
+            };
+            (target, params, view_params, None, return_type)
+        };
+        if params.len() != occurrences.len() || modes.len() != params.len() {
+            return;
+        }
+        // Secret operations have a closed polymorphic payload role, not a
+        // function signature containing the builtin's internal ERROR wildcard.
+        if intrinsic_shape.is_some_and(|intrinsic| {
+            matches!(
+                intrinsic,
+                IntrinsicId::SecretCompare | IntrinsicId::SecretRedact
+            )
+        }) {
+            let Some(concrete) = occurrences
+                .iter()
+                .map(|(_, _, _, ty)| *ty)
+                .collect::<Option<Vec<_>>>()
+            else {
+                return;
+            };
+            params = concrete;
+        }
+        let order = order
+            .map(|order| order.source_indices)
+            .unwrap_or_else(|| (0..params.len()).collect());
+        if order.len() != params.len() {
+            return;
+        }
+        let mut inverse = vec![None; params.len()];
+        for (parameter_index, &source_index) in order.iter().enumerate() {
+            let Some(slot) = inverse.get_mut(source_index) else {
+                return;
+            };
+            if slot.replace(parameter_index).is_some() {
+                return;
+            }
+        }
+        let mut arguments = Vec::with_capacity(params.len());
+        let mut roles = Vec::with_capacity(params.len());
+        for (source_index, &(expression, source_span, written_view, actual_type)) in
+            occurrences.iter().enumerate()
+        {
+            let (Some(parameter_index), Some(actual_type)) = (inverse[source_index], actual_type)
+            else {
+                return;
+            };
+            if actual_type == TypeInterner::ERROR || params[parameter_index] == TypeInterner::ERROR
+            {
+                return;
+            }
+            let origin = self.caller_origin(expression, written_view);
+            let access = if modes[parameter_index] {
+                CheckedCalleeAccess::View
+            } else {
+                CheckedCalleeAccess::Owned
+            };
+            let access = if intrinsic_shape.is_some_and(|intrinsic| {
+                matches!(intrinsic, IntrinsicId::Print | IntrinsicId::Println)
+            }) && written_view
+            {
+                CheckedCalleeAccess::View
+            } else {
+                access
+            };
+            let copyable = crate::ownership::is_implicitly_copyable(&self.interner, actual_type);
+            let observe = self.ownership_context != CheckedOwnershipContext::Ordinary
+                && self.caller_observation_data(actual_type, &mut HashSet::new());
+            // Ordinary function checking has already validated source syntax
+            // (including the pipeline step's original E0375 label). Closed
+            // intrinsic operands have their own sealed role gate here.
+            if intrinsic_shape.is_some() {
+                self.check_argument_view(
+                    access == CheckedCalleeAccess::View,
+                    written_view,
+                    source_span,
+                );
+            }
+            if !observe
+                && !written_view
+                && let Some(expression) = expression
+            {
+                self.check_owned_argument(
+                    access == CheckedCalleeAccess::View,
+                    expression,
+                    params[parameter_index],
+                    actual_type,
+                );
+            }
+            let effect = if copyable {
+                CheckedCallerEffect::Copy
+            } else if observe {
+                CheckedCallerEffect::ObserveData
+            } else if written_view {
+                CheckedCallerEffect::RetainBorrow
+            } else if access == CheckedCalleeAccess::View {
+                CheckedCallerEffect::RelinquishOwned
+            } else {
+                CheckedCallerEffect::TransferOwned
+            };
+            arguments.push(CheckedArgumentOwnership {
+                source_span,
+                source_index,
+                parameter_index,
+                actual_type,
+                parameter_type: params[parameter_index],
+                syntax: if written_view {
+                    CheckedCallerSyntax::WrittenView
+                } else {
+                    CheckedCallerSyntax::Bare
+                },
+                origin,
+                callee_access: access,
+                effect,
+            });
+        }
+        let shape = if let Some(intrinsic) = intrinsic_shape {
+            for (parameter_index, &ty) in params.iter().enumerate() {
+                roles.push(
+                    if matches!(intrinsic, IntrinsicId::Print | IntrinsicId::Println) {
+                        CheckedIntrinsicOperandRole::PrintArgument { ty }
+                    } else if crate::ownership::is_implicitly_copyable(&self.interner, ty) {
+                        CheckedIntrinsicOperandRole::Copy { ty }
+                    } else if modes[parameter_index] {
+                        CheckedIntrinsicOperandRole::View { ty }
+                    } else {
+                        CheckedIntrinsicOperandRole::Owned { ty }
+                    },
+                );
+            }
+            CheckedInvocationShape::Intrinsic {
+                intrinsic,
+                result_type: result,
+                operands: roles,
+            }
+        } else {
+            let signature_type = self.interner.intern(Type::Function {
+                params,
+                view_params: modes,
+                return_type: signature_result,
+            });
+            CheckedInvocationShape::Function { signature_type }
+        };
+        let packet = CheckedCallOwnership {
+            target,
+            shape,
+            context: self.ownership_context,
+            arguments,
+        };
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.call_ownership.insert(span, packet);
+        } else {
+            self.call_ownership.insert(span, packet);
+        }
+    }
+
     fn record_binding_mode(&mut self, span: Span, mode: CheckedBindingMode) {
         if let Some(active) = self.active_generic_instantiations.last_mut() {
             active.binding_modes.insert(span, mode);
@@ -7519,6 +8153,14 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn record_pipeline_step_input_type(&mut self, span: Span, ty: TypeId) {
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.pipeline_step_input_types.insert(span, ty);
+        } else {
+            self.pipeline_step_input_types.insert(span, ty);
+        }
+    }
+
     fn record_pipeline_step_call_type(&mut self, span: Span, ty: TypeId) {
         if let Some(active) = self.active_generic_instantiations.last_mut() {
             active.pipeline_step_call_types.insert(span, ty);
@@ -7543,6 +8185,43 @@ impl<'a> TypeChecker<'a> {
         source.retain(|span, _| !Self::span_is_within(*span, owner));
     }
 
+    fn body_binding_facts(
+        &self,
+        bindings: &HashMap<Span, CheckedBindingFact>,
+        calls: &HashMap<Span, CheckedCallOwnership>,
+        owner: Span,
+    ) -> HashMap<Span, CheckedBindingFact> {
+        let mut facts = Self::facts_in_span(bindings, owner);
+        for (_, call) in calls
+            .iter()
+            .filter(|(span, _)| Self::span_is_within(**span, owner))
+        {
+            for argument in &call.arguments {
+                match &argument.origin {
+                    CheckedCallerOrigin::Binding(fact) => {
+                        facts.insert(fact.declaration_span, *fact);
+                    }
+                    CheckedCallerOrigin::BorrowedProjection {
+                        source: CheckedViewSource::Binding(definition),
+                    }
+                    | CheckedCallerOrigin::OwnedFieldCopy {
+                        parent: CheckedViewSource::Binding(definition),
+                    } => {
+                        let span = self.resolve.scope_table.def(*definition).span;
+                        if let Some(fact) = bindings
+                            .get(&span)
+                            .filter(|fact| fact.definition == *definition)
+                        {
+                            facts.insert(span, *fact);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        facts
+    }
+
     fn clear_checked_body_facts(&mut self, owner: Span) {
         // Expression types are also retained in the root map for the existing
         // interpreter handoff, even while a generic fact scope is active.
@@ -7550,8 +8229,12 @@ impl<'a> TypeChecker<'a> {
         Self::clear_facts_in_span(&mut self.debug_type_names, owner);
         if let Some(active) = self.active_generic_instantiations.last_mut() {
             Self::clear_facts_in_span(&mut active.type_map, owner);
+            Self::clear_facts_in_span(&mut active.source_type_map, owner);
             Self::clear_facts_in_span(&mut active.debug_type_names, owner);
             Self::clear_facts_in_span(&mut active.binding_modes, owner);
+            Self::clear_facts_in_span(&mut active.binding_facts, owner);
+            Self::clear_facts_in_span(&mut active.call_ownership, owner);
+            Self::clear_facts_in_span(&mut active.invocation_signatures, owner);
             Self::clear_facts_in_span(&mut active.generic_calls, owner);
             Self::clear_facts_in_span(&mut active.intrinsic_ids, owner);
             Self::clear_facts_in_span(&mut active.intrinsic_type_arguments, owner);
@@ -7561,11 +8244,16 @@ impl<'a> TypeChecker<'a> {
             Self::clear_facts_in_span(&mut active.interface_calls, owner);
             Self::clear_facts_in_span(&mut active.method_values, owner);
             Self::clear_facts_in_span(&mut active.struct_constructions, owner);
+            Self::clear_facts_in_span(&mut active.pipeline_step_input_types, owner);
             Self::clear_facts_in_span(&mut active.pipeline_step_call_types, owner);
             Self::clear_facts_in_span(&mut active.static_selections, owner);
             Self::clear_facts_in_span(&mut active.comptime_type_bindings, owner);
         } else {
+            Self::clear_facts_in_span(&mut self.source_type_map, owner);
             Self::clear_facts_in_span(&mut self.binding_modes, owner);
+            Self::clear_facts_in_span(&mut self.binding_facts, owner);
+            Self::clear_facts_in_span(&mut self.call_ownership, owner);
+            Self::clear_facts_in_span(&mut self.invocation_signatures, owner);
             Self::clear_facts_in_span(&mut self.generic_calls, owner);
             Self::clear_facts_in_span(&mut self.intrinsic_ids, owner);
             Self::clear_facts_in_span(&mut self.intrinsic_type_arguments, owner);
@@ -7575,6 +8263,7 @@ impl<'a> TypeChecker<'a> {
             Self::clear_facts_in_span(&mut self.interface_calls, owner);
             Self::clear_facts_in_span(&mut self.method_values, owner);
             Self::clear_facts_in_span(&mut self.struct_constructions, owner);
+            Self::clear_facts_in_span(&mut self.pipeline_step_input_types, owner);
             Self::clear_facts_in_span(&mut self.pipeline_step_call_types, owner);
             Self::clear_facts_in_span(&mut self.comptime_type_bindings, owner);
         }
@@ -7584,8 +8273,15 @@ impl<'a> TypeChecker<'a> {
         if let Some(active) = self.active_generic_instantiations.last() {
             return CheckedBodyFacts {
                 type_map: Self::facts_in_span(&active.type_map, owner),
+                source_type_map: Self::facts_in_span(&active.source_type_map, owner),
                 debug_type_names: Self::facts_in_span(&active.debug_type_names, owner),
                 binding_modes: Self::facts_in_span(&active.binding_modes, owner),
+                binding_facts: self.body_binding_facts(
+                    &active.binding_facts,
+                    &active.call_ownership,
+                    owner,
+                ),
+                call_ownership: Self::facts_in_span(&active.call_ownership, owner),
                 generic_calls: Self::facts_in_span(&active.generic_calls, owner),
                 intrinsic_ids: Self::facts_in_span(&active.intrinsic_ids, owner),
                 intrinsic_type_arguments: Self::facts_in_span(
@@ -7601,6 +8297,10 @@ impl<'a> TypeChecker<'a> {
                 interface_calls: Self::facts_in_span(&active.interface_calls, owner),
                 method_values: Self::facts_in_span(&active.method_values, owner),
                 struct_constructions: Self::facts_in_span(&active.struct_constructions, owner),
+                pipeline_step_input_types: Self::facts_in_span(
+                    &active.pipeline_step_input_types,
+                    owner,
+                ),
                 pipeline_step_call_types: Self::facts_in_span(
                     &active.pipeline_step_call_types,
                     owner,
@@ -7611,8 +8311,15 @@ impl<'a> TypeChecker<'a> {
         }
         CheckedBodyFacts {
             type_map: Self::facts_in_span(&self.type_map, owner),
+            source_type_map: Self::facts_in_span(&self.source_type_map, owner),
             debug_type_names: Self::facts_in_span(&self.debug_type_names, owner),
             binding_modes: Self::facts_in_span(&self.binding_modes, owner),
+            binding_facts: self.body_binding_facts(
+                &self.binding_facts,
+                &self.call_ownership,
+                owner,
+            ),
+            call_ownership: Self::facts_in_span(&self.call_ownership, owner),
             generic_calls: Self::facts_in_span(&self.generic_calls, owner),
             intrinsic_ids: Self::facts_in_span(&self.intrinsic_ids, owner),
             intrinsic_type_arguments: Self::facts_in_span(&self.intrinsic_type_arguments, owner),
@@ -7625,6 +8332,7 @@ impl<'a> TypeChecker<'a> {
             interface_calls: Self::facts_in_span(&self.interface_calls, owner),
             method_values: Self::facts_in_span(&self.method_values, owner),
             struct_constructions: Self::facts_in_span(&self.struct_constructions, owner),
+            pipeline_step_input_types: Self::facts_in_span(&self.pipeline_step_input_types, owner),
             pipeline_step_call_types: Self::facts_in_span(&self.pipeline_step_call_types, owner),
             static_selections: HashMap::new(),
             comptime_type_bindings: Self::facts_in_span(&self.comptime_type_bindings, owner),
@@ -8167,6 +8875,10 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_function_impl(&mut self, func: &FunctionDef, function_name: String) {
+        let saved_ownership_context = std::mem::replace(
+            &mut self.ownership_context,
+            CheckedOwnershipContext::Ordinary,
+        );
         self.graphics_method_definitions
             .insert(func.span, func.clone());
         let is_main = func.name.name == "main" && !function_name.contains('.');
@@ -8223,27 +8935,37 @@ impl<'a> TypeChecker<'a> {
         self.current_return_type = None;
         self.current_function_name = None;
         self.current_function_pure = false;
+        self.ownership_context = saved_ownership_context;
     }
 
     fn check_verify_block(&mut self, verify: &VerifyBlock) {
+        let saved_context =
+            std::mem::replace(&mut self.ownership_context, CheckedOwnershipContext::Verify);
         self.in_verify_block = true;
         self.current_verify_name = Some(verify.name.name.clone());
         self.check_block(&verify.body);
         self.in_verify_block = false;
         self.current_verify_name = None;
+        self.ownership_context = saved_context;
     }
 
     fn check_property_block(&mut self, prop: &ast::PropertyBlock) {
+        let saved_context = std::mem::replace(
+            &mut self.ownership_context,
+            CheckedOwnershipContext::Property,
+        );
         self.in_property_block = true;
         for given in &prop.givens {
             self.record_debug_type_name(&given.name, &given.ty);
             let given_type = self.resolve_type_expr(&given.ty);
             if let Some(def_id) = self.declaration_def_id(given.name.span) {
                 self.type_env.insert(def_id, given_type);
+                self.record_assignment_binding(&given.name, false, false);
             }
         }
         self.check_block(&prop.body);
         self.in_property_block = false;
+        self.ownership_context = saved_context;
     }
 
     // ------------------------------------------------------------------
@@ -8953,7 +9675,12 @@ impl<'a> TypeChecker<'a> {
 
     fn check_breakpoint(&mut self, breakpoint_stmt: &ast::BreakpointStmt) {
         if let Some(condition) = &breakpoint_stmt.condition {
+            let saved_context = std::mem::replace(
+                &mut self.ownership_context,
+                CheckedOwnershipContext::BreakpointExpression,
+            );
             let cond_type = self.check_expr(condition);
+            self.ownership_context = saved_context;
             if cond_type != TypeInterner::ERROR && cond_type != TypeInterner::BOOL {
                 self.sink.emit(errors::condition_not_bool(
                     &self.type_name(cond_type),
@@ -8991,28 +9718,44 @@ impl<'a> TypeChecker<'a> {
         expected_ty: TypeId,
         allow_refinement_handle: bool,
     ) -> TypeId {
+        let mut source_ty = None;
         let ty = match expr {
             Expr::Paren(inner, _) => {
-                self.check_expr_for_expected(inner, expected_ty, allow_refinement_handle)
+                let ty = self.check_expr_for_expected(inner, expected_ty, allow_refinement_handle);
+                source_ty = self.checked_source_expression_type(inner.span());
+                ty
             }
             Expr::Run(inner, _) => {
                 let saved_in_property_block = self.in_property_block;
                 self.in_property_block = false;
                 let ty = self.check_expr_for_expected(inner, expected_ty, allow_refinement_handle);
                 self.in_property_block = saved_in_property_block;
+                source_ty = self.checked_source_expression_type(inner.span());
                 ty
             }
             Expr::IntLiteral(value, _)
                 if self.int_literal_matches_expected_type(*value, expected_ty) =>
             {
+                source_ty = Some(
+                    self.direct_secret_inner_type(expected_ty)
+                        .unwrap_or(expected_ty),
+                );
                 expected_ty
             }
             Expr::FloatLiteral(_, _) if self.float_literal_matches_expected_type(expected_ty) => {
+                source_ty = Some(
+                    self.direct_secret_inner_type(expected_ty)
+                        .unwrap_or(expected_ty),
+                );
                 expected_ty
             }
             Expr::Unary(UnaryOp::Neg, inner, _)
                 if self.negated_literal_matches_expected_type(inner, expected_ty) =>
             {
+                source_ty = Some(
+                    self.direct_secret_inner_type(expected_ty)
+                        .unwrap_or(expected_ty),
+                );
                 expected_ty
             }
             Expr::Binary(lhs, op, rhs, span)
@@ -9030,7 +9773,7 @@ impl<'a> TypeChecker<'a> {
                 let expected_inner = self
                     .direct_secret_inner_type(expected_ty)
                     .unwrap_or(expected_ty);
-                match self.interner.resolve(expected_inner).clone() {
+                let ty = match self.interner.resolve(expected_inner).clone() {
                     Type::List(expected_element) => self.check_list_construct_for_expected(
                         elems,
                         expected_ty,
@@ -9038,13 +9781,17 @@ impl<'a> TypeChecker<'a> {
                         allow_refinement_handle,
                     ),
                     _ => self.check_expr(expr),
+                };
+                if ty == expected_ty {
+                    source_ty = Some(expected_inner);
                 }
+                ty
             }
             Expr::MapConstruct(entries, _span) => {
                 let expected_inner = self
                     .direct_secret_inner_type(expected_ty)
                     .unwrap_or(expected_ty);
-                match self.interner.resolve(expected_inner).clone() {
+                let ty = match self.interner.resolve(expected_inner).clone() {
                     Type::Map(expected_key, expected_value) => self
                         .check_map_construct_for_expected(
                             entries,
@@ -9054,13 +9801,17 @@ impl<'a> TypeChecker<'a> {
                             allow_refinement_handle,
                         ),
                     _ => self.check_expr(expr),
+                };
+                if ty == expected_ty {
+                    source_ty = Some(expected_inner);
                 }
+                ty
             }
             Expr::Some(inner, _span) => {
                 let expected_inner = self
                     .direct_secret_inner_type(expected_ty)
                     .unwrap_or(expected_ty);
-                match self.interner.resolve(expected_inner).clone() {
+                let ty = match self.interner.resolve(expected_inner).clone() {
                     Type::Optional(expected_payload) => self.check_wrapper_payload_for_expected(
                         inner,
                         expected_ty,
@@ -9068,13 +9819,17 @@ impl<'a> TypeChecker<'a> {
                         allow_refinement_handle,
                     ),
                     _ => self.check_expr(expr),
+                };
+                if ty == expected_ty {
+                    source_ty = Some(expected_inner);
                 }
+                ty
             }
             Expr::Ok(inner, _span) => {
                 let expected_inner = self
                     .direct_secret_inner_type(expected_ty)
                     .unwrap_or(expected_ty);
-                match self.interner.resolve(expected_inner).clone() {
+                let ty = match self.interner.resolve(expected_inner).clone() {
                     Type::Result(expected_payload, _) => self.check_wrapper_payload_for_expected(
                         inner,
                         expected_ty,
@@ -9082,13 +9837,17 @@ impl<'a> TypeChecker<'a> {
                         allow_refinement_handle,
                     ),
                     _ => self.check_expr(expr),
+                };
+                if ty == expected_ty {
+                    source_ty = Some(expected_inner);
                 }
+                ty
             }
             Expr::Fail(inner, _span) => {
                 let expected_inner = self
                     .direct_secret_inner_type(expected_ty)
                     .unwrap_or(expected_ty);
-                match self.interner.resolve(expected_inner).clone() {
+                let ty = match self.interner.resolve(expected_inner).clone() {
                     Type::Result(_, expected_payload) => self.check_wrapper_payload_for_expected(
                         inner,
                         expected_ty,
@@ -9096,21 +9855,30 @@ impl<'a> TypeChecker<'a> {
                         allow_refinement_handle,
                     ),
                     _ => self.check_expr(expr),
+                };
+                if ty == expected_ty {
+                    source_ty = Some(expected_inner);
                 }
+                ty
             }
             Expr::None(_) => {
                 let expected_inner = self
                     .direct_secret_inner_type(expected_ty)
                     .unwrap_or(expected_ty);
-                match self.interner.resolve(expected_inner) {
+                let ty = match self.interner.resolve(expected_inner) {
                     Type::Optional(_) => expected_ty,
                     _ => self.check_expr(expr),
+                };
+                if ty == expected_ty {
+                    source_ty = Some(expected_inner);
                 }
+                ty
             }
             Expr::Comptime(inner, _) => {
                 self.comptime_expr_depth += 1;
                 let ty = self.check_expr_for_expected(inner, expected_ty, allow_refinement_handle);
                 self.comptime_expr_depth -= 1;
+                source_ty = self.checked_source_expression_type(inner.span());
                 ty
             }
             Expr::Coarsen(inner, span) => {
@@ -9209,10 +9977,13 @@ impl<'a> TypeChecker<'a> {
                     ));
                     expected_ty
                 } else {
+                    source_ty = Some(actual_ty);
                     actual_ty
                 }
             }
         };
+
+        self.record_source_expression_type(expr.span(), source_ty.unwrap_or(ty));
 
         let ty = if let Type::Secret(inner) = self.interner.resolve(expected_ty)
             && *inner != TypeInterner::ERROR
@@ -9260,6 +10031,7 @@ impl<'a> TypeChecker<'a> {
             if let Some(def_id) = self.declaration_def_id(name.span) {
                 self.type_env.insert(def_id, TypeInterner::STRING);
                 self.record_expression_type(name.span, TypeInterner::STRING);
+                self.record_assignment_binding(name, false, false);
                 self.record_closure_local(def_id);
             }
         }
@@ -9457,6 +10229,35 @@ impl<'a> TypeChecker<'a> {
             return;
         };
         let span = self.resolve.scope_table.def(definition).span;
+        if let Some(&ty) = self.type_env.get(&definition) {
+            let checked_mode = self
+                .active_generic_instantiations
+                .last()
+                .and_then(|active| active.binding_modes.get(&name.span))
+                .copied()
+                .or_else(|| {
+                    self.active_generic_instantiations
+                        .is_empty()
+                        .then(|| self.binding_modes.get(&name.span).copied())
+                        .flatten()
+                })
+                .unwrap_or(
+                    if view && !crate::ownership::is_implicitly_copyable(&self.interner, ty) {
+                        CheckedBindingMode::View {
+                            source: CheckedViewSource::Other,
+                        }
+                    } else {
+                        CheckedBindingMode::Owned
+                    },
+                );
+            self.record_binding_fact(CheckedBindingFact {
+                definition,
+                declaration_span: name.span,
+                ty,
+                mode: checked_mode,
+                mutable,
+            });
+        }
         let mode = if view {
             Some(AssignmentBinding::View)
         } else if mutable {
@@ -10270,6 +11071,7 @@ impl<'a> TypeChecker<'a> {
                                 if let Some(def_id) = self.declaration_def_id(binding.span) {
                                     self.type_env.insert(def_id, *field_ty);
                                     self.record_expression_type(binding.span, *field_ty);
+                                    self.record_assignment_binding(binding, false, false);
                                     self.record_closure_local(def_id);
                                 }
                             }
@@ -10525,6 +11327,10 @@ impl<'a> TypeChecker<'a> {
                 let saved_fn_name = self.current_function_name.take();
                 let saved_pure = self.current_function_pure;
                 let saved_in_verify_block = self.in_verify_block;
+                let saved_ownership_context = std::mem::replace(
+                    &mut self.ownership_context,
+                    CheckedOwnershipContext::Ordinary,
+                );
                 let saved_in_property_block = self.in_property_block;
                 let saved_comptime_expr_depth = self.comptime_expr_depth;
                 let saved_graphics_callback = self.in_graphics_callback;
@@ -10570,6 +11376,7 @@ impl<'a> TypeChecker<'a> {
                 self.current_function_name = saved_fn_name;
                 self.current_function_pure = saved_pure;
                 self.in_verify_block = saved_in_verify_block;
+                self.ownership_context = saved_ownership_context;
                 self.in_property_block = saved_in_property_block;
                 self.comptime_expr_depth = saved_comptime_expr_depth;
                 self.in_graphics_callback = saved_graphics_callback;
@@ -10582,19 +11389,30 @@ impl<'a> TypeChecker<'a> {
             }
         };
 
-        // Record the type for this expression span.
+        // Record the source operation before any surrounding expectation adds
+        // its physical conversion at the same expression occurrence.
+        self.record_source_expression_type(expr.span(), ty);
         self.record_expression_type(expr.span(), ty);
         ty
     }
 
     fn check_pipeline(&mut self, initial: &Expr, steps: &[ast::PipelineStep]) -> TypeId {
         let mut current_ty = self.check_expr(initial);
+        let mut input_span = initial.span();
         for (index, step) in steps.iter().enumerate() {
+            // Callee expressions can share this span. Seal the physical virtual
+            // input independently before checking that source occurrence.
+            self.record_pipeline_step_input_type(step.span, current_ty);
             // The interpreter uses the checked input type to infer source-generic
             // arguments for the synthetic first argument of a pipeline call.
             self.record_expression_type(step.span, current_ty);
-            current_ty =
-                self.check_pipeline_step(current_ty, step, (index == 0).then_some(initial));
+            current_ty = self.check_pipeline_step(
+                current_ty,
+                step,
+                (index == 0).then_some(initial),
+                input_span,
+            );
+            input_span = step.span;
         }
         current_ty
     }
@@ -10630,15 +11448,16 @@ impl<'a> TypeChecker<'a> {
         current_ty: TypeId,
         step: &ast::PipelineStep,
         initial: Option<&Expr>,
+        input_span: Span,
     ) -> TypeId {
         let (function, type_args, extra_args, piped_as_view) = Self::pipeline_step_call_parts(step);
         let step_ty = if self.resolved_expr_name(function).as_deref() == Some("graphics.run") {
             // Preserve the source authority expression while sharing every gate
             // with ordinary calls, including named arguments and type inference.
             // A prior pipeline result cannot be a declared capability parameter.
-            let input = initial.cloned().unwrap_or(Expr::Error(step.span));
+            let input = initial.cloned().unwrap_or(Expr::Error(input_span));
             let authority = if piped_as_view {
-                Expr::View(Box::new(input), step.span)
+                Expr::View(Box::new(input), input_span)
             } else {
                 input
             };
@@ -10650,21 +11469,51 @@ impl<'a> TypeChecker<'a> {
             args.extend_from_slice(extra_args);
             self.check_call(function, type_args, &args, step.span, None)
         } else {
-            self.check_pipeline_step_call(current_ty, step, initial)
+            self.check_pipeline_step_call(current_ty, step, initial, input_span)
         };
         self.record_pipeline_step_call_type(step.span, step_ty);
-        if let Some(handle) = &step.handle {
-            return self.check_handle_with_target_type(
+        let output_ty = if let Some(handle) = &step.handle {
+            self.check_handle_with_target_type(
                 step_ty,
                 handle.error_name.as_ref(),
                 &handle.body,
                 handle.span,
-            );
-        }
-        step_ty
+            )
+        } else {
+            step_ty
+        };
+        self.record_source_expression_type(step.span, output_ty);
+        output_ty
     }
 
     fn check_pipeline_step_call(
+        &mut self,
+        current_ty: TypeId,
+        step: &ast::PipelineStep,
+        initial: Option<&Expr>,
+        input_span: Span,
+    ) -> TypeId {
+        let result = self.check_pipeline_step_call_inner(current_ty, step, initial);
+        let (callee, _, extra_args, piped_as_view) = Self::pipeline_step_call_parts(step);
+        let mut occurrences = vec![(
+            initial,
+            input_span,
+            piped_as_view || initial.is_some_and(Self::is_explicit_view),
+            self.checked_source_expression_type(input_span),
+        )];
+        occurrences.extend(extra_args.iter().map(|arg| {
+            (
+                Some(&arg.value),
+                arg.value.span(),
+                Self::is_explicit_view(&arg.value),
+                self.checked_source_expression_type(arg.value.span()),
+            )
+        }));
+        self.record_invocation_ownership(callee, step.span, result, &occurrences);
+        result
+    }
+
+    fn check_pipeline_step_call_inner(
         &mut self,
         current_ty: TypeId,
         step: &ast::PipelineStep,
@@ -12432,6 +13281,30 @@ impl<'a> TypeChecker<'a> {
         span: Span,
         expected_return_type: Option<TypeId>,
     ) -> TypeId {
+        let result = self.check_call_inner(callee, type_args, args, span, expected_return_type);
+        let occurrences = args
+            .iter()
+            .map(|arg| {
+                (
+                    Some(&arg.value),
+                    arg.value.span(),
+                    Self::is_explicit_view(&arg.value),
+                    self.checked_source_expression_type(arg.value.span()),
+                )
+            })
+            .collect::<Vec<_>>();
+        self.record_invocation_ownership(callee, span, result, &occurrences);
+        result
+    }
+
+    fn check_call_inner(
+        &mut self,
+        callee: &Expr,
+        type_args: &[TypeExpr],
+        args: &[ast::CallArg],
+        span: Span,
+        expected_return_type: Option<TypeId>,
+    ) -> TypeId {
         let callee = Self::unparenthesized(callee);
         let callee_name = self.resolved_expr_name(callee);
         let mut callee_is_pure = callee_name
@@ -13535,14 +14408,25 @@ impl<'a> TypeChecker<'a> {
 
     fn is_explicit_view(expression: &Expr) -> bool {
         match expression {
-            Expr::Paren(inner, _) => Self::is_explicit_view(inner),
+            Expr::Paren(inner, _) | Expr::Coarsen(inner, _) | Expr::Declassify(inner, _) => {
+                Self::is_explicit_view(inner)
+            }
             Expr::View(_, _) => true,
+            // Clone acquires ownership, and FieldAccess reads a copied endpoint.
+            // Neither propagates an inner explicit View to this argument.
             _ => false,
         }
     }
 
     fn check_argument_view(&mut self, view_parameter: bool, explicit_view: bool, span: Span) {
-        if explicit_view && !view_parameter {
+        if explicit_view
+            && !view_parameter
+            && !self
+                .sink
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code.code() == 375 && diagnostic.span == span)
+        {
             self.sink
                 .emit(errors::view_argument_requires_view_parameter(span));
         }
@@ -13555,7 +14439,8 @@ impl<'a> TypeChecker<'a> {
         expected: TypeId,
         actual: TypeId,
     ) {
-        if view_parameter
+        if (self.ownership_context != CheckedOwnershipContext::Ordinary
+            && self.caller_observation_data(actual, &mut HashSet::new()))
             || Self::is_explicit_view(argument)
             || expected == TypeInterner::ERROR
             || actual == TypeInterner::ERROR
@@ -13564,10 +14449,18 @@ impl<'a> TypeChecker<'a> {
         {
             return;
         }
-        self.sink
-            .emit(crate::ownership::cannot_pass_view_to_owned_parameter(
+        if !self.diagnosed_caller_view_arguments.insert(argument.span()) {
+            return;
+        }
+        self.sink.emit(if view_parameter {
+            Diagnostic::error(
+                401,
+                "cannot pass a borrowed value bare; write `view` to retain its owner",
                 argument.span(),
-            ));
+            )
+        } else {
+            crate::ownership::cannot_pass_view_to_owned_parameter(argument.span())
+        });
 
         let mut subject = argument;
         while let Expr::View(inner, _)
@@ -15222,6 +16115,7 @@ impl<'a> TypeChecker<'a> {
                     if let Some(def_id) = self.declaration_def_id(name.span) {
                         self.type_env.insert(def_id, err_ty);
                         self.record_expression_type(name.span, err_ty);
+                        self.record_assignment_binding(name, false, false);
                         self.record_closure_local(def_id);
                     }
                 }
@@ -23616,24 +24510,32 @@ function generic_second[T](number: int64, values: T) returns nothing:
 function consume(values: list[int64]) returns nothing:
     return nothing
 "#;
-        for (parameter, value) in [
-            ("view values: Numbers", "coarsen values"),
-            ("view values: Numbers", "coarsen (view values)"),
-            ("view values: secret[list[int64]]", "declassify values"),
+        for (parameter, value, explicit_view) in [
+            ("view values: Numbers", "coarsen values", false),
+            ("view values: Numbers", "coarsen (view values)", true),
+            (
+                "view values: secret[list[int64]]",
+                "declassify values",
+                false,
+            ),
             (
                 "view values: secret[list[int64]]",
                 "declassify (view values)",
+                true,
             ),
         ] {
-            for body in [
-                format!("    return {value}\n"),
-                format!("    consume({value})\n    return list()\n"),
+            for (body, expected_code) in [
+                (format!("    return {value}\n"), 401),
+                (
+                    format!("    consume({value})\n    return list()\n"),
+                    if explicit_view { 375 } else { 401 },
+                ),
             ] {
                 let source =
                     format!("{prefix}function reject({parameter}) returns list[int64]:\n{body}");
                 let errors = check_source_errors(&source);
                 assert_eq!(errors.len(), 1, "{source}\n{errors:?}");
-                assert_eq!(errors[0].code.code(), 401, "{errors:?}");
+                assert_eq!(errors[0].code.code(), expected_code, "{errors:?}");
             }
         }
         for body in [
@@ -23673,7 +24575,7 @@ property borrowed_property_alias:
     assert consume(forwarded) == 1
 "#,
         );
-        assert_eq!(errors.len(), 3, "{errors:?}");
+        assert_eq!(errors.len(), 1, "{errors:?}");
         for error in errors {
             assert_eq!(error.code.code(), 401, "{error:?}");
             assert!(error.message.contains("owned parameter"));
@@ -24468,5 +25370,1350 @@ mod resource_hook_span_tests {
             checker.decl_defs.get(&resource.name.span),
             Some(&resource_definition)
         );
+    }
+}
+
+#[cfg(test)]
+mod caller_ownership_source_tests {
+    use super::*;
+    use jett_common::STDLIB_FILE_ID_START;
+
+    fn checked(source: &str, release: bool, stdlib: bool) -> CheckResult {
+        let parsed = jett_parser::parse(
+            source,
+            FileId::new(if stdlib { STDLIB_FILE_ID_START } else { 0 }),
+        );
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "resolve: {:?}",
+            resolved.diagnostics
+        );
+        check_with_options(&parsed.module, &resolved, CheckOptions { release })
+    }
+
+    fn errors(checked: &CheckResult) -> Vec<&Diagnostic> {
+        checked
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+            .collect()
+    }
+
+    const OBSERVER: &str =
+        "namespace app\nfunction inspect(view values: list[int64]) returns int64:\n    return 7\n";
+
+    #[test]
+    fn caller_facts_bare_view_formals_consume_exact_source_bindings() {
+        for invocation in [
+            "inspect(values)",
+            "app.inspect(values)",
+            "(inspect)(values)",
+        ] {
+            let source = format!(
+                "{OBSERVER}function test(values: list[int64]) returns list[int64]:\n    int64 number = {invocation}\n    return values\n"
+            );
+            for release in [false, true] {
+                let result = checked(&source, release, false);
+                let failures = errors(&result);
+                assert_eq!(failures.len(), 1, "{invocation}: {failures:?}");
+                assert_eq!(failures[0].code.code(), 400);
+                let packet = result
+                    .call_ownership
+                    .values()
+                    .next()
+                    .expect("checked source call");
+                let [argument] = packet.arguments.as_slice() else {
+                    panic!("one source operand");
+                };
+                assert_eq!(argument.syntax, CheckedCallerSyntax::Bare);
+                assert_eq!(argument.callee_access, CheckedCalleeAccess::View);
+                assert_eq!(argument.effect, CheckedCallerEffect::RelinquishOwned);
+                let CheckedCallerOrigin::Binding(binding) = &argument.origin else {
+                    panic!("exact binding origin");
+                };
+                assert_eq!(binding.ty, argument.actual_type);
+                assert_eq!(binding.mode, CheckedBindingMode::Owned);
+                assert!(
+                    result
+                        .binding_facts
+                        .values()
+                        .any(|fact| fact.definition == binding.definition
+                            && fact.declaration_span == binding.declaration_span)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_written_views_retain_owners_but_cannot_supply_owned_formals() {
+        let source = format!(
+            "{OBSERVER}function test(values: list[int64]) returns list[int64]:\n    int64 number = inspect(view values)\n    return values\n"
+        );
+        for release in [false, true] {
+            let result = checked(&source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let argument = &result.call_ownership.values().next().unwrap().arguments[0];
+            assert_eq!(argument.syntax, CheckedCallerSyntax::WrittenView);
+            assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+            let result = checked(
+                "function consume(values: list[int64]) returns nothing:\n    return nothing\nfunction test(view values: list[int64]) returns nothing:\n    consume(view values)\n",
+                release,
+                false,
+            );
+            let failures = errors(&result);
+            assert_eq!(failures.len(), 1, "{failures:?}");
+            assert_eq!(failures[0].code.code(), 375);
+        }
+    }
+
+    #[test]
+    fn caller_facts_known_borrowed_bare_arguments_have_one_precise_error() {
+        for body in [
+            "    int64 number = inspect(values)\n",
+            "    list[int64] borrowed = view values\n    list[int64] forwarded = borrowed\n    int64 number = inspect(forwarded)\n",
+        ] {
+            let source = format!(
+                "{OBSERVER}function test(view values: list[int64]) returns nothing:\n{body}    return nothing\n"
+            );
+            for release in [false, true] {
+                let result = checked(&source, release, false);
+                let failures = errors(&result);
+                assert_eq!(failures.len(), 1, "{failures:?}");
+                assert_eq!(failures[0].code.code(), 401);
+                assert!(failures[0].message.contains("borrowed value bare"));
+                assert!(result.binding_facts.values().any(|fact| matches!(
+                    fact.mode,
+                    CheckedBindingMode::View {
+                        source: CheckedViewSource::Other
+                    }
+                )));
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_named_calls_join_formals_without_reordering_sources() {
+        let source = "function choose(view first: list[int64], view second: list[int64]) returns int64:\n    return 1\nfunction test(left: list[int64], right: list[int64]) returns int64:\n    return choose(second: right, first: left)\n";
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let packet = result.call_ownership.values().next().unwrap();
+            assert_eq!(
+                packet
+                    .arguments
+                    .iter()
+                    .map(|argument| (argument.source_index, argument.parameter_index))
+                    .collect::<Vec<_>>(),
+                [(0, 1), (1, 0)]
+            );
+            assert!(
+                packet
+                    .arguments
+                    .iter()
+                    .all(|argument| argument.effect == CheckedCallerEffect::RelinquishOwned)
+            );
+            let source_text = packet
+                .arguments
+                .iter()
+                .map(|argument| {
+                    &source[argument.source_span.start as usize..argument.source_span.end as usize]
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                source_text[0].contains("right") && source_text[1].contains("left"),
+                "{source_text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_pipeline_source_zero_keeps_its_written_view_witness() {
+        for (step, expected) in [
+            ("into inspect()", CheckedCallerEffect::RelinquishOwned),
+            ("into view inspect()", CheckedCallerEffect::RetainBorrow),
+        ] {
+            let source = format!(
+                "{OBSERVER}function test(values: list[int64]) returns int64:\n    return values {step}\n"
+            );
+            for release in [false, true] {
+                let result = checked(&source, release, false);
+                assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+                let packet = result.call_ownership.values().next().unwrap();
+                assert_eq!(packet.arguments[0].source_index, 0);
+                assert_eq!(packet.arguments[0].parameter_index, 0);
+                assert_eq!(packet.arguments[0].effect, expected);
+                assert_eq!(
+                    packet.arguments[0].syntax == CheckedCallerSyntax::WrittenView,
+                    expected == CheckedCallerEffect::RetainBorrow
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_generic_bodies_keep_concrete_types_and_lexical_contexts() {
+        let source = "function terminal[T](view value: T) returns int64:\n    return 7\nfunction inspect[T](view value: T) returns int64:\n    return terminal[T](view value)\nfunction ordinary(values: list[int64]) returns int64:\n    int64 scalar = inspect[int64](3)\n    return inspect[list[int64]](values)\nverify observations:\n    list[int64] values = list(7)\n    assert inspect[list[int64]](values) == 7\n    assert inspect[list[int64]](values) == 7\n";
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let observed = result
+                .call_ownership
+                .values()
+                .filter(|packet| packet.context == CheckedOwnershipContext::Verify)
+                .collect::<Vec<_>>();
+            assert_eq!(observed.len(), 2);
+            assert!(observed.iter().all(|packet| packet.arguments[0].effect
+                == CheckedCallerEffect::ObserveData
+                && packet.arguments[0].syntax == CheckedCallerSyntax::Bare));
+            let inner = result
+                .generic_function_instantiations
+                .iter()
+                .flat_map(|body| body.call_ownership.values())
+                .collect::<Vec<_>>();
+            assert_eq!(inner.len(), 2);
+            assert!(
+                inner
+                    .iter()
+                    .all(|packet| packet.context == CheckedOwnershipContext::Ordinary)
+            );
+            assert!(inner.iter().any(|packet| packet.arguments[0].effect
+                == CheckedCallerEffect::Copy
+                && packet.arguments[0].actual_type == TypeInterner::INT64));
+            assert!(inner.iter().any(|packet| packet.arguments[0].effect
+                == CheckedCallerEffect::RetainBorrow
+                && matches!(
+                    result.interner.resolve(packet.arguments[0].actual_type),
+                    Type::List(_)
+                )));
+        }
+    }
+
+    #[test]
+    fn caller_facts_reflected_body_packets_do_not_flatten_field_types() {
+        let source = "struct Sample:\n    count: int64\n    values: list[int64]\nfunction probe[T](view value: T) returns nothing:\n    return nothing\nfunction inspect[T](view value: T) returns nothing:\n    for field in type.fields[T]():\n        comptime type Field = field.type_info:\n            Field original = type.field_value[T, Field](view value, view field)\n            probe[Field](view original)\n    return nothing\nfunction main() returns nothing:\n    Sample sample = Sample(count: 1, values: list(2))\n    inspect[Sample](view sample)\n";
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let bodies = result
+                .generic_function_instantiations
+                .iter()
+                .flat_map(|body| body.comptime_type_bindings.values())
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(bodies.len(), 2);
+            let arguments = bodies
+                .iter()
+                .flat_map(|body| body.body.call_ownership.values())
+                .filter(|packet| matches!(packet.target, CheckedInvocationTarget::Generic(_)))
+                .map(|packet| &packet.arguments[0])
+                .collect::<Vec<_>>();
+            assert_eq!(arguments.len(), 2);
+            assert!(
+                arguments
+                    .iter()
+                    .any(|argument| argument.actual_type == TypeInterner::INT64
+                        && argument.effect == CheckedCallerEffect::Copy)
+            );
+            assert!(arguments.iter().any(|argument| matches!(
+                result.interner.resolve(argument.actual_type),
+                Type::List(_)
+            ) && argument.effect
+                == CheckedCallerEffect::RetainBorrow));
+            assert!(
+                bodies
+                    .iter()
+                    .all(|body| !body.body.binding_facts.is_empty())
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_resource_parameters_use_same_source_rule_without_runtime_authority() {
+        let prefix = "namespace audit\nresource Token\nfunction observe(view token: Token) returns int64:\n    return 1\n";
+        for release in [false, true] {
+            let result = checked(
+                &format!(
+                    "{prefix}function last(token: Token) returns int64:\n    return observe(token)\n"
+                ),
+                release,
+                true,
+            );
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            assert!(result.resource_hooks.is_empty());
+            let packet = result.call_ownership.values().next().unwrap();
+            assert_eq!(
+                packet.arguments[0].effect,
+                CheckedCallerEffect::RelinquishOwned
+            );
+            let result = checked(
+                &format!(
+                    "{prefix}function reject(token: Token) returns Token:\n    int64 number = observe(token)\n    return token\n"
+                ),
+                release,
+                true,
+            );
+            let failures = errors(&result);
+            assert_eq!(failures.len(), 1, "{failures:?}");
+            assert_eq!(failures[0].code.code(), 400);
+            let result = checked(
+                &format!(
+                    "{prefix}function retain(token: Token) returns Token:\n    int64 number = observe(view token)\n    return token\n"
+                ),
+                release,
+                true,
+            );
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+        }
+    }
+
+    #[test]
+    fn caller_facts_closed_variadic_print_records_each_source_occurrence() {
+        let source = "function sample(values: list[int64]) returns list[int64]:\n    println(1, view values, \"tail\")\n    return values\n";
+        let result = checked(source, false, false);
+        assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+        let packet = result.call_ownership.values().next().unwrap();
+        assert_eq!(
+            packet.target,
+            CheckedInvocationTarget::Intrinsic(IntrinsicId::Println)
+        );
+        let CheckedInvocationShape::Intrinsic { operands, .. } = &packet.shape else {
+            panic!("closed variadic shape");
+        };
+        assert_eq!(operands.len(), 3);
+        assert!(
+            operands
+                .iter()
+                .all(|role| matches!(role, CheckedIntrinsicOperandRole::PrintArgument { .. }))
+        );
+        assert_eq!(
+            packet
+                .arguments
+                .iter()
+                .map(|argument| argument.effect)
+                .collect::<Vec<_>>(),
+            [
+                CheckedCallerEffect::Copy,
+                CheckedCallerEffect::RetainBorrow,
+                CheckedCallerEffect::Copy
+            ]
+        );
+    }
+    #[test]
+    fn caller_facts_owned_mode_preserves_run_pending_initialization() {
+        let source = "function main() returns nothing:\n    int64 task = run 7\n    cancel task\n    return nothing\n";
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+        }
+    }
+    #[test]
+    fn caller_facts_observation_context_does_not_supply_owned_intrinsic_access() {
+        let source = "verify invalid_source_access:\n    int64 count = 3\n    list[int64] generated = range(view count)\n    assert true\n";
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            let failures = errors(&result);
+            assert_eq!(failures.len(), 1, "{failures:?}");
+            assert_eq!(failures[0].code.code(), 375);
+        }
+    }
+
+    #[test]
+    fn caller_facts_scoped_calls_keep_only_exact_referenced_capture_roots() {
+        let source = r#"namespace app
+struct Sample:
+    count: int64
+    values: list[int64]
+function probe[T](view value: T) returns nothing:
+    return nothing
+function probe_count(value: int64) returns int64:
+    return value
+function inspect[T](view value: T, size: int64, spare: int64) returns nothing:
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            probe[T](view value)
+            probe[list[int64]](view value.values)
+            int64 count = probe_count(value.count)
+            function() returns int64 read = function() returns int64:
+                return probe_count(size)
+            int64 captured = read()
+    return nothing
+function main() returns nothing:
+    Sample sample = Sample(count: 1, values: list(2))
+    inspect[Sample](view sample, 3, 4)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let bodies = result
+                .generic_function_instantiations
+                .iter()
+                .flat_map(|body| body.comptime_type_bindings.values())
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(bodies.len(), 2);
+            for body in bodies {
+                let facts = &body.body.binding_facts;
+                assert!(facts.values().any(|fact| &source
+                    [fact.declaration_span.start as usize..fact.declaration_span.end as usize]
+                    == "size"));
+                assert!(!facts.values().any(|fact| &source
+                    [fact.declaration_span.start as usize..fact.declaration_span.end as usize]
+                    == "spare"));
+                let mut direct = false;
+                let mut projected = false;
+                let mut copied = false;
+                for packet in body.body.call_ownership.values() {
+                    for argument in &packet.arguments {
+                        match &argument.origin {
+                            CheckedCallerOrigin::Binding(fact) => {
+                                assert_eq!(facts.get(&fact.declaration_span), Some(fact));
+                                direct = true;
+                            }
+                            CheckedCallerOrigin::BorrowedProjection {
+                                source: CheckedViewSource::Binding(definition),
+                            } => {
+                                assert!(facts.values().any(|fact| fact.definition == *definition));
+                                projected = true;
+                            }
+                            CheckedCallerOrigin::OwnedFieldCopy {
+                                parent: CheckedViewSource::Binding(definition),
+                            } => {
+                                assert!(facts.values().any(|fact| fact.definition == *definition));
+                                copied = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                assert!(direct && projected && copied);
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_named_descriptors_and_baked_constants_are_producers() {
+        let source = r#"namespace app
+int64 answer = 7
+function identity(value: int64) returns int64:
+    return value
+function accept(callback: function(int64) returns int64, count: int64) returns nothing:
+    return nothing
+function main() returns nothing:
+    accept(identity, answer)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let packet = result
+                .call_ownership
+                .values()
+                .next()
+                .expect("one source call");
+            assert_eq!(packet.arguments.len(), 2);
+            assert!(
+                packet
+                    .arguments
+                    .iter()
+                    .all(|argument| argument.origin == CheckedCallerOrigin::OwnedExpression)
+            );
+            assert_eq!(
+                packet.arguments[0].effect,
+                CheckedCallerEffect::TransferOwned
+            );
+            assert_eq!(packet.arguments[1].effect, CheckedCallerEffect::Copy);
+        }
+    }
+
+    #[test]
+    fn caller_facts_local_descriptors_keep_their_exact_binding_identity() {
+        let source = r#"namespace app
+function identity(value: int64) returns int64:
+    return value
+function inspect(view callback: function(int64) returns int64) returns nothing:
+    return nothing
+function main() returns nothing:
+    function(int64) returns int64 stored = identity
+    inspect(view stored)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let argument = &result
+                .call_ownership
+                .values()
+                .next()
+                .expect("one source call")
+                .arguments[0];
+            let CheckedCallerOrigin::Binding(fact) = &argument.origin else {
+                panic!("local descriptor binding");
+            };
+            assert_eq!(
+                &source[fact.declaration_span.start as usize..fact.declaration_span.end as usize],
+                "stored"
+            );
+            assert_eq!(result.binding_facts.get(&fact.declaration_span), Some(fact));
+            assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+        }
+    }
+
+    #[test]
+    fn caller_facts_pipeline_sources_keep_each_preceding_output_span() {
+        let source = r#"namespace app
+function identity(view values: list[int64]) returns list[int64]:
+    return clone values
+function main(values: list[int64]) returns list[int64]:
+    return values into view identity() into identity()
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut calls = result.call_ownership.iter().collect::<Vec<_>>();
+            calls.sort_by_key(|(span, _)| span.start);
+            assert_eq!(calls.len(), 2);
+            assert_eq!(
+                &source[calls[0].1.arguments[0].source_span.start as usize
+                    ..calls[0].1.arguments[0].source_span.end as usize],
+                "values"
+            );
+            assert_eq!(
+                calls[0].1.arguments[0].effect,
+                CheckedCallerEffect::RetainBorrow
+            );
+            assert_eq!(calls[1].1.arguments[0].source_span, *calls[0].0);
+            assert_eq!(
+                calls[1].1.arguments[0].origin,
+                CheckedCallerOrigin::OwnedExpression
+            );
+            assert_eq!(
+                calls[1].1.arguments[0].effect,
+                CheckedCallerEffect::RelinquishOwned
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_interface_qualified_concrete_calls_use_the_selected_body_signature() {
+        let source = r#"namespace app
+interface Scored:
+    function score(view self: Scored, bonus: int64) returns int64
+struct User:
+    points: int64
+implement Scored for User:
+    function score(view self: User, bonus: int64) returns int64:
+        return self.points + bonus
+function main() returns int64:
+    User user = User(points: 7)
+    return Scored.score(bonus: 5, self: view user)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let packet = result
+                .call_ownership
+                .values()
+                .next()
+                .expect("selected method source call");
+            let CheckedInvocationTarget::Method(call) = &packet.target else {
+                panic!("concrete source method");
+            };
+            let definition = result
+                .method_definitions
+                .iter()
+                .find(|definition| definition.source_span == call.source_span)
+                .unwrap();
+            let CheckedInvocationShape::Function { signature_type } = &packet.shape else {
+                panic!("function shape");
+            };
+            let Type::Function {
+                params,
+                view_params,
+                return_type,
+            } = result.interner.resolve(*signature_type)
+            else {
+                panic!("function signature");
+            };
+            assert_eq!(params, &definition.parameter_types);
+            assert_eq!(*return_type, definition.return_type);
+            assert_eq!(view_params, &[true, false]);
+            assert_eq!(params[0], definition.owner_type);
+            assert!(matches!(
+                result.interner.resolve(params[0]),
+                Type::Struct(_)
+            ));
+            assert_eq!(
+                packet
+                    .arguments
+                    .iter()
+                    .map(|argument| (argument.source_index, argument.parameter_index))
+                    .collect::<Vec<_>>(),
+                [(0, 1), (1, 0)]
+            );
+            assert_eq!(packet.arguments[1].callee_access, CheckedCalleeAccess::View);
+        }
+    }
+
+    #[test]
+    fn caller_facts_inherent_calls_keep_registered_source_formal_modes() {
+        let source = r#"namespace app
+struct User:
+    points: int64
+    function score(view self: User, view values: list[int64]) returns int64:
+        return self.points
+function main() returns int64:
+    User user = User(points: 7)
+    list[int64] values = list(5)
+    return User.score(view user, values)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let packet = result
+                .call_ownership
+                .values()
+                .next()
+                .expect("selected inherent source call");
+            let CheckedInvocationTarget::Method(call) = &packet.target else {
+                panic!("source method");
+            };
+            let definition = result
+                .method_definitions
+                .iter()
+                .find(|definition| definition.source_span == call.source_span)
+                .unwrap();
+            let CheckedInvocationShape::Function { signature_type } = &packet.shape else {
+                panic!("function shape");
+            };
+            let Type::Function {
+                params,
+                view_params,
+                return_type,
+            } = result.interner.resolve(*signature_type)
+            else {
+                panic!("function signature");
+            };
+            assert_eq!(params, &definition.parameter_types);
+            assert_eq!(*return_type, definition.return_type);
+            assert_eq!(view_params, &[true, true]);
+            assert_eq!(
+                packet.arguments[0].effect,
+                CheckedCallerEffect::RetainBorrow
+            );
+            assert_eq!(
+                packet.arguments[1].effect,
+                CheckedCallerEffect::RelinquishOwned
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_erased_calls_keep_the_selected_interface_slot_signature() {
+        let source = r#"namespace app
+interface Scored:
+    function score(view self: Scored, bonus: int64) returns int64
+struct User:
+    points: int64
+implement Scored for User:
+    function score(view self: User, bonus: int64) returns int64:
+        return self.points + bonus
+function inspect(view item: Scored) returns int64:
+    return Scored.score(view item, 5)
+function main() returns int64:
+    User user = User(points: 7)
+    return inspect(view user)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let packet = result
+                .call_ownership
+                .values()
+                .find(|packet| matches!(packet.target, CheckedInvocationTarget::Interface(_)))
+                .expect("selected interface source call");
+            let CheckedInvocationTarget::Interface(call) = &packet.target else {
+                unreachable!();
+            };
+            let Type::Interface(id) = result.interner.resolve(call.interface_type) else {
+                panic!("interface owner");
+            };
+            let slot = &result.interner.resolve_interface(*id).methods[call.method_index];
+            let CheckedInvocationShape::Function { signature_type } = &packet.shape else {
+                panic!("function shape");
+            };
+            let Type::Function {
+                params,
+                view_params,
+                return_type,
+            } = result.interner.resolve(*signature_type)
+            else {
+                panic!("function signature");
+            };
+            assert_eq!(
+                params,
+                &slot.params.iter().map(|(_, ty, _)| *ty).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                view_params,
+                &slot
+                    .params
+                    .iter()
+                    .map(|(_, _, view)| *view)
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(*return_type, slot.return_type);
+            assert_eq!(params[0], call.interface_type);
+            assert_eq!(
+                packet.arguments[0].effect,
+                CheckedCallerEffect::RetainBorrow
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_source_actual_types_survive_binding_field_and_producer_promotion() {
+        let source = r#"namespace app
+struct Holder:
+    values: list[int64]
+function inspect(view values: secret[list[int64]]) returns nothing:
+    return nothing
+function produce() returns list[int64]:
+    return list(7)
+function main() returns nothing:
+    list[int64] values = list(7)
+    inspect(view values)
+    inspect(view produce())
+    Holder holder = Holder(values: list(8))
+    inspect(view holder.values)
+    secret[list[int64]] classified = clone values
+    inspect(view classified)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut calls = result
+                .call_ownership
+                .iter()
+                .filter(|(_, packet)| packet.arguments.len() == 1)
+                .collect::<Vec<_>>();
+            calls.sort_by_key(|(span, _)| span.start);
+            assert_eq!(calls.len(), 4);
+            for (index, (_, packet)) in calls.iter().enumerate() {
+                let argument = &packet.arguments[0];
+                assert_eq!(
+                    result.source_type_map.get(&argument.source_span),
+                    Some(&argument.actual_type)
+                );
+                assert_eq!(
+                    result.type_map.get(&argument.source_span),
+                    Some(&argument.parameter_type)
+                );
+                assert!(matches!(
+                    result.interner.resolve(argument.parameter_type),
+                    Type::Secret(_)
+                ));
+                if index < 3 {
+                    assert!(matches!(
+                        result.interner.resolve(argument.actual_type),
+                        Type::List(_)
+                    ));
+                    assert_ne!(argument.actual_type, argument.parameter_type);
+                } else {
+                    assert_eq!(argument.actual_type, argument.parameter_type);
+                }
+                assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+            }
+            let CheckedCallerOrigin::Binding(binding) = calls[0].1.arguments[0].origin else {
+                panic!("ordinary binding");
+            };
+            assert_eq!(binding.ty, calls[0].1.arguments[0].actual_type);
+            assert_eq!(
+                calls[1].1.arguments[0].origin,
+                CheckedCallerOrigin::OwnedExpression
+            );
+            assert!(matches!(
+                calls[2].1.arguments[0].origin,
+                CheckedCallerOrigin::BorrowedProjection { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn caller_facts_source_actual_types_keep_contextual_width_and_container_inference() {
+        let source = r#"namespace app
+function scalar(view value: secret[int8]) returns nothing:
+    return nothing
+function sequence(view values: secret[list[int8]]) returns nothing:
+    return nothing
+function optional_value(view value: secret[optional[int8]]) returns nothing:
+    return nothing
+function result_value(view value: secret[result[int8, string]]) returns nothing:
+    return nothing
+function mapped(view values: secret[map[string, int8]]) returns nothing:
+    return nothing
+function main() returns nothing:
+    scalar(7)
+    sequence(list())
+    optional_value(some(7))
+    optional_value(none)
+    result_value(ok(7))
+    result_value(fail("error"))
+    mapped(map("one": 7))
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut calls = result.call_ownership.iter().collect::<Vec<_>>();
+            calls.sort_by_key(|(span, _)| span.start);
+            assert_eq!(calls.len(), 7);
+            let expected = [
+                "scalar",
+                "sequence",
+                "optional_value",
+                "optional_value",
+                "result_value",
+                "result_value",
+                "mapped",
+            ];
+            for ((_, packet), name) in calls.iter().zip(expected) {
+                let [argument] = packet.arguments.as_slice() else {
+                    panic!("one source occurrence");
+                };
+                let Type::Secret(inner) = result.interner.resolve(argument.parameter_type) else {
+                    panic!("outer Secret formal for {name}");
+                };
+                assert_eq!(argument.actual_type, *inner, "{name}");
+                assert_eq!(
+                    result.source_type_map.get(&argument.source_span),
+                    Some(inner)
+                );
+                assert_eq!(
+                    result.type_map.get(&argument.source_span),
+                    Some(&argument.parameter_type)
+                );
+            }
+            assert_eq!(calls[0].1.arguments[0].actual_type, TypeInterner::INT8);
+            assert!(
+                matches!(result.interner.resolve(calls[1].1.arguments[0].actual_type), Type::List(inner) if *inner == TypeInterner::INT8)
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_source_actual_types_are_concrete_in_generic_and_reflected_frames() {
+        let source = r#"namespace app
+struct Sample:
+    count: int64
+    values: list[int64]
+function observe[T](view value: secret[T]) returns nothing:
+    return nothing
+function forward[T](view value: T) returns nothing:
+    observe[T](view value)
+function reflected[T](view value: T) returns nothing:
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            Field original = type.field_value[T, Field](view value, view field)
+            observe[Field](view original)
+function main() returns nothing:
+    list[int64] values = list(7)
+    forward[int64](1)
+    forward[list[int64]](view values)
+    Sample sample = Sample(count: 2, values: list(3))
+    reflected[Sample](view sample)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let direct = result
+                .generic_function_instantiations
+                .iter()
+                .filter(|body| body.comptime_type_bindings.is_empty())
+                .flat_map(|body| {
+                    body.call_ownership
+                        .values()
+                        .filter(|packet| {
+                            matches!(packet.target, CheckedInvocationTarget::Generic(_))
+                        })
+                        .map(move |packet| (body, packet))
+                })
+                .collect::<Vec<_>>();
+            // Reflected calls live only in the two exact scoped body snapshots.
+            assert_eq!(direct.len(), 2);
+            for (body, packet) in direct {
+                let argument = &packet.arguments[0];
+                assert_eq!(
+                    body.source_type_map.get(&argument.source_span),
+                    Some(&argument.actual_type)
+                );
+                assert_eq!(
+                    body.type_map.get(&argument.source_span),
+                    Some(&argument.parameter_type)
+                );
+                assert!(!result.source_type_map.contains_key(&argument.source_span));
+            }
+            let scoped = result
+                .generic_function_instantiations
+                .iter()
+                .flat_map(|body| body.comptime_type_bindings.values())
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(scoped.len(), 2);
+            let mut actuals = Vec::new();
+            for scope in scoped {
+                let packet = scope
+                    .body
+                    .call_ownership
+                    .values()
+                    .find(|packet| matches!(packet.target, CheckedInvocationTarget::Generic(_)))
+                    .unwrap();
+                let argument = &packet.arguments[0];
+                assert_eq!(
+                    scope.body.source_type_map.get(&argument.source_span),
+                    Some(&argument.actual_type)
+                );
+                assert_eq!(
+                    scope.body.type_map.get(&argument.source_span),
+                    Some(&argument.parameter_type)
+                );
+                actuals.push(argument.actual_type);
+            }
+            assert!(actuals.contains(&TypeInterner::INT64));
+            assert!(
+                actuals
+                    .iter()
+                    .any(|ty| matches!(result.interner.resolve(*ty), Type::List(_)))
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_source_actual_types_preserve_secret_children_and_binary_taint() {
+        let source = r#"namespace app
+function sequence(view values: secret[list[secret[int8]]]) returns nothing:
+    return nothing
+function optional_value(view value: secret[optional[secret[int8]]]) returns nothing:
+    return nothing
+function result_value(view value: secret[result[secret[int8], string]]) returns nothing:
+    return nothing
+function scalar(view value: secret[int8]) returns nothing:
+    return nothing
+function main() returns nothing:
+    secret[int8] sequence_child = 7
+    secret[int8] optional_child = 8
+    secret[int8] result_child = 9
+    secret[int8] hidden = 10
+    sequence(list(sequence_child))
+    optional_value(some(optional_child))
+    result_value(ok(result_child))
+    scalar(1 + 2)
+    scalar(hidden + 2)
+    scalar(2 + hidden)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut calls = result.call_ownership.iter().collect::<Vec<_>>();
+            calls.sort_by_key(|(span, _)| span.start);
+            assert_eq!(calls.len(), 6);
+            for (_, packet) in &calls {
+                let [argument] = packet.arguments.as_slice() else {
+                    panic!("one source occurrence");
+                };
+                assert_eq!(
+                    result.source_type_map.get(&argument.source_span),
+                    Some(&argument.actual_type)
+                );
+                assert_eq!(
+                    result.type_map.get(&argument.source_span),
+                    Some(&argument.parameter_type)
+                );
+            }
+            let raw_payload = |index: usize| {
+                let actual = calls[index].1.arguments[0].actual_type;
+                let payload = match result.interner.resolve(actual) {
+                    Type::List(payload) | Type::Optional(payload) | Type::Result(payload, _) => {
+                        *payload
+                    }
+                    other => panic!("inner container or sum, got {other:?}"),
+                };
+                assert!(
+                    matches!(result.interner.resolve(payload), Type::Secret(inner) if *inner == TypeInterner::INT8)
+                );
+                let Type::Secret(expected_inner) = result
+                    .interner
+                    .resolve(calls[index].1.arguments[0].parameter_type)
+                else {
+                    panic!("outer Secret formal");
+                };
+                assert_eq!(*expected_inner, actual);
+            };
+            for index in 0..3 {
+                raw_payload(index);
+            }
+            assert_eq!(calls[3].1.arguments[0].actual_type, TypeInterner::INT8);
+            for (_, packet) in &calls[4..] {
+                let argument = &packet.arguments[0];
+                assert_eq!(argument.actual_type, argument.parameter_type);
+                assert!(
+                    matches!(result.interner.resolve(argument.actual_type), Type::Secret(inner) if *inner == TypeInterner::INT8)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_pipeline_inputs_survive_indirect_field_callee_spans() {
+        let source = r#"namespace app
+enum Choice:
+    chosen(value: int64)
+    other(value: int64)
+function choose(value: int64) returns Choice:
+    return Choice.chosen(value)
+function increment(value: int64) returns int64:
+    return value + 1
+struct ChoiceHolder:
+    item: function(int64) returns Choice
+struct NumberHolder:
+    item: function(int64) returns int64
+function direct() returns Choice:
+    ChoiceHolder holder = ChoiceHolder(item: choose)
+    return 4 into holder.item
+function chained() returns int64:
+    NumberHolder holder = NumberHolder(item: increment)
+    return 4 into holder.item into holder.item
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut inputs = result.pipeline_step_input_types.iter().collect::<Vec<_>>();
+            inputs.sort_by_key(|(span, _)| span.start);
+            assert_eq!(inputs.len(), 3);
+            for (&span, &input) in inputs.iter().copied() {
+                assert_eq!(input, TypeInterner::INT64);
+                assert!(matches!(
+                    result.interner.resolve(result.type_map[&span]),
+                    Type::Function { .. }
+                ));
+                let packet = &result.call_ownership[&span];
+                assert!(matches!(
+                    packet.target,
+                    CheckedInvocationTarget::Indirect(_)
+                ));
+                assert_eq!(packet.arguments[0].actual_type, input);
+                assert_eq!(packet.arguments[0].parameter_type, input);
+                assert_eq!(
+                    result.source_type_map[&span],
+                    result.pipeline_step_call_types[&span]
+                );
+            }
+            assert!(matches!(
+                result.interner.resolve(result.source_type_map[inputs[0].0]),
+                Type::Enum(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn caller_facts_pipeline_inputs_distinguish_handled_output_and_reject_bad_inputs() {
+        let prefix = r#"namespace app
+function parse(value: string) returns result[int64, string]:
+    return fail("bad")
+function increment(value: int64) returns int64:
+    return value + 1
+struct Holder:
+    parse: function(string) returns result[int64, string]
+    finish: function(int64) returns int64
+"#;
+        let source = format!(
+            "{prefix}function main() returns int64:\n    Holder holder = Holder(parse: parse, finish: increment)\n    return \"x\"\n        into holder.parse handle error:\n            default 7\n        into holder.finish\n"
+        );
+        let invalid = format!(
+            "{prefix}function invalid() returns result[int64, string]:\n    Holder holder = Holder(parse: parse, finish: increment)\n    return 4 into holder.parse\n"
+        );
+        for release in [false, true] {
+            let result = checked(&source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut inputs = result.pipeline_step_input_types.iter().collect::<Vec<_>>();
+            inputs.sort_by_key(|(span, _)| span.start);
+            assert_eq!(inputs.len(), 2);
+            assert_eq!(*inputs[0].1, TypeInterner::STRING);
+            assert_eq!(*inputs[1].1, TypeInterner::INT64);
+            let first = *inputs[0].0;
+            assert!(
+                matches!(result.interner.resolve(result.pipeline_step_call_types[&first]), Type::Result(value, error) if *value == TypeInterner::INT64 && *error == TypeInterner::STRING)
+            );
+            assert_eq!(result.source_type_map[&first], TypeInterner::INT64);
+            assert_eq!(
+                result.call_ownership[inputs[1].0].arguments[0].source_span,
+                first
+            );
+            // The handle extends the first step span; only the following
+            // unhandled field target shares its complete occurrence span.
+            assert_eq!(result.type_map[&first], TypeInterner::STRING);
+            assert!(matches!(
+                result.interner.resolve(result.type_map[inputs[1].0]),
+                Type::Function { .. }
+            ));
+            let rejected = checked(&invalid, release, false);
+            assert!(
+                !errors(&rejected).is_empty(),
+                "invalid indirect input was admitted"
+            );
+            assert_eq!(
+                rejected
+                    .pipeline_step_input_types
+                    .values()
+                    .copied()
+                    .collect::<Vec<_>>(),
+                vec![TypeInterner::INT64]
+            );
+            assert!(
+                errors(&rejected)
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains("string")
+                        && diagnostic.message.contains("int64"))
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_pipeline_inputs_stay_in_exact_generic_and_reflected_frames() {
+        let source = r#"namespace app
+struct Sample:
+    count: int64
+    values: list[int64]
+function scalar(value: int64) returns int64:
+    return value
+function text(value: string) returns string:
+    return value
+function apply[T](value: T, mapper: function(T) returns T) returns T:
+    return value into mapper
+function inspect[T](view value: T) returns nothing:
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            Field original = type.field_value[T, Field](view value, view field)
+            function(Field) returns Field mapper = function(item: Field) returns Field:
+                return item
+            Field copied = original into mapper
+    return nothing
+function main() returns nothing:
+    int64 count = apply[int64](7, scalar)
+    string label = apply[string]("x", text)
+    Sample sample = Sample(count: 1, values: list(2))
+    inspect[Sample](view sample)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            assert!(result.pipeline_step_input_types.is_empty());
+            let direct = result
+                .generic_function_instantiations
+                .iter()
+                .filter(|body| body.comptime_type_bindings.is_empty())
+                .flat_map(|body| {
+                    body.pipeline_step_input_types
+                        .iter()
+                        .map(move |(span, input)| (body, span, input))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(direct.len(), 2);
+            let mut direct_types = Vec::new();
+            for (body, span, input) in direct {
+                let packet = &body.call_ownership[span];
+                assert_eq!(packet.arguments[0].actual_type, *input);
+                assert!(matches!(
+                    result.interner.resolve(body.type_map[span]),
+                    Type::Function { .. }
+                ));
+                assert!(!result.pipeline_step_input_types.contains_key(span));
+                direct_types.push(*input);
+            }
+            assert!(direct_types.contains(&TypeInterner::INT64));
+            assert!(direct_types.contains(&TypeInterner::STRING));
+            let scopes = result
+                .generic_function_instantiations
+                .iter()
+                .flat_map(|body| body.comptime_type_bindings.values())
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(scopes.len(), 2);
+            let mut scoped_types = Vec::new();
+            for scope in scopes {
+                assert_eq!(scope.body.pipeline_step_input_types.len(), 1);
+                let (&span, &input) = scope.body.pipeline_step_input_types.iter().next().unwrap();
+                assert_eq!(
+                    scope.body.call_ownership[&span].arguments[0].actual_type,
+                    input
+                );
+                assert!(matches!(
+                    result.interner.resolve(scope.body.type_map[&span]),
+                    Type::Function { .. }
+                ));
+                scoped_types.push(input);
+            }
+            assert!(scoped_types.contains(&TypeInterner::INT64));
+            assert!(scoped_types.iter().any(|input| matches!(result.interner.resolve(*input), Type::List(element) if *element == TypeInterner::INT64)));
+        }
+    }
+
+    #[test]
+    fn caller_facts_transformed_explicit_views_retain_borrows_across_call_forms() {
+        let source = r#"namespace app
+type Numbers = list[int64] where true
+function inspect(view values: list[int64]) returns nothing:
+    return nothing
+function generic[T](view value: T) returns nothing:
+    return nothing
+function retained(view numbers: Numbers, view hidden: secret[list[int64]], callback: function(view list[int64]) returns nothing) returns nothing:
+    inspect(coarsen (view numbers))
+    generic[list[int64]](declassify (view hidden))
+    callback((coarsen ((view numbers))))
+    (declassify (view hidden)) into inspect
+    list[int64] first_copy = clone (coarsen numbers)
+    list[int64] second_copy = clone (declassify hidden)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            assert_eq!(result.call_ownership.len(), 4);
+            for packet in result.call_ownership.values() {
+                let [argument] = packet.arguments.as_slice() else {
+                    panic!("one source argument");
+                };
+                assert_eq!(argument.syntax, CheckedCallerSyntax::WrittenView);
+                assert_eq!(argument.callee_access, CheckedCalleeAccess::View);
+                assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+                assert!(matches!(argument.origin, CheckedCallerOrigin::Binding(_)));
+                assert!(
+                    matches!(result.interner.resolve(argument.actual_type), Type::List(element) if *element == TypeInterner::INT64)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_transformed_views_keep_explicit_and_bare_diagnostics_distinct() {
+        let prefix = r#"namespace app
+type Numbers = list[int64] where true
+function consume(values: list[int64]) returns nothing:
+    return nothing
+function inspect(view values: list[int64]) returns nothing:
+    return nothing
+"#;
+        for (parameter, call, expected_code) in [
+            (
+                "view values: Numbers",
+                "consume(coarsen (view values))",
+                375,
+            ),
+            (
+                "view values: secret[list[int64]]",
+                "consume(declassify (view values))",
+                375,
+            ),
+            ("view values: Numbers", "consume(coarsen values)", 401),
+            (
+                "view values: secret[list[int64]]",
+                "consume(declassify values)",
+                401,
+            ),
+            ("view values: Numbers", "inspect(coarsen values)", 401),
+            (
+                "view values: secret[list[int64]]",
+                "inspect(declassify values)",
+                401,
+            ),
+        ] {
+            let source = format!(
+                "{prefix}function rejected({parameter}) returns nothing:\n    {call}\n    return nothing\n"
+            );
+            for release in [false, true] {
+                let result = checked(&source, release, false);
+                let failures = errors(&result);
+                assert_eq!(failures.len(), 1, "{source}: {failures:?}");
+                assert_eq!(
+                    failures[0].code.code(),
+                    expected_code,
+                    "{source}: {failures:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_transparent_view_syntax_stops_at_clones_and_copied_fields() {
+        let source = r#"namespace app
+type Numbers = list[int64] where true
+struct Holder:
+    values: list[int64]
+    numbers: Numbers
+    hidden: secret[list[int64]]
+function consume(values: list[int64]) returns nothing:
+    return nothing
+function acquired(view numbers: Numbers, view hidden: secret[list[int64]], view holder: Holder) returns nothing:
+    consume(coarsen (clone (view numbers)))
+    consume(declassify (clone (view hidden)))
+    consume((view holder).values)
+    consume(coarsen ((view holder).numbers))
+    consume(declassify ((view holder).hidden))
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut packets = result.call_ownership.iter().collect::<Vec<_>>();
+            packets.sort_by_key(|(span, _)| span.start);
+            assert_eq!(packets.len(), 5);
+            for (index, (_, packet)) in packets.iter().enumerate() {
+                let [argument] = packet.arguments.as_slice() else {
+                    panic!("one source argument");
+                };
+                assert_eq!(argument.syntax, CheckedCallerSyntax::Bare);
+                assert_eq!(argument.callee_access, CheckedCalleeAccess::Owned);
+                assert_eq!(argument.effect, CheckedCallerEffect::TransferOwned);
+                if index < 2 {
+                    assert_eq!(argument.origin, CheckedCallerOrigin::OwnedExpression);
+                } else {
+                    assert!(matches!(
+                        argument.origin,
+                        CheckedCallerOrigin::OwnedFieldCopy { .. }
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_invalid_calls_preserve_dependency_ownership_diagnostics() {
+        let take = "function take(values: list[int64]) returns int64:\n    return 1\n";
+        let cases = [
+            (format!("{OBSERVER}function test(values: list[int64]) returns list[int64]:\n    int64 ignored = inspect[int64](values)\n    return values\n"), vec![309], false),
+            (format!("{OBSERVER}{take}function test(values: list[int64]) returns list[int64]:\n    int64 ignored = inspect[int64](take(values))\n    return values\n"), vec![309, 400], false),
+            (format!("{OBSERVER}{take}function test(view values: list[int64]) returns int64:\n    return inspect[int64](take(values))\n"), vec![309, 401], false),
+            (format!("{OBSERVER}{take}function test(values: list[int64]) returns int64:\n    int64 consumed = take(values)\n    return inspect[int64](values)\n"), vec![309, 400], false),
+            ("namespace app\nfunction test(view values: bytes) returns string:\n    return bytes.__to_hex[string](values)\n".to_string(), vec![309], true),
+            ("namespace app\nfunction test() returns string:\n    return bytes.__to_hex[string](1)\n".to_string(), vec![304, 309], true),
+            ("namespace app\nfunction test(view values: bytes) returns string:\n    return bytes.__to_hex(values)\n".to_string(), vec![401], true),
+            ("namespace app\nfunction test(view values: bytes) returns string:\n    return bytes.__to_hex(view values)\n".to_string(), vec![], true),
+        ];
+        for (source, expected, stdlib) in cases {
+            for release in [false, true] {
+                let result = checked(&source, release, stdlib);
+                let mut codes = errors(&result)
+                    .iter()
+                    .map(|error| error.code.code())
+                    .collect::<Vec<_>>();
+                codes.sort_unstable();
+                assert_eq!(
+                    codes, expected,
+                    "release={release}: {:?}",
+                    result.diagnostics
+                );
+            }
+        }
     }
 }

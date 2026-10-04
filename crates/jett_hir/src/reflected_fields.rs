@@ -2052,6 +2052,7 @@ function pipeline_operands(view value: Record, view field: TypeField) returns in
             function,
             args,
             evaluation_order,
+            ..
         } = &returned_read(&program, "pipeline_operands").kind
         else {
             panic!("next source call");
@@ -2397,6 +2398,7 @@ function arg_order(index: int64) returns string:
                 function,
                 args,
                 evaluation_order,
+                ..
             } = &returned_read(&program, name).kind
             else {
                 panic!("following call");

@@ -133,12 +133,12 @@ verify concat_empty_test:
 # --- ownership contract ---
 function observer_views_preserve_owner() returns string:
     bytes original = bytes.from_string("Hi")
-    int64 length = bytes.length(original)
-    int64 first = bytes.get(original, 0) handle:
+    int64 length = bytes.length(view original)
+    int64 first = bytes.get(view original, 0) handle:
         default -1
-    bytes piece = bytes.slice(original, 0, 1)
-    string hex = bytes.to_hex(original)
-    string text = bytes.to_string(original) handle error:
+    bytes piece = bytes.slice(view original, 0, 1)
+    string hex = bytes.to_hex(view original)
+    string text = bytes.to_string(view original) handle error:
         default error
     return "{length}:{first}:{bytes.length(piece)}:{hex}:{text}:{bytes.length(original)}"
 verify observer_views_preserve_owner:

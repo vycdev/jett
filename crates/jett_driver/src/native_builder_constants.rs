@@ -8,7 +8,9 @@ use jett_hir::{
 };
 use jett_types::{ReflectionFieldInfo, ReflectionTypeInfo, Type, TypeId, TypeInterner};
 
-use crate::native_property_cases::{ValueContext, value_expression};
+use crate::native_property_cases::{
+    ValueContext, evaluated_intrinsic_expression, value_expression,
+};
 
 pub(super) fn builder_expression(
     value: &Value,
@@ -109,7 +111,7 @@ pub(super) fn builder_expression(
             context,
         )?);
     }
-    let mut current = intrinsic_expression(
+    let mut current = evaluated_intrinsic_expression(
         intrinsic,
         vec![owner],
         arguments,
@@ -120,7 +122,8 @@ pub(super) fn builder_expression(
             TypeInterner::TYPE_CONSTRUCTION
         },
         span,
-    );
+        types,
+    )?;
     if member.is_some() {
         current = unwrap_builder(current, span);
     }
@@ -163,14 +166,15 @@ pub(super) fn builder_expression(
         )?;
         let payload = value_expression(payload, payload_type, span, context)?;
         current = unwrap_builder(
-            intrinsic_expression(
+            evaluated_intrinsic_expression(
                 IntrinsicId::TypeConstructPut,
                 vec![owner, payload_type],
                 vec![info.clone(), payload_info],
                 vec![current, metadata, payload],
                 builder_result_type(types)?,
                 span,
-            ),
+                types,
+            )?,
             span,
         );
     }
@@ -219,29 +223,6 @@ fn builder_result_type(types: &TypeInterner) -> Result<TypeId, String> {
         if *ok == TypeInterner::TYPE_CONSTRUCTION && *error == TypeInterner::STRING)
         })
         .ok_or("checked builder result type is absent".into())
-}
-
-fn intrinsic_expression(
-    intrinsic: IntrinsicId,
-    type_arguments: Vec<TypeId>,
-    reflection_arguments: Vec<ReflectionTypeInfo>,
-    args: Vec<Expression>,
-    ty: TypeId,
-    span: Span,
-) -> Expression {
-    Expression {
-        kind: ExpressionKind::Intrinsic {
-            intrinsic,
-            type_arguments,
-            reflection_arguments,
-            refinement_predicates: Vec::new(),
-            field_validation: None,
-            evaluation_order: (0..args.len()).collect(),
-            args,
-        },
-        ty,
-        span,
-    }
 }
 
 fn unwrap_builder(target: Expression, span: Span) -> Expression {

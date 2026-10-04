@@ -4,39 +4,39 @@ function raw_tree_facade_root() returns json.JsonTree:
     return json.parse_raw("{{\"name\":\"Ada\",\"scores\":[3,5],\"active\":true,\"ratio\":2.5,\"missing\":null}}") handle error:
         default json.JsonTree.string_value(error)
 function raw_tree_facade_name(view root: json.JsonTree) returns string:
-    json.JsonTree name = json.field(root, "name") handle:
+    json.JsonTree name = json.field(view root, "name") handle:
         return "missing name"
     return json.as_string(name) handle error:
         default error
 function raw_tree_facade_scores(view root: json.JsonTree) returns string:
-    json.JsonTree scores = json.field(root, "scores") handle:
+    json.JsonTree scores = json.field(view root, "scores") handle:
         return "missing scores"
-    int64 score_count = json.array_length(scores) handle error:
+    int64 score_count = json.array_length(view scores) handle error:
         return error
-    json.JsonTree second = json.index(scores, 1) handle:
+    json.JsonTree second = json.index(view scores, 1) handle:
         return "missing score"
-    int64 second_score = json.as_int64(second) handle error:
+    int64 second_score = json.as_int64(view second) handle error:
         return error
     return "{json.is_array(scores)}:{score_count}:{second_score}:{json.is_number(second)}"
 function raw_tree_facade_scalars(view root: json.JsonTree) returns string:
-    json.JsonTree active = json.field(root, "active") handle:
+    json.JsonTree active = json.field(view root, "active") handle:
         return "missing active"
-    bool active_value = json.as_bool(active) handle error:
+    bool active_value = json.as_bool(view active) handle error:
         return error
-    json.JsonTree ratio = json.field(root, "ratio") handle:
+    json.JsonTree ratio = json.field(view root, "ratio") handle:
         return "missing ratio"
     float64 ratio_value = json.as_float64(ratio) handle error:
         return error
-    json.JsonTree missing = json.field(root, "missing") handle:
+    json.JsonTree missing = json.field(view root, "missing") handle:
         return "missing null"
     return "{active_value}:{json.is_bool(active)}:{ratio_value}:{json.is_null(missing)}"
 function raw_tree_facade_root_summary(view root: json.JsonTree) returns string:
-    string root_kind = json.kind(root)
-    bool root_is_object = json.is_object(root)
-    list[string] keys = json.object_keys(root) handle error:
+    string root_kind = json.kind(view root)
+    bool root_is_object = json.is_object(view root)
+    list[string] keys = json.object_keys(view root) handle error:
         return error
-    string raw = json.serialize_raw(root)
-    string root_kind_after_reads = json.kind(root)
+    string raw = json.serialize_raw(view root)
+    string root_kind_after_reads = json.kind(view root)
     bool raw_mentions_name = string.contains(raw, "Ada")
     return "{root_kind}:{root_is_object}:{list.length[string](view keys)}:{raw_mentions_name}:{root_kind_after_reads}"
 function raw_tree_facade_summary() returns string:

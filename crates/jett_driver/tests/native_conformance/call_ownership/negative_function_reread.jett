@@ -1,0 +1,11 @@
+namespace app
+function increment(value: int64) returns int64:
+    return value + 1
+function apply(view callback: function(int64) returns int64, value: int64) returns int64:
+    return callback(value)
+function main(stdout: Stdout) returns nothing:
+    function(int64) returns int64 callback = increment
+    int64 before = apply(callback, 3)
+    int64 after = apply(view callback, 5)
+    Stdout.write(view stdout, "{before}:{after}\n")
+    return nothing

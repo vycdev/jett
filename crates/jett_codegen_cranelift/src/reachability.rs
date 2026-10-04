@@ -351,6 +351,7 @@ fn collect_expression_references(expression: &Expression, references: &mut Refer
             field_validation: _,
             args,
             evaluation_order: _,
+            ..
         } => {
             for argument in args {
                 collect_expression_references(argument, references);
@@ -651,7 +652,7 @@ function root() returns int64:
 
     #[test]
     fn retained_calls_and_references_still_reach_uninhabited_specializations() {
-        for source in [
+        for (case, source) in [
             r#"namespace app
 function identity(value: int64) returns int64:
     return value
@@ -664,7 +665,10 @@ function identity(value: int64) returns int64:
 function root() returns function(int64) returns int64:
     return identity
 "#,
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let (mut program, types) = lower_source_with_types(source);
             let callee = program
                 .functions
@@ -678,11 +682,42 @@ function root() returns function(int64) returns int64:
             callee.locals[parameter].debug_ty = jett_types::TypeInterner::NEVER;
             assert!(uninhabited_specialization(callee));
             assert_eq!(reachable_names(&program), ["identity", "root"]);
-            // A fabricated surviving use must fail ordinary verification;
-            // suppressing implicit roots must never supply a `never` carrier.
+            // Reachability keeps both identities, but an earlier source
+            // packet rejection is independent of the native callable gate.
+            let result = crate::emit_host_object(&program, &types);
+            if case == 0 {
+                assert!(matches!(result, Err(CodegenError::InvalidMir(errors))
+                    if errors.len() == 1 && errors[0].message
+                        == "source function ownership signature differs from the exact HIR declaration"));
+            } else {
+                // Preserve the original reference-only refusal until its
+                // actual validation path is characterized separately.
+                assert!(matches!(
+                    result,
+                    Err(CodegenError::InvalidMirContract { .. })
+                ));
+            }
+            let root = program
+                .functions
+                .iter()
+                .find(|function| function.identity.declaration.name == "root")
+                .expect("original checked root");
+            let expression = root
+                .blocks
+                .iter()
+                .find_map(|block| match &block.terminator.kind {
+                    TerminatorKind::Return(Some(value)) => Some(value),
+                    _ => None,
+                })
+                .expect("retained original call or reference");
+            let expected = if case == 0 {
+                "callable direct edge requires an uninhabited parameter"
+            } else {
+                "function value signature does not match target"
+            };
             assert!(matches!(
-                crate::emit_host_object(&program, &types),
-                Err(CodegenError::InvalidMirContract { .. })
+                crate::verify::verify_callable_expression_for_test(&program, &types, root, expression),
+                Err(CodegenError::InvalidMirContract { message, .. }) if message == expected
             ));
         }
     }

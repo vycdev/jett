@@ -67,7 +67,7 @@ fn projected_source(
 pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
     // This pass must not make malformed, unreachable input disappear before
     // the caller reports its original validation errors.
-    if validate(program).is_err() {
+    if validate_call_ownership(program, types).is_err() {
         return;
     }
     for function in &mut program.functions {
@@ -86,6 +86,10 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             else {
                 continue;
             };
+            let Ok(iteration_plan) = crate::iteration_views::original_plan(function, header, types)
+            else {
+                continue;
+            };
             if iterable.ty.index() as usize >= types.len() {
                 continue;
             }
@@ -93,7 +97,7 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                 Type::List(element) | Type::Set(element) if value_binding.is_none() => {
                     (*element, None)
                 }
-                Type::Map(key, map_value) if value_binding.is_some() => (*key, Some(*map_value)),
+                Type::Map(key, map_value) => (*key, value_binding.map(|_| *map_value)),
                 Type::String if value_binding.is_none() => (TypeInterner::STRING, None),
                 _ => continue,
             };
@@ -246,7 +250,7 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                         source: source.clone(),
                         index: cursor,
                         target: key,
-                        part: if map_value.is_some() {
+                        part: if matches!(types.resolve(iterable.ty), Type::Map(..)) {
                             SequencePart::Key
                         } else {
                             SequencePart::Element
@@ -339,6 +343,17 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                         redirect_edge(&mut function.blocks[i].terminator.kind, target, end);
                     }
                 }
+            }
+            if let Some(original) = iteration_plan {
+                crate::iteration_views::retain_prepared(
+                    function,
+                    original,
+                    source,
+                    cursor,
+                    length,
+                    BlockId(preheader as u32),
+                    span,
+                );
             }
         }
         if removed_uninhabited_body {

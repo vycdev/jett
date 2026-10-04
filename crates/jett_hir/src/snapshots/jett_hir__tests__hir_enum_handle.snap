@@ -1,5 +1,6 @@
 ---
 source: crates/jett_hir/src/lib.rs
+assertion_line: 7014
 expression: program
 ---
 Program {
@@ -309,6 +310,92 @@ Program {
                                             evaluation_order: [
                                                 0,
                                             ],
+                                            ownership: Source(
+                                                SourceCallOwnership {
+                                                    target: Function(
+                                                        FunctionId(
+                                                            0,
+                                                        ),
+                                                    ),
+                                                    shape: Function {
+                                                        signature_type: TypeId(
+                                                            49,
+                                                        ),
+                                                    },
+                                                    context: Ordinary,
+                                                    arguments: [
+                                                        ArgumentOwnership {
+                                                            source_span: Span {
+                                                                file: FileId(
+                                                                    0,
+                                                                ),
+                                                                start: 208,
+                                                                end: 211,
+                                                            },
+                                                            source_index: 0,
+                                                            parameter_index: 0,
+                                                            actual_type: TypeId(
+                                                                10,
+                                                            ),
+                                                            parameter_type: TypeId(
+                                                                10,
+                                                            ),
+                                                            syntax: Bare,
+                                                            origin: OwnedExpression,
+                                                            callee_access: Owned,
+                                                            physical_access: Owned,
+                                                            effect: Copy,
+                                                            staging: Original,
+                                                            witness: SourceArgumentWitness {
+                                                                source_span: Span {
+                                                                    file: FileId(
+                                                                        0,
+                                                                    ),
+                                                                    start: 208,
+                                                                    end: 211,
+                                                                },
+                                                                source_index: 0,
+                                                                parameter_index: 0,
+                                                                actual_type: TypeId(
+                                                                    10,
+                                                                ),
+                                                                occurrence_type: TypeId(
+                                                                    10,
+                                                                ),
+                                                                parameter_type: TypeId(
+                                                                    10,
+                                                                ),
+                                                                syntax: Bare,
+                                                                origin: OwnedExpression,
+                                                                callee_access: Owned,
+                                                                effect: Copy,
+                                                                context: Ordinary,
+                                                                observation: None,
+                                                            },
+                                                        },
+                                                    ],
+                                                    bridge: Direct,
+                                                    generated_operands: [],
+                                                    certificate: SourceCallCertificate {
+                                                        result_type: TypeId(
+                                                            48,
+                                                        ),
+                                                        generated_operands: [],
+                                                        target: Function(
+                                                            FunctionId(
+                                                                0,
+                                                            ),
+                                                        ),
+                                                        shape: Function {
+                                                            signature_type: TypeId(
+                                                                49,
+                                                            ),
+                                                        },
+                                                        context: Ordinary,
+                                                        bridge: Direct,
+                                                    },
+                                                },
+                                            ),
                                         },
                                         ty: TypeId(
                                             48,

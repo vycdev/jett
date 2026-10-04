@@ -1,0 +1,15 @@
+namespace app
+function with_extra(view values: list[int64], extra: int64) returns int64:
+    return list.length[int64](view values) + extra
+function fallback(view stdout: Stdout) returns int64:
+    Stdout.write(view stdout, "later:default\n")
+    return 3
+function main(stdout: Stdout) returns nothing:
+    list[int64] values = list(1, 2)
+    optional[int64] absent = none
+    Stdout.write(view stdout, "before:default\n")
+    int64 answer = with_extra(values, absent handle:
+        default fallback(view stdout)
+    )
+    Stdout.write(view stdout, "answer:{answer}\n")
+    return nothing

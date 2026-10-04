@@ -1,10 +1,13 @@
 //! Jett's backend-neutral control-flow graph representation.
 
 mod analysis;
+mod call_ownership;
+pub use call_ownership::{CallerAcquisitions, SourceAcquisition};
 mod call_views;
 pub mod copy_values;
 mod generated_functions;
 mod handlers;
+mod iteration_views;
 pub use generated_functions::prepare_native_generated_functions;
 mod sequences;
 pub use sequences::prepare_native_sequences;
@@ -46,6 +49,11 @@ pub struct Function {
     pub entry: BlockId,
     pub blocks: Vec<BasicBlock>,
     pub span: Span,
+    // Only canonical MIR preparation can authenticate a removed success edge.
+    prepared_absent_successes: Vec<uninhabited_sums::PreparedAbsentSuccess>,
+    prepared_present_successes: Vec<uninhabited_sums::PreparedPresentSuccess>,
+    prepared_view_iterations: Vec<iteration_views::PreparedViewIteration>,
+    original_view_iterations: Vec<iteration_views::OriginalIteration>,
 }
 
 impl Function {
@@ -333,6 +341,39 @@ struct FunctionValidator<'function, 'errors> {
     functions: &'function [Function],
     function_count: usize,
     errors: &'errors mut Vec<ValidationError>,
+}
+
+/// Validate every invocation before preparation, including unused bodies and
+/// disconnected blocks. Metadata origins must never become execution liveness.
+pub fn validate_call_ownership(
+    program: &Program,
+    types: &TypeInterner,
+) -> Result<(), Vec<ValidationError>> {
+    validate(program)?;
+    let mut errors = Vec::new();
+    let validation = call_ownership::ProgramValidation::new(program);
+    for function in &program.functions {
+        if let Err(message) = validation.validate_function(function, types) {
+            errors.push(ValidationError {
+                span: function.span,
+                message,
+            });
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+/// Acquire a function's sealed source ownership evidence before native lowering.
+pub fn validate_caller_acquisitions<'a>(
+    program: &Program,
+    function: &'a Function,
+    types: &TypeInterner,
+) -> Result<CallerAcquisitions<'a>, String> {
+    call_ownership::validate_function(program, function, types)
 }
 
 impl FunctionValidator<'_, '_> {
@@ -823,6 +864,17 @@ impl FunctionValidator<'_, '_> {
     }
 
     fn expression(&mut self, expression: &Expression) {
+        let ownership = match &expression.kind {
+            hir::ExpressionKind::Call { ownership, .. }
+            | hir::ExpressionKind::Intrinsic { ownership, .. }
+            | hir::ExpressionKind::IndirectCall { ownership, .. } => Some(ownership),
+            _ => None,
+        };
+        if let Some(ownership) = ownership {
+            ownership
+                .metadata_local_ids(|id| self.check_local(id, expression.span, "caller ownership"));
+            ownership.metadata_function_ids(|id| self.check_function(id, expression.span));
+        }
         match &expression.kind {
             hir::ExpressionKind::Local(local) => {
                 self.check_local(*local, expression.span, "expression");
@@ -871,6 +923,7 @@ impl FunctionValidator<'_, '_> {
                 function,
                 args,
                 evaluation_order,
+                ..
             } => {
                 self.check_function(*function, expression.span);
                 self.check_evaluation_order(evaluation_order, args.len(), expression.span);
@@ -918,6 +971,7 @@ impl FunctionValidator<'_, '_> {
                 callee,
                 args,
                 evaluation_order,
+                ..
             } => {
                 self.expression(callee);
                 self.check_evaluation_order(evaluation_order, args.len(), expression.span);
@@ -1049,7 +1103,9 @@ impl FunctionValidator<'_, '_> {
 }
 
 pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Vec<LowerError>> {
-    if let Err(errors) = hir::validate(program) {
+    if let Err(errors) =
+        hir::validate(program).and_then(|()| hir::validate_backend_types(program, types))
+    {
         return Err(errors
             .into_iter()
             .map(|error| LowerError {
@@ -1068,14 +1124,24 @@ pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Ve
             )
         })
         .collect();
-    Ok(Program {
+    let lowered = Program {
         equality_methods: program.equality_methods.clone(),
         functions: program
             .functions
             .iter()
             .map(|function| lower_function(function, types, &function_param_modes))
             .collect(),
-    })
+    };
+    validate_call_ownership(&lowered, types).map_err(|errors| {
+        errors
+            .into_iter()
+            .map(|error| LowerError {
+                span: error.span,
+                message: error.message,
+            })
+            .collect::<Vec<_>>()
+    })?;
+    Ok(lowered)
 }
 
 fn lower_function(
@@ -1102,7 +1168,7 @@ fn lower_function(
     if builder.open() && function.return_type == jett_types::TypeInterner::NOTHING {
         builder.terminate(TerminatorKind::Return(None), function.body.span);
     }
-    Function {
+    let mut lowered = Function {
         id: function.id,
         identity: function.identity.clone(),
         debug_kind: function.debug_kind.clone(),
@@ -1113,9 +1179,16 @@ fn lower_function(
         entry: BlockId(0),
         blocks: builder.blocks,
         span: function.span,
-    }
+        prepared_absent_successes: Vec::new(),
+        prepared_present_successes: Vec::new(),
+        prepared_view_iterations: Vec::new(),
+        original_view_iterations: Vec::new(),
+    };
+    iteration_views::capture_original(&mut lowered, types);
+    lowered
 }
 
+#[derive(Clone)]
 struct Builder<'a> {
     types: &'a TypeInterner,
     function_param_modes: &'a std::collections::HashMap<FunctionId, Vec<ParamMode>>,
@@ -1416,7 +1489,7 @@ impl<'a> Builder<'a> {
                 body: body_block,
                 exit,
             },
-            iterable.span,
+            statement_span,
         );
         self.loops.push((header, exit, self.call_view_scopes.len()));
         self.current = body_block;
@@ -2020,6 +2093,18 @@ function first(left: int64, right: int64) returns int64:
             field_validation: None,
             args: Vec::new(),
             evaluation_order: vec![0],
+            ownership: hir::CallOwnership::generated(
+                hir::GeneratedOperation::ReflectionMetadata {
+                    intrinsic: hir::IntrinsicId::TypeName,
+                },
+                &[],
+                &[],
+                &[],
+                TypeInterner::STRING,
+                &[],
+                &TypeInterner::new(),
+            )
+            .expect("closed metadata source"),
         };
         arms[0].target = BlockId(u32::MAX);
         *otherwise = BlockId(u32::MAX - 1);

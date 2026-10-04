@@ -230,7 +230,7 @@ struct ScopeFacts {
 fn referenced_locals(block: &BasicBlock) -> BTreeSet<usize> {
     let mut block = block.clone();
     let mut locals = BTreeSet::new();
-    crate::sequences::prune::block_locals(
+    crate::sequences::prune::block_runtime_locals(
         &mut block,
         &mut |local| {
             locals.insert(local.index() as usize);

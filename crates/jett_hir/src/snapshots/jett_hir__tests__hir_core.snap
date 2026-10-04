@@ -1,5 +1,6 @@
 ---
 source: crates/jett_hir/src/lib.rs
+assertion_line: 6992
 expression: program
 ---
 Program {
@@ -316,6 +317,141 @@ Program {
                                         1,
                                         0,
                                     ],
+                                    ownership: Source(
+                                        SourceCallOwnership {
+                                            target: Function(
+                                                FunctionId(
+                                                    0,
+                                                ),
+                                            ),
+                                            shape: Function {
+                                                signature_type: TypeId(
+                                                    47,
+                                                ),
+                                            },
+                                            context: Ordinary,
+                                            arguments: [
+                                                ArgumentOwnership {
+                                                    source_span: Span {
+                                                        file: FileId(
+                                                            0,
+                                                        ),
+                                                        start: 162,
+                                                        end: 163,
+                                                    },
+                                                    source_index: 1,
+                                                    parameter_index: 0,
+                                                    actual_type: TypeId(
+                                                        3,
+                                                    ),
+                                                    parameter_type: TypeId(
+                                                        3,
+                                                    ),
+                                                    syntax: Bare,
+                                                    origin: OwnedExpression,
+                                                    callee_access: Owned,
+                                                    physical_access: Owned,
+                                                    effect: Copy,
+                                                    staging: Original,
+                                                    witness: SourceArgumentWitness {
+                                                        source_span: Span {
+                                                            file: FileId(
+                                                                0,
+                                                            ),
+                                                            start: 162,
+                                                            end: 163,
+                                                        },
+                                                        source_index: 1,
+                                                        parameter_index: 0,
+                                                        actual_type: TypeId(
+                                                            3,
+                                                        ),
+                                                        occurrence_type: TypeId(
+                                                            3,
+                                                        ),
+                                                        parameter_type: TypeId(
+                                                            3,
+                                                        ),
+                                                        syntax: Bare,
+                                                        origin: OwnedExpression,
+                                                        callee_access: Owned,
+                                                        effect: Copy,
+                                                        context: Ordinary,
+                                                        observation: None,
+                                                    },
+                                                },
+                                                ArgumentOwnership {
+                                                    source_span: Span {
+                                                        file: FileId(
+                                                            0,
+                                                        ),
+                                                        start: 153,
+                                                        end: 154,
+                                                    },
+                                                    source_index: 0,
+                                                    parameter_index: 1,
+                                                    actual_type: TypeId(
+                                                        3,
+                                                    ),
+                                                    parameter_type: TypeId(
+                                                        3,
+                                                    ),
+                                                    syntax: Bare,
+                                                    origin: OwnedExpression,
+                                                    callee_access: Owned,
+                                                    physical_access: Owned,
+                                                    effect: Copy,
+                                                    staging: Original,
+                                                    witness: SourceArgumentWitness {
+                                                        source_span: Span {
+                                                            file: FileId(
+                                                                0,
+                                                            ),
+                                                            start: 153,
+                                                            end: 154,
+                                                        },
+                                                        source_index: 0,
+                                                        parameter_index: 1,
+                                                        actual_type: TypeId(
+                                                            3,
+                                                        ),
+                                                        occurrence_type: TypeId(
+                                                            3,
+                                                        ),
+                                                        parameter_type: TypeId(
+                                                            3,
+                                                        ),
+                                                        syntax: Bare,
+                                                        origin: OwnedExpression,
+                                                        callee_access: Owned,
+                                                        effect: Copy,
+                                                        context: Ordinary,
+                                                        observation: None,
+                                                    },
+                                                },
+                                            ],
+                                            bridge: Direct,
+                                            generated_operands: [],
+                                            certificate: SourceCallCertificate {
+                                                result_type: TypeId(
+                                                    3,
+                                                ),
+                                                generated_operands: [],
+                                                target: Function(
+                                                    FunctionId(
+                                                        0,
+                                                    ),
+                                                ),
+                                                shape: Function {
+                                                    signature_type: TypeId(
+                                                        47,
+                                                    ),
+                                                },
+                                                context: Ordinary,
+                                                bridge: Direct,
+                                            },
+                                        },
+                                    ),
                                 },
                                 ty: TypeId(
                                     3,

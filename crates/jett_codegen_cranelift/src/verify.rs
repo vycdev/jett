@@ -195,7 +195,7 @@ pub(crate) fn verify_descriptor_bodies(
     program: &Program,
     types: &TypeInterner,
 ) -> Result<(), CodegenError> {
-    jett_mir::validate(program).map_err(CodegenError::InvalidMir)?;
+    jett_mir::validate_call_ownership(program, types).map_err(CodegenError::InvalidMir)?;
     // Shared inline tables and impossible sum arms contain valid Never metadata
     // that need not allocate a native frame slot. Validate original type shapes
     // without demanding a carrier for an absent function result; every surviving
@@ -302,11 +302,35 @@ impl VerifiedProgram {
     }
 }
 
+/// Unit-only access to the existing native expression integrity gate.
+/// Outer emission independently checks the original caller ownership packet;
+/// this helper supplies no preparation, callable frame or emission authority.
+#[cfg(test)]
+pub(crate) fn verify_callable_expression_for_test(
+    program: &Program,
+    types: &TypeInterner,
+    function: &Function,
+    expression: &Expression,
+) -> Result<(), CodegenError> {
+    let verified = VerifiedProgram {
+        functions: Vec::new(),
+        by_mir_index: vec![None; program.functions.len()],
+    };
+    let verifier = Verifier {
+        program,
+        types,
+        verified: &verified,
+        phase: VerifierPhase::CallableNative,
+        metadata_functions: RefCell::new(HashSet::new()),
+    };
+    verifier.expression(function, expression)
+}
+
 pub(crate) fn verify_program(
     program: &Program,
     types: &TypeInterner,
 ) -> Result<VerifiedProgram, CodegenError> {
-    jett_mir::validate(program).map_err(CodegenError::InvalidMir)?;
+    jett_mir::validate_call_ownership(program, types).map_err(CodegenError::InvalidMir)?;
 
     // Reachability may omit lifted bodies, but malformed source metadata must
     // not disappear with an unused descriptor.

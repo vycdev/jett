@@ -1912,3 +1912,33 @@ cases, 182 object obligations and 92 result groups recorded above. The same b718
 follow-up. The exact94 workflow 37126837754 is still in progress. No linked native case or
 object obligation is added: fixed 207 inventory/182 obligations, 464 supplemental cases, about-85% planning
 and the whole-language 100% goal remain unchanged.
+
+## Typed caller ownership integration
+
+The isolated caller-ownership change over `a9a6cd63` implements the existing
+Rule24 caller disposition and Rule25 ordinary-data observation exceptions.
+Sealed source-call facts rejoin exact declarations, argument permutations and
+raw/physical types through HIR, MIR and native validation. Generated calls,
+temporary staging, viewed-loop bindings and handled sum/refinement defaults
+carry separate checked proofs. Invalid outer calls retain independent operand
+and nested ownership errors without transferring ownership at that invalid call.
+The [implementation contract](native_call_ownership_facts.md) records the scope.
+
+The formatted candidate passes all 293 checker tests, 598 frontend fixtures,
+168 HIR tests, 147 MIR tests, 67 backend unit tests and 63 object-emission tests.
+All 15 native caller groups pass with exact debug/release stdout, stderr and
+status after source deletion: 28 linked binaries plus 14 negative checks before
+artifact lookup/publication. Both previously failing driver property replays
+pass independently, including generated refinement shrinking and ordinary-data
+snapshots before interface conversion. Whole-program ownership validation now
+constructs one immutable signature projection per pass; mutation and late
+disconnected-call regressions retain exact diagnostics.
+
+The accepted unchanged a9 baseline passed its clean workspace: 92 successful
+result groups, 464 supplemental native cases and all 182 object obligations.
+Workflow 37130142896 passed all four Windows/Linux build and installed jobs.
+Those receipts do not validate this candidate. Its full workspace, 479-case
+supplemental corpus, fixed inventory and supported-host acceptance are pending.
+The fixed inventory remains 207 with 182 object obligations; the broad estimate
+stays about 85%. Resource providers/cleanup, async and actor lifetimes and
+remaining capture/reflection shapes remain part of the 100% objective.

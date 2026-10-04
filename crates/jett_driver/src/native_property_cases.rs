@@ -10,7 +10,7 @@ use jett_hir::{
     StateId, Statement, StatementKind, VariantId,
 };
 use jett_parser::ast::{Item, Module};
-use jett_types::{ReflectionMetadata, Type, TypeId, TypeInterner};
+use jett_types::{ReflectionMetadata, ReflectionTypeInfo, Type, TypeId, TypeInterner};
 use std::collections::HashSet;
 
 pub(super) fn append_property_suite(
@@ -243,11 +243,38 @@ fn append_trial(
         .map(|(value, param)| value_expression(value, param.ty, span, &mut context))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|message| error(span, message))?;
+    let evaluation_order = (0..args.len()).collect::<Vec<_>>();
+    let parameter_types = function
+        .params
+        .iter()
+        .map(|parameter| parameter.ty)
+        .collect::<Vec<_>>();
+    let access = function
+        .params
+        .iter()
+        .map(|parameter| match parameter.mode {
+            ParamMode::Owned => jett_typecheck::CheckedCalleeAccess::Owned,
+            ParamMode::View => jett_typecheck::CheckedCalleeAccess::View,
+        })
+        .collect::<Vec<_>>();
+    let ownership = jett_hir::CallOwnership::generated(
+        jett_hir::GeneratedOperation::NativeSuite {
+            function: function.id,
+        },
+        &args,
+        &parameter_types,
+        &access,
+        TypeInterner::NOTHING,
+        &evaluation_order,
+        types,
+    )
+    .map_err(|message| error(span, message))?;
     statements.push(Statement {
         kind: StatementKind::Expression(Expression {
             kind: ExpressionKind::Call {
                 function: function.id,
-                evaluation_order: (0..args.len()).collect(),
+                evaluation_order,
+                ownership,
                 args,
             },
             ty: TypeInterner::NOTHING,
@@ -964,6 +991,48 @@ fn function_value_expression(
     }
 }
 
+pub(super) fn evaluated_intrinsic_expression(
+    intrinsic: IntrinsicId,
+    type_arguments: Vec<TypeId>,
+    reflection_arguments: Vec<ReflectionTypeInfo>,
+    args: Vec<Expression>,
+    ty: TypeId,
+    span: Span,
+    types: &TypeInterner,
+) -> Result<Expression, String> {
+    let parameter_types = args.iter().map(|argument| argument.ty).collect::<Vec<_>>();
+    let access = (0..args.len())
+        .map(|index| {
+            jett_typecheck::intrinsic_operand_access(intrinsic, index, args.len())
+                .ok_or_else(|| "evaluated intrinsic operand has no checked access role".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let evaluation_order = (0..args.len()).collect::<Vec<_>>();
+    let ownership = jett_hir::CallOwnership::generated(
+        jett_hir::GeneratedOperation::EvaluatedValue { intrinsic },
+        &args,
+        &parameter_types,
+        &access,
+        ty,
+        &evaluation_order,
+        types,
+    )?;
+    Ok(Expression {
+        kind: ExpressionKind::Intrinsic {
+            intrinsic,
+            type_arguments,
+            reflection_arguments,
+            refinement_predicates: Vec::new(),
+            field_validation: None,
+            args,
+            evaluation_order,
+            ownership,
+        },
+        ty,
+        span,
+    })
+}
+
 fn set_expression(
     values: &[Value],
     element: TypeId,
@@ -971,51 +1040,40 @@ fn set_expression(
     span: Span,
     context: &mut ValueContext<'_>,
 ) -> Result<Expression, String> {
-    let mut current = Expression {
-        kind: ExpressionKind::Intrinsic {
-            intrinsic: IntrinsicId::SetNew,
-            type_arguments: vec![element],
-            reflection_arguments: Vec::new(),
-            refinement_predicates: Vec::new(),
-            field_validation: None,
-            args: Vec::new(),
-            evaluation_order: Vec::new(),
-        },
+    let mut current = evaluated_intrinsic_expression(
+        IntrinsicId::SetNew,
+        vec![element],
+        Vec::new(),
+        Vec::new(),
         ty,
         span,
-    };
+        context.types,
+    )?;
     for value in values {
-        current = Expression {
-            kind: ExpressionKind::Intrinsic {
-                intrinsic: IntrinsicId::SetAdd,
-                type_arguments: vec![element],
-                reflection_arguments: Vec::new(),
-                refinement_predicates: Vec::new(),
-                field_validation: None,
-                args: vec![current, value_expression(value, element, span, context)?],
-                evaluation_order: vec![0, 1],
-            },
+        let element_value = value_expression(value, element, span, context)?;
+        current = evaluated_intrinsic_expression(
+            IntrinsicId::SetAdd,
+            vec![element],
+            Vec::new(),
+            vec![current, element_value],
             ty,
             span,
-        };
+            context.types,
+        )?;
     }
     Ok(current)
 }
 
 fn bytes_expression(bytes: &[u8], span: Span, types: &TypeInterner) -> Result<Expression, String> {
-    let empty = Expression {
-        kind: ExpressionKind::Intrinsic {
-            intrinsic: IntrinsicId::BytesNew,
-            type_arguments: Vec::new(),
-            reflection_arguments: Vec::new(),
-            refinement_predicates: Vec::new(),
-            field_validation: None,
-            args: Vec::new(),
-            evaluation_order: Vec::new(),
-        },
-        ty: TypeInterner::BYTES,
+    let empty = evaluated_intrinsic_expression(
+        IntrinsicId::BytesNew,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        TypeInterner::BYTES,
         span,
-    };
+        types,
+    )?;
     if bytes.is_empty() {
         return Ok(empty);
     }
@@ -1028,23 +1086,19 @@ fn bytes_expression(bytes: &[u8], span: Span, types: &TypeInterner) -> Result<Ex
     let hex = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     Ok(Expression {
         kind: ExpressionKind::Handle {
-            target: Box::new(Expression {
-                kind: ExpressionKind::Intrinsic {
-                    intrinsic: IntrinsicId::BytesFromHex,
-                    type_arguments: Vec::new(),
-                    reflection_arguments: Vec::new(),
-                    refinement_predicates: Vec::new(),
-                    field_validation: None,
-                    args: vec![Expression {
-                        kind: ExpressionKind::String(hex),
-                        ty: TypeInterner::STRING,
-                        span,
-                    }],
-                    evaluation_order: vec![0],
-                },
-                ty: result_type,
+            target: Box::new(evaluated_intrinsic_expression(
+                IntrinsicId::BytesFromHex,
+                Vec::new(),
+                Vec::new(),
+                vec![Expression {
+                    kind: ExpressionKind::String(hex),
+                    ty: TypeInterner::STRING,
+                    span,
+                }],
+                result_type,
                 span,
-            }),
+                types,
+            )?),
             kind: HandleKind::Result,
             error_local: None,
             failure: Block {

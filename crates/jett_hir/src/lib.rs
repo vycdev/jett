@@ -11,7 +11,8 @@ pub use jett_intrinsics::IntrinsicId;
 use jett_parser::ast::{self, Expr, Item, Module, Stmt};
 use jett_resolve::{DefId, DefKind, ResolveResult};
 use jett_typecheck::{
-    CheckResult, CheckedBindingMode, CheckedBodyFacts, CheckedCallArgumentOrder,
+    CheckResult, CheckedBindingFact, CheckedBindingMode, CheckedBodyFacts,
+    CheckedCallArgumentOrder, CheckedCallOwnership, CheckedCalleeAccess,
     CheckedComptimeTypeBinding, CheckedComptimeTypeSelection, CheckedGenericCall,
     CheckedGenericFunctionInstantiation, CheckedGenericSpecialization, CheckedInterfaceCall,
     CheckedMethodCall, CheckedMethodDefinition, CheckedMethodValue, CheckedStaticSelection,
@@ -23,6 +24,11 @@ use jett_types::{
     ReflectionTypeInfo, ReflectionVariantInfo, Type, TypeId, TypeInterner,
 };
 
+mod call_ownership;
+mod iteration_bindings;
+pub use iteration_bindings::{IterationPart, ViewIterationBinding, checked_view_iteration_binding};
+#[cfg(test)]
+mod call_ownership_tests;
 mod inline_functions;
 mod interface_values;
 #[cfg(test)]
@@ -31,6 +37,16 @@ mod local_views;
 mod reflected_fields;
 mod type_validation;
 
+pub use call_ownership::{
+    ArgumentOwnership, ArgumentStaging, CallBridge, CallOwnership, CallTarget, CallerBindingFact,
+    CallerBindingMode, CallerOrigin, CallerViewSource, GeneratedAcquisition,
+    GeneratedArgumentOwnership, GeneratedArgumentStaging, GeneratedArgumentWitness,
+    GeneratedCallOwnership, GeneratedHandleShape, GeneratedOperation, GeneratedOriginalShape,
+    GeneratedSnapshotProof, ObservationProof, OwnershipLocalInfo, SourceArgumentWitness,
+    SourceCallOwnership, observation_data_type, validate_compiler_metadata_operand,
+    validate_generated_operand_tree, validate_hir_invocation, validate_invocation_target,
+    validate_operand_ownership, validate_program_call_ownership, validate_source_operand,
+};
 pub use interface_values::complete_value_conversions;
 pub use local_views::{
     is_borrowed_local, local_view_root, validate_local_view_initializer, validate_local_views,
@@ -357,6 +373,7 @@ pub enum ExpressionKind {
         args: Vec<Expression>,
         /// Parameter indexes in lexical source evaluation order.
         evaluation_order: Vec<usize>,
+        ownership: CallOwnership,
     },
     Intrinsic {
         intrinsic: IntrinsicId,
@@ -375,11 +392,13 @@ pub enum ExpressionKind {
         field_validation: Option<ReflectedFieldValidation>,
         args: Vec<Expression>,
         evaluation_order: Vec<usize>,
+        ownership: CallOwnership,
     },
     IndirectCall {
         callee: Box<Expression>,
         args: Vec<Expression>,
         evaluation_order: Vec<usize>,
+        ownership: CallOwnership,
     },
     StructConstruct {
         struct_type: TypeId,
@@ -878,6 +897,7 @@ impl Validator<'_> {
                 function,
                 args,
                 evaluation_order,
+                ..
             } => {
                 if function.index() as usize >= self.program.functions.len() {
                     self.error(expression.span, "call references an unknown HIR function");
@@ -938,6 +958,7 @@ impl Validator<'_> {
                 callee,
                 args,
                 evaluation_order,
+                ..
             } => {
                 self.expression(callee);
                 self.check_evaluation_order(evaluation_order, args.len(), expression.span);
@@ -1613,8 +1634,11 @@ impl<'a> Lowerer<'a> {
             self,
             &function_ids,
             self.check.type_map.clone(),
+            self.check.source_type_map.clone(),
             self.check.debug_type_names.clone(),
             self.check.binding_modes.clone(),
+            self.check.call_ownership.clone(),
+            self.check.binding_facts.clone(),
             self.check.generic_calls.clone(),
             self.check.intrinsic_ids.clone(),
             self.check.intrinsic_type_arguments.clone(),
@@ -1625,9 +1649,20 @@ impl<'a> Lowerer<'a> {
             self.check.method_values.clone(),
             self.check.struct_constructions.clone(),
             self.check.pipeline_step_call_types.clone(),
+            self.check.pipeline_step_input_types.clone(),
             HashMap::new(),
             facts_in_span(&self.check.comptime_type_bindings, span),
         );
+        body_lowerer.ownership_context = match kind {
+            DeclarationKind::Verify => jett_typecheck::CheckedOwnershipContext::Verify,
+            DeclarationKind::Property => jett_typecheck::CheckedOwnershipContext::Property,
+            _ => {
+                body_lowerer
+                    .parent
+                    .error(span, "test ownership context has no test declaration");
+                return None;
+            }
+        };
         let mut params = Vec::with_capacity(givens.len());
         for given in givens {
             let Some(definition) = body_lowerer
@@ -1699,8 +1734,11 @@ impl<'a> Lowerer<'a> {
             parameter_types,
             return_type,
             expression_types,
+            source_expression_types,
             debug_type_names,
             binding_modes,
+            call_ownership,
+            binding_facts,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -1711,6 +1749,7 @@ impl<'a> Lowerer<'a> {
             method_values,
             struct_constructions,
             pipeline_step_call_types,
+            pipeline_step_input_types,
             static_selections,
             comptime_type_bindings,
             concrete_args,
@@ -1720,8 +1759,11 @@ impl<'a> Lowerer<'a> {
                 instantiation.parameter_types.clone(),
                 instantiation.return_type,
                 instantiation.type_map.clone(),
+                instantiation.source_type_map.clone(),
                 instantiation.debug_type_names.clone(),
                 instantiation.binding_modes.clone(),
+                instantiation.call_ownership.clone(),
+                instantiation.binding_facts.clone(),
                 instantiation.generic_calls.clone(),
                 instantiation.intrinsic_ids.clone(),
                 instantiation.intrinsic_type_arguments.clone(),
@@ -1732,6 +1774,7 @@ impl<'a> Lowerer<'a> {
                 instantiation.method_values.clone(),
                 instantiation.struct_constructions.clone(),
                 instantiation.pipeline_step_call_types.clone(),
+                instantiation.pipeline_step_input_types.clone(),
                 instantiation.static_selections.clone(),
                 instantiation.comptime_type_bindings.clone(),
                 instantiation.concrete_args.clone(),
@@ -1742,8 +1785,11 @@ impl<'a> Lowerer<'a> {
                 method.parameter_types.clone(),
                 method.return_type,
                 self.check.type_map.clone(),
+                self.check.source_type_map.clone(),
                 self.check.debug_type_names.clone(),
                 self.check.binding_modes.clone(),
+                self.check.call_ownership.clone(),
+                self.check.binding_facts.clone(),
                 self.check.generic_calls.clone(),
                 self.check.intrinsic_ids.clone(),
                 self.check.intrinsic_type_arguments.clone(),
@@ -1754,6 +1800,7 @@ impl<'a> Lowerer<'a> {
                 self.check.method_values.clone(),
                 self.check.struct_constructions.clone(),
                 self.check.pipeline_step_call_types.clone(),
+                self.check.pipeline_step_input_types.clone(),
                 HashMap::new(),
                 facts_in_span(&self.check.comptime_type_bindings, source.function.span),
                 Vec::new(),
@@ -1792,8 +1839,11 @@ impl<'a> Lowerer<'a> {
                 parameter_types,
                 return_type,
                 self.check.type_map.clone(),
+                self.check.source_type_map.clone(),
                 self.check.debug_type_names.clone(),
                 self.check.binding_modes.clone(),
+                self.check.call_ownership.clone(),
+                self.check.binding_facts.clone(),
                 self.check.generic_calls.clone(),
                 self.check.intrinsic_ids.clone(),
                 self.check.intrinsic_type_arguments.clone(),
@@ -1804,6 +1854,7 @@ impl<'a> Lowerer<'a> {
                 self.check.method_values.clone(),
                 self.check.struct_constructions.clone(),
                 self.check.pipeline_step_call_types.clone(),
+                self.check.pipeline_step_input_types.clone(),
                 HashMap::new(),
                 facts_in_span(&self.check.comptime_type_bindings, source.function.span),
                 Vec::new(),
@@ -1823,8 +1874,11 @@ impl<'a> Lowerer<'a> {
             self,
             &function_ids,
             expression_types,
+            source_expression_types,
             debug_type_names,
             binding_modes,
+            call_ownership,
+            binding_facts,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -1835,6 +1889,7 @@ impl<'a> Lowerer<'a> {
             method_values,
             struct_constructions,
             pipeline_step_call_types,
+            pipeline_step_input_types,
             static_selections,
             comptime_type_bindings,
         );
@@ -1870,6 +1925,12 @@ impl<'a> Lowerer<'a> {
                 span: param.span,
             });
         }
+        body_lowerer.view_parameter_locals.extend(
+            params
+                .iter()
+                .filter(|parameter| parameter.mode == ParamMode::View)
+                .map(|parameter| parameter.local),
+        );
         let body = body_lowerer.lower_block(&source.function.body);
         body_lowerer.reject_unconsumed_static_selections();
         body_lowerer.reject_unconsumed_comptime_type_bindings();
@@ -1983,8 +2044,11 @@ impl<'a> Lowerer<'a> {
             self,
             &function_ids,
             self.check.type_map.clone(),
+            self.check.source_type_map.clone(),
             self.check.debug_type_names.clone(),
             self.check.binding_modes.clone(),
+            self.check.call_ownership.clone(),
+            self.check.binding_facts.clone(),
             self.check.generic_calls.clone(),
             self.check.intrinsic_ids.clone(),
             self.check.intrinsic_type_arguments.clone(),
@@ -1995,6 +2059,7 @@ impl<'a> Lowerer<'a> {
             self.check.method_values.clone(),
             self.check.struct_constructions.clone(),
             self.check.pipeline_step_call_types.clone(),
+            self.check.pipeline_step_input_types.clone(),
             HashMap::new(),
             constructor_bindings,
         );
@@ -2198,8 +2263,11 @@ impl<'a> Lowerer<'a> {
 
         let function_ids = self.function_ids.clone();
         let expression_types = self.check.type_map.clone();
+        let source_expression_types = self.check.source_type_map.clone();
         let debug_type_names = self.check.debug_type_names.clone();
         let binding_modes = self.check.binding_modes.clone();
+        let call_ownership = self.check.call_ownership.clone();
+        let binding_facts = self.check.binding_facts.clone();
         let generic_calls = self.check.generic_calls.clone();
         let intrinsic_ids = self.check.intrinsic_ids.clone();
         let intrinsic_type_arguments = self.check.intrinsic_type_arguments.clone();
@@ -2210,6 +2278,7 @@ impl<'a> Lowerer<'a> {
         let method_values = self.check.method_values.clone();
         let struct_constructions = self.check.struct_constructions.clone();
         let pipeline_step_call_types = self.check.pipeline_step_call_types.clone();
+        let pipeline_step_input_types = self.check.pipeline_step_input_types.clone();
         let static_selections = HashMap::new();
         let comptime_type_bindings =
             facts_in_span(&self.check.comptime_type_bindings, source.handler.span);
@@ -2217,8 +2286,11 @@ impl<'a> Lowerer<'a> {
             self,
             &function_ids,
             expression_types,
+            source_expression_types,
             debug_type_names,
             binding_modes,
+            call_ownership,
+            binding_facts,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -2229,6 +2301,7 @@ impl<'a> Lowerer<'a> {
             method_values,
             struct_constructions,
             pipeline_step_call_types,
+            pipeline_step_input_types,
             static_selections,
             comptime_type_bindings,
         );
@@ -2339,6 +2412,12 @@ impl<'a> Lowerer<'a> {
                 span: param.span,
             });
         }
+        body_lowerer.view_parameter_locals.extend(
+            params
+                .iter()
+                .filter(|parameter| parameter.mode == ParamMode::View)
+                .map(|parameter| parameter.local),
+        );
         let body = body_lowerer.lower_block(&source.handler.body);
         body_lowerer.reject_unconsumed_static_selections();
         body_lowerer.reject_unconsumed_comptime_type_bindings();
@@ -2398,8 +2477,11 @@ impl<'a> Lowerer<'a> {
             self,
             &function_ids,
             self.check.type_map.clone(),
+            self.check.source_type_map.clone(),
             self.check.debug_type_names.clone(),
             self.check.binding_modes.clone(),
+            self.check.call_ownership.clone(),
+            self.check.binding_facts.clone(),
             self.check.generic_calls.clone(),
             self.check.intrinsic_ids.clone(),
             self.check.intrinsic_type_arguments.clone(),
@@ -2410,6 +2492,7 @@ impl<'a> Lowerer<'a> {
             self.check.method_values.clone(),
             self.check.struct_constructions.clone(),
             self.check.pipeline_step_call_types.clone(),
+            self.check.pipeline_step_input_types.clone(),
             HashMap::new(),
             facts_in_span(&self.check.comptime_type_bindings, source.alias.span),
         );
@@ -2492,8 +2575,11 @@ struct BodyLowerer<'lowerer, 'program> {
     parent: &'lowerer mut Lowerer<'program>,
     function_ids: &'lowerer HashMap<FunctionKey, FunctionId>,
     expression_types: HashMap<Span, TypeId>,
+    source_expression_types: HashMap<Span, TypeId>,
     debug_type_names: HashMap<Span, String>,
     binding_modes: HashMap<Span, CheckedBindingMode>,
+    call_ownership: HashMap<Span, CheckedCallOwnership>,
+    binding_facts: HashMap<Span, CheckedBindingFact>,
     generic_calls: HashMap<Span, CheckedGenericCall>,
     intrinsic_ids: HashMap<Span, IntrinsicId>,
     intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -2504,6 +2590,7 @@ struct BodyLowerer<'lowerer, 'program> {
     method_values: HashMap<Span, CheckedMethodValue>,
     struct_constructions: HashMap<Span, CheckedStructConstruction>,
     pipeline_step_call_types: HashMap<Span, TypeId>,
+    pipeline_step_input_types: HashMap<Span, TypeId>,
     static_selections: HashMap<Span, CheckedStaticSelection>,
     comptime_type_bindings: HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
     consumed_static_selections: HashSet<Span>,
@@ -2513,6 +2600,9 @@ struct BodyLowerer<'lowerer, 'program> {
     visible_bindings: Vec<HashMap<String, LocalId>>,
     scoped_type_bindings: Vec<ScopedTypeBinding>,
     return_type: Option<TypeId>,
+    ownership_context: jett_typecheck::CheckedOwnershipContext,
+    view_parameter_locals: HashSet<LocalId>,
+    view_iteration_bindings: HashMap<LocalId, ViewIterationBinding>,
 }
 
 impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
@@ -2520,8 +2610,11 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         parent: &'lowerer mut Lowerer<'program>,
         function_ids: &'lowerer HashMap<FunctionKey, FunctionId>,
         expression_types: HashMap<Span, TypeId>,
+        source_expression_types: HashMap<Span, TypeId>,
         debug_type_names: HashMap<Span, String>,
         binding_modes: HashMap<Span, CheckedBindingMode>,
+        call_ownership: HashMap<Span, CheckedCallOwnership>,
+        binding_facts: HashMap<Span, CheckedBindingFact>,
         generic_calls: HashMap<Span, CheckedGenericCall>,
         intrinsic_ids: HashMap<Span, IntrinsicId>,
         intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -2532,6 +2625,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         method_values: HashMap<Span, CheckedMethodValue>,
         struct_constructions: HashMap<Span, CheckedStructConstruction>,
         pipeline_step_call_types: HashMap<Span, TypeId>,
+        pipeline_step_input_types: HashMap<Span, TypeId>,
         static_selections: HashMap<Span, CheckedStaticSelection>,
         comptime_type_bindings: HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
     ) -> Self {
@@ -2539,8 +2633,11 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             parent,
             function_ids,
             expression_types,
+            source_expression_types,
             debug_type_names,
             binding_modes,
+            call_ownership,
+            binding_facts,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -2551,6 +2648,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             method_values,
             struct_constructions,
             pipeline_step_call_types,
+            pipeline_step_input_types,
             static_selections,
             comptime_type_bindings,
             consumed_static_selections: HashSet::new(),
@@ -2560,6 +2658,9 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             visible_bindings: vec![HashMap::new()],
             scoped_type_bindings: Vec::new(),
             return_type: None,
+            ownership_context: jett_typecheck::CheckedOwnershipContext::Ordinary,
+            view_parameter_locals: HashSet::new(),
+            view_iteration_bindings: HashMap::new(),
         }
     }
 
@@ -2864,6 +2965,55 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     Some(binding) => Some(self.allocate_declared_local(binding, false)?),
                     None => None,
                 };
+                let saved_iteration_bindings = self.view_iteration_bindings.clone();
+                if loop_stmt.view {
+                    let part = if matches!(
+                        self.parent.check.interner.resolve(iterable.ty),
+                        Type::Map(..)
+                    ) {
+                        IterationPart::Key
+                    } else {
+                        IterationPart::Element
+                    };
+                    let bindings = [(key, part)]
+                        .into_iter()
+                        .chain(value.map(|value| (value, IterationPart::Value)));
+                    for (local, part) in bindings {
+                        let metadata = &self.locals[local.index() as usize];
+                        if metadata.mutable
+                            || metadata.view_source.is_some()
+                            || self.view_parameter_locals.contains(&local)
+                            || self.view_iteration_bindings.contains_key(&local)
+                        {
+                            self.parent.error(
+                                loop_stmt.span,
+                                "viewed iteration binder is not a fresh immutable local",
+                            );
+                            return None;
+                        }
+                        match checked_view_iteration_binding(
+                            &self.parent.check.interner,
+                            loop_stmt.span,
+                            iterable.ty,
+                            metadata.ty,
+                            part,
+                        ) {
+                            Ok(proof)
+                                if !jett_typecheck::ownership::is_implicitly_copyable(
+                                    &self.parent.check.interner,
+                                    proof.binder_type(),
+                                ) =>
+                            {
+                                self.view_iteration_bindings.insert(local, proof);
+                            }
+                            Ok(_) => {}
+                            Err(message) => {
+                                self.parent.error(loop_stmt.span, message);
+                                return None;
+                            }
+                        }
+                    }
+                }
                 let body = if matches!(
                     self.parent.check.interner.resolve(iterable.ty),
                     Type::List(element) if *element == TypeInterner::NEVER
@@ -2883,6 +3033,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 } else {
                     self.lower_block(&loop_stmt.body)
                 };
+                self.view_iteration_bindings = saved_iteration_bindings;
                 self.visible_bindings.pop();
                 (
                     StatementKind::For {
@@ -2958,10 +3109,16 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 (StatementKind::Trace(local), trace.span)
             }
             Stmt::Breakpoint(point) => {
+                let enclosing_context = std::mem::replace(
+                    &mut self.ownership_context,
+                    jett_typecheck::CheckedOwnershipContext::BreakpointExpression,
+                );
                 let condition = match &point.condition {
-                    Some(value) => Some(self.lower_expression(value)?),
-                    None => None,
+                    Some(value) => self.lower_expression(value).map(Some),
+                    None => Some(None),
                 };
+                self.ownership_context = enclosing_context;
+                let condition = condition?;
                 let mut visible = std::collections::BTreeMap::new();
                 for scope in &self.visible_bindings {
                     visible.extend(scope.iter().map(|(name, local)| (name, *local)));
@@ -3180,8 +3337,11 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
     ) -> Block {
         let CheckedBodyFacts {
             type_map,
+            source_type_map,
             debug_type_names,
             binding_modes,
+            call_ownership,
+            binding_facts,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -3192,14 +3352,19 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             method_values,
             struct_constructions,
             pipeline_step_call_types,
+            pipeline_step_input_types,
             static_selections,
             comptime_type_bindings,
         } = facts;
 
         let saved_expression_types = std::mem::replace(&mut self.expression_types, type_map);
+        let saved_source_expression_types =
+            std::mem::replace(&mut self.source_expression_types, source_type_map);
         let saved_debug_type_names =
             std::mem::replace(&mut self.debug_type_names, debug_type_names);
         let saved_binding_modes = std::mem::replace(&mut self.binding_modes, binding_modes);
+        let saved_call_ownership = std::mem::replace(&mut self.call_ownership, call_ownership);
+        let saved_binding_facts = std::mem::replace(&mut self.binding_facts, binding_facts);
         let saved_generic_calls = std::mem::replace(&mut self.generic_calls, generic_calls);
         let saved_intrinsic_ids = std::mem::replace(&mut self.intrinsic_ids, intrinsic_ids);
         let saved_intrinsic_type_arguments =
@@ -3217,6 +3382,10 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             std::mem::replace(&mut self.struct_constructions, struct_constructions);
         let saved_pipeline_step_call_types =
             std::mem::replace(&mut self.pipeline_step_call_types, pipeline_step_call_types);
+        let saved_pipeline_step_input_types = std::mem::replace(
+            &mut self.pipeline_step_input_types,
+            pipeline_step_input_types,
+        );
         let saved_static_selections =
             std::mem::replace(&mut self.static_selections, static_selections);
         let saved_comptime_type_bindings =
@@ -3231,8 +3400,11 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
 
         self.local_ids = saved_local_ids;
         self.expression_types = saved_expression_types;
+        self.source_expression_types = saved_source_expression_types;
         self.debug_type_names = saved_debug_type_names;
         self.binding_modes = saved_binding_modes;
+        self.call_ownership = saved_call_ownership;
+        self.binding_facts = saved_binding_facts;
         self.generic_calls = saved_generic_calls;
         self.intrinsic_ids = saved_intrinsic_ids;
         self.intrinsic_type_arguments = saved_intrinsic_type_arguments;
@@ -3243,6 +3415,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         self.method_values = saved_method_values;
         self.struct_constructions = saved_struct_constructions;
         self.pipeline_step_call_types = saved_pipeline_step_call_types;
+        self.pipeline_step_input_types = saved_pipeline_step_input_types;
         self.static_selections = saved_static_selections;
         self.comptime_type_bindings = saved_comptime_type_bindings;
         self.consumed_static_selections = saved_consumed_static;
@@ -3346,11 +3519,26 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             );
             return None;
         };
+        let (parameter_types, _) = self
+            .ownership_function_parameters(function)
+            .map_err(|message| self.parent.error(expression.span(), message))
+            .ok()?;
+        let args = vec![value];
+        let ownership = self.generated_ownership(
+            GeneratedOperation::Display { method: function },
+            &args,
+            &parameter_types,
+            &[CheckedCalleeAccess::View],
+            TypeInterner::STRING,
+            &[0],
+            expression.span(),
+        )?;
         Some(Expression {
             kind: ExpressionKind::DisplayResult(Box::new(Expression {
                 kind: ExpressionKind::Call {
+                    ownership,
                     function,
-                    args: vec![value],
+                    args,
                     evaluation_order: vec![0],
                 },
                 ty: TypeInterner::STRING,
@@ -3399,10 +3587,25 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 if self.method_calls.contains_key(&span) =>
             {
                 let function = self.resolve_user_call_target(left, span)?;
+                let args = vec![self.lower_expression(left)?, self.lower_expression(right)?];
+                let (parameter_types, _) = self
+                    .ownership_function_parameters(function)
+                    .map_err(|message| self.parent.error(span, message))
+                    .ok()?;
+                let ownership = self.generated_ownership(
+                    GeneratedOperation::Equality { method: function },
+                    &args,
+                    &parameter_types,
+                    &[CheckedCalleeAccess::View, CheckedCalleeAccess::View],
+                    ty,
+                    &[0, 1],
+                    span,
+                )?;
                 let call = ExpressionKind::EquatableResult(Box::new(Expression {
                     kind: ExpressionKind::Call {
+                        ownership,
                         function,
-                        args: vec![self.lower_expression(left)?, self.lower_expression(right)?],
+                        args,
                         evaluation_order: vec![0, 1],
                     },
                     ty,
@@ -3609,7 +3812,20 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     }
                 }
                 let enclosing_return_type = self.return_type.replace(return_type);
+                let enclosing_context = std::mem::replace(
+                    &mut self.ownership_context,
+                    jett_typecheck::CheckedOwnershipContext::Ordinary,
+                );
+                let enclosing_view_parameters = std::mem::replace(
+                    &mut self.view_parameter_locals,
+                    view_params.iter().copied().collect(),
+                );
+                let enclosing_iteration_bindings =
+                    std::mem::take(&mut self.view_iteration_bindings);
                 let body = self.lower_block(body);
+                self.view_parameter_locals = enclosing_view_parameters;
+                self.view_iteration_bindings = enclosing_iteration_bindings;
+                self.ownership_context = enclosing_context;
                 self.return_type = enclosing_return_type;
                 self.visible_bindings.pop();
                 ExpressionKind::InlineFunction {
@@ -3981,9 +4197,18 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 method: call.method_index,
             };
             let function = self.function_ids.get(&key).copied()?;
+            self.check_source_actuals(call_span, args)?;
             let (args, evaluation_order) =
                 self.lower_arguments_in_parameter_order(args, call_span)?;
+            let ownership = self.source_ownership(call_span, &args, &evaluation_order)?;
             return Some(ExpressionKind::Call {
+                ownership: self.finish_call_ownership(
+                    ownership,
+                    Some(function),
+                    None,
+                    &args,
+                    call_span,
+                )?,
                 function,
                 args,
                 evaluation_order,
@@ -4078,6 +4303,8 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
 
         let (mut lowered_args, mut evaluation_order) =
             self.lower_arguments_in_parameter_order(args, call_span)?;
+        self.check_source_actuals(call_span, args)?;
+        let ownership = self.source_ownership(call_span, &lowered_args, &evaluation_order)?;
         let source_call = self.is_source_call(callee, call_span);
         // A callee can be any checked function value, including a projected
         // field or another call's result. Declaration and intrinsic identities
@@ -4087,14 +4314,29 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             && self.is_checked_function_value(callee)
         {
             return Some(ExpressionKind::IndirectCall {
+                ownership: self.finish_call_ownership(
+                    ownership,
+                    None,
+                    None,
+                    &lowered_args,
+                    call_span,
+                )?,
                 callee: Box::new(self.lower_expression(callee)?),
                 args: lowered_args,
                 evaluation_order,
             });
         }
         if source_call {
+            let function = self.resolve_user_call_target(callee, call_span)?;
             Some(ExpressionKind::Call {
-                function: self.resolve_user_call_target(callee, call_span)?,
+                ownership: self.finish_call_ownership(
+                    ownership,
+                    Some(function),
+                    None,
+                    &lowered_args,
+                    call_span,
+                )?,
+                function,
                 args: lowered_args,
                 evaluation_order,
             })
@@ -4125,6 +4367,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     return None;
                 };
                 return Some(ExpressionKind::Call {
+                    ownership: self.finish_call_ownership(
+                        ownership,
+                        Some(function),
+                        None,
+                        &lowered_args,
+                        call_span,
+                    )?,
                     function,
                     args: lowered_args,
                     evaluation_order,
@@ -4146,6 +4395,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     self.trusted_stdlib_generic_function("json", name, call_span)
             {
                 return Some(ExpressionKind::Call {
+                    ownership: self.finish_call_ownership(
+                        ownership,
+                        Some(function),
+                        None,
+                        &lowered_args,
+                        call_span,
+                    )?,
                     function,
                     args: lowered_args,
                     evaluation_order,
@@ -4170,6 +4426,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     self.trusted_stdlib_generic_function("json", name, call_span)
             {
                 return Some(ExpressionKind::Call {
+                    ownership: self.finish_call_ownership(
+                        ownership,
+                        Some(function),
+                        None,
+                        &lowered_args,
+                        call_span,
+                    )?,
                     function,
                     args: lowered_args,
                     evaluation_order,
@@ -4190,6 +4453,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     return None;
                 };
                 return Some(ExpressionKind::Call {
+                    ownership: self.finish_call_ownership(
+                        ownership,
+                        Some(function),
+                        None,
+                        &lowered_args,
+                        call_span,
+                    )?,
                     function,
                     args: lowered_args,
                     evaluation_order,
@@ -4208,6 +4478,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     return None;
                 };
                 return Some(ExpressionKind::Call {
+                    ownership: self.finish_call_ownership(
+                        ownership,
+                        Some(function),
+                        None,
+                        &lowered_args,
+                        call_span,
+                    )?,
                     function,
                     args: lowered_args,
                     evaluation_order,
@@ -4231,6 +4508,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     return None;
                 };
                 return Some(ExpressionKind::Call {
+                    ownership: self.finish_call_ownership(
+                        ownership,
+                        Some(function),
+                        None,
+                        &lowered_args,
+                        call_span,
+                    )?,
                     function,
                     args: lowered_args,
                     evaluation_order,
@@ -4244,6 +4528,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 && let Some(kind) = self.lower_primitive_json_serialization(
                     type_arguments[0],
                     &lowered_args[0],
+                    &ownership,
                     call_span,
                 )
             {
@@ -4416,6 +4701,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             let field_validation =
                 self.reflected_read_validation(intrinsic, &type_arguments, call_span)?;
             Some(ExpressionKind::Intrinsic {
+                ownership: self.finish_call_ownership(
+                    ownership,
+                    None,
+                    Some(intrinsic),
+                    &lowered_args,
+                    call_span,
+                )?,
                 intrinsic,
                 type_arguments,
                 reflection_arguments,
@@ -5681,12 +5973,22 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         &mut self,
         ty: TypeId,
         value: &Expression,
+        ownership: &CallOwnership,
         span: Span,
     ) -> Option<ExpressionKind> {
         if matches!(self.parent.check.interner.resolve(ty), Type::Nothing) {
+            let function = self.trusted_stdlib_function("json", "json_serialize_native_nothing")?;
+            let args = vec![value.clone()];
             return Some(ExpressionKind::Call {
-                function: self.trusted_stdlib_function("json", "json_serialize_native_nothing")?,
-                args: vec![value.clone()],
+                ownership: self.finish_call_ownership(
+                    ownership.clone(),
+                    Some(function),
+                    None,
+                    &args,
+                    span,
+                )?,
+                function,
+                args,
                 evaluation_order: vec![0],
             });
         }
@@ -5754,13 +6056,21 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             ty: tree_type,
             span,
         };
+        let args = vec![Expression {
+            kind: ExpressionKind::View(Box::new(tree)),
+            ty: tree_type,
+            span,
+        }];
         Some(ExpressionKind::Call {
-            function,
-            args: vec![Expression {
-                kind: ExpressionKind::View(Box::new(tree)),
-                ty: tree_type,
+            ownership: self.finish_call_ownership(
+                ownership.clone(),
+                Some(function),
+                None,
+                &args,
                 span,
-            }],
+            )?,
+            function,
+            args,
             evaluation_order: vec![0],
         })
     }
@@ -6153,7 +6463,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         let mut current = self.lower_expression(initial)?;
         for (index, step) in steps.iter().enumerate() {
             let output_type = if let Some(next_step) = steps.get(index + 1) {
-                let Some(ty) = self.expression_types.get(&next_step.span).copied() else {
+                let Some(ty) = self.pipeline_step_input_types.get(&next_step.span).copied() else {
                     self.parent
                         .error(next_step.span, "pipeline step has no checked input type");
                     return None;
@@ -6190,6 +6500,9 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         output_type: TypeId,
     ) -> Option<Expression> {
         let (callee, extra_args, piped_as_view) = Self::pipeline_step_call_parts(step);
+        if self.enum_constructor_variant(callee, output_type).is_none() {
+            self.check_pipeline_actuals(step.span, &piped, piped_as_view, extra_args)?;
+        }
         let piped = if piped_as_view {
             Expression {
                 ty: piped.ty,
@@ -6213,18 +6526,30 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             && !self.intrinsic_ids.contains_key(&step.span)
             && self.is_checked_function_value(callee)
         {
+            let ownership = self.source_ownership(step.span, &args, &evaluation_order)?;
             ExpressionKind::IndirectCall {
+                ownership: self.finish_call_ownership(ownership, None, None, &args, step.span)?,
                 callee: Box::new(self.lower_expression(callee)?),
                 args,
                 evaluation_order,
             }
         } else if source_call {
+            let function = self.resolve_user_call_target(callee, step.span)?;
+            let ownership = self.source_ownership(step.span, &args, &evaluation_order)?;
             ExpressionKind::Call {
-                function: self.resolve_user_call_target(callee, step.span)?,
+                ownership: self.finish_call_ownership(
+                    ownership,
+                    Some(function),
+                    None,
+                    &args,
+                    step.span,
+                )?,
+                function,
                 args,
                 evaluation_order,
             }
         } else {
+            let ownership = self.source_ownership(step.span, &args, &evaluation_order)?;
             let has_explicit_type_arguments = Self::has_explicit_type_arguments(&step.function);
             let intrinsic = self.checked_intrinsic_id(step.span)?;
             let type_arguments =
@@ -6256,6 +6581,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             let field_validation =
                 self.reflected_read_validation(intrinsic, &type_arguments, step.span)?;
             ExpressionKind::Intrinsic {
+                ownership: self.finish_call_ownership(
+                    ownership,
+                    None,
+                    Some(intrinsic),
+                    &args,
+                    step.span,
+                )?,
                 intrinsic,
                 type_arguments,
                 reflection_arguments,
@@ -7772,6 +8104,7 @@ function main() returns int64:
                     function,
                     args,
                     evaluation_order,
+                    ..
                 },
             ..
         })) = &main.body.statements[1].kind
@@ -7824,6 +8157,7 @@ function main() returns int64:
                     function,
                     args,
                     evaluation_order,
+                    ..
                 },
             ..
         })) = &main.body.statements[1].kind
@@ -8575,6 +8909,18 @@ function callbacks() returns secret[list[Callback]]:
         for kind in [
             ExpressionKind::Local(LocalId::new(0)),
             ExpressionKind::Call {
+                ownership: CallOwnership::generated(
+                    GeneratedOperation::NativeSuite {
+                        function: FunctionId::new(0),
+                    },
+                    &[],
+                    &[],
+                    &[],
+                    TypeInterner::NOTHING,
+                    &[],
+                    &types,
+                )
+                .unwrap(),
                 function: FunctionId::new(0),
                 args: vec![],
                 evaluation_order: vec![],
@@ -10233,6 +10579,18 @@ function main() returns nothing:
             (
                 active,
                 ExpressionKind::Call {
+                    ownership: CallOwnership::generated(
+                        GeneratedOperation::NativeSuite {
+                            function: FunctionId::new(0),
+                        },
+                        &[],
+                        &[],
+                        &[],
+                        TypeInterner::NOTHING,
+                        &[],
+                        &types,
+                    )
+                    .unwrap(),
                     function: FunctionId::new(0),
                     args: vec![],
                     evaluation_order: vec![],
@@ -10778,6 +11136,7 @@ function direct() returns int64:
                 callee,
                 args,
                 evaluation_order,
+                ..
             } = &returned_value(name).kind
             else {
                 panic!("expected indirect call in {name}");
@@ -10833,6 +11192,7 @@ function main() returns int64:
                     callee,
                     args,
                     evaluation_order,
+                    ..
                 },
             ..
         })) = &program.functions[1].body.statements[2].kind
@@ -11102,6 +11462,7 @@ function main() returns int64:
             function,
             args,
             evaluation_order,
+            ..
         } = &value.kind
         else {
             panic!("expected lowered generic pipeline step");
@@ -11118,6 +11479,7 @@ function main() returns int64:
                     function,
                     args,
                     evaluation_order,
+                    ..
                 },
             ..
         })) = &main.body.statements[2].kind
@@ -11130,6 +11492,7 @@ function main() returns int64:
             function,
             args,
             evaluation_order,
+            ..
         } = &args[0].kind
         else {
             panic!("expected concrete method pipeline step");
@@ -11160,6 +11523,7 @@ function main() returns int64:
                         callee,
                         args,
                         evaluation_order,
+                        ..
                     },
                 ..
             })) = &program.functions[function_index].body.statements[statement_index].kind
@@ -11216,6 +11580,7 @@ function grouped_without_arguments() returns int64:
                         callee,
                         args,
                         evaluation_order,
+                        ..
                     },
                 ..
             })) = &function
@@ -11651,5 +12016,196 @@ function precise() returns Session at empty:
                 checked.diagnostics
             );
         }
+    }
+
+    const VIEWED_ITERATION_CALL_SOURCE: &str = r#"namespace app
+struct Item:
+    code: int64
+function inspect(view item: Item) returns int64:
+    return item.code
+function text_size(view text: string) returns int64:
+    return 1
+function list_items(view items: list[Item]) returns int64:
+    mutable int64 total = 0
+    for item in view items:
+        total = total + inspect(view item)
+    return total
+function map_items(view items: map[string, Item]) returns int64:
+    mutable int64 total = 0
+    for key, item in view items:
+        total = total + text_size(view key) + inspect(view item)
+    return total
+function strings(view text: string) returns int64:
+    mutable int64 total = 0
+    for item in view text:
+        total = total + text_size(view item)
+    return total
+function set_items(view items: set[string]) returns int64:
+    mutable int64 total = 0
+    for item in view items:
+        total = total + text_size(view item)
+    return total
+function owned_items(items: list[Item]) returns int64:
+    mutable int64 total = 0
+    for item in items:
+        total = total + inspect(item)
+    return total
+"#;
+
+    #[test]
+    fn viewed_loop_caller_origins_use_typed_iteration_backing_not_abi_parameters() {
+        let (program, checked) = lower_source_with_check(VIEWED_ITERATION_CALL_SOURCE, false);
+        validate_backend_types(&program, &checked.interner).expect("exact viewed iteration source");
+        for name in ["list_items", "map_items", "strings", "set_items"] {
+            let function = program
+                .functions
+                .iter()
+                .find(|function| function.identity.declaration.name == name)
+                .unwrap();
+            let StatementKind::For {
+                key,
+                value,
+                by_view,
+                ..
+            } = &function.body.statements[1].kind
+            else {
+                panic!("source For")
+            };
+            assert!(*by_view);
+            assert!(!function.params.iter().any(|param| param.local == *key));
+            assert!(
+                !function
+                    .params
+                    .iter()
+                    .any(|param| Some(param.local) == *value)
+            );
+            assert!(function.locals[key.index() as usize].view_source.is_none());
+        }
+        let owned = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "owned_items")
+            .unwrap();
+        assert!(matches!(
+            owned.body.statements[1].kind,
+            StatementKind::For { by_view: false, .. }
+        ));
+    }
+
+    #[test]
+    fn viewed_loop_proof_stays_in_exact_body_and_rejects_forged_binders() {
+        let (program, checked) = lower_source_with_check(VIEWED_ITERATION_CALL_SOURCE, false);
+        let index = program
+            .functions
+            .iter()
+            .position(|function| function.identity.declaration.name == "list_items")
+            .unwrap();
+        let original_loop = program.functions[index].body.statements[1].clone();
+        for case in 0..6 {
+            let mut changed = program.clone();
+            let function = &mut changed.functions[index];
+            let StatementKind::For {
+                key, by_view, body, ..
+            } = &mut function.body.statements[1].kind
+            else {
+                unreachable!()
+            };
+            match case {
+                0 => *by_view = false,
+                1 => {
+                    let escaped = body.statements[0].clone();
+                    function.body.statements.insert(2, escaped);
+                }
+                2 => *key = function.params[0].local,
+                3 => function.locals[key.index() as usize].ty = TypeInterner::STRING,
+                4 => {
+                    let escaped = body.statements[0].clone();
+                    function.body.statements[1] = escaped;
+                }
+                5 => function.body.statements.insert(2, original_loop.clone()),
+                _ => unreachable!(),
+            }
+            let errors = validate_backend_types(&changed, &checked.interner)
+                .expect_err("forged viewed loop backing");
+            assert!(
+                errors.iter().any(|error| error
+                    .message
+                    .contains("borrowed binding lost its immediate source")
+                    || error.message.contains("viewed iteration binder")
+                    || error.message.contains("viewed iteration binding type")
+                    || error
+                        .message
+                        .contains("iteration binding is declared more than once")),
+                "{case}: {errors:?}"
+            );
+        }
+        assert!(matches!(
+            original_loop.kind,
+            StatementKind::For { by_view: true, .. }
+        ));
+    }
+
+    #[test]
+    fn nested_viewed_iteration_preserves_each_immediate_binder_and_forwarded_alias() {
+        let (program, checked) = lower_source_with_check(
+            r#"namespace app
+struct Item:
+    code: int64
+function inspect(view item: Item) returns int64:
+    return item.code
+function nested(view groups: list[list[Item]]) returns int64:
+    mutable int64 total = 0
+    for items in view groups:
+        for item in view items:
+            Item alias = view item
+            total = total + inspect(view alias)
+    return total
+"#,
+            false,
+        );
+        validate_backend_types(&program, &checked.interner)
+            .expect("nested and forwarded view binding");
+        let mut changed = program.clone();
+        let function = changed
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "nested")
+            .unwrap();
+        let StatementKind::For {
+            key: outer, body, ..
+        } = &mut function.body.statements[1].kind
+        else {
+            unreachable!()
+        };
+        let StatementKind::For { key: inner, .. } = &mut body.statements[0].kind else {
+            unreachable!()
+        };
+        *inner = *outer;
+        let errors = validate_backend_types(&changed, &checked.interner)
+            .expect_err("nested loop cannot reuse its parent binder");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message.contains("fresh immutable local")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn copyable_viewed_loop_binding_can_be_captured_as_an_ordinary_copy() {
+        let (program, checked) = lower_source_with_check(
+            r#"namespace app
+function copy_capture(view items: list[int64]) returns int64:
+    mutable int64 total = 0
+    for item in view items:
+        function() returns int64 callback = function() returns int64:
+            return item
+        total = total + callback()
+    return total
+"#,
+            false,
+        );
+        validate_backend_types(&program, &checked.interner)
+            .expect("copyable viewed iteration capture");
     }
 }

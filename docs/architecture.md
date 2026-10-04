@@ -639,7 +639,9 @@ This sub-phase tracks the ownership state of every variable through the control 
 - A variable can only be used once unless it is a `view` or has an explicitly
   copyable type. Numeric primitives, `bool`, `nothing`, and immutable `string`
   are implicitly copyable; the primitive `bytes` type is move-only.
-- After a variable is passed to a non-`view` parameter, it becomes `Consumed`.
+- A bare move-only owned argument becomes `Consumed` even when its formal
+  parameter is `view`. Written `view` retains the caller owner only at a View
+  formal; an Owned formal requires an owned value or an explicit clone.
 - Using a `Consumed` variable is a compile error.
 - `view` parameters can read but not consume.
 - `view` values cannot be returned, stored in structs, or sent to actors.
@@ -680,15 +682,77 @@ reject execution. The
 [open contract](open_design/projected_field_assignment.md) must settle safe
 updates or rejection of all projected writes before extending this handoff.
 
-The checker also rejects known move-only views at owned return and argument
-boundaries with E0401. It reuses declaration facts for view parameters, local
-views, and forwarded aliases, retaining the borrow through parentheses,
-`coarsen`, and `declassify` when the checked result is move-only. These checks
-cover ordinary, generic, indirect, and pipeline calls, including actor handlers
-and verify/property bodies. Explicit written view arguments retain E0375;
-implicit-copy results, valid clones, ordinary owned field copies without
-Resource data, and owned call results remain valid. Resource-bearing field
-acquisition must use a nonowning view or a genuine owned transfer.
+The checker rejects known move-only views at owned return boundaries and
+ordinary bare argument boundaries with E0401, including calls whose formal is
+View. It reuses declaration facts for view parameters, local views, and forwarded
+aliases, retaining the borrow through parentheses, `coarsen`, and `declassify`
+when the checked result is move-only. Ordinary, generic, indirect, pipeline and
+actor calls obey the same boundary. Lexical verify, property and breakpoint
+expressions retain Rule25's ordinary-data observation behavior only through a
+validated copy, borrow or owning snapshot. Capability and Resource authority
+cannot be acquired through observation. Explicit written view arguments to Owned
+formals retain E0375; implicit-copy results, valid clones, ordinary owned field
+copies without Resource data, and owned call results remain valid.
+Resource-bearing field acquisition requires a nonowning view or a genuine owned
+transfer.
+
+A rejected typed invocation has no ownership handoff. Ownership recovery reads
+its dependencies in source order, preserving independent nested-call effects and
+use-after-move errors. Invalid builtin type arguments retain the operand shape for
+checking but have an ERROR result and cannot select an acquisition packet.
+
+Caller ownership facts retain the resolved target, raw source occurrence type,
+formal access, original written syntax, exact binding identity, and lexical
+argument order in each ordinary, concrete generic, and reflected body. Pipeline
+inputs have a separate checked input fact from the step's callee and output;
+sharing a syntax span does not merge these roles. HIR seals source facts before
+physical conversions and retains generated metadata operands separately. A
+physical View wrapper cannot turn a bare transfer into caller retention.
+
+MIR records finite owning, copying, observation and loan stages while preserving
+the original source certificate. A relinquished View input first moves its full
+endpoint into one owning temporary at its lexical position, then borrows that
+temporary through the call. Compiler-generated calls seal their exact operation,
+result, target and argument order through one fallible factory. Their stages
+retain an immutable acquisition witness and a once-only private storage
+association. Private generated-producer shapes preserve the exact operation,
+target, typed occurrence, ordered fields and backing identities. Restoring a
+materialized local requires its unique dominating owning initializer and the
+same immutable producer shape. Ordinary snapshots require recursive ordinary-data
+proof; a callable signature or opaque carrier cannot grant cloning authority.
+MIR joins the packet to its exact initializer, Begin/End loan and typed original
+occurrence before pruning, move planning or native eligibility.
+Observation snapshots can precede existing interface conversion only when the
+sealed raw source is ordinary data with an independently supported clone. MIR
+clones that exact backing once and restores the existing conversion spine;
+an erased Interface signature does not grant cloning authority.
+
+Compiler-generated refinement handlers retain their ordered exact predicate
+identities, candidate backing, error-empty tests, selecting branches and shared
+failure entry. One validated output and every owning default must reach the use
+through that checked graph. Transparent default conversions cannot acquire a
+borrowed loop binder. Canonical compaction remaps the private proof without
+turning it into an execution read or cleanup owner.
+
+View-loop binders carry a private typed element/key/value proof only inside their
+exact lexical loop body. MIR retains the original checked loop inventory while
+canonical sequence preparation records the exact borrowed source, cursor, length,
+binders and body/exit graph. Prepared records cannot manufacture a missing original
+loop, authorize a binder outside its body or acquire its borrowed storage. Dense
+compaction remaps these identities without treating proof metadata as execution
+reads or cleanup owners.
+
+Canonical simplification of a checked uninhabited sum arm carries private
+preparation metadata across compaction. Distinct absent-success and present-success
+records preserve their exact source, output, runtime tag and selected edge. An
+arbitrary Goto or default cannot replace the checked sum edge, and a retained
+successful payload still requires its exact extraction and owning source.
+
+Expression lowering descends through existing containers and conversions when a
+nested checked call requires owning staging, even if it contains no handler.
+Short-circuit boolean operands retain their selected control-flow arm and lexical
+evaluation order. These facts do not supply Resource runtime layout, providers,
+async or actor execution.
 
 Directly written return-view annotations report E0401 by unique annotation
 span, including unused generic headers, interface/inherent/implementation
