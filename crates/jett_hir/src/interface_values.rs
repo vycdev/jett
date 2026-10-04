@@ -165,8 +165,38 @@ impl Lowerer<'_> {
                         value
                     })
                     .collect::<Vec<_>>();
+                let access = params
+                    .iter()
+                    .map(|param| {
+                        if param.mode == ParamMode::View {
+                            jett_typecheck::CheckedCalleeAccess::View
+                        } else {
+                            jett_typecheck::CheckedCalleeAccess::Owned
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let ownership = match crate::CallOwnership::generated(
+                    crate::GeneratedOperation::InterfaceDispatch {
+                        function: target,
+                        interface_type: owner,
+                        method_index,
+                    },
+                    &args,
+                    &implementation.parameter_types,
+                    &access,
+                    implementation.return_type,
+                    &(0..args.len()).collect::<Vec<_>>(),
+                    &self.check.interner,
+                ) {
+                    Ok(ownership) => ownership,
+                    Err(message) => {
+                        self.error(span, message);
+                        continue;
+                    }
+                };
                 let value = Expression {
                     kind: ExpressionKind::Call {
+                        ownership,
                         function: target,
                         evaluation_order: (0..args.len()).collect(),
                         args,
@@ -412,7 +442,8 @@ impl Adapters {
         }
         let Type::Function {
             return_type: source_return,
-            ..
+            params: source_params,
+            view_params: source_views,
         } = types.resolve(source)
         else {
             return None;
@@ -470,10 +501,35 @@ impl Adapters {
                 span,
             })
             .collect::<Vec<_>>();
+        let access = source_views
+            .iter()
+            .map(|view| {
+                if *view {
+                    jett_typecheck::CheckedCalleeAccess::View
+                } else {
+                    jett_typecheck::CheckedCalleeAccess::Owned
+                }
+            })
+            .collect::<Vec<_>>();
+        let ownership = crate::CallOwnership::generated(
+            crate::GeneratedOperation::FunctionAdapter {
+                callee: params[0].local,
+                source_type: source,
+                target_type: target,
+            },
+            &args,
+            source_params,
+            &access,
+            *source_return,
+            &(0..args.len()).collect::<Vec<_>>(),
+            types,
+        )
+        .ok()?;
         let value = Expression {
             kind: ExpressionKind::IndirectCall {
+                ownership,
                 callee: Box::new(Expression {
-                    kind: ExpressionKind::Local(LocalId(0)),
+                    kind: ExpressionKind::Local(params[0].local),
                     ty: source,
                     span,
                 }),

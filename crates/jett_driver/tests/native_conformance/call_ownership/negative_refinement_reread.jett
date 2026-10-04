@@ -1,0 +1,13 @@
+namespace app
+type Positive = int64 where value > 0
+function refined(view value: Positive) returns int64:
+    return coarsen clone value
+function report(number: int64) returns string:
+    Positive established = number handle error:
+        return error
+    int64 before = refined(established)
+    int64 after = refined(view established)
+    return "{before}:{after}"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "{report(7)}\n")
+    return nothing

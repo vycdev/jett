@@ -3021,8 +3021,13 @@ fn lower_file_for_backend_inner(
         BackendLoweringError::Hir(errors).with_debug_observations(&debug_observations)
     })?;
     let native_verify_entry = if mode == BackendLoweringMode::VerifySuite {
-        append_native_verify_suite(&mut hir, &parse_result.module, entry_file)
-            .map_err(|error| error.with_debug_observations(&debug_observations))?
+        append_native_verify_suite(
+            &mut hir,
+            &parse_result.module,
+            entry_file,
+            &check_result.interner,
+        )
+        .map_err(|error| error.with_debug_observations(&debug_observations))?
     } else {
         None
     };
@@ -3565,6 +3570,7 @@ fn append_native_verify_suite(
     hir: &mut jett_hir::Program,
     module: &Module,
     entry_file: FileId,
+    types: &jett_types::TypeInterner,
 ) -> Result<Option<jett_hir::FunctionId>, BackendLoweringError> {
     let mut verifies = Vec::new();
     let mut suite_namespace = None;
@@ -3602,19 +3608,34 @@ fn append_native_verify_suite(
     let id = jett_hir::FunctionId::new(hir.functions.len() as u32);
     let statements = verifies
         .into_iter()
-        .map(|(function, span)| jett_hir::Statement {
-            kind: jett_hir::StatementKind::Expression(jett_hir::Expression {
-                kind: jett_hir::ExpressionKind::Call {
-                    function,
-                    args: Vec::new(),
-                    evaluation_order: Vec::new(),
-                },
-                ty: jett_types::TypeInterner::NOTHING,
+        .map(|(function, span)| {
+            let ownership = jett_hir::CallOwnership::generated(
+                jett_hir::GeneratedOperation::NativeSuite { function },
+                &[],
+                &[],
+                &[],
+                jett_types::TypeInterner::NOTHING,
+                &[],
+                types,
+            )
+            .map_err(|message| {
+                BackendLoweringError::Hir(vec![jett_hir::LowerError { span, message }])
+            })?;
+            Ok(jett_hir::Statement {
+                kind: jett_hir::StatementKind::Expression(jett_hir::Expression {
+                    kind: jett_hir::ExpressionKind::Call {
+                        function,
+                        args: Vec::new(),
+                        evaluation_order: Vec::new(),
+                        ownership,
+                    },
+                    ty: jett_types::TypeInterner::NOTHING,
+                    span,
+                }),
                 span,
-            }),
-            span,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, BackendLoweringError>>()?;
     hir.functions.push(jett_hir::Function {
         id,
         debug_kind: jett_hir::FunctionDebugKind::named(

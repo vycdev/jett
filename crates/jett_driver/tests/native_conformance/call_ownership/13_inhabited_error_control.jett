@@ -1,0 +1,16 @@
+namespace app
+function count(view values: list[int64]) returns int64:
+    return list.length[int64](view values)
+function measure[E](outcome: result[list[int64], E], view stdout: Stdout) returns int64:
+    Stdout.write(view stdout, "before:success\n")
+    int64 answer = count(outcome handle error:
+        Stdout.write(view stdout, "failure:success\n")
+        return 0
+    )
+    Stdout.write(view stdout, "after:success\n")
+    return answer
+function main(stdout: Stdout) returns nothing:
+    result[list[int64], string] outcome = ok(list(1, 2))
+    int64 answer = measure(outcome, view stdout)
+    Stdout.write(view stdout, "count:{answer}\n")
+    return nothing

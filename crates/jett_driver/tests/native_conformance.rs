@@ -24,6 +24,9 @@ use std::time::{Duration, Instant};
 #[path = "support/native_inventory_execution.rs"]
 mod inventory_execution;
 
+#[path = "native_conformance/call_ownership.rs"]
+mod call_ownership;
+
 #[path = "native_conformance/scoped_call_views.rs"]
 mod scoped_call_views;
 
@@ -3691,7 +3694,8 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
         ),
     ] {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
-        let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+        let expected = jett_driver::run_file_capture_output(&fixture)
+            .unwrap_or_else(|error| panic!("{name}: interpreter oracle: {error}"));
         if name == "uuid_values" {
             assert_eq!(
                 debug_print_text(&expected.debug_events),
@@ -7350,12 +7354,16 @@ fn native_projected_nested_collections_match_interpreter() {
 fn native_nested_handle_projected_view_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/nested_handle_projected_view.jett");
-    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(debug_print_text(&expected.debug_events), "3 8\n10 13\n");
     let directory = tempfile::tempdir().expect("isolated projected handler directory");
+    let source = directory.path().join("nested_handle_projected_view.jett");
+    fs::copy(&fixture, &source).expect("copy unchanged projected handler source");
+    let expected = jett_driver::run_file_capture_output(&source).expect("interpreter oracle");
+    assert_eq!(debug_print_text(&expected.debug_events), "3 8\n10 13\n");
     let binary = directory.path().join("nested_handle_projected_view.exe");
-    build_host_executable(&fixture, launcher(), &binary)
+    build_host_executable(&source, launcher(), &binary)
         .expect("compile projected view before handler");
+    fs::remove_file(&source).expect("erase projected handler source before native execution");
+    assert!(!source.exists());
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
@@ -8132,13 +8140,20 @@ fn native_intrinsic_nested_handle_matches_interpreter() {
 fn native_indirect_aggregate_view_before_handler_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/nested_handle_indirect_aggregate_view.jett");
-    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     let directory = tempfile::tempdir().expect("isolated aggregate view directory");
+    let source = directory
+        .path()
+        .join("nested_handle_indirect_aggregate_view.jett");
+    fs::copy(&fixture, &source).expect("copy unchanged indirect handler source");
+    let expected = jett_driver::run_file_capture_output(&source).expect("interpreter oracle");
+    assert_eq!(debug_print_text(&expected.debug_events), "5 8\n");
     let binary = directory
         .path()
         .join("nested_handle_indirect_aggregate_view.exe");
-    build_host_executable(&fixture, launcher(), &binary)
+    build_host_executable(&source, launcher(), &binary)
         .expect("compile indirect aggregate view before a handler");
+    fs::remove_file(&source).expect("erase indirect handler source before native execution");
+    assert!(!source.exists());
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());

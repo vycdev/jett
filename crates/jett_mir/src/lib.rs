@@ -1,10 +1,18 @@
 //! Jett's backend-neutral control-flow graph representation.
 
 mod analysis;
+mod breakpoint_regions;
+mod call_owner_generations;
+mod call_ownership;
+pub use call_owner_generations::{
+    CallGenerationSlot, CallGenerationStoragePlan, CallOwnerEscrowId, CallOwnerGenerationId,
+};
+pub use call_ownership::{CallerAcquisitions, SourceAcquisition};
 mod call_views;
 pub mod copy_values;
 mod generated_functions;
 mod handlers;
+mod iteration_views;
 pub use generated_functions::prepare_native_generated_functions;
 mod sequences;
 pub use sequences::prepare_native_sequences;
@@ -19,7 +27,7 @@ use jett_common::Span;
 use jett_hir::{self as hir, Expression, FieldId, FunctionIdentity, VariantId};
 use jett_types::{TypeId, TypeInterner};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlockId(u32);
 
 impl BlockId {
@@ -46,6 +54,13 @@ pub struct Function {
     pub entry: BlockId,
     pub blocks: Vec<BasicBlock>,
     pub span: Span,
+    // Only canonical MIR preparation can authenticate a removed success edge.
+    prepared_absent_successes: Vec<uninhabited_sums::PreparedAbsentSuccess>,
+    prepared_present_successes: Vec<uninhabited_sums::PreparedPresentSuccess>,
+    prepared_view_iterations: Vec<iteration_views::PreparedViewIteration>,
+    original_view_iterations: Vec<iteration_views::OriginalIteration>,
+    breakpoint_regions: Vec<breakpoint_regions::BreakpointRegion>,
+    call_owner_generations: Vec<call_owner_generations::CallOwnerGeneration>,
 }
 
 impl Function {
@@ -159,6 +174,21 @@ impl SequenceSource {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StatementKind {
+    /// Empty, internal generation escrow; this is not an initialized Jett value.
+    OpenCallOwnerGeneration {
+        generation: CallOwnerGenerationId,
+        root: LocalId,
+    },
+    /// Transfer the old owner once, after the independent RHS has been acquired.
+    ReplaceCallOwnerGeneration {
+        generation: CallOwnerGenerationId,
+        root: LocalId,
+        rhs_owner: LocalId,
+    },
+    /// End the matching captured generation after its last call loan.
+    CloseCallOwnerGeneration {
+        generation: CallOwnerGenerationId,
+    },
     /// A compiler-internal, call-bounded borrow with an exact eager borrow proof.
     /// Unlike a source Let alias, only this typed statement grants End authority.
     BeginCallView {
@@ -333,6 +363,39 @@ struct FunctionValidator<'function, 'errors> {
     functions: &'function [Function],
     function_count: usize,
     errors: &'errors mut Vec<ValidationError>,
+}
+
+/// Validate every invocation before preparation, including unused bodies and
+/// disconnected blocks. Metadata origins must never become execution liveness.
+pub fn validate_call_ownership(
+    program: &Program,
+    types: &TypeInterner,
+) -> Result<(), Vec<ValidationError>> {
+    validate(program)?;
+    let mut errors = Vec::new();
+    let validation = call_ownership::ProgramValidation::new(program);
+    for function in &program.functions {
+        if let Err(message) = validation.validate_function(function, types) {
+            errors.push(ValidationError {
+                span: function.span,
+                message,
+            });
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+/// Acquire a function's sealed source ownership evidence before native lowering.
+pub fn validate_caller_acquisitions<'a>(
+    program: &Program,
+    function: &'a Function,
+    types: &TypeInterner,
+) -> Result<CallerAcquisitions<'a>, String> {
+    call_ownership::validate_function(program, function, types)
 }
 
 impl FunctionValidator<'_, '_> {
@@ -519,6 +582,16 @@ impl FunctionValidator<'_, '_> {
 
     fn statement(&mut self, statement: &Statement) {
         match &statement.kind {
+            StatementKind::OpenCallOwnerGeneration { root, .. } => {
+                self.check_local(*root, statement.span, "generation root")
+            }
+            StatementKind::ReplaceCallOwnerGeneration {
+                root, rhs_owner, ..
+            } => {
+                self.check_local(*root, statement.span, "generation root");
+                self.check_local(*rhs_owner, statement.span, "generation acquired RHS");
+            }
+            StatementKind::CloseCallOwnerGeneration { .. } => {}
             StatementKind::ReflectedContainerReady { source, .. } => {
                 self.check_local(*source, statement.span, "reflected container source");
             }
@@ -823,6 +896,17 @@ impl FunctionValidator<'_, '_> {
     }
 
     fn expression(&mut self, expression: &Expression) {
+        let ownership = match &expression.kind {
+            hir::ExpressionKind::Call { ownership, .. }
+            | hir::ExpressionKind::Intrinsic { ownership, .. }
+            | hir::ExpressionKind::IndirectCall { ownership, .. } => Some(ownership),
+            _ => None,
+        };
+        if let Some(ownership) = ownership {
+            ownership
+                .metadata_local_ids(|id| self.check_local(id, expression.span, "caller ownership"));
+            ownership.metadata_function_ids(|id| self.check_function(id, expression.span));
+        }
         match &expression.kind {
             hir::ExpressionKind::Local(local) => {
                 self.check_local(*local, expression.span, "expression");
@@ -871,6 +955,7 @@ impl FunctionValidator<'_, '_> {
                 function,
                 args,
                 evaluation_order,
+                ..
             } => {
                 self.check_function(*function, expression.span);
                 self.check_evaluation_order(evaluation_order, args.len(), expression.span);
@@ -918,6 +1003,7 @@ impl FunctionValidator<'_, '_> {
                 callee,
                 args,
                 evaluation_order,
+                ..
             } => {
                 self.expression(callee);
                 self.check_evaluation_order(evaluation_order, args.len(), expression.span);
@@ -1049,7 +1135,9 @@ impl FunctionValidator<'_, '_> {
 }
 
 pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Vec<LowerError>> {
-    if let Err(errors) = hir::validate(program) {
+    if let Err(errors) =
+        hir::validate(program).and_then(|()| hir::validate_backend_types(program, types))
+    {
         return Err(errors
             .into_iter()
             .map(|error| LowerError {
@@ -1068,21 +1156,32 @@ pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Ve
             )
         })
         .collect();
-    Ok(Program {
+    let lowered = Program {
         equality_methods: program.equality_methods.clone(),
         functions: program
             .functions
             .iter()
             .map(|function| lower_function(function, types, &function_param_modes))
-            .collect(),
-    })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| vec![error])?,
+    };
+    validate_call_ownership(&lowered, types).map_err(|errors| {
+        errors
+            .into_iter()
+            .map(|error| LowerError {
+                span: error.span,
+                message: error.message,
+            })
+            .collect::<Vec<_>>()
+    })?;
+    Ok(lowered)
 }
 
 fn lower_function(
     function: &hir::Function,
     types: &TypeInterner,
     function_param_modes: &std::collections::HashMap<FunctionId, Vec<ParamMode>>,
-) -> Function {
+) -> Result<Function, LowerError> {
     let mut builder = Builder::new(function.body.span, types, function_param_modes);
     builder.locals = function.locals.clone();
     builder.view_params = function
@@ -1102,7 +1201,9 @@ fn lower_function(
     if builder.open() && function.return_type == jett_types::TypeInterner::NOTHING {
         builder.terminate(TerminatorKind::Return(None), function.body.span);
     }
-    Function {
+    let breakpoint_capture = std::mem::take(&mut builder.breakpoint_capture);
+    let generation_capture = std::mem::take(&mut builder.generation_capture);
+    let mut lowered = Function {
         id: function.id,
         identity: function.identity.clone(),
         debug_kind: function.debug_kind.clone(),
@@ -1113,9 +1214,32 @@ fn lower_function(
         entry: BlockId(0),
         blocks: builder.blocks,
         span: function.span,
-    }
+        prepared_absent_successes: Vec::new(),
+        prepared_present_successes: Vec::new(),
+        prepared_view_iterations: Vec::new(),
+        original_view_iterations: Vec::new(),
+        breakpoint_regions: Vec::new(),
+        call_owner_generations: Vec::new(),
+    };
+    lowered.breakpoint_regions =
+        breakpoint_capture
+            .seal(&lowered)
+            .map_err(|message| LowerError {
+                span: function.span,
+                message,
+            })?;
+    lowered.call_owner_generations =
+        generation_capture
+            .seal(&lowered)
+            .map_err(|message| LowerError {
+                span: function.span,
+                message,
+            })?;
+    iteration_views::capture_original(&mut lowered, types);
+    Ok(lowered)
 }
 
+#[derive(Clone)]
 struct Builder<'a> {
     types: &'a TypeInterner,
     function_param_modes: &'a std::collections::HashMap<FunctionId, Vec<ParamMode>>,
@@ -1126,6 +1250,8 @@ struct Builder<'a> {
     locals: Vec<Local>,
     handlers: Vec<(LocalId, BlockId)>,
     view_params: Vec<LocalId>,
+    breakpoint_capture: breakpoint_regions::Capture,
+    generation_capture: call_owner_generations::Capture,
 }
 
 impl<'a> Builder<'a> {
@@ -1151,6 +1277,8 @@ impl<'a> Builder<'a> {
             locals: Vec::new(),
             handlers: Vec::new(),
             view_params: Vec::new(),
+            breakpoint_capture: breakpoint_regions::Capture::default(),
+            generation_capture: call_owner_generations::Capture::default(),
         }
     }
 
@@ -1164,6 +1292,8 @@ impl<'a> Builder<'a> {
                 span,
             },
         });
+        self.breakpoint_capture.block(id);
+        self.generation_capture.block(id);
         id
     }
 
@@ -1175,13 +1305,22 @@ impl<'a> Builder<'a> {
     }
 
     fn terminate(&mut self, kind: TerminatorKind, span: Span) {
-        self.blocks[self.current.index() as usize].terminator = Terminator { kind, span };
+        let value = Terminator { kind, span };
+        self.breakpoint_capture.terminator(self.current, &value);
+        self.generation_capture.terminator(self.current, &value);
+        self.blocks[self.current.index() as usize].terminator = value;
     }
 
     fn push(&mut self, kind: StatementKind, span: Span) {
+        let index = self.blocks[self.current.index() as usize].statements.len();
+        let value = Statement { kind, span };
+        self.breakpoint_capture
+            .statement(self.current, index, &value);
+        self.generation_capture
+            .statement(self.current, index, &value);
         self.blocks[self.current.index() as usize]
             .statements
-            .push(Statement { kind, span });
+            .push(value);
     }
 
     fn close_to(&mut self, target: BlockId, span: Span) {
@@ -1232,14 +1371,52 @@ impl<'a> Builder<'a> {
                 );
             }
             hir::StatementKind::Assign { target, value } => {
+                // Keep the current owner readable throughout the entire RHS.
+                let generation = match target.kind {
+                    hir::ExpressionKind::Local(root) => self
+                        .generation_capture
+                        .protected(root)
+                        .map(|generation| (generation, root)),
+                    _ => None,
+                };
                 let value = self.lower_value(value);
-                self.push(
-                    StatementKind::Assign {
-                        target: target.clone(),
-                        value,
-                    },
-                    statement.span,
-                );
+                if let Some((generation, root)) = generation {
+                    let rhs_owner = self.temporary(value.ty, value.span);
+                    let acquired = (
+                        self.current,
+                        self.blocks[self.current.index() as usize].statements.len(),
+                    );
+                    self.push(
+                        StatementKind::Let {
+                            local: rhs_owner,
+                            value,
+                        },
+                        statement.span,
+                    );
+                    let replacement = (
+                        self.current,
+                        self.blocks[self.current.index() as usize].statements.len(),
+                    );
+                    self.generation_capture
+                        .replacement(generation, statement, rhs_owner, acquired, replacement)
+                        .expect("constructor-selected generation preserves its checked Assign");
+                    self.push(
+                        StatementKind::ReplaceCallOwnerGeneration {
+                            generation,
+                            root,
+                            rhs_owner,
+                        },
+                        statement.span,
+                    );
+                } else {
+                    self.push(
+                        StatementKind::Assign {
+                            target: target.clone(),
+                            value,
+                        },
+                        statement.span,
+                    );
+                }
             }
             hir::StatementKind::Expression(value) => {
                 let value = self.lower_value(value);
@@ -1259,8 +1436,10 @@ impl<'a> Builder<'a> {
                 // operand may move their owner. Other CFG branches retain them.
                 self.end_call_views_since(0, statement.span);
                 let abandoned = std::mem::take(&mut self.call_view_scopes);
+                let generations = self.generation_capture.suspend();
                 let value = value.as_ref().map(|v| self.lower_value(v));
                 self.call_view_scopes = abandoned;
+                self.generation_capture.restore(generations);
                 self.terminate(TerminatorKind::Return(value), statement.span);
             }
             hir::StatementKind::Break => {
@@ -1308,6 +1487,14 @@ impl<'a> Builder<'a> {
                 condition,
                 bindings,
             } => {
+                let capturing = condition.is_some();
+                if capturing {
+                    self.breakpoint_capture.begin(
+                        statement,
+                        self.current,
+                        self.blocks[self.current.index() as usize].statements.len(),
+                    );
+                }
                 let condition = condition.as_ref().map(|value| self.lower_value(value));
                 self.push(
                     StatementKind::Breakpoint {
@@ -1316,6 +1503,12 @@ impl<'a> Builder<'a> {
                     },
                     statement.span,
                 );
+                if capturing {
+                    self.breakpoint_capture.end(
+                        self.current,
+                        self.blocks[self.current.index() as usize].statements.len() - 1,
+                    );
+                }
             }
             hir::StatementKind::Respond(value) => {
                 self.end_call_views_since(0, statement.span);
@@ -1416,7 +1609,7 @@ impl<'a> Builder<'a> {
                 body: body_block,
                 exit,
             },
-            iterable.span,
+            statement_span,
         );
         self.loops.push((header, exit, self.call_view_scopes.len()));
         self.current = body_block;
@@ -2020,6 +2213,18 @@ function first(left: int64, right: int64) returns int64:
             field_validation: None,
             args: Vec::new(),
             evaluation_order: vec![0],
+            ownership: hir::CallOwnership::generated(
+                hir::GeneratedOperation::ReflectionMetadata {
+                    intrinsic: hir::IntrinsicId::TypeName,
+                },
+                &[],
+                &[],
+                &[],
+                TypeInterner::STRING,
+                &[],
+                &TypeInterner::new(),
+            )
+            .expect("closed metadata source"),
         };
         arms[0].target = BlockId(u32::MAX);
         *otherwise = BlockId(u32::MAX - 1);

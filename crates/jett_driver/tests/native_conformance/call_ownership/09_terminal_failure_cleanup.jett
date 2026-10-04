@@ -1,0 +1,18 @@
+namespace app
+function with_extra(view values: list[int64], extra: int64) returns int64:
+    return list.length[int64](view values) + extra
+function failing(view stdout: Stdout) returns int64:
+    Stdout.write(view stdout, "failure:cleanup\n")
+    list[string] broken = list.remove_at[string](list("owned", "other"), -1)
+    return list.length[string](broken)
+function main(stdout: Stdout) returns nothing:
+    bytes payload = bytes.from_string("cleanup")
+    list[string] retained = list("owner", "kept")
+    list[int64] values = list(1, 2)
+    optional[int64] absent = none
+    Stdout.write(view stdout, "before:cleanup\n")
+    int64 answer = with_extra(values, absent handle:
+        default failing(view stdout)
+    )
+    Stdout.write(view stdout, "after:{answer}:{bytes.to_hex(view payload)}:{list.length[string](view retained)}\n")
+    return nothing

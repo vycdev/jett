@@ -1,0 +1,14 @@
+namespace call_probe
+export function mix(view left: list[int64], right: list[int64]) returns int64:
+    return list.length[int64](view left) + list.length[int64](view right)
+export function count(view values: list[int64]) returns int64:
+    return list.length[int64](view values)
+namespace app
+function main(stdout: Stdout) returns nothing:
+    use call_probe
+    list[int64] left = list(1)
+    list[int64] right = list(2, 3)
+    int64 before = call_probe.mix(right: right, left: left)
+    int64 after = call_probe.count(view right)
+    Stdout.write(view stdout, "named-owned:{before}:{after}\n")
+    return nothing

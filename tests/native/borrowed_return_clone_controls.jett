@@ -2,7 +2,7 @@ namespace app
 struct Record:
     values: list[int64]
     label: string
-type NonEmptyNumbers = list[int64] where list.length(value) > 0
+type NonEmptyNumbers = list[int64] where list.length(view value) > 0
 function copy_values[T](view values: list[T]) returns list[T]:
     return clone values
 function copy_record(view source: Record) returns Record:

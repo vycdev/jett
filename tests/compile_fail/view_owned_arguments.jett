@@ -1,4 +1,4 @@
-# ERROR: E0401 x11
+# ERROR: E0401 x9
 namespace app
 function consume(values: list[int64]) returns int64:
     return list.length[int64](view values)

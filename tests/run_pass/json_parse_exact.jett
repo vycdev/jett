@@ -161,7 +161,7 @@ function parse_exact_accepts_legacy_json_value_payload() returns string:
     string raw = "{{\"answer\":43,\"extra\":{{\"nested\":true}}}}"
     json.JsonTree tree = json.parse_exact[json.JsonTree](raw) handle error:
         return error
-    json.JsonTree answer = json.field(tree, "answer") handle:
+    json.JsonTree answer = json.field(view tree, "answer") handle:
         return "missing"
     int64 value = json.as_int64(answer) handle error:
         return error

@@ -56,9 +56,9 @@ verify csv_parse_empty_test:
 function csv_parse_single_blank_line_test() returns string:
     list[list[string]] rows = csv.parse("\n") handle error:
         return error
-    list[string] blank = list.get[list[string]](rows, 0) handle:
+    list[string] blank = list.get[list[string]](view rows, 0) handle:
         return "missing blank record"
-    string value = list.get[string](blank, 0) handle:
+    string value = list.get[string](view blank, 0) handle:
         return "missing empty field"
     return "{list.length[list[string]](rows)}:{list.length[string](blank)}:{value}"
 verify csv_parse_single_blank_line_test:
@@ -66,9 +66,9 @@ verify csv_parse_single_blank_line_test:
 function csv_parse_blank_record_test() returns string:
     list[list[string]] rows = csv.parse("first\n\nthird") handle error:
         return error
-    list[string] blank = list.get[list[string]](rows, 1) handle:
+    list[string] blank = list.get[list[string]](view rows, 1) handle:
         return "missing blank record"
-    string value = list.get[string](blank, 0) handle:
+    string value = list.get[string](view blank, 0) handle:
         return "missing empty field"
     return "{list.length[list[string]](rows)}:{list.length[string](blank)}:{value}"
 verify csv_parse_blank_record_test:
@@ -76,9 +76,9 @@ verify csv_parse_blank_record_test:
 function csv_parse_ragged_rows_test() returns string:
     list[list[string]] rows = csv.parse("a,b\n1\n2,3,4") handle error:
         return error
-    list[string] short = list.get[list[string]](rows, 1) handle:
+    list[string] short = list.get[list[string]](view rows, 1) handle:
         return "missing short row"
-    list[string] long = list.get[list[string]](rows, 2) handle:
+    list[string] long = list.get[list[string]](view rows, 2) handle:
         return "missing long row"
     return "{list.length[list[string]](rows)}:{list.length[string](short)}:{list.length[string](long)}"
 verify csv_parse_ragged_rows_test:

@@ -1,0 +1,12 @@
+namespace call_probe
+export function mix(view left: list[int64], right: list[int64]) returns int64:
+    return list.length[int64](view left) + list.length[int64](right)
+namespace app
+function main(stdout: Stdout) returns nothing:
+    use call_probe
+    list[int64] left = list(1, 2)
+    list[int64] right = list(3, 4, 5)
+    int64 answer = call_probe.mix(right: right, left: view left)
+    int64 retained = call_probe.mix(right: list(6, 7, 8), left: view left)
+    Stdout.write(view stdout, "transfer:{answer}:{retained}:{list.length[int64](view left)}\n")
+    return nothing

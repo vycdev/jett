@@ -193,6 +193,73 @@ fn declared_field_is_secret(types: &TypeInterner, mut ty: TypeId) -> Option<bool
     None
 }
 
+pub(crate) fn validate_field_projection(
+    value: &Expression,
+    types: &TypeInterner,
+) -> Result<(), &'static str> {
+    let ExpressionKind::Field {
+        base,
+        owner_type,
+        field,
+    } = &value.kind
+    else {
+        return Err("borrowed projection metadata does not describe a field");
+    };
+    if owner_type.index() as usize >= types.len() || base.ty.index() as usize >= types.len() {
+        return Err("native borrowed projection has an invalid field owner");
+    }
+    let secret_owner = matches!(
+        types.resolve(base.ty),
+        Type::Secret(inner)
+            if *inner == *owner_type
+                && matches!(
+                    types.resolve(*inner),
+                    Type::Struct(_) | Type::Bitfield(_) | Type::MachineState { .. }
+                )
+    );
+    if base.ty != *owner_type && !secret_owner {
+        return Err("native borrowed projection has an invalid field owner");
+    }
+    let field_type = match types.resolve(*owner_type) {
+        Type::Struct(struct_id) => types
+            .resolve_struct(*struct_id)
+            .fields
+            .get(field.index() as usize)
+            .map(|(_, ty)| *ty),
+        Type::Bitfield(bitfield_id) => types
+            .resolve_bitfield(*bitfield_id)
+            .fields
+            .get(field.index() as usize)
+            .map(|field| field.ty),
+        Type::MachineState { machine, state } => {
+            let Some(state) = types.resolve_machine(*machine).state(*state) else {
+                return Err("native borrowed projection has an invalid machine state");
+            };
+            state.fields.get(field.index() as usize).map(|(_, ty)| *ty)
+        }
+        _ => {
+            return Err(
+                "native borrowed projection requires ordinary struct, bitfield or state-qualified machine fields",
+            );
+        }
+    };
+    let Some(field_type) = field_type else {
+        return Err("native borrowed projection has an invalid field index");
+    };
+    let Some(already_secret) = declared_field_is_secret(types, field_type) else {
+        return Err("native borrowed projection has an invalid field endpoint type");
+    };
+    let valid_result = if secret_owner && field_type != TypeInterner::NOTHING && !already_secret {
+        matches!(types.resolve(value.ty), Type::Secret(inner) if *inner == field_type)
+    } else {
+        value.ty == field_type
+    };
+    if !valid_result {
+        return Err("native borrowed projection has an invalid field endpoint type");
+    }
+    Ok(())
+}
+
 pub fn validate_local_view_initializer(
     value: &Expression,
     source: LocalId,
@@ -214,68 +281,8 @@ pub fn validate_local_view_initializer(
             {
                 return Ok(());
             }
-            ExpressionKind::Field {
-                base,
-                owner_type,
-                field,
-            } => {
-                if owner_type.index() as usize >= types.len()
-                    || base.ty.index() as usize >= types.len()
-                {
-                    return Err("native borrowed projection has an invalid field owner");
-                }
-                let secret_owner = matches!(
-                    types.resolve(base.ty),
-                    Type::Secret(inner)
-                        if *inner == *owner_type
-                            && matches!(
-                                types.resolve(*inner),
-                                Type::Struct(_) | Type::Bitfield(_) | Type::MachineState { .. }
-                            )
-                );
-                if base.ty != *owner_type && !secret_owner {
-                    return Err("native borrowed projection has an invalid field owner");
-                }
-                let field_type = match types.resolve(*owner_type) {
-                    Type::Struct(struct_id) => types
-                        .resolve_struct(*struct_id)
-                        .fields
-                        .get(field.index() as usize)
-                        .map(|(_, ty)| *ty),
-                    Type::Bitfield(bitfield_id) => types
-                        .resolve_bitfield(*bitfield_id)
-                        .fields
-                        .get(field.index() as usize)
-                        .map(|field| field.ty),
-                    Type::MachineState { machine, state } => {
-                        let Some(state) = types.resolve_machine(*machine).state(*state) else {
-                            return Err("native borrowed projection has an invalid machine state");
-                        };
-                        state.fields.get(field.index() as usize).map(|(_, ty)| *ty)
-                    }
-                    _ => {
-                        return Err(
-                            "native borrowed projection requires ordinary struct, bitfield or state-qualified machine fields",
-                        );
-                    }
-                };
-                let Some(field_type) = field_type else {
-                    return Err("native borrowed projection has an invalid field index");
-                };
-                let Some(already_secret) = declared_field_is_secret(types, field_type) else {
-                    return Err("native borrowed projection has an invalid field endpoint type");
-                };
-                let valid_result = if secret_owner
-                    && field_type != TypeInterner::NOTHING
-                    && !already_secret
-                {
-                    matches!(types.resolve(value.ty), Type::Secret(inner) if *inner == field_type)
-                } else {
-                    value.ty == field_type
-                };
-                if !valid_result {
-                    return Err("native borrowed projection has an invalid field endpoint type");
-                }
+            ExpressionKind::Field { base, .. } => {
+                validate_field_projection(value, types)?;
                 value = base;
             }
             ExpressionKind::View(inner) => {

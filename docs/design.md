@@ -5767,7 +5767,7 @@ Jett introduces one concept: the **view**. A view is a read-only, non-owning ref
 
 ```
 function count_items(view data: list[Item]) returns int64:
-    return list.length[Item](data)
+    return list.length[Item](view data)
 
 function total_price(view items: list[Item]) returns float64:
     mutable float64 sum = 0.0
@@ -5804,7 +5804,7 @@ The `view` keyword appears in **both** declarations and call sites. The function
 
 ```
 function count(view data: list[int64]) returns int64:
-    return list.length[int64](data)
+    return list.length[int64](view data)
 
 # Keep the value — view at call site:
 int64 len = count(view items)
@@ -5924,8 +5924,17 @@ preserve pending metadata, while field reads retain their eager receiver checks.
 The operation's result is materialized before the internal scope ends. An
 aborted handler ends abandoned scopes before returning an owned operand, and
 loop exits abandon only scopes inside the exited operation. Persistent source
-aliases retain the limits above. Owner changes during a later argument remain
-a separate checker/native reconciliation; see the
+aliases retain the limits above. Native staging now preserves the captured
+generation of an exact source-checked mutable plain `TypeConstruction` binding
+when a later argument assigns its replacement. The current binding and captured
+backing remain separate, without a new source clone or ABI permission. Broader
+simultaneous cohorts and other owner kinds still require reconciliation.
+
+A written view of an original handled owned producer also keeps its exact
+checked conversion and temporary backing. An interface boxing conversion may
+read that proved concrete input borrowed while producing an independently owned
+box; its runtime implementation may copy the payload. These bounded paths make
+no zero-runtime-copy claim; see the
 [call-view implementation](active/native_scoped_call_view_staging.md).
 
 **Rule 2: A view cannot be sent to another thread.**
@@ -7054,7 +7063,7 @@ Jett keeps its symbol set **as small as possible**. Symbols are only used where 
 | `:` | Type annotations, block starts |
 | `"` | Strings |
 
-The `view` keyword is explicit at both call sites and declarations. When passing a value to a function that declares a `view` parameter, the caller must write `view`: `process(view data)`. In pipelines: `data into view json.serialize[Type]()`.
+The `view` keyword appears at declarations and call sites. To retain an owned move-only value, or forward a borrowed value to a `view` parameter, write `view`: `process(view data)`. In pipelines: `data into view json.serialize[Type]()`. Rule24 also permits a bare owned last-use argument to a `view` parameter; the caller relinquishes that owner after the call.
 
 **Replaced by keywords:**
 

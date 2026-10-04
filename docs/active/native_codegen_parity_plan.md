@@ -2271,3 +2271,37 @@ native case passes an isolated rerun, not whole-workspace acceptance. See
 [centralized acceptance context](native_acceptance_audit.md#retained-reference-preparation).
 The about-85% estimate, fixed 207 inventory/182 obligations, 464 supplemental
 native cases and whole-language 100% goal are unchanged.
+
+### Typed caller ownership integration
+
+The caller disposition selected by Rule24 now survives exact typed source,
+HIR, MIR and native handoffs. Separate sealed proofs cover generated calls,
+temporary staging, viewed loops and handled defaults; Rule25 data snapshots
+preserve existing interface conversion. An earlier formatted integration
+checkpoint passed 293 checker, 598 frontend, 168 HIR, 147 MIR, 67 backend and
+63 object tests. At that checkpoint all 15 linked caller groups passed in both
+profiles after source deletion, and the two failed driver property replays
+passed independently.
+
+The current formatted compiler-core gate passes 304 checker, 188 HIR, 196 MIR,
+70 backend and 63 object-emission tests, plus the MIR doctest. These current
+counts remain separate from full-workspace, complete-native and supported-host
+acceptance. Per-pass signature projection reuse preserves all validation
+boundaries and exact diagnostics.
+
+The bounded handled-conversion follow-up now passes all 66 MIR acquisition
+groups and a new linked payload-reading fixture in both profiles after source
+deletion. Captured mutable plain `TypeConstruction` generations pass seven MIR
+groups, three native emission groups and the original builder native regression.
+All seven failures of the historical 479-group run now pass individual replays.
+These paths preserve exact private Source/CFG authority and add no source clone
+or ABI permission; runtime interface boxing may copy its payload. Broader
+simultaneous cohorts and other owner kinds remain open.
+
+The [contract](native_call_ownership_facts.md) and
+[acceptance record](native_acceptance_audit.md#typed-caller-ownership-integration)
+separate these focused results from pending full-workspace, fresh complete native
+corpus, 182-object inventory and supported-host checks. The a9 predecessor is accepted locally
+and on all four supported-host jobs. The fixed 207 inventory, about 85% tracking
+and 100% whole-language goal remain unchanged. Actual Resource lifecycle and
+provider dispatch, followed by native ownership/cleanup, are the next work.

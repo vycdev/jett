@@ -67,10 +67,14 @@ fn projected_source(
 pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
     // This pass must not make malformed, unreachable input disappear before
     // the caller reports its original validation errors.
-    if validate(program).is_err() {
+    if validate_call_ownership(program, types).is_err() {
         return;
     }
     for function in &mut program.functions {
+        let before_pass = (!function.breakpoint_regions.is_empty()
+            || crate::call_owner_generations::has_records(function))
+        .then(|| function.clone());
+        let mut valid_regions = true;
         let mut removed_uninhabited_body = false;
         let count = function.blocks.len();
         for index in 0..count {
@@ -86,6 +90,10 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             else {
                 continue;
             };
+            let Ok(iteration_plan) = crate::iteration_views::original_plan(function, header, types)
+            else {
+                continue;
+            };
             if iterable.ty.index() as usize >= types.len() {
                 continue;
             }
@@ -93,7 +101,7 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                 Type::List(element) | Type::Set(element) if value_binding.is_none() => {
                     (*element, None)
                 }
-                Type::Map(key, map_value) if value_binding.is_some() => (*key, Some(*map_value)),
+                Type::Map(key, map_value) => (*key, value_binding.map(|_| *map_value)),
                 Type::String if value_binding.is_none() => (TypeInterner::STRING, None),
                 _ => continue,
             };
@@ -138,6 +146,18 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             {
                 continue;
             }
+            let before_iteration = (!function.breakpoint_regions.is_empty()
+                || crate::call_owner_generations::has_records(function))
+            .then(|| function.clone());
+            let mut region_edit = crate::breakpoint_regions::SequenceEdit {
+                header,
+                before: function.blocks[index].terminator.clone(),
+                after: function.blocks[index].terminator.clone(),
+                append: Vec::new(),
+                prefix: None,
+                redirects: Vec::new(),
+                blocks: Vec::new(),
+            };
             let span = iterable.span;
             let cursor = temporary(function, TypeInterner::INT64, span);
             let length = temporary(function, TypeInterner::INT64, span);
@@ -207,22 +227,47 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                 },
                 span,
             });
+            region_edit
+                .append
+                .push((BlockId(preheader as u32), init.clone()));
             function.blocks[preheader].statements.extend(init);
             if uninhabited {
                 // Keep evaluation and SequenceLength: it validates pending
                 // containers and projected ancestors even when no item exists.
                 // No runtime value can be extracted for the checked binder.
                 if by_view {
-                    function.blocks[index].statements.push(Statement {
+                    let end = Statement {
                         kind: StatementKind::IterationBorrow {
                             source,
                             token: cursor,
                             start: false,
                         },
                         span,
-                    });
+                    };
+                    region_edit.append.push((header, vec![end.clone()]));
+                    function.blocks[index].statements.push(end);
                 }
                 function.blocks[index].terminator.kind = TerminatorKind::Goto(exit);
+                region_edit.after = function.blocks[index].terminator.clone();
+                if let Some(before_iteration) = &before_iteration
+                    && (crate::call_owner_generations::sequence_transition(
+                        function,
+                        before_iteration,
+                        &region_edit,
+                        types,
+                    )
+                    .is_err()
+                        || crate::breakpoint_regions::sequence_transition(
+                            function,
+                            before_iteration,
+                            region_edit,
+                            types,
+                        )
+                        .is_err())
+                {
+                    valid_regions = false;
+                    break;
+                }
                 removed_uninhabited_body = true;
                 continue;
             }
@@ -246,7 +291,7 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                         source: source.clone(),
                         index: cursor,
                         target: key,
-                        part: if map_value.is_some() {
+                        part: if matches!(types.resolve(iterable.ty), Type::Map(..)) {
                             SequencePart::Key
                         } else {
                             SequencePart::Element
@@ -289,6 +334,7 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                     },
                 );
             }
+            region_edit.prefix = Some((body, prefix.clone()));
             prefix.append(&mut function.blocks[body.index() as usize].statements);
             function.blocks[body.index() as usize].statements = prefix;
             if by_view {
@@ -336,13 +382,68 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                                 span,
                             },
                         });
+                        region_edit.blocks.push(
+                            function
+                                .blocks
+                                .last()
+                                .expect("canonical edge split was appended")
+                                .clone(),
+                        );
+                        let old = function.blocks[i].terminator.clone();
                         redirect_edge(&mut function.blocks[i].terminator.kind, target, end);
+                        region_edit.redirects.push((
+                            function.blocks[i].id,
+                            old,
+                            function.blocks[i].terminator.clone(),
+                        ));
                     }
                 }
             }
+            region_edit.after = function.blocks[index].terminator.clone();
+            // Redirect edits operate on the just-created canonical header, so
+            // its initial replacement precedes the exact redirect snapshots.
+            if let Some((_, old, _)) = region_edit
+                .redirects
+                .iter()
+                .find(|(block, _, _)| *block == header)
+            {
+                region_edit.after = old.clone();
+            }
+            if let Some(before_iteration) = &before_iteration
+                && (crate::call_owner_generations::sequence_transition(
+                    function,
+                    before_iteration,
+                    &region_edit,
+                    types,
+                )
+                .is_err()
+                    || crate::breakpoint_regions::sequence_transition(
+                        function,
+                        before_iteration,
+                        region_edit,
+                        types,
+                    )
+                    .is_err())
+            {
+                valid_regions = false;
+                break;
+            }
+            if let Some(original) = iteration_plan {
+                crate::iteration_views::retain_prepared(
+                    function,
+                    original,
+                    source,
+                    cursor,
+                    length,
+                    BlockId(preheader as u32),
+                    span,
+                );
+            }
         }
-        if removed_uninhabited_body {
-            prune::unreachable(function);
+        if !valid_regions || (removed_uninhabited_body && !prune::unreachable(function)) {
+            if let Some(before_pass) = before_pass {
+                *function = before_pass;
+            }
         }
     }
 }

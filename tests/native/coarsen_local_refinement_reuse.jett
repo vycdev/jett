@@ -1,5 +1,5 @@
 namespace app
-type NonEmptyNumbers = list[int64] where list.length(value) > 0
+type NonEmptyNumbers = list[int64] where list.length(view value) > 0
 function main() returns nothing:
     NonEmptyNumbers checked = list(2, 3) handle error:
         println(error)

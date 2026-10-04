@@ -229,7 +229,7 @@ fn emit_for_triple(
     let mut prepared = program.clone();
     jett_mir::prepare_native_sequences(&mut prepared, types);
     jett_mir::prepare_native_uninhabited_sums(&mut prepared, types);
-    jett_mir::prepare_native_generated_functions(&mut prepared);
+    jett_mir::prepare_native_generated_functions(&mut prepared, types);
     let program = &prepared;
     let verified = verify_program(program, types)?;
     if let Some(entry) = entry
@@ -770,6 +770,8 @@ fn translate_function(
 
     let runtime_context = builder.declare_var(module.target_config().pointer_type());
     let environment_variable = builder.declare_var(ir::types::I64);
+    let caller_acquisitions = jett_mir::validate_caller_acquisitions(program, function, types)
+        .map_err(|message| contract_error(symbol, function.span, message))?;
     let ownership = MoveValuePlan::analyze(program, function, types)
         .map_err(|message| contract_error(symbol, function.span, message))?;
     let local_slots = function
@@ -796,6 +798,58 @@ fn translate_function(
             ))
         })
         .collect::<Vec<_>>();
+    let mut generation_slots = Vec::new();
+    let mut generation_ids = std::collections::BTreeSet::new();
+    let mut escrow_ids = std::collections::BTreeSet::new();
+    for slot in ownership.generation_storage().slots() {
+        let root = function.local(slot.root()).ok_or_else(|| {
+            contract_error(
+                symbol,
+                function.span,
+                "call owner generation root is absent",
+            )
+        })?;
+        let root_slot = local_slots
+            .get(slot.root().index() as usize)
+            .copied()
+            .flatten()
+            .ok_or_else(|| {
+                contract_error(
+                    symbol,
+                    function.span,
+                    "call owner generation has no owning root storage",
+                )
+            })?;
+        if !generation_ids.insert(slot.generation().index())
+            || !escrow_ids.insert(slot.escrow().index())
+            || root.ty != slot.ty()
+            || root.ty.index() as usize >= types.len()
+            || !matches!(types.resolve(root.ty), Type::TypeConstruction)
+            || root.view_source.is_some()
+        {
+            return Err(contract_error(
+                symbol,
+                function.span,
+                "call owner generation storage differs from its exact plan",
+            ));
+        }
+        generation_slots.push(NativeCallGenerationStorage {
+            generation: slot.generation(),
+            root: slot.root(),
+            ty: slot.ty(),
+            root_slot,
+            owner_slot: builder.create_sized_stack_slot(ir::StackSlotData::new(
+                ir::StackSlotKind::ExplicitSlot,
+                8,
+                3,
+            )),
+            retired_slot: builder.create_sized_stack_slot(ir::StackSlotData::new(
+                ir::StackSlotKind::ExplicitSlot,
+                8,
+                3,
+            )),
+        });
+    }
     let failure_block = builder.create_block();
 
     let mut variables = Vec::with_capacity(function.locals.len());
@@ -853,6 +907,10 @@ fn translate_function(
             for slot in local_slots.iter().flatten().chain(&temporary_slots) {
                 builder.ins().stack_store(zero, *slot, 0);
             }
+            for storage in &generation_slots {
+                builder.ins().stack_store(zero, storage.owner_slot, 0);
+                builder.ins().stack_store(zero, storage.retired_slot, 0);
+            }
         }
 
         let mut translator = Translator {
@@ -869,12 +927,15 @@ fn translate_function(
             equality_methods: &program.equality_methods,
             symbol,
             local_types: &function.locals,
+            caller_acquisitions: &caller_acquisitions,
+            taking_binding: None,
             test_ownership: matches!(
                 function.identity.declaration.kind,
                 jett_hir::DeclarationKind::Verify | jett_hir::DeclarationKind::Property
             ),
             local_slots: &local_slots,
             temporary_slots: &temporary_slots,
+            generation_slots: &generation_slots,
             next_temporary: 0,
             failure_block,
         };
@@ -1054,12 +1115,15 @@ fn translate_function(
         equality_methods: &program.equality_methods,
         symbol,
         local_types: &function.locals,
+        caller_acquisitions: &caller_acquisitions,
+        taking_binding: None,
         test_ownership: matches!(
             function.identity.declaration.kind,
             jett_hir::DeclarationKind::Verify | jett_hir::DeclarationKind::Property
         ),
         local_slots: &local_slots,
         temporary_slots: &temporary_slots,
+        generation_slots: &generation_slots,
         next_temporary: temporary_slots.len(),
         failure_block,
     };
@@ -1086,6 +1150,18 @@ enum LoweredValue {
     Owned(Value, ir::StackSlot),
 }
 
+/// Internal owning storage from one freshly validated Function plan. Neither
+/// this handle slot nor its retired state can be addressed as a Jett Local.
+#[derive(Clone, Copy)]
+struct NativeCallGenerationStorage {
+    generation: jett_mir::CallOwnerGenerationId,
+    root: jett_mir::LocalId,
+    ty: TypeId,
+    root_slot: ir::StackSlot,
+    owner_slot: ir::StackSlot,
+    retired_slot: ir::StackSlot,
+}
+
 struct Translator<'a, 'builder> {
     equality_methods: &'a std::collections::HashMap<TypeId, FunctionId>,
     builder: &'a mut FunctionBuilder<'builder>,
@@ -1100,9 +1176,12 @@ struct Translator<'a, 'builder> {
     types: &'a TypeInterner,
     symbol: &'a str,
     local_types: &'a [jett_mir::Local],
+    caller_acquisitions: &'a jett_mir::CallerAcquisitions<'a>,
+    taking_binding: Option<jett_hir::LocalId>,
     test_ownership: bool,
     local_slots: &'a [Option<ir::StackSlot>],
     temporary_slots: &'a [ir::StackSlot],
+    generation_slots: &'a [NativeCallGenerationStorage],
     next_temporary: usize,
     failure_block: ir::Block,
 }
@@ -1325,11 +1404,36 @@ impl Translator<'_, '_> {
                 let value = if borrowed {
                     self.argument(value, true)?
                 } else {
-                    self.expression(value)?
+                    let source = self
+                        .caller_acquisitions
+                        .owner_initializer(*local)
+                        .and_then(|source| source.binding);
+                    let previous = std::mem::replace(&mut self.taking_binding, source);
+                    let result = self.expression(value);
+                    self.taking_binding = previous;
+                    result?
                 };
                 self.define_local(*local, value, statement.span)
             }
             StatementKind::EndCallView { .. } => Ok(()),
+            StatementKind::OpenCallOwnerGeneration { generation, root } => {
+                let storage =
+                    self.call_generation_storage(*generation, Some(*root), statement.span)?;
+                self.clear_slot(storage.owner_slot);
+                self.clear_slot(storage.retired_slot);
+                Ok(())
+            }
+            StatementKind::ReplaceCallOwnerGeneration {
+                generation,
+                root,
+                rhs_owner,
+            } => self.replace_call_generation(*generation, *root, *rhs_owner, statement.span),
+            StatementKind::CloseCallOwnerGeneration { generation } => {
+                let storage = self.call_generation_storage(*generation, None, statement.span)?;
+                self.drop_slot(storage.owner_slot)?;
+                self.clear_slot(storage.retired_slot);
+                Ok(())
+            }
             StatementKind::CheckRefinement {
                 local,
                 call,
@@ -1784,6 +1888,17 @@ impl Translator<'_, '_> {
     }
 
     fn expression(&mut self, expression: &Expression) -> Result<LoweredValue, CodegenError> {
+        let source = self.caller_acquisitions.argument_binding(expression);
+        let previous = self.taking_binding;
+        if source.is_some() {
+            self.taking_binding = source;
+        }
+        let result = self.expression_inner(expression);
+        self.taking_binding = previous;
+        result
+    }
+
+    fn expression_inner(&mut self, expression: &Expression) -> Result<LoweredValue, CodegenError> {
         let kind = scalar_kind(self.types, expression.ty, "native expression")?;
         match &expression.kind {
             ExpressionKind::Int(value) => {
@@ -1831,6 +1946,14 @@ impl Translator<'_, '_> {
                 if let Some(slot) = self.local_slots[local.index() as usize] {
                     let v = self.builder.ins().stack_load(ir::types::I64, slot, 0);
                     self.expect_machine_state(local.index() as usize, expression.ty, v)?;
+                    if self.taking_binding == Some(*local) {
+                        self.clear_slot(slot);
+                        return if is_linear(self.types, expression.ty) {
+                            self.own_linear(v)
+                        } else {
+                            self.own(v)
+                        };
+                    }
                     if is_linear(self.types, expression.ty) {
                         if self.test_ownership {
                             return self.clone_linear(
@@ -2124,6 +2247,7 @@ impl Translator<'_, '_> {
                 function,
                 args,
                 evaluation_order,
+                ..
             } => self.call(*function, args, evaluation_order, expression),
             ExpressionKind::FunctionAdapter { value, function } => {
                 let lowered = self.expression(value)?;
@@ -2231,6 +2355,7 @@ impl Translator<'_, '_> {
                 callee,
                 args,
                 evaluation_order,
+                ..
             } => self.indirect_call(callee, args, evaluation_order, expression),
             ExpressionKind::StructConstruct {
                 fields,
@@ -3676,7 +3801,7 @@ function root() returns int64:
             .expect("original descriptor metadata");
         jett_mir::prepare_native_sequences(&mut program, &types);
         jett_mir::prepare_native_uninhabited_sums(&mut program, &types);
-        jett_mir::prepare_native_generated_functions(&mut program);
+        jett_mir::prepare_native_generated_functions(&mut program, &types);
         let verified = verify_program(&program, &types).expect("prepared native program");
         let mut module = test_object_module();
         let declarations = declare_reachable_functions(&mut module, &program, &types, &verified)
@@ -3922,6 +4047,7 @@ function root() returns int64:
                     .iter()
                     .any(|param| { param.local == factory.locals[detached].id })
             );
+            let mut invalid_metadata = None;
             if corruption == 2 {
                 factory.blocks[0].statements.push(jett_mir::Statement {
                     kind: StatementKind::Trace(factory.locals[detached].id),
@@ -3946,19 +4072,35 @@ function root() returns int64:
                     invalid = foreign.intern(jett_types::Type::List(invalid));
                 }
                 assert!(invalid.index() as usize >= types.len());
+                invalid_metadata = Some(invalid);
                 if corruption == 0 {
                     factory.locals[detached].ty = invalid;
                 } else {
                     factory.locals[detached].debug_ty = invalid;
                 }
             }
-            assert!(
-                matches!(
-                    emit_host_object(&program, &types),
-                    Err(CodegenError::UnsupportedType { .. })
-                ),
-                "enclosing slot corruption {corruption}"
-            );
+            let result = emit_host_object(&program, &types);
+            if let Some(invalid) = invalid_metadata {
+                assert!(
+                    matches!(result, Err(CodegenError::InvalidMir(errors))
+                        if errors.len() == 1 && errors[0].message
+                            == "call ownership local metadata is outside its function or interner"),
+                    "enclosing metadata corruption {corruption}"
+                );
+                assert!(matches!(
+                    crate::verify::scalar_kind(&types, invalid, "enclosing original metadata"),
+                    Err(CodegenError::UnsupportedType { type_name, context })
+                        if type_name == format!("<invalid type {}>", invalid.index())
+                            && context == "enclosing original metadata"
+                ));
+            } else {
+                // These live Trace/Let controls still demand a native Never
+                // carrier, independently of detached-slot compaction.
+                assert!(
+                    matches!(result, Err(CodegenError::UnsupportedType { .. })),
+                    "enclosing live slot corruption {corruption}"
+                );
+            }
         }
     }
 
@@ -3967,6 +4109,29 @@ function root() returns int64:
         for corruption in 0..6 {
             let (mut program, types) = lower_source(UNINHABITED_DESCRIPTOR_SOURCE);
             let function_count = program.functions.len();
+            let source_call = program
+                .functions
+                .iter()
+                .flat_map(|function| &function.blocks)
+                .find_map(|block| match &block.terminator.kind {
+                    TerminatorKind::Return(Some(value))
+                        if matches!(value.kind, ExpressionKind::Call { .. }) =>
+                    {
+                        Some(value.kind.clone())
+                    }
+                    _ => block
+                        .statements
+                        .iter()
+                        .find_map(|statement| match &statement.kind {
+                            StatementKind::Let { value, .. }
+                                if matches!(value.kind, ExpressionKind::Call { .. }) =>
+                            {
+                                Some(value.kind.clone())
+                            }
+                            _ => None,
+                        }),
+                })
+                .expect("fixture retains a checked source call packet");
             let descriptor = program
                 .functions
                 .iter_mut()
@@ -4018,11 +4183,11 @@ function root() returns int64:
                     }) else {
                         panic!("inline value return");
                     };
-                    value.kind = ExpressionKind::Call {
-                        function: FunctionId::new(function_count as u32 + 1),
-                        args: Vec::new(),
-                        evaluation_order: Vec::new(),
+                    value.kind = source_call;
+                    let ExpressionKind::Call { function, .. } = &mut value.kind else {
+                        panic!("source call fixture");
                     };
+                    *function = FunctionId::new(function_count as u32 + 1);
                 }
                 5 => {
                     let mut foreign = TypeInterner::new();
@@ -4065,6 +4230,25 @@ function root() returns int64:
         assert!(crate::verify::descriptor_only_function(target));
         assert!(matches!(
             emit_host_object(&program, &types),
+            Err(CodegenError::InvalidMir(errors))
+                if errors.len() == 1 && errors[0].message
+                    == "source function ownership signature differs from the exact HIR declaration"
+        ));
+        let root = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "root")
+            .expect("original checked caller");
+        let expression = root
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator.kind {
+                TerminatorKind::Return(Some(value)) => Some(value),
+                _ => None,
+            })
+            .expect("original callable return expression");
+        assert!(matches!(
+            crate::verify::verify_callable_expression_for_test(&program, &types, root, expression),
             Err(CodegenError::InvalidMirContract { message, .. })
                 if message == "callable direct edge requires an uninhabited parameter"
         ));
@@ -4112,6 +4296,25 @@ function root() returns int64:
         }
         assert!(matches!(
             emit_host_object(&program, &types),
+            Err(CodegenError::InvalidMir(errors))
+                if errors.len() == 1 && errors[0].message
+                    == "indirect call ownership signature differs from its actual callee"
+        ));
+        let root = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "root")
+            .expect("original checked caller");
+        let expression = root
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator.kind {
+                TerminatorKind::Return(Some(value)) => Some(value),
+                _ => None,
+            })
+            .expect("original callable return expression");
+        assert!(matches!(
+            crate::verify::verify_callable_expression_for_test(&program, &types, root, expression),
             Err(CodegenError::InvalidMirContract { message, .. })
                 if message == "callable indirect edge requires an uninhabited parameter"
         ));
@@ -4301,7 +4504,7 @@ function root() returns nothing:
             .expect("valid original metadata in absent sum arms");
         jett_mir::prepare_native_sequences(&mut program, &types);
         jett_mir::prepare_native_uninhabited_sums(&mut program, &types);
-        jett_mir::prepare_native_generated_functions(&mut program);
+        jett_mir::prepare_native_generated_functions(&mut program, &types);
         let verified = verify_program(&program, &types).expect("prepared inhabited sum arms");
         assert!(
             verified
@@ -4698,6 +4901,214 @@ function root() returns int64:
             emit_host_object(&program, &types),
             Err(CodegenError::UnsupportedType { .. })
         ));
+    }
+
+    fn secret_gate_returned_call(function: &mut Function) -> &mut Expression {
+        let entry = function.entry.index() as usize;
+        let TerminatorKind::Return(Some(value)) = &mut function.blocks[entry].terminator.kind
+        else {
+            panic!("source returned invocation");
+        };
+        assert!(matches!(
+            value.kind,
+            ExpressionKind::Call { .. } | ExpressionKind::IndirectCall { .. }
+        ));
+        value
+    }
+
+    fn assert_checked_native_call_gate(program: &Program, types: &TypeInterner, expected: &str) {
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "caller")
+            .expect("source caller");
+        let expression = function
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator.kind {
+                TerminatorKind::Return(Some(value)) => Some(value),
+                _ => None,
+            })
+            .expect("source return expression");
+        assert!(
+            matches!(
+                crate::verify::verify_callable_expression_for_test(program, types, function, expression),
+                Err(CodegenError::InvalidMirContract { message, .. }) if message == expected
+            ),
+            "native expression must retain its precise gate: {expected}"
+        );
+    }
+
+    #[test]
+    fn native_secret_call_result_gate_remains_independent_of_source_certificates() {
+        for (callee, expected) in [
+            (
+                "callback",
+                "direct call result type does not match its signature",
+            ),
+            ("factory()", "indirect call result type mismatch"),
+        ] {
+            let source = format!(
+                "function callback(value: int64) returns int64:\n    return value\n\
+                 function factory() returns function(int64) returns int64:\n    return callback\n\
+                 function caller(value: secret[int64]) returns secret[int64]:\n    return {callee}(value)\n"
+            );
+            let (mut program, types) = lower_source(&source);
+            let caller = program
+                .functions
+                .iter_mut()
+                .find(|function| function.identity.declaration.name == "caller")
+                .unwrap();
+            caller.return_type = TypeInterner::INT64;
+            secret_gate_returned_call(caller).ty = TypeInterner::INT64;
+            assert_checked_native_call_gate(&program, &types, expected);
+        }
+    }
+
+    #[test]
+    fn native_secret_call_payload_gate_preserves_exact_primitive_and_nominal_types() {
+        for (callee, expected) in [
+            (
+                "callback",
+                "direct call argument type does not match its parameter",
+            ),
+            ("factory()", "indirect call argument type mismatch"),
+        ] {
+            for parameter in ["int64", "Positive"] {
+                let source = format!(
+                    "type Positive = int64 where value > 0\n\
+                     function callback(value: {parameter}) returns {parameter}:\n    return value\n\
+                     function factory() returns function({parameter}) returns {parameter}:\n    return callback\n\
+                     function caller(value: secret[{parameter}]) returns secret[{parameter}]:\n    return {callee}(value)\n"
+                );
+                let (mut program, mut types) = lower_source(&source);
+                let payload = if parameter == "Positive" {
+                    TypeInterner::INT64
+                } else {
+                    TypeInterner::INT32
+                };
+                let hidden = types.intern(jett_types::Type::Secret(payload));
+                let caller = program
+                    .functions
+                    .iter_mut()
+                    .find(|function| function.identity.declaration.name == "caller")
+                    .unwrap();
+                let expression = secret_gate_returned_call(caller);
+                let args = match &mut expression.kind {
+                    ExpressionKind::Call { args, .. }
+                    | ExpressionKind::IndirectCall { args, .. } => args,
+                    _ => unreachable!(),
+                };
+                args[0].ty = hidden;
+                args[0].kind = ExpressionKind::Int(7);
+                assert_checked_native_call_gate(&program, &types, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn native_secret_call_impurity_gate_remains_independent_of_source_certificates() {
+        for (callee, expected) in [
+            (
+                "callback",
+                "direct call argument type does not match its parameter",
+            ),
+            ("factory()", "indirect call argument type mismatch"),
+        ] {
+            let source = format!(
+                "function callback(view stdout: Stdout, value: int64) returns int64:\n    return value\n\
+                 function factory() returns function(view Stdout, int64) returns int64:\n    return callback\n\
+                 function caller(view stdout: Stdout, value: int64) returns int64:\n    return {callee}(view stdout, value)\n"
+            );
+            let (mut program, mut types) = lower_source(&source);
+            let hidden = types.intern(jett_types::Type::Secret(TypeInterner::INT64));
+            let caller = program
+                .functions
+                .iter_mut()
+                .find(|function| function.identity.declaration.name == "caller")
+                .unwrap();
+            let expression = secret_gate_returned_call(caller);
+            let args = match &mut expression.kind {
+                ExpressionKind::Call { args, .. } | ExpressionKind::IndirectCall { args, .. } => {
+                    args
+                }
+                _ => unreachable!(),
+            };
+            args[1].ty = hidden;
+            args[1].kind = ExpressionKind::Int(7);
+            assert_checked_native_call_gate(&program, &types, expected);
+        }
+    }
+
+    #[test]
+    fn native_reflected_metadata_expression_gates_preserve_arity_and_exact_types() {
+        let source = "enum Event:\n    empty = 17\n    content(text: string, values: list[optional[int64]])\n\
+            machine Session:\n    states:\n        empty\n        content(text: string, values: list[optional[int64]])\n    transitions:\n        empty to content\n\
+            function variant_pipe(view source: Event) returns TypeVariant:\n    TypeVariant selected = source into view type.variant_value[Event]()\n    return selected\n\
+            function state_pipe(view source: Session) returns TypeMachineState:\n    TypeMachineState selected = source into view type.machine_state_value[Session]()\n    return selected\n\
+            function narrowed_pipe(view source: Session at content) returns TypeMachineState:\n    TypeMachineState selected = source into view type.machine_state_value[Session at content]()\n    return selected\n\
+            function map_pipe(index: int64) returns TypeInfo:\n    TypeInfo selected = index into type.arg[map[string, list[optional[int64]]]]()\n    return selected\n";
+        for (name, expected) in [
+            (
+                "variant_pipe",
+                "invalid checked type.variant_value operands",
+            ),
+            (
+                "state_pipe",
+                "invalid checked type.machine_state_value operands",
+            ),
+            (
+                "narrowed_pipe",
+                "invalid checked type.machine_state_value operands",
+            ),
+            ("map_pipe", "invalid checked type.arg operands"),
+        ] {
+            for remove in [true, false] {
+                let (program, types) = lower_source(source);
+                let function = program
+                    .functions
+                    .iter()
+                    .find(|function| function.identity.declaration.name == name)
+                    .expect("source reflected observer");
+                let mut expression = function
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.statements)
+                    .find_map(|statement| match &statement.kind {
+                        StatementKind::Let { value, .. }
+                            if matches!(value.kind, ExpressionKind::Intrinsic { .. }) =>
+                        {
+                            Some(value.clone())
+                        }
+                        _ => None,
+                    })
+                    .expect("exact checked observer initializer");
+                let ExpressionKind::Intrinsic {
+                    args,
+                    evaluation_order,
+                    ..
+                } = &mut expression.kind
+                else {
+                    unreachable!()
+                };
+                assert!(args.len() > 1);
+                if remove {
+                    args.pop();
+                    evaluation_order.pop();
+                } else {
+                    let metadata = args.last_mut().unwrap();
+                    metadata.kind = ExpressionKind::Bool(false);
+                    metadata.ty = TypeInterner::BOOL;
+                }
+                assert!(
+                    matches!(
+                        crate::verify::verify_callable_expression_for_test(&program, &types, function, &expression),
+                        Err(CodegenError::InvalidMirContract { message, .. }) if message == expected
+                    ),
+                    "{name}/remove={remove}: native metadata expression gate remains exact"
+                );
+            }
+        }
     }
 
     #[test]
@@ -5469,13 +5880,14 @@ function escaped(items: list[int64]) returns list[int64]:
     fn consuming_sequence_cannot_take_from_a_borrowed_parameter() {
         let (mut program, types) = lower_source(
             r#"
-function visit(items: list[int64]) returns nothing:
+function visit(view items: list[int64]) returns nothing:
     for item in view items:
         break
 "#,
         );
         jett_mir::prepare_native_sequences(&mut program, &types);
-        program.functions[0].params[0].mode = jett_mir::ParamMode::View;
+        emit_host_object(&program, &types)
+            .expect("checked borrowed iteration is valid before corruption");
         for block in &mut program.functions[0].blocks {
             for statement in &mut block.statements {
                 if let StatementKind::SequenceGet { consume, .. } = &mut statement.kind {
@@ -5484,11 +5896,13 @@ function visit(items: list[int64]) returns nothing:
             }
         }
         let error = emit_host_object(&program, &types).expect_err("cannot take a borrowed element");
-        assert!(
-            error
-                .to_string()
-                .contains("cannot take element from borrowed"),
-            "{error}"
+        let CodegenError::InvalidMir(errors) = error else {
+            panic!("prepared borrowed extraction must fail before emission: {error:?}");
+        };
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(
+            errors[0].message,
+            "call ownership viewed extraction changed source/cursor/target/role or consumption"
         );
     }
     #[test]
@@ -5531,5 +5945,172 @@ function visit(items: list[int64]) returns int64:
             }
         }
         emit_host_object(&program, &types).expect("late-numbered unique loop preheader");
+    }
+
+    const CALL_OWNER_GENERATION_SOURCE: &str = r#"namespace app
+struct User:
+    name: string
+struct Alternate:
+    code: int64
+function inspect_builder(view builder: TypeConstruction, extra: int64) returns int64:
+    return extra
+function maybe(flag: bool) returns optional[int64]:
+    if flag:
+        return some(11)
+    return none
+function exercise(flag: bool) returns int64:
+    mutable TypeConstruction switchable = type.construct_start[User]()
+    int64 selected = inspect_builder(view switchable, maybe(flag) handle:
+        switchable = type.construct_start[Alternate]()
+        switchable = type.construct_start[User]()
+        default 7
+    )
+    return selected
+"#;
+
+    fn emit_call_owner_generation(source: &str) -> (Program, TypeInterner) {
+        let (program, types) = lower_source(source);
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "exercise")
+            .expect("actual source exercise function");
+        let ownership = MoveValuePlan::analyze(&program, function, &types)
+            .expect("fresh generation ownership proof");
+        let slots = ownership.generation_storage().slots();
+        assert_eq!(slots.len(), 1, "one source captured generation");
+        let root = function.local(slots[0].root()).expect("generation root");
+        assert!(matches!(types.resolve(root.ty), Type::TypeConstruction));
+        assert_eq!(slots[0].ty(), root.ty);
+        assert!(root.mutable && root.view_source.is_none());
+        let verified = verify_program(&program, &types).expect("full typed generation program");
+        let mut module = test_object_module();
+        let declarations = declare_reachable_functions(&mut module, &program, &types, &verified)
+            .expect("native declarations");
+        let declaration = declarations.get(function.id).expect("exercise declaration");
+        let mut context = module.make_context();
+        context.func.signature = declaration.signature.clone();
+        translate_function(
+            &mut module,
+            &declarations,
+            &program,
+            function,
+            &types,
+            &declaration.symbol,
+            &mut context,
+        )
+        .expect("generation native translation");
+        // This function handles a produced sum, so there is no independent
+        // stable-sum snapshot to obscure a call-capture clone regression.
+        assert!(
+            module.get_name(NativeLeaf::StructClone.symbol()).is_none(),
+            "generation capture must stack-move its owner without cloning"
+        );
+        let object = emit_host_object(&program, &types).expect("generation object");
+        assert!(!object.bytes.is_empty());
+        (program, types)
+    }
+
+    #[test]
+    fn native_call_owner_generation_emits_repeated_replacement_without_capture_clone() {
+        let (program, _types) = emit_call_owner_generation(CALL_OWNER_GENERATION_SOURCE);
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "exercise")
+            .unwrap();
+        let replacements = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter(|statement| {
+                matches!(
+                    statement.kind,
+                    StatementKind::ReplaceCallOwnerGeneration { .. }
+                )
+            })
+            .count();
+        assert_eq!(
+            replacements, 2,
+            "both independent replacements share one escrow"
+        );
+    }
+
+    #[test]
+    fn native_call_owner_generation_emits_conditional_and_early_abort_cleanup() {
+        let conditional = CALL_OWNER_GENERATION_SOURCE
+            .replace("        switchable = type.construct_start[User]()\n", "");
+        emit_call_owner_generation(&conditional);
+        let abort = conditional.replace("        default 7\n", "        return 13\n");
+        emit_call_owner_generation(&abort);
+    }
+
+    #[test]
+    fn native_call_owner_generation_rejects_changed_storage_protocol_before_emission() {
+        let (program, types) = emit_call_owner_generation(CALL_OWNER_GENERATION_SOURCE);
+        let index = program
+            .functions
+            .iter()
+            .position(|function| function.identity.declaration.name == "exercise")
+            .unwrap();
+        for corruption in 0..4 {
+            let mut changed = program.clone();
+            let function = &mut changed.functions[index];
+            let mut applied = false;
+            for block in &mut function.blocks {
+                if applied {
+                    break;
+                }
+                let position = block
+                    .statements
+                    .iter()
+                    .position(|statement| match corruption {
+                        0 => matches!(
+                            statement.kind,
+                            StatementKind::OpenCallOwnerGeneration { .. }
+                        ),
+                        1 => matches!(
+                            statement.kind,
+                            StatementKind::ReplaceCallOwnerGeneration { .. }
+                        ),
+                        2 | 3 => matches!(
+                            statement.kind,
+                            StatementKind::CloseCallOwnerGeneration { .. }
+                        ),
+                        _ => unreachable!(),
+                    });
+                let Some(position) = position else {
+                    continue;
+                };
+                match corruption {
+                    0 | 2 => {
+                        block.statements.remove(position);
+                    }
+                    1 => {
+                        let StatementKind::ReplaceCallOwnerGeneration {
+                            root, rhs_owner, ..
+                        } = &mut block.statements[position].kind
+                        else {
+                            unreachable!();
+                        };
+                        *rhs_owner = *root;
+                    }
+                    3 => {
+                        let duplicate = block.statements[position].clone();
+                        block.statements.insert(position + 1, duplicate);
+                    }
+                    _ => unreachable!(),
+                }
+                applied = true;
+            }
+            assert!(
+                applied,
+                "corruption {corruption} found its canonical operation"
+            );
+            crate::verify::verify_descriptor_bodies(&changed, &types)
+                .expect_err("original metadata gate must retain generation integrity");
+            emit_host_object(&changed, &types)
+                .expect_err("changed generation storage protocol must fail before emission");
+        }
     }
 }

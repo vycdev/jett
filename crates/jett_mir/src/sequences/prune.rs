@@ -3,9 +3,12 @@
 //! below therefore name dense local/block tables, including unreachable input.
 use super::*;
 
-pub(crate) fn unreachable(function: &mut Function) {
+pub(crate) fn unreachable(function: &mut Function) -> bool {
+    let before = (!function.breakpoint_regions.is_empty()
+        || crate::call_owner_generations::has_records(function))
+    .then(|| function.clone());
     let Ok(cfg) = ControlFlowGraph::analyze(function) else {
-        return;
+        return false;
     };
     let mut reachable = vec![false; function.blocks.len()];
     let mut pending = vec![function.entry];
@@ -32,13 +35,38 @@ pub(crate) fn unreachable(function: &mut Function) {
     for block in &mut function.blocks {
         block_targets(&mut block.terminator.kind, &remap_block);
     }
+    function
+        .prepared_absent_successes
+        .retain_mut(|record| record.remap_blocks(&blocks));
+    function
+        .prepared_present_successes
+        .retain_mut(|record| record.remap_blocks(&blocks));
+    function
+        .prepared_view_iterations
+        .retain_mut(|record| record.remap_blocks(&blocks));
+    function
+        .original_view_iterations
+        .retain_mut(|record| record.remap_blocks(&blocks));
 
-    unused_locals(function);
+    if before.as_ref().is_some_and(|before| {
+        crate::call_owner_generations::remap_blocks(function, before, &blocks).is_err()
+    }) || crate::breakpoint_regions::remap_blocks(function, &blocks).is_err()
+        || !unused_locals(function)
+    {
+        if let Some(before) = before {
+            *function = before;
+        }
+        return false;
+    }
+    true
 }
 
 /// Remove absent frame slots without changing any original control-flow block.
 /// Every parameter, binding, read, capture and debug or loan reference survives.
-pub(crate) fn unused_locals(function: &mut Function) {
+pub(crate) fn unused_locals(function: &mut Function) -> bool {
+    let before = (!function.breakpoint_regions.is_empty()
+        || crate::call_owner_generations::has_records(function))
+    .then(|| function.clone());
     let mut used = vec![false; function.locals.len()];
     for parameter in &function.params {
         used[parameter.local.index() as usize] = true;
@@ -96,9 +124,31 @@ pub(crate) fn unused_locals(function: &mut Function) {
     for block in &mut function.blocks {
         block_locals(block, &mut remap_local, &mut remap_floor);
     }
+    // Certificate metadata creates no execution reads or otherwise dead slots.
+    function
+        .prepared_absent_successes
+        .retain_mut(|record| record.remap_locals(&locals));
+    function
+        .prepared_present_successes
+        .retain_mut(|record| record.remap_locals(&locals));
+    function
+        .prepared_view_iterations
+        .retain_mut(|record| record.remap_locals(&locals));
+    function
+        .original_view_iterations
+        .retain_mut(|record| record.remap_locals(&locals));
+    if crate::call_owner_generations::remap_locals(function, &locals).is_err()
+        || crate::breakpoint_regions::remap_locals(function, &locals).is_err()
+    {
+        if let Some(before) = before {
+            *function = before;
+        }
+        return false;
+    }
+    true
 }
 
-fn block_targets(kind: &mut TerminatorKind, visit: &impl Fn(&mut BlockId)) {
+pub(crate) fn block_targets(kind: &mut TerminatorKind, visit: &impl Fn(&mut BlockId)) {
     match kind {
         TerminatorKind::Goto(target) => visit(target),
         TerminatorKind::Branch {
@@ -150,8 +200,34 @@ pub(crate) fn block_locals(
     visit: &mut impl FnMut(&mut LocalId),
     floor: &mut impl FnMut(&mut u32),
 ) {
+    visit_block_locals(block, visit, floor, true);
+}
+
+/// Execution reads exclude structural caller provenance and staging witnesses.
+pub(crate) fn block_runtime_locals(
+    block: &mut BasicBlock,
+    visit: &mut impl FnMut(&mut LocalId),
+    floor: &mut impl FnMut(&mut u32),
+) {
+    visit_block_locals(block, visit, floor, false);
+}
+
+fn visit_block_locals(
+    block: &mut BasicBlock,
+    visit: &mut impl FnMut(&mut LocalId),
+    floor: &mut impl FnMut(&mut u32),
+    metadata: bool,
+) {
     for statement in &mut block.statements {
         match &mut statement.kind {
+            StatementKind::OpenCallOwnerGeneration { root, .. } => visit(root),
+            StatementKind::ReplaceCallOwnerGeneration {
+                root, rhs_owner, ..
+            } => {
+                visit(root);
+                visit(rhs_owner);
+            }
+            StatementKind::CloseCallOwnerGeneration { .. } => {}
             StatementKind::ReflectedContainerReady { source, .. } => visit(source),
             StatementKind::SequenceLength { source, target } => {
                 source_local(source, visit);
@@ -182,20 +258,20 @@ pub(crate) fn block_locals(
                 local, call: value, ..
             } => {
                 visit(local);
-                expression(value, visit, floor);
+                expression(value, visit, floor, metadata);
             }
             StatementKind::EndCallView { local } => visit(local),
             StatementKind::Assign { target, value } => {
-                expression(target, visit, floor);
-                expression(value, visit, floor);
+                expression(target, visit, floor, metadata);
+                expression(value, visit, floor, metadata);
             }
             StatementKind::Evaluate(value) | StatementKind::HandleDefault(value) => {
-                expression(value, visit, floor)
+                expression(value, visit, floor, metadata)
             }
             StatementKind::Assert { condition, message } => {
-                expression(condition, visit, floor);
+                expression(condition, visit, floor, metadata);
                 if let Some(message) = message {
-                    expression(message, visit, floor);
+                    expression(message, visit, floor, metadata);
                 }
             }
             StatementKind::Trace(local) => visit(local),
@@ -204,7 +280,7 @@ pub(crate) fn block_locals(
                 bindings,
             } => {
                 if let Some(condition) = condition {
-                    expression(condition, visit, floor);
+                    expression(condition, visit, floor, metadata);
                 }
                 for binding in bindings {
                     visit(binding);
@@ -215,19 +291,19 @@ pub(crate) fn block_locals(
     match &mut block.terminator.kind {
         TerminatorKind::Return(value) => {
             if let Some(value) = value {
-                expression(value, visit, floor);
+                expression(value, visit, floor, metadata);
             }
         }
         TerminatorKind::Respond(value)
         | TerminatorKind::Branch {
             condition: value, ..
-        } => expression(value, visit, floor),
+        } => expression(value, visit, floor, metadata),
         TerminatorKind::Switch {
             scrutinee,
             variants,
             ..
         } => {
-            expression(scrutinee, visit, floor);
+            expression(scrutinee, visit, floor, metadata);
             for (_, _, bindings) in variants {
                 for binding in bindings {
                     visit(binding);
@@ -244,10 +320,10 @@ pub(crate) fn block_locals(
             if let Some(value) = value {
                 visit(value);
             }
-            expression(iterable, visit, floor);
+            expression(iterable, visit, floor, metadata);
         }
         TerminatorKind::ReflectedTypeDispatch { type_info, .. } => {
-            expression(type_info, visit, floor)
+            expression(type_info, visit, floor, metadata)
         }
         TerminatorKind::Goto(_) | TerminatorKind::Unreachable => {}
     }
@@ -257,7 +333,27 @@ fn expression(
     value: &mut Expression,
     visit: &mut impl FnMut(&mut LocalId),
     floor: &mut impl FnMut(&mut u32),
+    metadata: bool,
 ) {
+    if metadata {
+        let packet = match &mut value.kind {
+            ExpressionKind::Call { ownership, .. }
+            | ExpressionKind::IndirectCall { ownership, .. }
+            | ExpressionKind::Intrinsic { ownership, .. } => Some(ownership),
+            _ => None,
+        };
+        if let Some(packet) = packet {
+            // Infallible structural remapping does not create execution reads.
+            let result = packet.remap_metadata_locals(|mut id| {
+                visit(&mut id);
+                Ok::<_, std::convert::Infallible>(id)
+            });
+            match result {
+                Ok(()) => {}
+                Err(impossible) => match impossible {},
+            }
+        }
+    }
     match &mut value.kind {
         ExpressionKind::Local(local) => visit(local),
         ExpressionKind::ClosureRef { captures, .. } => {
@@ -266,8 +362,8 @@ fn expression(
             }
         }
         ExpressionKind::Binary { left, right, .. } => {
-            expression(left, visit, floor);
-            expression(right, visit, floor);
+            expression(left, visit, floor, metadata);
+            expression(right, visit, floor, metadata);
         }
         ExpressionKind::Unary { value, .. }
         | ExpressionKind::ResultOk(value)
@@ -289,7 +385,7 @@ fn expression(
         | ExpressionKind::Cancel(value)
         | ExpressionKind::Field { base: value, .. }
         | ExpressionKind::View(value)
-        | ExpressionKind::Clone(value) => expression(value, visit, floor),
+        | ExpressionKind::Clone(value) => expression(value, visit, floor, metadata),
         ExpressionKind::Call { args, .. }
         | ExpressionKind::Intrinsic { args, .. }
         | ExpressionKind::ActorSpawn { args, .. }
@@ -299,7 +395,7 @@ fn expression(
         | ExpressionKind::EnumConstruct { payloads: args, .. }
         | ExpressionKind::ListConstruct { elements: args } => {
             for arg in args {
-                expression(arg, visit, floor);
+                expression(arg, visit, floor, metadata);
             }
         }
         ExpressionKind::IndirectCall { callee, args, .. }
@@ -313,15 +409,15 @@ fn expression(
             payloads: args,
             ..
         } => {
-            expression(callee, visit, floor);
+            expression(callee, visit, floor, metadata);
             for arg in args {
-                expression(arg, visit, floor);
+                expression(arg, visit, floor, metadata);
             }
         }
         ExpressionKind::MapConstruct { entries } => {
             for entry in entries {
-                expression(&mut entry.key, visit, floor);
-                expression(&mut entry.value, visit, floor);
+                expression(&mut entry.key, visit, floor, metadata);
+                expression(&mut entry.value, visit, floor, metadata);
             }
         }
         ExpressionKind::Handle {
@@ -330,16 +426,16 @@ fn expression(
             failure,
             ..
         } => {
-            expression(target, visit, floor);
+            expression(target, visit, floor, metadata);
             if let Some(local) = error_local {
                 visit(local);
             }
-            hir_block(failure, visit, floor);
+            hir_block(failure, visit, floor, metadata);
         }
         ExpressionKind::StringInterpolation(parts) => {
             for part in parts {
                 if let hir::StringSegment::Value(value) = part {
-                    expression(value, visit, floor);
+                    expression(value, visit, floor, metadata);
                 }
             }
         }
@@ -354,7 +450,7 @@ fn expression(
                 visit(local);
             }
             floor(local_floor);
-            hir_block(body, visit, floor);
+            hir_block(body, visit, floor, metadata);
         }
         ExpressionKind::Int(_)
         | ExpressionKind::Float(_)
@@ -373,39 +469,40 @@ fn hir_block(
     block: &mut hir::Block,
     visit: &mut impl FnMut(&mut LocalId),
     floor: &mut impl FnMut(&mut u32),
+    metadata: bool,
 ) {
     for statement in &mut block.statements {
         match &mut statement.kind {
             hir::StatementKind::Let { local, value } => {
                 visit(local);
-                expression(value, visit, floor);
+                expression(value, visit, floor, metadata);
             }
             hir::StatementKind::Assign { target, value } => {
-                expression(target, visit, floor);
-                expression(value, visit, floor);
+                expression(target, visit, floor, metadata);
+                expression(value, visit, floor, metadata);
             }
             hir::StatementKind::Return(value) => {
                 if let Some(value) = value {
-                    expression(value, visit, floor);
+                    expression(value, visit, floor, metadata);
                 }
             }
             hir::StatementKind::HandleDefault(value)
             | hir::StatementKind::Expression(value)
-            | hir::StatementKind::Respond(value) => expression(value, visit, floor),
+            | hir::StatementKind::Respond(value) => expression(value, visit, floor, metadata),
             hir::StatementKind::If {
                 condition,
                 then_block,
                 else_block,
             } => {
-                expression(condition, visit, floor);
-                hir_block(then_block, visit, floor);
+                expression(condition, visit, floor, metadata);
+                hir_block(then_block, visit, floor, metadata);
                 if let Some(block) = else_block {
-                    hir_block(block, visit, floor);
+                    hir_block(block, visit, floor, metadata);
                 }
             }
             hir::StatementKind::While { condition, body } => {
-                expression(condition, visit, floor);
-                hir_block(body, visit, floor);
+                expression(condition, visit, floor, metadata);
+                hir_block(body, visit, floor, metadata);
             }
             hir::StatementKind::For {
                 key,
@@ -418,22 +515,22 @@ fn hir_block(
                 if let Some(value) = value {
                     visit(value);
                 }
-                expression(iterable, visit, floor);
-                hir_block(body, visit, floor);
+                expression(iterable, visit, floor, metadata);
+                hir_block(body, visit, floor, metadata);
             }
             hir::StatementKind::Match { scrutinee, arms } => {
-                expression(scrutinee, visit, floor);
+                expression(scrutinee, visit, floor, metadata);
                 for arm in arms {
                     for binding in &mut arm.bindings {
                         visit(binding);
                     }
-                    hir_block(&mut arm.body, visit, floor);
+                    hir_block(&mut arm.body, visit, floor, metadata);
                 }
             }
             hir::StatementKind::Assert { condition, message } => {
-                expression(condition, visit, floor);
+                expression(condition, visit, floor, metadata);
                 if let Some(value) = message {
-                    expression(value, visit, floor);
+                    expression(value, visit, floor, metadata);
                 }
             }
             hir::StatementKind::Trace(local) => visit(local),
@@ -442,17 +539,17 @@ fn hir_block(
                 bindings,
             } => {
                 if let Some(value) = condition {
-                    expression(value, visit, floor);
+                    expression(value, visit, floor, metadata);
                 }
                 for binding in bindings {
                     visit(binding);
                 }
             }
-            hir::StatementKind::Scope(block) => hir_block(block, visit, floor),
+            hir::StatementKind::Scope(block) => hir_block(block, visit, floor, metadata),
             hir::StatementKind::ReflectedTypeDispatch { type_info, arms } => {
-                expression(type_info, visit, floor);
+                expression(type_info, visit, floor, metadata);
                 for arm in arms {
-                    hir_block(&mut arm.body, visit, floor);
+                    hir_block(&mut arm.body, visit, floor, metadata);
                 }
             }
             hir::StatementKind::Break | hir::StatementKind::Continue => {}

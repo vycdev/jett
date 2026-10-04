@@ -397,7 +397,7 @@ fn scoped_view_origin_and_end_survive_native_local_compaction() {
     let stage_before = stages(original)[0];
     let owner_before = original.local(stage_before).unwrap().view_source.unwrap();
     let count_before = original.locals.len();
-    crate::prepare_native_generated_functions(&mut program);
+    crate::prepare_native_generated_functions(&mut program, &types);
     let function = exercise(&program);
     validate(function, &types).unwrap();
     crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();

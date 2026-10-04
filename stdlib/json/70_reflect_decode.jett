@@ -368,7 +368,7 @@ function json_decode_tree_primitive_reflected[T](view raw: JsonTree, primitive: 
         return ok(decoded_float)
     return ok(decoded_integer)
 function json_decode_tree_integer_primitive_reflected[T](view raw: JsonTree, primitive: TypePrimitive) returns result[optional[T], string]:
-    if json_type_primitive_uses_int64_json_integer(primitive):
+    if json_type_primitive_uses_int64_json_integer(view primitive):
         return json_decode_tree_integer_some_reflected[T](view raw, primitive)
     if primitive == TypePrimitive.uint64_type:
         return json_decode_tree_uint64_some_reflected[T](view raw)
@@ -567,7 +567,7 @@ function json_tree_result_payload(view raw: JsonTree) returns result[JsonTreeObj
         return fail("expected result object, got {json_tree_kind(view raw)}")
     list[string] keys = json_tree_object_keys(view raw) handle error:
         return fail(error)
-    if list.length[string](keys) != 1:
+    if list.length[string](view keys) != 1:
         return fail("expected result object with exactly one key")
     string key = list.get[string](keys, 0) handle:
         return fail("expected result object with exactly one key")
@@ -610,7 +610,7 @@ function json_decode_tree_enum_string_reflected[T](view raw: JsonTree, type_name
 function json_decode_tree_enum_object_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]:
     list[string] keys = json_tree_object_keys(view raw) handle error:
         return fail("expected enum string or object, got {json_tree_kind(view raw)}")
-    if list.length[string](keys) != 1:
+    if list.length[string](view keys) != 1:
         return fail("expected enum object with exactly one variant key")
     string variant_name = list.get[string](keys, 0) handle:
         return fail("expected enum object with exactly one variant key")

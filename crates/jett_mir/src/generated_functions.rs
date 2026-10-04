@@ -7,15 +7,15 @@ mod tests;
 /// Compact generated inline functions independently of their enclosing function.
 /// Enclosing functions lose only unused local slots, preserving every block.
 /// Capture and ordinary parameter order remain the existing callable ABI.
-pub fn prepare_native_generated_functions(program: &mut Program) {
-    if validate(program).is_err() {
+pub fn prepare_native_generated_functions(program: &mut Program, types: &TypeInterner) {
+    if validate_call_ownership(program, types).is_err() {
         return;
     }
     for function in &mut program.functions {
-        if function.debug_kind == hir::FunctionDebugKind::Inline {
-            sequences::prune::unreachable(function);
+        let _prepared = if function.debug_kind == hir::FunctionDebugKind::Inline {
+            sequences::prune::unreachable(function)
         } else {
-            sequences::prune::unused_locals(function);
-        }
+            sequences::prune::unused_locals(function)
+        };
     }
 }

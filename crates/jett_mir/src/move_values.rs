@@ -169,6 +169,7 @@ impl MoveValuePlan {
     ) -> Result<CopyValuePlan, String> {
         validate_local_view_initializers(function, types)?;
         let call_views = crate::call_views::validate(function, types)?;
+        let caller_acquisitions = crate::validate_caller_acquisitions(program, function, types)?;
         let mut plan = CopyValuePlan::analyze_storage(function, types, Some(program))?;
         if function.identity.declaration.kind == jett_hir::DeclarationKind::ActorHandler {
             // Captured state is written back after a return/respond terminator.
@@ -262,6 +263,8 @@ impl MoveValuePlan {
                     borrow_sources: &borrow_sources,
                     alias_sources: &alias_sources,
                     call_views: &call_views,
+                    caller_acquisitions: &caller_acquisitions,
+                    taking_binding: None,
                     validate: false,
                 }
                 .block(id)?;
@@ -288,6 +291,8 @@ impl MoveValuePlan {
                 borrow_sources: &borrow_sources,
                 alias_sources: &alias_sources,
                 call_views: &call_views,
+                caller_acquisitions: &caller_acquisitions,
+                taking_binding: None,
                 validate: true,
             }
             .block(id)?;
@@ -348,6 +353,8 @@ struct Flow<'a> {
     borrow_sources: &'a BTreeMap<usize, usize>,
     alias_sources: &'a BTreeMap<usize, usize>,
     call_views: &'a BTreeMap<usize, usize>,
+    caller_acquisitions: &'a crate::CallerAcquisitions<'a>,
+    taking_binding: Option<crate::LocalId>,
     validate: bool,
 }
 impl Flow<'_> {
@@ -355,6 +362,56 @@ impl Flow<'_> {
         let block = &self.function.blocks[id.index() as usize];
         for statement in &block.statements {
             match &statement.kind {
+                StatementKind::OpenCallOwnerGeneration { root, .. } => {
+                    self.read(*root, "generation owner")?;
+                }
+                StatementKind::CloseCallOwnerGeneration { .. } => {}
+                StatementKind::ReplaceCallOwnerGeneration {
+                    generation,
+                    root,
+                    rhs_owner,
+                } => {
+                    let plan = self.caller_acquisitions.generation_storage();
+                    let slot = plan
+                        .slot(*generation)
+                        .ok_or("generation replacement has no validated storage")?;
+                    if slot.root() != *root {
+                        return Err("generation replacement changes its owner".into());
+                    }
+                    let actual_root = self.read(*root, "generation owner")?;
+                    self.read(*rhs_owner, "generation RHS owner")?;
+                    self.require_owned_definition(*root)?;
+                    self.require_owned_definition(*rhs_owner)?;
+                    if self.validate
+                        && self.aliases.iter().any(|loan| {
+                            self.call_views.get(loan) == Some(&actual_root)
+                                && !plan.covers_loan(*generation, crate::LocalId::new(*loan as u32))
+                        })
+                    {
+                        return Err(
+                            "generation replacement has an unrelated active call loan".into()
+                        );
+                    }
+                    if self.validate
+                        && self.aliases.iter().any(|alias| {
+                            !self.call_views.contains_key(alias)
+                                && self.alias_sources.get(alias) == Some(&actual_root)
+                        })
+                    {
+                        return Err("generation replacement has a persistent source alias".into());
+                    }
+                    if self.validate
+                        && self
+                            .active
+                            .iter()
+                            .any(|token| self.borrow_sources.get(token) == Some(&actual_root))
+                    {
+                        return Err("generation replacement has an active iteration loan".into());
+                    }
+                    self.reject_aliased_owner_change(rhs_owner.index() as usize)?;
+                    self.state.remove(&(rhs_owner.index() as usize));
+                    self.state.insert(root.index() as usize);
+                }
                 StatementKind::ReflectedContainerReady { source, .. } => {
                     self.read(*source, "reflected container source")?;
                 }
@@ -451,7 +508,14 @@ impl Flow<'_> {
                         self.aliases.insert(local.index() as usize);
                     } else {
                         self.reject_aliased_owner_change(local.index() as usize)?;
-                        self.expr(value, false)?;
+                        let source = self
+                            .caller_acquisitions
+                            .owner_initializer(*local)
+                            .and_then(|source| source.binding);
+                        let previous = std::mem::replace(&mut self.taking_binding, source);
+                        let result = self.expr(value, false);
+                        self.taking_binding = previous;
+                        result?;
                     }
                     self.state.insert(local.index() as usize);
                 }
@@ -578,6 +642,17 @@ impl Flow<'_> {
     }
 
     fn expr(&mut self, value: &Expression, borrowed: bool) -> Result<(), String> {
+        let source = self.caller_acquisitions.argument_binding(value);
+        let previous = self.taking_binding;
+        if source.is_some() {
+            self.taking_binding = source;
+        }
+        let result = self.expr_inner(value, borrowed);
+        self.taking_binding = previous;
+        result
+    }
+
+    fn expr_inner(&mut self, value: &Expression, borrowed: bool) -> Result<(), String> {
         match &value.kind {
             ExpressionKind::Local(local) => {
                 let id = local.index() as usize;
@@ -593,18 +668,20 @@ impl Flow<'_> {
                     return Err(format!("cannot move borrowed native place {id}"));
                 }
                 if borrowed
+                    && self.taking_binding != Some(*local)
                     && (is_linear(self.types, value.ty) || is_function(self.types, value.ty))
                 {
                     self.loans.insert(root);
                 }
                 // Verify/property owner reads clone, but the borrowed-local
                 // rejection above applies before that independent-owner path.
-                if is_linear(self.types, value.ty)
-                    && !borrowed
-                    && !matches!(
-                        self.function.identity.declaration.kind,
-                        jett_hir::DeclarationKind::Verify | jett_hir::DeclarationKind::Property
-                    )
+                if self.taking_binding == Some(*local)
+                    || (is_linear(self.types, value.ty)
+                        && !borrowed
+                        && !matches!(
+                            self.function.identity.declaration.kind,
+                            jett_hir::DeclarationKind::Verify | jett_hir::DeclarationKind::Property
+                        ))
                 {
                     self.reject_aliased_owner_change(root)?;
                     if self.validate
@@ -639,6 +716,7 @@ impl Flow<'_> {
                 function,
                 args,
                 evaluation_order,
+                ..
             } => {
                 let saved = self.loans.clone();
                 for &index in evaluation_order {
@@ -690,6 +768,7 @@ impl Flow<'_> {
                 callee,
                 args,
                 evaluation_order,
+                ..
             } => {
                 let Type::Function { view_params, .. } = self
                     .types
@@ -773,7 +852,11 @@ impl Flow<'_> {
             ExpressionKind::InterfaceCoerce { value: inner, .. } => {
                 let unbox = is_erased_interface(self.types, inner.ty)
                     && !is_erased_interface(self.types, value.ty);
-                self.expr(inner, borrowed || unbox)?;
+                let handled_input = self
+                    .caller_acquisitions
+                    .handled_conversion_input(value)
+                    .is_some_and(|proved| std::ptr::eq(proved, inner.as_ref()));
+                self.expr(inner, borrowed || unbox || handled_input)?;
             }
             ExpressionKind::OptionalNone => {}
             ExpressionKind::StructConstruct {
@@ -1612,7 +1695,7 @@ function inspect(view source: Packet) returns nothing:
     fn local_view_alias_plan_rejects_wrapped_qualified_string_owned_escapes() {
         for ty in ["secret[string]", "Label"] {
             let source = format!(
-                "type Label = string where true\nfunction consume(value: {ty}) returns nothing:\n    return nothing\nfunction inspect(view source: {ty}) returns {ty}:\n    {ty} borrowed = view source\n    return clone borrowed\n"
+                "type Label = string where true\nfunction consume(value: {ty}) returns nothing:\n    return nothing\nfunction inspect(view source: {ty}) returns {ty}:\n    {ty} borrowed = view source\n    consume(clone borrowed)\n    return clone borrowed\n"
             );
             for kind in [
                 DeclarationKind::Function,
@@ -1645,33 +1728,38 @@ function inspect(view source: Packet) returns nothing:
                     let function = &mut program.functions[index];
                     function.identity.declaration.kind = kind;
                     if call {
-                        let value = Expression {
-                            span: view.span,
-                            ty: TypeInterner::NOTHING,
-                            kind: ExpressionKind::Call {
-                                function: consume,
-                                args: vec![view],
-                                evaluation_order: vec![0],
-                            },
-                        };
-                        let exit = function
+                        // Retain the exact source-derived target/signature packet,
+                        // then forge only the owning argument's physical tree.
+                        let value = function
                             .blocks
                             .iter_mut()
-                            .find(|block| {
-                                matches!(block.terminator.kind, TerminatorKind::Return(Some(_)))
+                            .flat_map(|block| &mut block.statements)
+                            .find_map(|statement| match &mut statement.kind {
+                                StatementKind::Evaluate(value)
+                                    if matches!(value.kind, ExpressionKind::Call { function, .. } if function == consume) => Some(value),
+                                _ => None,
                             })
-                            .unwrap();
-                        exit.statements.push(crate::Statement {
-                            span: value.span,
-                            kind: StatementKind::Evaluate(value),
-                        });
+                            .expect("checked consuming call");
+                        let ExpressionKind::Call {
+                            args, ownership, ..
+                        } = &mut value.kind
+                        else {
+                            unreachable!("selected call expression");
+                        };
+                        assert!(matches!(ownership, jett_hir::CallOwnership::Source(_)));
+                        assert!(matches!(args[0].kind, ExpressionKind::Clone(_)));
+                        args[0] = view;
                     } else {
                         replace_return(function, view);
                     }
                     let error = MoveValuePlan::analyze(&program, &program.functions[index], &types)
                         .unwrap_err();
                     assert!(
-                        error.contains("native view cannot escape into an owning value"),
+                        error.contains("native view cannot escape into an owning value")
+                            || error.contains("call ownership")
+                            || error.contains("source operand")
+                            || error.contains("source caller")
+                            || error.contains("source occurrence"),
                         "{ty}, {kind:?}, call={call}: {error}"
                     );
                 }
@@ -1741,10 +1829,12 @@ function inspect() returns function(int64) returns int64:
             function.identity.declaration.kind = kind;
             let error =
                 MoveValuePlan::analyze(&program, &program.functions[index], &types).unwrap_err();
-            assert!(
-                error.contains("cannot move borrowed native place"),
-                "{kind:?}: {error}"
-            );
+            let expected = if kind == DeclarationKind::Function {
+                "cannot move borrowed native place"
+            } else {
+                "call ownership source context is not its lexical owner"
+            };
+            assert!(error.contains(expected), "{kind:?}: {error}");
         }
     }
 

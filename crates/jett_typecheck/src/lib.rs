@@ -1,5 +1,6 @@
 // Type checking for the Jett compiler.
 
+pub mod caller_ownership;
 pub mod capability;
 pub mod checker;
 pub mod complexity;
@@ -23,3 +24,10 @@ pub use resource_hooks::{CheckedResourceHook, ResourceHookError, validate_resour
 mod resource_hook_tests;
 
 pub use resource_program::{CheckedResourceProgram, ResourceProgramError};
+
+pub use caller_ownership::{
+    CheckedArgumentOwnership, CheckedBindingFact, CheckedCallOwnership, CheckedCalleeAccess,
+    CheckedCallerEffect, CheckedCallerOrigin, CheckedCallerSyntax, CheckedIntrinsicOperandRole,
+    CheckedInvocationShape, CheckedInvocationTarget, CheckedOwnershipContext,
+    intrinsic_operand_access,
+};

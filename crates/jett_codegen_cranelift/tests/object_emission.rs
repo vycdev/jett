@@ -347,7 +347,15 @@ function main(raw: int64) returns Higher:
 #[test]
 fn native_return_dynamic_failure_keeps_its_message_producer_reachable() {
     let (mut program, types) = lower_source(
-        "namespace app\nfunction message() returns string:\n    return \"dynamic error\"\nfunction main() returns nothing:\n    return nothing\n",
+        r#"namespace app
+function message() returns string:
+    return "dynamic error"
+function unreferenced_message() returns string:
+    return "unused error"
+function main() returns nothing:
+    message()
+    return nothing
+"#,
     );
     let message = program
         .functions
@@ -357,34 +365,55 @@ fn native_return_dynamic_failure_keeps_its_message_producer_reachable() {
     message.identity.declaration.origin = SourceOrigin::Stdlib;
     let message_id = message.id;
     let message_symbol = symbol_name(&message.identity, &types).unwrap();
+    let unreferenced = program
+        .functions
+        .iter_mut()
+        .find(|function| function.identity.declaration.name == "unreferenced_message")
+        .unwrap();
+    unreferenced.identity.declaration.origin = SourceOrigin::Stdlib;
+    let unreferenced_symbol = symbol_name(&unreferenced.identity, &types).unwrap();
     let main = program
         .functions
         .iter_mut()
         .find(|function| function.identity.declaration.name == "main")
         .unwrap();
-    let span = main.span;
-    main.blocks[main.entry.index() as usize]
+    let statement = main.blocks[main.entry.index() as usize]
         .statements
-        .push(jett_mir::Statement {
-            kind: jett_mir::StatementKind::Evaluate(jett_hir::Expression {
-                kind: jett_hir::ExpressionKind::RuntimeFailureMessage(Box::new(
-                    jett_hir::Expression {
-                        kind: jett_hir::ExpressionKind::Call {
-                            function: message_id,
-                            args: Vec::new(),
-                            evaluation_order: Vec::new(),
-                        },
-                        ty: TypeInterner::STRING,
-                        span,
-                    },
-                )),
-                ty: TypeInterner::NOTHING,
-                span,
-            }),
+        .iter_mut()
+        .find(|statement| {
+            matches!(&statement.kind,
+                jett_mir::StatementKind::Evaluate(jett_hir::Expression {
+                    kind: jett_hir::ExpressionKind::Call { function, .. }, ..
+                }) if *function == message_id)
+        })
+        .expect("checked message call statement");
+    let jett_mir::StatementKind::Evaluate(value) = &mut statement.kind else {
+        unreachable!("selected Evaluate statement");
+    };
+    assert!(matches!(&value.kind,
+        jett_hir::ExpressionKind::Call {
+            function,
+            ownership: jett_hir::CallOwnership::Source(_),
+            ..
+        } if *function == message_id));
+    let span = value.span;
+    // Reparent the checked call without changing its source certificate.
+    let message_call = std::mem::replace(
+        value,
+        jett_hir::Expression {
+            kind: jett_hir::ExpressionKind::Nothing,
+            ty: TypeInterner::NOTHING,
             span,
-        });
+        },
+    );
+    *value = jett_hir::Expression {
+        kind: jett_hir::ExpressionKind::RuntimeFailureMessage(Box::new(message_call)),
+        ty: TypeInterner::NOTHING,
+        span,
+    };
     let artifact = emit_host_object(&program, &types).expect("dynamic message producer");
     assert!(artifact.symbols.contains(&message_symbol));
+    assert!(!artifact.symbols.contains(&unreferenced_symbol));
 }
 
 #[test]
@@ -886,8 +915,8 @@ fn rejects_secret_lifted_calls_with_untainted_mir_results() {
         let error = emit_host_object(&program, &types)
             .expect_err("secret lifting must retain the checked result taint");
         assert!(
-            matches!(error, CodegenError::InvalidMirContract { ref message, .. }
-                if message.contains("call result type")),
+            matches!(error, CodegenError::InvalidMir(ref errors)
+                if errors.iter().any(|error| error.message == "call ownership result differs from its checked source certificate")),
             "{callee}: {error:?}"
         );
     }
@@ -1030,8 +1059,10 @@ fn rejects_secret_lifting_with_mismatched_argument_types() {
             let error = emit_host_object(&program, &types)
                 .expect_err("secret lifting must preserve the expected payload type");
             assert!(
-                matches!(error, CodegenError::InvalidMirContract { ref message, .. }
-                    if message.contains("call argument type")),
+                matches!(error, CodegenError::InvalidMir(ref errors)
+                    if errors.iter().any(|error| error.message == if callee == "callback" {
+                        "call ownership converted operand differs from its physical parameter"
+                    } else { "call ownership indirect converted operand differs from its physical parameter" })),
                 "{callee}({parameter}): {error:?}"
             );
         }
@@ -1066,8 +1097,10 @@ fn rejects_secret_lifting_into_impure_call_parameters() {
         let error = emit_host_object(&program, &types)
             .expect_err("impure calls cannot accept secret-lifted arguments");
         assert!(
-            matches!(error, CodegenError::InvalidMirContract { ref message, .. }
-                if message.contains("call argument type")),
+            matches!(error, CodegenError::InvalidMir(ref errors)
+                if errors.iter().any(|error| error.message == if callee == "callback" {
+                    "call ownership converted operand differs from its physical parameter"
+                } else { "call ownership indirect converted operand differs from its physical parameter" })),
             "{callee}: {error:?}"
         );
     }
@@ -2646,7 +2679,10 @@ fn native_reflected_value_pipelines_reject_missing_and_wrong_typed_metadata() {
                 emit_host_object(&program, &types)
             }));
             assert!(
-                matches!(rejection, Ok(Err(CodegenError::InvalidMirContract { .. }))),
+                matches!(rejection, Ok(Err(CodegenError::InvalidMir(ref errors)))
+                    if errors.iter().any(|error| error.message == if remove {
+                        "call ownership operand count is invalid"
+                    } else { "generated operand has no checked actual/conversion type" })),
                 "{name}, remove={remove}: malformed metadata must be rejected without panicking: {rejection:?}"
             );
         }

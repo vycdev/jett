@@ -1,0 +1,34 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+struct Item:
+    values: list[int64]
+implement Named for Item:
+    function name(view self: Item) returns string:
+        return "item:{list.length[int64](view self.values)}"
+function read(view value: Named, extra: int64) returns string:
+    return "{Named.name(view value)}:{extra}"
+function make(view stdout: Stdout, present: bool) returns optional[Item]:
+    Stdout.write(view stdout, "source\n")
+    if present:
+        return some(Item(values: list(2, 3)))
+    return none
+function later(view stdout: Stdout, present: bool) returns optional[int64]:
+    Stdout.write(view stdout, "later\n")
+    if present:
+        return some(11)
+    return none
+function exercise(view stdout: Stdout, present: bool) returns string:
+    return read(view(make(view stdout, present) handle:
+        Stdout.write(view stdout, "default:source\n")
+        default Item(values: list(7))
+    ), later(view stdout, present) handle:
+        Stdout.write(view stdout, "default:later\n")
+        default 3
+    )
+function main(stdout: Stdout) returns nothing:
+    string absent = exercise(view stdout, false)
+    Stdout.write(view stdout, "absent:{absent}\n")
+    string present = exercise(view stdout, true)
+    Stdout.write(view stdout, "present:{present}\n")
+    return nothing

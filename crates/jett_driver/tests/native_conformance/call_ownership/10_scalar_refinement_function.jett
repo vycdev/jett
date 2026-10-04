@@ -1,0 +1,21 @@
+namespace app
+type Positive = int64 where value > 0
+function scalar(view value: int64) returns int64:
+    return value
+function refined(view value: Positive) returns int64:
+    return coarsen clone value
+function increment(value: int64) returns int64:
+    return value + 1
+function apply(view callback: function(int64) returns int64, value: int64) returns int64:
+    return callback(value)
+function report(number: int64) returns string:
+    Positive established = number handle error:
+        return error
+    int64 nominal = refined(established)
+    function(int64) returns int64 callback = increment
+    int64 invoked = apply(callback, 3)
+    int64 copied = scalar(number)
+    return "{copied}:{number}:{nominal}:{invoked}"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "typed:{report(7)}\n")
+    return nothing
