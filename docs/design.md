@@ -2282,6 +2282,11 @@ original bare owned Resource actual passed to a view formal belongs to an owning
 argument holder and a bounded loan, rather than an ordinary acquisition record.
 This analysis is compiler metadata. Native execution still requires the emitted
 layout, connected custody ABI and cleanup on every control-flow edge.
+The compiler now derives the native execution family from that authenticated
+original program, including resource-free direct callers of Resource functions.
+It projects the fresh ownership plan into immutable layout bytes and the exact
+driver-selected entry tuple. These projections provide consistency metadata;
+they do not grant runtime authority or enable native Resource body execution.
 
 The private native runtime custody core separately tracks non-cloneable owned
 and borrowed tokens, checked frame destinations and reverse acquisition

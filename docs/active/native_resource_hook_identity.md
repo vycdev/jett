@@ -533,3 +533,37 @@ connected Resource Source ABI/emission/cleanup and linked lifecycle execution
 remain required. The fixed 207/182 inventory and approximate 85% coverage
 estimate remain unchanged; runtime/metadata checks do not supply the missing
 Resource native execution.
+
+## Resource execution family and emitted layout
+
+The compiler now captures the Resource execution family only after validating
+the complete original checked HIR archive. Resource-free direct Source caller
+predecessors receive sealed constructor witnesses and fresh Scope/invocation
+plans. Edited current graphs cannot remove or recapture those witnesses.
+Exact formal projections retain actual and parameter types, access, spelling,
+effects and lexical evaluation order. Absent Optional and failed Result shells
+receive exact holders; an ordinary failure companion is extracted once.
+
+One fresh whole-program plan now projects deterministic bounded v2 layout bytes
+and the exact driver-selected entry tuple. Every manifest hook remains checked,
+including unused descriptors. The immutable object accessor emits metadata only.
+Return transfer executes under the callee root Scope while retaining its private
+Return destination; publication uses the same completed Scope and resolves the
+active caller destination. These are distinct from the original recorded Return
+storage and site facts.
+
+The original producer packet reconstructs 11 paths and 33 hunks (`4319e3`).
+Actual compilation exposed a missing FunctionId ordering implementation and a
+private-module import; the fixes use stable dense IDs and supported readonly MIR
+reexports. New fixtures were corrected to the existing owned-capability entry
+rule after E0503. No language or checker rule was relaxed. Two narrow writer
+successors preserve Return storage while projecting its active Scope (`25bf9c`,
+`f36175`). Independent source/API review found no additional concrete blocker.
+
+All eight focused groups pass in both compiler profiles (`1cba25`, `242535`).
+The formatted compiler/object gate passes **543/543** plus the MIR doctest
+(`fc3f02`). After the final Return projection, all **74 codegen and 63 object
+checks** pass again (`45ddfe`). The driver gate passes **693/693**: 87 library,
+8 lowering and 598 frontend fixture checks (`b9de51`). These are Source, compiler
+and metadata checks. Dedicated body/ABI emission, ordinary companion cleanup,
+matched runtime archive and Source-deleted linked lifecycle runs remain required.

@@ -6,11 +6,12 @@ mod call_owner_generations;
 mod call_ownership;
 mod resource_ownership;
 pub use resource_ownership::{
-    ResourceCallOperand, ResourceCallResult, ResourceCompletion, ResourceFrame, ResourceFrameId,
-    ResourceFrameRole, ResourceFunctionPlan, ResourceLoan, ResourceLoanId, ResourceLoanSource,
-    ResourceOccupancy, ResourceOperation, ResourceOperationId, ResourceOperationRole,
-    ResourceOwnerSlot, ResourceOwnerSlotId, ResourceOwnershipPlan, ResourcePath, ResourcePosition,
-    ResourceShape, ResourceSite, ResourceSlotStorage, validate_resource_ownership,
+    ResourceArgumentEffect, ResourceArgumentSyntax, ResourceCallFormal, ResourceCallOperand,
+    ResourceCallResult, ResourceCompletion, ResourceFrame, ResourceFrameId, ResourceFrameRole,
+    ResourceFunctionPlan, ResourceLoan, ResourceLoanId, ResourceLoanSource, ResourceOccupancy,
+    ResourceOperation, ResourceOperationId, ResourceOperationRole, ResourceOwnerSlot,
+    ResourceOwnerSlotId, ResourceOwnershipPlan, ResourcePath, ResourcePosition, ResourceShape,
+    ResourceSite, ResourceSlotStorage, validate_resource_ownership,
 };
 #[cfg(test)]
 mod resource_manifest_tests;
@@ -1262,17 +1263,18 @@ pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Ve
             })
             .collect());
     }
-    resource_ownership::authenticate_original(program, types).map_err(|message| {
-        vec![LowerError {
-            span: program
-                .functions
-                .first()
-                .map_or(Span::new(jett_common::FileId::new(0), 0, 0), |function| {
-                    function.span
-                }),
-            message,
-        }]
-    })?;
+    let resource_execution =
+        resource_ownership::authenticate_original(program, types).map_err(|message| {
+            vec![LowerError {
+                span: program
+                    .functions
+                    .first()
+                    .map_or(Span::new(jett_common::FileId::new(0), 0, 0), |function| {
+                        function.span
+                    }),
+                message,
+            }]
+        })?;
     let function_param_modes = program
         .functions
         .iter()
@@ -1296,6 +1298,7 @@ pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Ve
                     &function_param_modes,
                     &program.resource_manifest,
                     &program.resource_source,
+                    &resource_execution,
                 )
             })
             .collect::<Result<Vec<_>, _>>()
@@ -1319,6 +1322,7 @@ fn lower_function(
     function_param_modes: &std::collections::HashMap<FunctionId, Vec<ParamMode>>,
     resource_manifest: &hir::ResourceManifest,
     resource_source: &hir::ResourceSourceArchive,
+    resource_execution: &resource_ownership::ResourceExecutionClosure,
 ) -> Result<Function, LowerError> {
     let mut builder = Builder::new(function.body.span, types, function_param_modes);
     builder.locals = function.locals.clone();
@@ -1327,6 +1331,7 @@ fn lower_function(
         resource_manifest,
         resource_source,
         types,
+        resource_execution,
     );
     builder.view_params = function
         .params

@@ -4126,7 +4126,8 @@ Resource actual has no ordinary caller owning-operand claim. The dynamic runtime
 acquisition log must determine reverse cleanup order; local-number order is not
 cleanup order. The plan's entry block is distinct from the driver-selected program
 entry function. The initial plain/Optional/Result analysis does not yet implement
-the emitted native layout or execution ABI. Handled actual normalization, complete
+the execution ABI. A fresh plan now supplies the emitted native layout described
+below. Handled actual normalization, complete
 aggregate/scoped/reflected custody and concurrency remain required.
 
 The formatted affected gate passes 535 HIR/MIR/codegen/object-emission tests,
@@ -4148,3 +4149,21 @@ lower_value frames decrease from 169,448 to 15,272 bytes. See the
 [repair receipt](active/native_resource_hook_identity.md#windows-lowering-stack-repair)
 for individual frame measurements and exact verification scopes. Native
 Resource Source execution remains pending its connected ABI and cleanup.
+
+### Resource execution family and object layout
+
+After authenticating the entire original checked HIR archive, MIR derives a
+private execution family from Resource functions and their direct Source caller
+predecessors. Resource-free wrappers receive their own sealed constructor
+witnesses and fresh Scope and invocation proofs. Current graph edits cannot
+recompute or expand that authority. Nested calls remain refused when their
+evaluation needs canonical Source-order staging.
+
+The code generator projects one fresh whole-program ownership plan into bounded,
+deterministic v2 layout bytes. Rows preserve exact containing-function signatures,
+parameter access and evaluation order, caller result destinations, provisional
+Return storage, absent sums and ordinary failure companions. Return publication
+uses the callee's completed root Scope while retaining the distinct Return slot.
+The immutable object accessor exposes that layout and the actual driver-selected
+entry function, signature and root Scope. It emits no Source body or provider.
+Connected ABI leaves and linked lifecycle execution remain required.

@@ -349,19 +349,35 @@ impl<'p> Analysis<'p> {
                     Ok(None)
                 }
             }
-            E::OptionalNone if expected.is_some() => Ok(Some(Value { shape: expected.unwrap(), occupancy: ResourceOccupancy::Empty, owner: None, loan: None })),
+            E::OptionalNone if expected.is_some() => {
+                let shape = expected.unwrap();
+                if !matches!(shape, ResourceShape::Optional { .. }) { return Err("Resource absence is not its exact Optional shape".into()); }
+                let destination = self.result_slot(ordinal, shape.clone(), self.active_frame);
+                self.operation(self.active_frame, ResourceOperationRole::CreateAbsentSum { destination });
+                Ok(Some(Value { shape, occupancy: ResourceOccupancy::Empty, owner: Some(destination), loan: None }))
+            },
             E::OptionalSome(inner) | E::ResultOk(inner) if expected.is_some() => {
                 let payload = self.expression(state, inner, true)?;
                 if state.aborted { return Ok(None); }
                 let mut value = payload.ok_or("Resource sum payload has no exact owning producer")?;
                 if value.loan.is_some() || value.shape.kind() != expected.as_ref().unwrap().kind() { return Err("Resource sum payload is borrowed or from another nominal kind".into()); }
-                value.shape = expected.unwrap();
+                let shape = expected.unwrap();
+                let destination = self.result_slot(ordinal, shape.clone(), self.active_frame);
+                let source = value.owner.ok_or("Resource sum adoption has no sole owning payload")?;
+                self.operation(self.active_frame, ResourceOperationRole::SumAdopt { source, destination });
+                value.shape = shape;
+                value.owner = Some(destination);
                 Ok(Some(value))
             }
             E::ResultFail(inner) if expected.is_some() => {
                 if self.expression(state, inner, true)?.is_some() { return Err("Resource result failure companion cannot carry custody".into()); }
                 if state.aborted { return Ok(None); }
-                Ok(Some(Value { shape: expected.unwrap(), occupancy: ResourceOccupancy::Empty, owner: None, loan: None }))
+                let shape = expected.unwrap();
+                let ResourceShape::Result { failure, .. } = &shape else { return Err("Resource failure is not its exact Result shape".into()); };
+                if inner.ty != *failure { return Err("Resource failure companion changes its declared exact type".into()); }
+                let destination = self.result_slot(ordinal, shape.clone(), self.active_frame);
+                self.operation(self.active_frame, ResourceOperationRole::CreateFailureSum { destination, failure: *failure });
+                Ok(Some(Value { shape, occupancy: ResourceOccupancy::Empty, owner: Some(destination), loan: None }))
             }
             E::RuntimeFailure(_) | E::RuntimeFailureMessage(_) => {
                 if let E::RuntimeFailureMessage(message) = &expression.kind { self.expression(state, message, false)?; }
@@ -372,7 +388,12 @@ impl<'p> Analysis<'p> {
             _ => {
                 let mut has_resource = false;
                 walk::expression(expression, &mut |value| {
-                    if !std::ptr::eq(value, expression) { has_resource |= resource_type_pending(self.types, value.ty) && !matches!(self.types.resolve(value.ty), Type::Function { .. }); }
+                    if !std::ptr::eq(value, expression) {
+                        has_resource |= resource_type_pending(self.types, value.ty) && !matches!(self.types.resolve(value.ty), Type::Function { .. });
+                        if let E::Call { function, .. } = value.kind {
+                            has_resource |= self.program.functions.get(function.index() as usize).is_some_and(|callee| callee.id == function && callee.resource_lowering.is_some());
+                        }
+                    }
                 });
                 if has_resource { return Err("pending ResourceOwnershipPlan: nested Resource evaluation requires exact source-order canonical staging".into()); }
                 Ok(None)
@@ -391,6 +412,12 @@ impl<'p> Analysis<'p> {
         ordinal: usize,
     ) -> Result<Option<Value>, String> {
         let resource = hook.is_some()
+            || function.is_some_and(|id| {
+                self.program
+                    .functions
+                    .get(id.index() as usize)
+                    .is_some_and(|callee| callee.id == id && callee.resource_lowering.is_some())
+            })
             || shape(&self.program.resource_manifest, self.types, expression.ty)?.is_some()
             || args.iter().any(|arg| {
                 shape(&self.program.resource_manifest, self.types, arg.ty)
@@ -593,6 +620,11 @@ impl<'p> Analysis<'p> {
                     ResourceOperationRole::InvokeSourceFunction {
                         function: function
                             .ok_or("Resource call has neither an exact hook nor a Source callee")?,
+                        formals: source
+                            .arguments
+                            .iter()
+                            .map(ResourceCallFormal::original)
+                            .collect(),
                         source: source.clone(),
                         evaluation_order: order.to_vec(),
                         operands,
@@ -699,6 +731,11 @@ impl<'p> Analysis<'p> {
                             self.store(&mut state, *target, Some(payload), false)?;
                             self.operation(ResourceFrameId(0), ResourceOperationRole::SumTake { source: owner, destination: self.local_slots[target.index() as usize].ok_or("Resource sum success has no dedicated output slot")?, tag, success: true });
                         } else {
+                            let ResourceShape::Result { failure, .. } = &value.shape else { return Err("pending ResourceOwnershipPlan: Optional empty-arm extraction has no ordinary companion".into()); };
+                            let header = self.function.local(*target).ok_or("Resource failure take has no exact destination")?.clone();
+                            if header.ty != *failure { return Err("Resource failure take changes its exact companion type".into()); }
+                            let owner = value.owner.ok_or("Resource failure companion has no exact sum shell holder")?;
+                            self.operation(ResourceFrameId(0), ResourceOperationRole::TakeFailureCompanion { source: owner, target: header, failure: *failure, tag });
                             self.read(&mut state, *source, true)?;
                             if shape(&self.program.resource_manifest, self.types, self.function.local(*target).ok_or("Resource failure take has no destination")?.ty)?.is_some() { return Err("Resource failure companion cannot become an occupied owner".into()); }
                         }

@@ -1,0 +1,14 @@
+namespace app
+function pass_owner(token: resource_probe.TestHandle) returns resource_probe.TestHandle:
+    return token
+function lifecycle(view net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle token = resource_probe.create(view net, 1) handle error:
+        return nothing
+    resource_probe.TestHandle moved = pass_owner(token)
+    result[int64, string] observed = resource_probe.borrow(view net, view moved)
+    resource_probe.close(moved)
+    return nothing
+function main(net: Network) returns nothing:
+    lifecycle(view net)
+    return nothing

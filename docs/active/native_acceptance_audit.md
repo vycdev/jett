@@ -2141,3 +2141,25 @@ connected Resource Source ABI/emission/cleanup and linked lifecycle execution
 remain required. The fixed 207/182 inventory and approximate 85% coverage
 estimate remain unchanged; runtime/metadata checks do not supply the missing
 Resource native execution.
+
+## Resource execution family and layout prerequisite
+
+Resource-free original direct Source callers now belong to the authenticated
+Resource execution family. Fresh whole-program ownership plans project exact
+formal facts, sum shell roles, Scope/Return distinctions and the actual
+driver-selected entry into deterministic immutable v2 layout metadata. The
+readonly object accessor emits no Source body or provider execution.
+
+Eight focused groups pass in both compiler profiles. The formatted compiler
+gate passes **543/543** plus the MIR doctest (`fc3f02`); the final Return
+projection passes all **74 codegen and 63 object checks** (`45ddfe`). The driver
+gate passes **693/693** (`b9de51`). Corrections preserve the existing owned
+runtime-capability entry rule and private constructor authority. See the
+[implementation receipt](native_resource_hook_identity.md#resource-execution-family-and-emitted-layout).
+
+Native Resource Source execution remains unaccepted until dedicated body/ABI
+emission and cleanup run in linked binaries with Source inputs removed. The
+native **480/480** result remains the separate adapter-head Windows test receipt;
+it contains no admitted Resource lifecycle case. The approximate **85%** feature
+coverage estimate remains unchanged. Remaining aggregate, captured/reflected,
+refinement, provider and concurrency cases stay within the full goal.

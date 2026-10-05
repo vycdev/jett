@@ -362,6 +362,7 @@ fn resource_ownership_bitwise_source_archive_and_constructor_capture_reject_repl
         &hir.resource_manifest,
         &hir.resource_source,
         types,
+        &authenticate_original(&hir, types).unwrap(),
     );
     let hir::StatementKind::Return(Some(value)) = &function.body.statements[0].kind else {
         panic!("source factory return");

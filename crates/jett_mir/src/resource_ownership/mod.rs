@@ -3,7 +3,11 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod execution_closure;
+#[cfg(test)]
+mod execution_closure_tests;
 mod flow;
+pub(super) use execution_closure::ResourceExecutionClosure;
 #[cfg(test)]
 mod original_calls_tests;
 #[cfg(test)]
@@ -217,6 +221,80 @@ pub enum ResourceCallResult {
     Owned { slot: ResourceOwnerSlotId },
 }
 
+/// Readonly projection of the original checked Source tuple, not a minting API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceArgumentSyntax {
+    Bare,
+    WrittenView,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceArgumentEffect {
+    Copy,
+    TransferOwned,
+    RelinquishOwned,
+    RetainBorrow,
+    ObserveData,
+}
+#[derive(Debug, Clone)]
+pub struct ResourceCallFormal {
+    parameter: usize,
+    source_index: usize,
+    actual_type: TypeId,
+    parameter_type: TypeId,
+    syntax: ResourceArgumentSyntax,
+    effect: ResourceArgumentEffect,
+    access: ParamMode,
+}
+impl ResourceCallFormal {
+    pub fn parameter(&self) -> usize {
+        self.parameter
+    }
+    pub fn source_index(&self) -> usize {
+        self.source_index
+    }
+    pub fn actual_type(&self) -> TypeId {
+        self.actual_type
+    }
+    pub fn parameter_type(&self) -> TypeId {
+        self.parameter_type
+    }
+    pub fn syntax(&self) -> ResourceArgumentSyntax {
+        self.syntax
+    }
+    pub fn effect(&self) -> ResourceArgumentEffect {
+        self.effect
+    }
+    pub fn access(&self) -> ParamMode {
+        self.access
+    }
+    fn original(argument: &hir::ArgumentOwnership) -> Self {
+        use jett_typecheck::{
+            CheckedCalleeAccess as A, CheckedCallerEffect as E, CheckedCallerSyntax as S,
+        };
+        Self {
+            parameter: argument.parameter_index,
+            source_index: argument.source_index,
+            actual_type: argument.actual_type,
+            parameter_type: argument.parameter_type,
+            syntax: match argument.syntax {
+                S::Bare => ResourceArgumentSyntax::Bare,
+                S::WrittenView => ResourceArgumentSyntax::WrittenView,
+            },
+            effect: match argument.effect {
+                E::Copy => ResourceArgumentEffect::Copy,
+                E::TransferOwned => ResourceArgumentEffect::TransferOwned,
+                E::RelinquishOwned => ResourceArgumentEffect::RelinquishOwned,
+                E::RetainBorrow => ResourceArgumentEffect::RetainBorrow,
+                E::ObserveData => ResourceArgumentEffect::ObserveData,
+            },
+            access: match argument.callee_access {
+                A::Owned => ParamMode::Owned,
+                A::View => ParamMode::View,
+            },
+        }
+    }
+}
+
 /// Closed metadata roles. None is a public constructor for a validated plan.
 #[derive(Debug, Clone)]
 pub enum ResourceOperationRole {
@@ -247,10 +325,29 @@ pub enum ResourceOperationRole {
     },
     InvokeSourceFunction {
         function: FunctionId,
+        formals: Vec<ResourceCallFormal>,
         source: hir::SourceCallOwnership,
         evaluation_order: Vec<usize>,
         operands: Vec<ResourceCallOperand>,
         result: ResourceCallResult,
+    },
+    /// Move a sole plain payload into a fresh conditional shell.
+    SumAdopt {
+        source: ResourceOwnerSlotId,
+        destination: ResourceOwnerSlotId,
+    },
+    CreateAbsentSum {
+        destination: ResourceOwnerSlotId,
+    },
+    CreateFailureSum {
+        destination: ResourceOwnerSlotId,
+        failure: TypeId,
+    },
+    TakeFailureCompanion {
+        source: ResourceOwnerSlotId,
+        target: Local,
+        failure: TypeId,
+        tag: LocalId,
     },
     SumTake {
         source: ResourceOwnerSlotId,
@@ -403,6 +500,7 @@ pub(super) struct ResourceLoweringWitness {
     original: hir::Function,
     calls: Vec<OriginalCallAssociation>,
     source: hir::ResourceSourceArchive,
+    execution: ResourceExecutionClosure,
     manifest: hir::ResourceManifest,
     parameters: Vec<Param>,
     locals: Vec<Local>,
@@ -421,8 +519,10 @@ impl Capture {
         manifest: &hir::ResourceManifest,
         source: &hir::ResourceSourceArchive,
         types: &TypeInterner,
+        execution: &ResourceExecutionClosure,
     ) -> Self {
-        let mut needed = resource_type_pending(types, function.return_type)
+        let mut needed = execution.contains(function.id)
+            || resource_type_pending(types, function.return_type)
             || function
                 .locals
                 .iter()
@@ -439,6 +539,7 @@ impl Capture {
                 original: function.clone(),
                 calls: Vec::new(),
                 source: source.clone(),
+                execution: execution.clone(),
                 manifest: manifest.clone(),
                 parameters: function.params.clone(),
                 locals: function.locals.clone(),
@@ -480,6 +581,7 @@ impl Capture {
         if !occupied(expression.ty)
             && !args.iter().any(|value| occupied(value.ty))
             && !matches!(expression.kind, hir::ExpressionKind::ResourceInvoke { .. })
+            && !witness.execution.direct_call(expression)
         {
             return Ok(false);
         }
@@ -522,7 +624,7 @@ impl Capture {
         }
         let mut candidates = Vec::new();
         walk::expression(expression, &mut |candidate| {
-            if source_custody_call(candidate, types) {
+            if source_custody_call(candidate, types, &witness.execution) {
                 candidates.push(candidate.clone());
             }
         });
@@ -666,6 +768,7 @@ impl ResourceLoweringWitness {
                 .zip(&other.calls)
                 .all(|(left, right)| left.same(right))
             && self.source == other.source
+            && self.execution == other.execution
             && self.manifest == other.manifest
             && self.parameters == other.parameters
             && self.locals == other.locals
@@ -690,7 +793,7 @@ fn original_function_equal(left: &hir::Function, right: &hir::Function) -> bool 
 pub(super) fn authenticate_original(
     program: &hir::Program,
     types: &TypeInterner,
-) -> Result<(), String> {
+) -> Result<ResourceExecutionClosure, String> {
     let archive = &program.resource_source;
     if archive.manifest().is_none() {
         if !program.resource_manifest.kinds().is_empty()
@@ -705,7 +808,7 @@ pub(super) fn authenticate_original(
         {
             return Err("Resource lowering has no original checked HIR archive".into());
         }
-        return Ok(());
+        return Ok(ResourceExecutionClosure::default());
     }
     archive.validate_types(types)?;
     if archive.manifest() != Some(&program.resource_manifest)
@@ -719,13 +822,17 @@ pub(super) fn authenticate_original(
     {
         return Err("Resource lowering differs from its original checked HIR archive".into());
     }
-    Ok(())
+    ResourceExecutionClosure::from_original(archive.functions(), types)
 }
 
 fn custody_type(types: &TypeInterner, ty: TypeId) -> bool {
     resource_type_pending(types, ty) && !matches!(types.resolve(ty), Type::Function { .. })
 }
-fn source_custody_call(value: &Expression, types: &TypeInterner) -> bool {
+fn source_custody_call(
+    value: &Expression,
+    types: &TypeInterner,
+    execution: &ResourceExecutionClosure,
+) -> bool {
     let (args, ownership) = match &value.kind {
         hir::ExpressionKind::Call {
             args, ownership, ..
@@ -741,7 +848,8 @@ fn source_custody_call(value: &Expression, types: &TypeInterner) -> bool {
     matches!(ownership, hir::CallOwnership::Source(source) if source.arguments.iter().all(|argument| argument.staging == hir::ArgumentStaging::Original))
         && (custody_type(types, value.ty)
             || args.iter().any(|arg| custody_type(types, arg.ty))
-            || matches!(value.kind, hir::ExpressionKind::ResourceInvoke { .. }))
+            || matches!(value.kind, hir::ExpressionKind::ResourceInvoke { .. })
+            || execution.direct_call(value))
 }
 /// A readonly association lookup, never a constructor or ordinary owner claim.
 pub(super) fn original_call_at(
@@ -763,6 +871,13 @@ pub(super) fn original_call_at(
         return Ok(false);
     }
     witness.source.validate_types(types)?;
+    if witness.execution
+        != ResourceExecutionClosure::from_original(witness.source.functions(), types)?
+    {
+        return Err(
+            "Resource call execution closure differs from its original checked bodies".into(),
+        );
+    }
     witness.manifest.validate(types)?;
     witness.current(function)?;
     if &witness.manifest != manifest
@@ -819,8 +934,30 @@ pub(super) fn validate_witnesses(
     types: &TypeInterner,
 ) -> Result<(), Vec<ValidationError>> {
     let mut errors = Vec::new();
+    let execution = program
+        .functions
+        .iter()
+        .find_map(|function| function.resource_lowering.as_ref())
+        .map(|witness| {
+            witness.source.validate_types(types)?;
+            ResourceExecutionClosure::from_original(witness.source.functions(), types)
+        })
+        .transpose()
+        .map_err(|message| {
+            vec![ValidationError {
+                span: program
+                    .functions
+                    .first()
+                    .map_or(Span::new(jett_common::FileId::new(0), 0, 0), |function| {
+                        function.span
+                    }),
+                message,
+            }]
+        })?
+        .unwrap_or_default();
     for function in &program.functions {
-        let needed = resource_type_pending(types, function.return_type)
+        let needed = execution.contains(function.id)
+            || resource_type_pending(types, function.return_type)
             || function
                 .locals
                 .iter()
@@ -835,6 +972,9 @@ pub(super) fn validate_witnesses(
                     .validate_types(types)
                     .and_then(|()| witness.manifest.validate(types))
                     .and_then(|()| {
+                        if witness.execution != execution {
+                            return Err("Resource execution closure differs from the original checked call graph".into());
+                        }
                         if witness.source.manifest() != Some(&witness.manifest)
                             || !witness.source.functions().iter().any(|original| {
                                 original_function_equal(original, &witness.original)
