@@ -3725,6 +3725,13 @@ in the interpreter. Every attempt has a fresh process/context and a deadline.
 Only exits 0 and 71 count as completed attempts; other exits, compilation/link
 errors, timeouts, and non-reproducible failures abort the runner. Initial suite
 stdout/stderr remain separate from replay output and the shrunk counterexample.
+Native link and execution capture retains parent-owned append-only temporary
+files and gives each child an owned duplicate handle. Each readback uses explicit
+offsets bounded by one sampled file length; append-only writes preserve earlier
+bytes when Windows positioned reads move the shared cursor. Capture errors retain
+their stream, creation/duplication/snapshot stage and original I/O source. The
+existing polling deadline and child kill/reap protocol do not wait for EOF from
+descendants that inherited output handles.
 The CLI validates explicit build targets before loading source, accepting only
 the current supported host. Native `build` invokes the driver object and link stages and publishes an
 executable atomically. `build --check` retains frontend-only validation. The

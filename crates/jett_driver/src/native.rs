@@ -1354,27 +1354,13 @@ fn run_command_with_timeout(
     program: &Path,
     timeout: Duration,
 ) -> Result<CommandOutput, NativeBuildError> {
-    // Files do not require EOF from every descendant that inherited a handle.
-    // Reopen gives writers independent offsets; capture only the exit snapshot.
-    let mut stdout = capture_file("stdout")?;
-    let mut stderr = capture_file("stderr")?;
+    // Retained files do not require EOF from inherited descendant handles.
+    // Duplicate append-only handles; positioned reads keep a bounded snapshot.
+    let stdout = capture_file("stdout")?;
+    let stderr = capture_file("stderr")?;
     command
-        .stdout(
-            stdout
-                .reopen()
-                .map_err(|source| NativeBuildError::CaptureLinkerOutput {
-                    stream: "stdout",
-                    source,
-                })?,
-        )
-        .stderr(
-            stderr
-                .reopen()
-                .map_err(|source| NativeBuildError::CaptureLinkerOutput {
-                    stream: "stderr",
-                    source,
-                })?,
-        );
+        .stdout(capture_writer(stdout.as_file(), "stdout")?)
+        .stderr(capture_writer(stderr.as_file(), "stderr")?);
     let child = command
         .spawn()
         .map_err(|source| NativeBuildError::SpawnLinker {
@@ -1405,8 +1391,8 @@ fn run_command_with_timeout(
         }
     };
 
-    let stdout = read_output_snapshot(stdout.as_file_mut(), "stdout")?;
-    let stderr = read_output_snapshot(stderr.as_file_mut(), "stderr")?;
+    let stdout = read_output_snapshot(stdout.as_file(), "stdout")?;
+    let stderr = read_output_snapshot(stderr.as_file(), "stderr")?;
     if timed_out {
         return Err(NativeBuildError::LinkTimedOut {
             linker: program.to_path_buf(),
@@ -1471,22 +1457,109 @@ impl Drop for ManagedChild {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CaptureStage {
+    Create,
+    Duplicate,
+    Snapshot,
+}
+
+#[derive(Debug)]
+struct CaptureIoError {
+    stage: CaptureStage,
+    source: io::Error,
+}
+
+impl fmt::Display for CaptureIoError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let stage = match self.stage {
+            CaptureStage::Create => "create",
+            CaptureStage::Duplicate => "duplicate",
+            CaptureStage::Snapshot => "snapshot",
+        };
+        write!(formatter, "{stage} capture: {}", self.source)
+    }
+}
+
+impl std::error::Error for CaptureIoError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+fn capture_error(stream: &'static str, stage: CaptureStage, source: io::Error) -> NativeBuildError {
+    NativeBuildError::CaptureLinkerOutput {
+        stream,
+        source: io::Error::new(source.kind(), CaptureIoError { stage, source }),
+    }
+}
+
 fn capture_file(stream: &'static str) -> Result<tempfile::NamedTempFile, NativeBuildError> {
-    tempfile::NamedTempFile::new()
-        .map_err(|source| NativeBuildError::CaptureLinkerOutput { stream, source })
+    // Windows positioned reads update the shared cursor. Append-only writes
+    // still target EOF when a surviving descendant writes during a snapshot.
+    tempfile::Builder::new()
+        .append(true)
+        .tempfile()
+        .map_err(|source| capture_error(stream, CaptureStage::Create, source))
+}
+
+fn capture_writer(file: &fs::File, stream: &'static str) -> Result<fs::File, NativeBuildError> {
+    file.try_clone()
+        .map_err(|source| capture_error(stream, CaptureStage::Duplicate, source))
+}
+
+struct CaptureSnapshot<'a> {
+    file: &'a fs::File,
+    offset: u64,
+}
+
+impl Read for CaptureSnapshot<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let count = read_capture_at(self.file, buffer, self.offset)?;
+        let advance = u64::try_from(count).map_err(io::Error::other)?;
+        self.offset = self.offset.checked_add(advance).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "capture snapshot offset overflow",
+            )
+        })?;
+        Ok(count)
+    }
+}
+
+#[cfg(unix)]
+fn read_capture_at(file: &fs::File, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
+    use std::os::unix::fs::FileExt;
+    file.read_at(buffer, offset)
+}
+
+#[cfg(windows)]
+fn read_capture_at(file: &fs::File, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
+    use std::os::windows::fs::FileExt;
+    file.seek_read(buffer, offset)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn read_capture_at(_file: &fs::File, _buffer: &mut [u8], _offset: u64) -> io::Result<usize> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "positioned native capture is unavailable on this host",
+    ))
 }
 
 fn read_output_snapshot(
-    file: &mut fs::File,
+    file: &fs::File,
     stream: &'static str,
 ) -> Result<Vec<u8>, NativeBuildError> {
-    let mut read = || -> io::Result<Vec<u8>> {
+    let read = || -> io::Result<Vec<u8>> {
         let length = file.metadata()?.len();
         let mut bytes = Vec::new();
-        file.take(length).read_to_end(&mut bytes)?;
+        CaptureSnapshot { file, offset: 0 }
+            .take(length)
+            .read_to_end(&mut bytes)?;
         Ok(bytes)
     };
-    read().map_err(|source| NativeBuildError::CaptureLinkerOutput { stream, source })
+    read().map_err(|source| capture_error(stream, CaptureStage::Snapshot, source))
 }
 
 #[cfg(windows)]
@@ -1848,6 +1921,154 @@ verify checking:
             validate_host_launcher(&wrong),
             Err(NativeBuildError::LauncherNativeLibrariesMismatch { .. })
         ));
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn capture_snapshots_retain_handle_identity_and_append_after_cursor_changes() {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let capture = capture_file("stdout").unwrap();
+        let mut writer = capture_writer(capture.as_file(), "stdout").unwrap();
+        assert!(
+            read_output_snapshot(capture.as_file(), "stdout")
+                .unwrap()
+                .is_empty()
+        );
+        writer.write_all(b"prefix").unwrap();
+        assert_eq!(
+            read_output_snapshot(capture.as_file(), "stdout").unwrap(),
+            b"prefix"
+        );
+        // A duplicate writer must remain append-only after the parent moves
+        // their shared cursor. No reopen is used to restore an independent one.
+        capture.as_file().seek(SeekFrom::Start(1)).unwrap();
+        writer.write_all(b"-suffix").unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                read_output_snapshot(capture.as_file(), "stdout").unwrap(),
+                b"prefix-suffix"
+            );
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn capture_snapshot_bounds_multichunk_reads_despite_interleaved_appends() {
+        use std::io::Write;
+
+        let capture = capture_file("stderr").unwrap();
+        let mut writer = capture_writer(capture.as_file(), "stderr").unwrap();
+        let prefix = b"0123456789abcdef".repeat(8 * 1024);
+        let suffix = b"later-output".repeat(1024);
+        writer.write_all(&prefix).unwrap();
+        let sampled_length = capture.as_file().metadata().unwrap().len();
+        let mut snapshot = CaptureSnapshot {
+            file: capture.as_file(),
+            offset: 0,
+        }
+        .take(sampled_length);
+        let mut first = [0; 17];
+        snapshot.read_exact(&mut first).unwrap();
+        // On Windows this append moves the shared cursor to EOF. The next
+        // snapshot read must still use its own offset and the original bound.
+        writer.write_all(&suffix).unwrap();
+        let mut captured = first.to_vec();
+        snapshot.read_to_end(&mut captured).unwrap();
+        assert_eq!(captured, prefix);
+        let mut all_output = prefix;
+        all_output.extend_from_slice(&suffix);
+        assert_eq!(
+            read_output_snapshot(capture.as_file(), "stderr").unwrap(),
+            all_output
+        );
+
+        // Short EOF remains valid if the file is shorter than a sampled bound.
+        let mut short = Vec::new();
+        CaptureSnapshot {
+            file: capture.as_file(),
+            offset: 0,
+        }
+        .take(u64::try_from(all_output.len()).unwrap() + 1)
+        .read_to_end(&mut short)
+        .unwrap();
+        assert_eq!(short, all_output);
+    }
+
+    #[test]
+    fn capture_error_context_preserves_stream_kind_and_original_os_error() {
+        for stage in [
+            CaptureStage::Create,
+            CaptureStage::Duplicate,
+            CaptureStage::Snapshot,
+        ] {
+            let original = io::Error::from_raw_os_error(5);
+            let kind = original.kind();
+            let NativeBuildError::CaptureLinkerOutput { stream, source } =
+                capture_error("stderr", stage, original)
+            else {
+                panic!("capture context changed the public error variant");
+            };
+            assert_eq!(stream, "stderr");
+            assert_eq!(source.kind(), kind);
+            let detail = source
+                .get_ref()
+                .unwrap()
+                .downcast_ref::<CaptureIoError>()
+                .unwrap();
+            assert_eq!(detail.stage, stage);
+            assert_eq!(detail.source.raw_os_error(), Some(5));
+            let nested = std::error::Error::source(detail).unwrap();
+            assert_eq!(
+                nested.downcast_ref::<io::Error>().unwrap().raw_os_error(),
+                Some(5)
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn command_runner_captures_windows_streams_and_nonzero_status() {
+        use std::os::windows::process::CommandExt;
+
+        let mut command = Command::new("cmd.exe");
+        command
+            .args(["/d", "/s", "/c"])
+            .raw_arg(r#"<nul set /p "=captured"&<nul set /p "=diagnostic" 1>&2&exit /b 7"#)
+            .stdin(Stdio::null());
+        let output =
+            run_command_with_timeout(command, Path::new("cmd.exe"), Duration::from_secs(5))
+                .unwrap();
+        assert_eq!(output.status.code(), Some(7));
+        assert_eq!(output.stdout, b"captured");
+        assert_eq!(output.stderr, b"diagnostic");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn command_windows_deadline_does_not_wait_for_inherited_capture_handles() {
+        use std::os::windows::process::CommandExt;
+
+        let mut command = Command::new("cmd.exe");
+        command
+            .args(["/d", "/s", "/c"])
+            .raw_arg(r#"<nul set /p "=captured"&<nul set /p "=diagnostic" 1>&2&start "" /b cmd.exe /d /c "ping.exe -n 6 127.0.0.1 >nul"&ping.exe -n 6 127.0.0.1 >nul"#)
+            .stdin(Stdio::null());
+        let start = Instant::now();
+        let error =
+            run_command_with_timeout(command, Path::new("cmd.exe"), Duration::from_millis(500))
+                .expect_err("parent must time out while a descendant retains the captures");
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "inherited handles defeated the deadline"
+        );
+        match error {
+            NativeBuildError::LinkTimedOut { stdout, stderr, .. } => {
+                assert_eq!(stdout, "captured");
+                assert_eq!(stderr, "diagnostic");
+            }
+            error => panic!("unexpected error: {error}"),
+        }
     }
 
     #[cfg(unix)]

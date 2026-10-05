@@ -2243,3 +2243,32 @@ At the runtime successor to cc06aa1f, `native-resource-replacement-preflight-foc
 The formatted Source replacement successor to `2b9442b1` passes 558 compiler/object/HIR/MIR checks plus one MIR doctest, and all 606 frontend/backend-lowering fixture checks. `native-resource-replacement-final-reference.log` and `native-resource-replacement-final-native.log` each pass eleven shared original Source scenarios in both profiles. The native launch deletes Project and synthetic Stdlib Source, observes exact events/body/cleanup/messages/scripts, retires every Resource/ordinary obligation before one destroy, and preserves body 255/cleanup 255 for executed old-finalizer failure. Exact self-reseat emits no finalizer/transfer, while failed RHS evaluation leaves old available to its handler. The fixed 207 inventory/182 obligations and broad 85% estimate are unchanged.
 
 The new measured archive receipt `54a38248` preserves exact CRT/library/symbol provenance; both HOST C ABI controls pass. The broad driver-library attempt is 86 passed/1 failed due to CaptureLinkerOutput PermissionDenied during pre-spawn capture setup; the exact isolated property replay passes. The error alone does not identify capture creation versus second-handle opening. This is not a clean full driver-library result. The previous 486 native regression result remains specific to `cc06aa1f` until the complete suite is rerun on the new commit. Conditional/aggregate/projected replacement, other Resource execution and supported-host production distribution remain unproven.
+
+
+### Exact native Resource replacement regression
+
+The clean pushed `cda86ac7` Source replacement commit passes the complete default
+native gate: 486 tests, zero failures and one ignored Resource group, in 1355.37
+seconds. All 2099 recorded Rust/Jett/Cargo inputs remain exact after termination.
+The ignored group was separately executed in all 22 native and 22 real-reference
+scenario/profile runs. The earlier 86/87 driver-library result remains a recorded
+capture setup failure; its isolated pass alone did not make that broad gate clean.
+
+### Retained native output capture
+
+The driver retains append-only capture files, gives children owned duplicate
+handles, and reads bounded snapshots with explicit offsets. It no longer opens
+the second file object through ReOpenFile. Private error context identifies
+creation, duplication or snapshot while retaining the original I/O source.
+The original PermissionDenied log proves a pre-spawn setup failure, but does
+not distinguish creation from reopening or establish an external cause.
+
+After correcting the authored Windows test commands' quoting without changing
+their stream/status/deadline oracles, all 12 capture checks and three command
+checks pass. The unchanged property replay regression passes twice in isolation,
+then the complete driver library passes all 92 tests (152.85 seconds). Existing
+Source deletion, both optimize modes, 104 trials, trial-4 sentinel, counterexample
+and original-stream requirements remain intact. Child polling/kill/reap and
+deadline behavior are unchanged. This verification repair does not increase the
+about-85% feature estimate. Full native and supported-host acceptance of the next
+combined Source implementation remain separate gates.
