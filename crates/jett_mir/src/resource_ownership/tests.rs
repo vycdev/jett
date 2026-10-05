@@ -1,5 +1,6 @@
 use super::*;
 use jett_common::{FileId, SourceOrigin};
+use jett_hir::ExpressionKind;
 use jett_parser::{ast::Item, parse};
 use jett_resolve::ResourceKernelSpec;
 use jett_typecheck::CheckedCallerEffect as Effect;
@@ -547,5 +548,181 @@ function inspect(holder: Holder) returns nothing:
         foreign.fields[0].1 = TypeInterner::STRING;
         types.update_struct(id, foreign);
         assert!(hir.resource_source.validate_types(&types).is_err());
+    }
+}
+
+const MUTABLE_REPLACEMENT_SOURCE: &str = include_str!(
+    "../../../jett_codegen_cranelift/src/emit/resource_execution/replacement/mutable_assignment.jett"
+);
+
+#[test]
+fn resource_ownership_replacement_seals_the_actual_rhs_and_original_mutable_site() {
+    for release in [false, true] {
+        let original = checked(MUTABLE_REPLACEMENT_SOURCE, release);
+        let program = lowered(&original);
+        let plan = validate_resource_ownership(&program, &original.checked().interner).unwrap();
+        for name in ["replace_live", "failed_rhs_keeps_owner"] {
+            let function = named(&plan, name);
+            let replacements = function
+                .operations()
+                .iter()
+                .filter(|operation| {
+                    matches!(operation.role(), ResourceOperationRole::Replace { .. })
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(replacements.len(), 1, "{name}");
+            let operation = replacements[0];
+            let ResourceOperationRole::Replace {
+                destination,
+                replacement,
+                old,
+            } = operation.role()
+            else {
+                unreachable!();
+            };
+            assert_ne!(destination, replacement);
+            assert_eq!(*old, ResourceOccupancy::Occupied);
+            assert!(!operation.is_expression_operation());
+            let current = &program.functions[function.function().index() as usize];
+            let ResourcePosition::Statement(index) = operation.site().position() else {
+                panic!("assignment statement site");
+            };
+            let StatementKind::Assign { target, value } =
+                &current.blocks[operation.site().block().index() as usize].statements[index].kind
+            else {
+                panic!("exact original assignment");
+            };
+            let (ExpressionKind::Local(target), ExpressionKind::Local(rhs)) =
+                (&target.kind, &value.kind)
+            else {
+                panic!("canonical handled Source RHS and local destination");
+            };
+            let ResourceSlotStorage::Local { header } =
+                function.owner_slots()[destination.index()].storage()
+            else {
+                panic!("original mutable owning header");
+            };
+            assert_eq!(header.id, *target);
+            assert!(header.mutable);
+            assert_eq!(
+                function.owner_slots()[destination.index()].shape(),
+                function.owner_slots()[replacement.index()].shape()
+            );
+            let ResourceSlotStorage::Local { header: rhs_header } =
+                function.owner_slots()[replacement.index()].storage()
+            else {
+                panic!("evaluated canonical RHS local");
+            };
+            assert_eq!(rhs_header.id, *rhs);
+            assert!(function.operations().iter().any(|other| other.site() == operation.site()
+                && matches!(other.role(), ResourceOperationRole::Transfer { source, destination: selected }
+                    if source == replacement && selected == destination)));
+        }
+    }
+}
+
+#[test]
+fn resource_ownership_self_rebind_and_closed_destination_keep_distinct_exact_roles() {
+    for release in [false, true] {
+        let original = checked(MUTABLE_REPLACEMENT_SOURCE, release);
+        let program = lowered(&original);
+        let plan = validate_resource_ownership(&program, &original.checked().interner).unwrap();
+        let function = named(&plan, "rebind_self");
+        let reseats = function
+            .operations()
+            .iter()
+            .filter(|operation| {
+                matches!(operation.role(), ResourceOperationRole::SelfRebind { .. })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reseats.len(), 1);
+        let operation = reseats[0];
+        let ResourceOperationRole::SelfRebind { slot } = operation.role() else {
+            unreachable!()
+        };
+        let ResourceSlotStorage::Local { header } = function.owner_slots()[slot.index()].storage()
+        else {
+            panic!("owning local")
+        };
+        assert!(header.mutable);
+        let current = &program.functions[function.function().index() as usize];
+        let ResourcePosition::Statement(index) = operation.site().position() else {
+            panic!("assignment")
+        };
+        let StatementKind::Assign { target, value } =
+            &current.blocks[operation.site().block().index() as usize].statements[index].kind
+        else {
+            panic!("self assignment")
+        };
+        assert!(matches!(target.kind, ExpressionKind::Local(local) if local == header.id));
+        assert!(matches!(value.kind, ExpressionKind::Local(local) if local == header.id));
+        assert!(
+            !function
+                .operations()
+                .iter()
+                .any(|other| other.site() == operation.site()
+                    && matches!(
+                        other.role(),
+                        ResourceOperationRole::Replace { .. }
+                            | ResourceOperationRole::Transfer { .. }
+                            | ResourceOperationRole::Drop { .. }
+                    ))
+        );
+        let closed = named(&plan, "rebind_after_close");
+        assert!(!closed.operations().iter().any(|operation| matches!(
+            operation.role(),
+            ResourceOperationRole::Replace { .. } | ResourceOperationRole::SelfRebind { .. }
+        )));
+        let current = &program.functions[closed.function().index() as usize];
+        assert!(closed.operations().iter().any(|operation| {
+            let ResourcePosition::Statement(index) = operation.site().position() else {
+                return false;
+            };
+            matches!(
+                current.blocks[operation.site().block().index() as usize].statements[index].kind,
+                StatementKind::Assign { .. }
+            ) && matches!(operation.role(), ResourceOperationRole::Transfer { .. })
+        }));
+    }
+}
+
+#[test]
+fn resource_ownership_replacement_and_reseat_reject_changed_public_source_or_header() {
+    for release in [false, true] {
+        let original = checked(MUTABLE_REPLACEMENT_SOURCE, release);
+        let program = lowered(&original);
+        let types = &original.checked().interner;
+        for mutation in 0..3 {
+            let mut changed = program.clone();
+            let function = changed
+                .functions
+                .iter_mut()
+                .find(|function| {
+                    function.identity.declaration.namespace == "app"
+                        && function.identity.declaration.name == "rebind_self"
+                })
+                .unwrap();
+            let assignment = function
+                .blocks
+                .iter_mut()
+                .flat_map(|block| &mut block.statements)
+                .find(|statement| matches!(statement.kind, StatementKind::Assign { .. }))
+                .unwrap();
+            let StatementKind::Assign { target, value } = &mut assignment.kind else {
+                unreachable!()
+            };
+            let ExpressionKind::Local(local) = target.kind else {
+                unreachable!()
+            };
+            if mutation == 0 {
+                function.locals[local.index() as usize].mutable = false;
+            } else if mutation == 1 {
+                value.kind = ExpressionKind::View(Box::new(value.clone()));
+            } else {
+                value.span.start += 1;
+            }
+            assert!(validate_resource_ownership(&changed, types).is_err());
+            assert!(validate_witnesses(&changed, types).is_err());
+        }
     }
 }

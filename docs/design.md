@@ -8471,7 +8471,7 @@ The native backend now emits direct checked Resource calls with an internal
 Scope parameter, exact lexical acquisition, provisional Return publication and
 ordinary companion cleanup. Ordinary callable signatures and Source rules stay
 the same. Exact indirect descriptor calls, statically aborted acquisition CFGs
-and mutable replacement still require their dedicated native successors.
+and conditional/aggregate replacement still require their dedicated native successors.
 Compiler-test Resource providers are confined to a single runtime archive built
 with both `test` and `jett_resource_native_test_archive`; production providers
 remain disabled. Archive compilation and object emission alone do not establish
@@ -8481,4 +8481,6 @@ absent at launch and zero live obligations before teardown. This local test
 slice does not enable production Resource providers or complete broader native
 Resource semantics.
 
-Native plain Resource replacement validates both exact live owners, active runtime holders, loans, nominal kinds, generation capacity and acquisition storage before retiring the old value. An invalid replacement leaves both owners intact. This runtime protocol check does not yet admit Source replacement in native code generation.
+Native plain Resource replacement validates both exact live owners, active runtime holders, loans, nominal kinds, generation capacity and acquisition storage before retiring the old value. An invalid replacement leaves both owners intact. The native compiler consumes this check for exact plain-owner replacement.
+
+Native plain Resource assignment now retains the evaluated RHS while the old owner remains live. Successful replacement retires old and installs RHS once; failed RHS evaluation preserves old for its handler or scope cleanup. Exact self-assignment moves and reseats the same local without a runtime transfer or finalizer. Assignment after close transfers into the vacant local. Conditional, aggregate and projected native replacement remain pending.

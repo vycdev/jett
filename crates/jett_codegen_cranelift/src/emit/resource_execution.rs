@@ -1164,14 +1164,70 @@ impl Translator<'_, '_> {
                 let destination = resource
                     .local_slot(local)?
                     .ok_or_else(|| pending("Resource assignment lost its owning local"))?;
-                let transfer = site_only.iter().copied().find(|operation| matches!(operation.role(), Role::Transfer { destination: selected, .. } if *selected == destination)).ok_or_else(|| pending("Resource replacement has no exact RHS transfer"))?;
-                let bits = if let Some(replace) = site_only.iter().copied().find(|operation| matches!(operation.role(), Role::Replace { destination: selected, .. } if *selected == destination)) {
-                    let Role::Transfer { source, .. } = transfer.role() else { unreachable!(); };
-                    let old = self.resource_owner(destination)?; let rhs = self.resource_owner(*source)?;
+                let mut replacements = site_only.iter().copied().filter(|operation|
+                    matches!(operation.role(), Role::Replace { destination: selected, .. } if *selected == destination));
+                let mut reseats = site_only.iter().copied().filter(|operation|
+                    matches!(operation.role(), Role::SelfRebind { slot } if *slot == destination));
+                let mut transfers = site_only.iter().copied().filter(|operation|
+                    matches!(operation.role(), Role::Transfer { destination: selected, .. } if *selected == destination));
+                let replace = replacements.next();
+                let reseat = reseats.next();
+                let transfer = transfers.next();
+                if replacements.next().is_some()
+                    || reseats.next().is_some()
+                    || transfers.next().is_some()
+                {
+                    return Err(pending(
+                        "Resource assignment has ambiguous exact endpoint roles",
+                    ));
+                }
+                let bits = if let Some(replace) = replace {
+                    let Role::Replace {
+                        replacement,
+                        old: jett_mir::ResourceOccupancy::Occupied,
+                        ..
+                    } = replace.role()
+                    else {
+                        return Err(pending(
+                            "Resource replacement does not have its occupied old owner",
+                        ));
+                    };
+                    if reseat.is_some()
+                        || !matches!(transfer.map(|operation| operation.role()),
+                        Some(Role::Transfer { source, destination: selected }) if source == replacement && *selected == destination)
+                    {
+                        return Err(pending(
+                            "Resource replacement lost its exact evaluated RHS transfer",
+                        ));
+                    }
+                    let old = self.resource_owner(destination)?;
+                    let rhs = self.resource_owner(*replacement)?;
                     let (context, frame, ordinal) = self.resource_operation(replace)?;
-                    let bits = Leaf::Replace.output(self.module, self.builder, &[context, frame, ordinal, old, rhs], resource.failure, 8)?;
-                    self.clear_slot(resource.owners[source.index()]); self.resource_store(destination, bits)?; bits
-                } else { self.resource_transfer(transfer)? };
+                    let bits = Leaf::Replace.output(
+                        self.module,
+                        self.builder,
+                        &[context, frame, ordinal, old, rhs],
+                        resource.failure,
+                        8,
+                    )?;
+                    self.clear_slot(resource.owners[replacement.index()]);
+                    self.resource_store(destination, bits)?;
+                    bits
+                } else if reseat.is_some() {
+                    if transfer.is_some()
+                        || !matches!(value.kind, ExpressionKind::Local(source) if source == local)
+                        || value.ty != target.ty
+                    {
+                        return Err(pending(
+                            "Resource self-rebind lost its exact current Local occurrence",
+                        ));
+                    }
+                    self.resource_owner(destination)?
+                } else {
+                    self.resource_transfer(transfer.ok_or_else(|| {
+                        pending("vacant Resource assignment has no exact evaluated RHS transfer")
+                    })?)?
+                };
                 self.define_local(local, LoweredValue::Scalar(bits), statement.span)?;
                 Ok(true)
             }

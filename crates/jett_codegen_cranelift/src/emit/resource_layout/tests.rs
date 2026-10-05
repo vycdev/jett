@@ -291,3 +291,89 @@ fn resource_manifest_accessor_emits_only_the_immutable_compiler_owned_projection
         && symbol.name().ok() == Some(super::super::JETT_AOT_ENTRY_SYMBOL_V1)));
     // This control emits metadata/accessor only: no body, leaf or provider execution.
 }
+
+#[test]
+fn resource_layout_replacement_uses_exact_rhs_tag12_and_reseat_has_no_row() {
+    const SOURCE: &str = include_str!("../resource_execution/replacement/mutable_assignment.jett");
+    for release in [false, true] {
+        let checked = checked(SOURCE, release);
+        let program = lower_source(&checked);
+        let layout = EmittedResourceLayout::from_program(
+            &program,
+            &checked.checked().interner,
+            entry(&program),
+        )
+        .unwrap();
+        let mut rows = Rows::new(layout.plan()).unwrap();
+        rows.populate().unwrap();
+        let mut replacements = 0;
+        let mut reseats = 0;
+        for function in layout.plan().functions() {
+            for operation in function.operations() {
+                match operation.role() {
+                    Role::Replace {
+                        destination,
+                        replacement,
+                        old,
+                    } => {
+                        replacements += 1;
+                        assert_eq!(*old, custody::ResourceOccupancy::Occupied);
+                        assert_ne!(destination, replacement);
+                        let ordinal = layout
+                            .operation(function.function(), operation.id())
+                            .unwrap();
+                        assert_eq!(
+                            rows.operations[ordinal as usize].1,
+                            [
+                                12,
+                                layout
+                                    .frame(function.function(), operation.frame())
+                                    .unwrap(),
+                                layout.slot(function.function(), *destination).unwrap(),
+                                layout.slot(function.function(), *replacement).unwrap(),
+                            ]
+                        );
+                    }
+                    Role::SelfRebind { .. } => {
+                        reseats += 1;
+                        assert!(
+                            layout
+                                .operation(function.function(), operation.id())
+                                .is_none()
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(replacements >= 2);
+        assert_eq!(reseats, 1);
+    }
+}
+
+#[test]
+fn resource_layout_sum_replacement_stays_a_separate_transport_refusal() {
+    const SOURCE: &str = r#"namespace app
+export function main(net: Network) returns nothing:
+    use resource_probe
+    mutable optional[resource_probe.TestHandle] token = none
+    token = resource_probe.empty()
+    return nothing
+"#;
+    for release in [false, true] {
+        let checked = checked(SOURCE, release);
+        let program = lower_source(&checked);
+        let error = EmittedResourceLayout::from_program(
+            &program,
+            &checked.checked().interner,
+            entry(&program),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "mutable replacement requires distinct occupied plain owners in the exact Scope"
+            ),
+            "{error:?}"
+        );
+    }
+}

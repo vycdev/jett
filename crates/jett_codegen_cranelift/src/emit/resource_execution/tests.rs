@@ -308,3 +308,91 @@ function main(net: Network) returns nothing:
         );
     }
 }
+
+#[test]
+fn resource_native_replacement_original_source_emits_replace_reseat_and_vacant_routes() {
+    const SOURCE: &str = include_str!("replacement/mutable_assignment.jett");
+    for release in [false, true] {
+        for (selected, replaces) in [
+            ("replace_live", true),
+            ("rebind_self", false),
+            ("rebind_after_close", false),
+            ("failed_rhs_keeps_owner", true),
+        ] {
+            // Native verification deliberately emits every fresh plan function.
+            // Isolate this exact actual Source function so an unused live-replace
+            // helper cannot supply a misleading Replace import for a reseat.
+            let mut declarations = SOURCE.split("export function ");
+            let prefix = declarations.next().unwrap();
+            let body = declarations
+                .find(|body| body.starts_with(&format!("{selected}(")))
+                .unwrap();
+            let source = format!(
+                "{prefix}export function {body}export function main(net: Network) returns nothing:
+    {selected}(view net)
+    return nothing
+"
+            );
+            let artifact = emitted(&source, release);
+            let (_, imports) = symbols(&artifact);
+            assert_eq!(
+                imports
+                    .iter()
+                    .any(|name| name == "jett_rt_v1_resource_replace"),
+                replaces,
+                "{selected}: {imports:?}"
+            );
+            for leaf in ["source_enter", "scope_complete", "transfer", "close"] {
+                assert!(
+                    imports
+                        .iter()
+                        .any(|name| name == &format!("jett_rt_v1_resource_{leaf}")),
+                    "{selected}/{leaf}: {imports:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn resource_native_replacement_ordinary_rhs_failure_keeps_original_owner_until_cleanup() {
+    const SOURCE: &str = r#"namespace app
+function replacement_label() returns int64:
+    use resource_probe
+    return resource_probe.terminal_label()
+export function main(net: Network) returns nothing:
+    use resource_probe
+    mutable resource_probe.TestHandle token = resource_probe.create(view net, 2441) handle error:
+        return nothing
+    token = resource_probe.create(view net, replacement_label()) handle error:
+        return nothing
+    resource_probe.close(token)
+    return nothing
+"#;
+    for release in [false, true] {
+        let checked = checked(SOURCE, release);
+        let program = lower_source(&checked);
+        let layout = EmittedResourceLayout::from_program(
+            &program,
+            &checked.checked().interner,
+            entry(&program),
+        )
+        .unwrap();
+        let main = layout.plan().function(entry(&program)).unwrap();
+        assert!(
+            main.operations()
+                .iter()
+                .any(|operation| matches!(operation.role(), Role::Replace { .. }))
+        );
+        let artifact = emitted(SOURCE, release);
+        let (_, imports) = symbols(&artifact);
+        for leaf in ["replace", "operation_complete", "scope_complete"] {
+            assert!(
+                imports
+                    .iter()
+                    .any(|name| name == &format!("jett_rt_v1_resource_{leaf}"))
+            );
+        }
+        assert!(imports.iter().any(|name| name.contains("failure")));
+    }
+}

@@ -190,6 +190,7 @@ impl<'p> Analysis<'p> {
         local: LocalId,
         value: Option<Value>,
         replace: bool,
+        self_rebind: bool,
     ) -> Result<(), String> {
         let index = local.index() as usize;
         let metadata = self
@@ -242,6 +243,9 @@ impl<'p> Analysis<'p> {
         }
         let destination = self.local_slots[index]
             .ok_or("Resource owning destination lacks its dedicated slot")?;
+        if replace && !metadata.mutable {
+            return Err("Resource assignment requires its exact mutable owning header".into());
+        }
         if let Some(old) = state.values[index].as_ref() {
             if !replace || !metadata.mutable {
                 return Err(
@@ -258,6 +262,9 @@ impl<'p> Analysis<'p> {
                 ResourceFrameId(0),
                 ResourceOperationRole::Replace {
                     destination,
+                    replacement: value
+                        .owner
+                        .ok_or("Resource replacement lacks its evaluated RHS owner slot")?,
                     old: old.occupancy,
                 },
             );
@@ -277,6 +284,18 @@ impl<'p> Analysis<'p> {
                         source,
                         destination,
                     },
+                );
+            } else if replace {
+                if !self_rebind
+                    || !matches!(value.shape, ResourceShape::Plain { .. })
+                    || value.occupancy != ResourceOccupancy::Occupied
+                    || state.values[index].is_some()
+                {
+                    return Err("pending ResourceOwnershipPlan: self-rebind needs the exact occupied plain Local reseat".into());
+                }
+                self.operation(
+                    ResourceFrameId(0),
+                    ResourceOperationRole::SelfRebind { slot: destination },
                 );
             }
         }
@@ -708,7 +727,7 @@ impl<'p> Analysis<'p> {
                     let taking = !self.function.is_view_local(*local);
                     let result = self.expression(&mut state, value, taking)?;
                     if !state.aborted {
-                        self.store(&mut state, *local, result, false)?;
+                        self.store(&mut state, *local, result, false, false)?;
                         state.descriptors[local.index() as usize] = match &value.kind {
                             E::ResourceHookValue { hook } => Some(hook.clone()),
                             E::Local(source) => state.descriptors[source.index() as usize].clone(),
@@ -719,7 +738,12 @@ impl<'p> Analysis<'p> {
                 StatementKind::Assign { target, value } => {
                     let E::Local(local) = target.kind else { return Err("pending ResourceOwnershipPlan: projected replacement needs its aggregate transport".into()); };
                     let result = self.expression(&mut state, value, true)?;
-                    if !state.aborted { self.store(&mut state, local, result, true)?; }
+                    if !state.aborted {
+                        let self_rebind = matches!(value.kind, E::Local(source) if source == local)
+                            && target.ty == value.ty
+                            && self.function.local(local).map(|header| header.ty) == Some(value.ty);
+                        self.store(&mut state, local, result, true, self_rebind)?;
+                    }
                 }
                 StatementKind::Evaluate(value) | StatementKind::HandleDefault(value) => {
                     if let Some(value) = self.expression(&mut state, value, true)? {
@@ -743,7 +767,7 @@ impl<'p> Analysis<'p> {
                             let mut payload = self.read(&mut state, *source, true)?.ok_or("Resource sum source was consumed before its exact take")?;
                             payload.shape = ResourceShape::Plain { kind: payload.shape.kind().clone() };
                             payload.owner = Some(self.local_slots[target.index() as usize].ok_or("Resource sum success has no exact output slot")?);
-                            self.store(&mut state, *target, Some(payload), false)?;
+                            self.store(&mut state, *target, Some(payload), false, false)?;
                             self.operation(ResourceFrameId(0), ResourceOperationRole::SumTake { source: owner, destination: self.local_slots[target.index() as usize].ok_or("Resource sum success has no dedicated output slot")?, tag, success: true });
                         } else {
                             let ResourceShape::Result { failure, .. } = &value.shape else { return Err("pending ResourceOwnershipPlan: Optional empty-arm extraction has no ordinary companion".into()); };

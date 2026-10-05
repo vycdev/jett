@@ -364,7 +364,12 @@ pub enum ResourceOperationRole {
     },
     Replace {
         destination: ResourceOwnerSlotId,
+        replacement: ResourceOwnerSlotId,
         old: ResourceOccupancy,
+    },
+    /// Exact successful mutable Local = Local reseat; no runtime effect or row.
+    SelfRebind {
+        slot: ResourceOwnerSlotId,
     },
     /// Scope completion obligations are retired by the dynamic core log, never local-number order.
     Drop {

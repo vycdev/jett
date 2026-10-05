@@ -2334,3 +2334,7 @@ pending. See [the exact scope](native_resource_hook_identity.md#reference-lifecy
 Whole scoped/reflected/indirect/worker and aggregate ownership breadth, real
 providers, native hook/carrier/drop integration and task/actor cancellation remain
 required. The about-85% estimate, fixed 207/182 inventory and 100% goal are unchanged.
+
+### Source plain Resource replacement
+
+Native assignment now executes exact checked plain Resource replacement, self-reseat and vacant-after-close transfer. Six new shared scenarios extend the original five; all 11 pass in both real-reference profiles and as generated native programs after Source deletion. Runtime preflight preserves invalid inputs before finalization, and failure tests distinguish an ordinary RHS error from old-finalizer cleanup failure. The formatted compiler gate passes 558 checks plus the MIR doctest and606 frontend/lowering checks pass. One temporary capture failure in the broad driver-library run passes isolated replay; clean full-library, complete native regression and supported-host results remain separate gates. Conditional/aggregate/projected replacement and broader Resource/provider/async/reflection work remain required. The coarse estimate remains about 85%, with fixed 207 fixtures and 182 object obligations unchanged.

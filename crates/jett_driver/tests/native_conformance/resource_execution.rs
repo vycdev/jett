@@ -17,7 +17,7 @@ use std::{
 };
 
 const RECEIPT_ENV: &str = "JETT_RESOURCE_NATIVE_TEST_ARCHIVE_RECEIPT_V1";
-const RECEIPT_SHA256: &str = "ccb3472ef957a2fe3b6d5537d1b9fed21ff1bc9973f90efd137375d9743c73bd";
+const RECEIPT_SHA256: &str = "54a38248f8975fad43e964100abdd14f2b2445c39ee37e8c3eb07f19357b541a";
 struct Archive {
     path: PathBuf,
     target: String,

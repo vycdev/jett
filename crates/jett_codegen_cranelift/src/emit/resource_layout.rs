@@ -775,10 +775,42 @@ impl<'a, 'p> Rows<'a, 'p> {
                     self.slot(f, *destination)?,
                 ]
             }
-            Role::Replace { .. } => {
-                return Err(pending(
-                    "mutable replacement needs the exact evaluated replacement slot before emission",
-                ));
+            Role::Replace {
+                destination,
+                replacement,
+                old,
+            } => {
+                let old_slot = function
+                    .owner_slots()
+                    .get(destination.index())
+                    .ok_or_else(|| pending("Replace destination is outside its exact plan"))?;
+                let rhs_slot = function
+                    .owner_slots()
+                    .get(replacement.index())
+                    .ok_or_else(|| pending("Replace RHS is outside its exact plan"))?;
+                if destination == replacement
+                    || *old != custody::ResourceOccupancy::Occupied
+                    || !matches!(old_slot.shape(), custody::ResourceShape::Plain { .. })
+                    || old_slot.shape() != rhs_slot.shape()
+                    || !matches!(old_slot.storage(), custody::ResourceSlotStorage::Local { header } if header.mutable)
+                    || old_slot.frame() != operation.frame()
+                    || rhs_slot.frame() != operation.frame()
+                    || function.frames()[operation.frame().index()].role()
+                        != custody::ResourceFrameRole::Scope
+                {
+                    return Err(pending(
+                        "mutable replacement requires distinct occupied plain owners in the exact Scope",
+                    ));
+                }
+                vec![
+                    12,
+                    frame,
+                    self.slot(f, *destination)?,
+                    self.slot(f, *replacement)?,
+                ]
+            }
+            Role::SelfRebind { .. } => {
+                return Err(pending("SelfRebind has no runtime operation row"));
             }
             Role::Complete { .. } => vec![13, frame],
             Role::Descriptor { hook } => vec![14, self.hook(hook)?],
@@ -1055,7 +1087,7 @@ impl<'a, 'p> Rows<'a, 'p> {
 }
 fn emitted(role: &Role) -> bool {
     match role {
-        Role::BoundedBorrowUse { .. } => false,
+        Role::BoundedBorrowUse { .. } | Role::SelfRebind { .. } => false,
         Role::InvokeHook { hook, .. } => {
             hook.recipe() == jett_types::ResourceKernelRecipe::NetworkBorrow
         }
