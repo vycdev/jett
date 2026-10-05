@@ -487,8 +487,49 @@ earlier compile/failure logs remain diagnostic evidence.
 These are runtime host-protocol controls, not linked Source execution. Exact
 Source child Scope/Return activation, resident incoming views, connected C leaves
 and emission, operational compiler cleanup, the matched archive and linked
-source-deleted binaries in both profiles remain required. The current Windows
-CLI setup-capture stack overflow remains a separate pending regression. Broader
+source-deleted binaries in both profiles remain required. The adapter-head Windows
+CLI setup-capture stack overflow is recorded separately; the later helper
+repair below supersedes that pending local regression. Broader
 aggregate/reflection/refinement, provider and concurrency coverage remains part
 of the full goal. Native caller 480/480, the fixed 207/182 inventory and the
 approximate **85%** feature estimate retain their separate scopes.
+
+## Windows lowering stack repair
+
+The unchanged CLI native-setup capture test reproduced a main-thread stack
+overflow at Resource ownership and adapter heads. The adapter-head Windows CI
+also completed the native conformance suite with **480/480 passing** before the
+workflow failed its separate CLI capture target (`b32d80`, workflow
+`37244085637`). This is current adapter-head supported native execution evidence;
+it still includes no native Resource lifecycle case.
+
+The repair extracts the existing heavy HIR statement/equality/inline-function
+branches and MIR expression/per-actual branches into private helpers. Original
+Source facts, Resource call capture, preflight, lexical order, shared call-view
+scope, rollback, spans, diagnostics and context restoration remain at the same
+operations. Source fixtures, assertions, snapshots, launcher order and stack
+sizes are unchanged. Exact guarded application reconstructs both files and all
+39 hunks (`3a8820`); the independent reconstruction record agrees.
+
+The original regression now passes **1/1** (`285533`), and the formatted full
+CLI capture target passes **9/9** (`508636`). The formatted phase gate passes
+**535/535** HIR/MIR/codegen/object checks plus 32 type tests and the MIR doctest
+(`f8fe67`). The broader gate passes **693/693**: 87 driver library, 8 lowering
+checks including all 182 run-pass fixtures, and 598 frontend fixtures (`647ede`,
+`target/native-windows-stack-decomposition-driver-fixtures.log`). An initial
+command used the nonexistent test target frontend; no driver test ran in that
+attempt. The corrected fixture_suite command supplies the actual receipt.
+
+Actual Debug assembly measurement (`779571`,
+`target/native-windows-stack-decomposition-frame-measurements.json`) records
+MIR lower_value decreasing from 169,448 to 15,272 bytes and the ordered-call
+loop from 73,736 to 4,504 bytes. Its separate per-actual helper uses 70,104 bytes.
+HIR lower_expression decreases from 117,624 to 106,200 bytes and lower_statement
+from 108,552 to 100,216 bytes. These are individual function-frame measurements,
+not a whole-program stack limit or proof of every recursion shape.
+
+The local platform regression is repaired. Whole-head supported-host CI and
+connected Resource Source ABI/emission/cleanup and linked lifecycle execution
+remain required. The fixed 207/182 inventory and approximate 85% coverage
+estimate remain unchanged; runtime/metadata checks do not supply the missing
+Resource native execution.

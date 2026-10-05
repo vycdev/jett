@@ -2900,52 +2900,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
 
     fn lower_statement(&mut self, statement: &Stmt) -> Option<Statement> {
         let (kind, span) = match statement {
-            Stmt::VarDecl(decl) => {
-                let Some(definition) = self.parent.definition_at(decl.name.span, DefKind::Variable)
-                else {
-                    self.parent
-                        .error(decl.name.span, "local has no resolved definition");
-                    return None;
-                };
-                let Some(ty) =
-                    self.expression_types
-                        .get(&decl.name.span)
-                        .copied()
-                        .filter(|ty| {
-                            // Bare machine annotations erase precise state in
-                            // the binding while its producer keeps that state.
-                            // Secret qualification also preserves both sides.
-                            matches!(
-                                self.parent.check.interner.resolve(*ty),
-                                Type::Machine(_) | Type::Secret(_)
-                            ) || interface_values::contains_erased_boundary(
-                                &self.parent.check.interner,
-                                *ty,
-                            ) || self.expression_types.get(&decl.value.span()).is_some_and(
-                                |actual| {
-                                    interface_values::contains_erased_boundary(
-                                        &self.parent.check.interner,
-                                        *actual,
-                                    )
-                                },
-                            )
-                        })
-                        .or_else(|| self.expression_types.get(&decl.value.span()).copied())
-                        .or_else(|| self.parent.check.definition_types.get(&definition).copied())
-                else {
-                    self.parent
-                        .error(decl.name.span, "local has no checked type");
-                    return None;
-                };
-                // The new binding becomes visible only after its initializer,
-                // including any handled failure and nested breakpoint.
-                let value = self.lower_expression(&decl.value)?;
-                let view_source = self.local_view_source(decl, &value, ty)?;
-                let local =
-                    self.allocate_local(definition, &decl.name.name, ty, decl.mutable, decl.span);
-                self.locals[local.index() as usize].view_source = view_source;
-                (StatementKind::Let { local, value }, decl.span)
-            }
+            Stmt::VarDecl(decl) => self.lower_local_declaration(decl)?,
             Stmt::Assign(assign) => (
                 StatementKind::Assign {
                     target: self.lower_expression(&assign.target)?,
@@ -2971,72 +2926,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 };
                 (kind, expr.span)
             }
-            Stmt::If(branch) => {
-                if let Some(selection) = self.static_selection(branch.span) {
-                    let selected = match selection {
-                        CheckedStaticSelection::IfThen => Some(&branch.then_block),
-                        CheckedStaticSelection::IfElseIf(index) => {
-                            match branch.else_ifs.get(index) {
-                                Some((_, block)) => Some(block),
-                                None => {
-                                    self.parent.error(
-                                        branch.span,
-                                        "checked static else-if selection is out of range",
-                                    );
-                                    return None;
-                                }
-                            }
-                        }
-                        CheckedStaticSelection::IfElse => match branch.else_block.as_ref() {
-                            Some(block) => Some(block),
-                            None => {
-                                self.parent.error(
-                                    branch.span,
-                                    "checked static else selection has no source branch",
-                                );
-                                return None;
-                            }
-                        },
-                        CheckedStaticSelection::IfNoBranch => {
-                            if branch.else_block.is_some() {
-                                self.parent.error(
-                                    branch.span,
-                                    "checked static no-branch selection disagrees with source else",
-                                );
-                                return None;
-                            }
-                            None
-                        }
-                        CheckedStaticSelection::MatchArm(_) => {
-                            self.parent.error(
-                                branch.span,
-                                "checked static match selection attached to an if statement",
-                            );
-                            return None;
-                        }
-                    };
-                    let Some(selected) = selected else {
-                        return None;
-                    };
-                    (
-                        StatementKind::Scope(self.lower_block(selected)),
-                        branch.span,
-                    )
-                } else {
-                    let condition = self.lower_expression(&branch.condition)?;
-                    let then_block = self.lower_block(&branch.then_block);
-                    let else_block =
-                        self.lower_else_chain(&branch.else_ifs, branch.else_block.as_ref());
-                    (
-                        StatementKind::If {
-                            condition,
-                            then_block,
-                            else_block,
-                        },
-                        branch.span,
-                    )
-                }
-            }
+            Stmt::If(branch) => self.lower_if_statement(branch)?,
             Stmt::While(loop_stmt) => (
                 StatementKind::While {
                     condition: self.lower_expression(&loop_stmt.condition)?,
@@ -3044,127 +2934,8 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 },
                 loop_stmt.span,
             ),
-            Stmt::For(loop_stmt) => {
-                let iterable = self.lower_expression(&loop_stmt.iterable)?;
-                self.visible_bindings.push(HashMap::new());
-                let key = self.allocate_declared_local(&loop_stmt.variable, false)?;
-                let value = match &loop_stmt.value_variable {
-                    Some(binding) => Some(self.allocate_declared_local(binding, false)?),
-                    None => None,
-                };
-                let saved_iteration_bindings = self.view_iteration_bindings.clone();
-                if loop_stmt.view {
-                    let part = if matches!(
-                        self.parent.check.interner.resolve(iterable.ty),
-                        Type::Map(..)
-                    ) {
-                        IterationPart::Key
-                    } else {
-                        IterationPart::Element
-                    };
-                    let bindings = [(key, part)]
-                        .into_iter()
-                        .chain(value.map(|value| (value, IterationPart::Value)));
-                    for (local, part) in bindings {
-                        let metadata = &self.locals[local.index() as usize];
-                        if metadata.mutable
-                            || metadata.view_source.is_some()
-                            || self.view_parameter_locals.contains(&local)
-                            || self.view_iteration_bindings.contains_key(&local)
-                        {
-                            self.parent.error(
-                                loop_stmt.span,
-                                "viewed iteration binder is not a fresh immutable local",
-                            );
-                            return None;
-                        }
-                        match checked_view_iteration_binding(
-                            &self.parent.check.interner,
-                            loop_stmt.span,
-                            iterable.ty,
-                            metadata.ty,
-                            part,
-                        ) {
-                            Ok(proof)
-                                if !jett_typecheck::ownership::is_implicitly_copyable(
-                                    &self.parent.check.interner,
-                                    proof.binder_type(),
-                                ) =>
-                            {
-                                self.view_iteration_bindings.insert(local, proof);
-                            }
-                            Ok(_) => {}
-                            Err(message) => {
-                                self.parent.error(loop_stmt.span, message);
-                                return None;
-                            }
-                        }
-                    }
-                }
-                let body = if matches!(
-                    self.parent.check.interner.resolve(iterable.ty),
-                    Type::List(element) if *element == TypeInterner::NEVER
-                ) || matches!(
-                    self.parent.check.interner.resolve(iterable.ty),
-                    Type::Map(key, value)
-                        if *key == TypeInterner::NEVER || *value == TypeInterner::NEVER
-                ) {
-                    // The frontend still checks this body. An uninhabited
-                    // element type proves that no iteration can enter it;
-                    // retain the iterable so MIR validates pending values.
-                    self.consume_omitted_body_facts(loop_stmt.body.span);
-                    Block {
-                        statements: Vec::new(),
-                        span: loop_stmt.body.span,
-                    }
-                } else {
-                    self.lower_block(&loop_stmt.body)
-                };
-                self.view_iteration_bindings = saved_iteration_bindings;
-                self.visible_bindings.pop();
-                (
-                    StatementKind::For {
-                        key,
-                        value,
-                        by_view: loop_stmt.view,
-                        iterable,
-                        body,
-                    },
-                    loop_stmt.span,
-                )
-            }
-            Stmt::Match(match_stmt) => {
-                if let Some(selection) = self.static_selection(match_stmt.span) {
-                    let CheckedStaticSelection::MatchArm(index) = selection else {
-                        self.parent.error(
-                            match_stmt.span,
-                            "checked static if selection attached to a match statement",
-                        );
-                        return None;
-                    };
-                    let Some(arm) = match_stmt.arms.get(index) else {
-                        self.parent.error(
-                            match_stmt.span,
-                            "checked static match-arm selection is out of range",
-                        );
-                        return None;
-                    };
-                    if matches!(&arm.pattern, ast::Pattern::Variant(_, bindings) if !bindings.is_empty())
-                    {
-                        self.parent.error(
-                            arm.span,
-                            "checked static match arm unexpectedly binds runtime payloads",
-                        );
-                        return None;
-                    }
-                    (
-                        StatementKind::Scope(self.lower_block(&arm.body)),
-                        match_stmt.span,
-                    )
-                } else {
-                    (self.lower_match(match_stmt)?, match_stmt.span)
-                }
-            }
+            Stmt::For(loop_stmt) => self.lower_for_statement(loop_stmt)?,
+            Stmt::Match(match_stmt) => self.lower_match_statement(match_stmt)?,
             Stmt::Break(span) => (StatementKind::Break, *span),
             Stmt::Continue(span) => (StatementKind::Continue, *span),
             Stmt::Assert(assertion) => (
@@ -3241,6 +3012,257 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             return None;
         }
         Some(Statement { kind, span })
+    }
+
+    #[inline(never)]
+    fn lower_local_declaration(&mut self, decl: &ast::VarDecl) -> Option<(StatementKind, Span)> {
+        Some({
+            let Some(definition) = self.parent.definition_at(decl.name.span, DefKind::Variable)
+            else {
+                self.parent
+                    .error(decl.name.span, "local has no resolved definition");
+                return None;
+            };
+            let Some(ty) = self
+                .expression_types
+                .get(&decl.name.span)
+                .copied()
+                .filter(|ty| {
+                    // Bare machine annotations erase precise state in
+                    // the binding while its producer keeps that state.
+                    // Secret qualification also preserves both sides.
+                    matches!(
+                        self.parent.check.interner.resolve(*ty),
+                        Type::Machine(_) | Type::Secret(_)
+                    ) || interface_values::contains_erased_boundary(
+                        &self.parent.check.interner,
+                        *ty,
+                    ) || self
+                        .expression_types
+                        .get(&decl.value.span())
+                        .is_some_and(|actual| {
+                            interface_values::contains_erased_boundary(
+                                &self.parent.check.interner,
+                                *actual,
+                            )
+                        })
+                })
+                .or_else(|| self.expression_types.get(&decl.value.span()).copied())
+                .or_else(|| self.parent.check.definition_types.get(&definition).copied())
+            else {
+                self.parent
+                    .error(decl.name.span, "local has no checked type");
+                return None;
+            };
+            // The new binding becomes visible only after its initializer,
+            // including any handled failure and nested breakpoint.
+            let value = self.lower_expression(&decl.value)?;
+            let view_source = self.local_view_source(decl, &value, ty)?;
+            let local =
+                self.allocate_local(definition, &decl.name.name, ty, decl.mutable, decl.span);
+            self.locals[local.index() as usize].view_source = view_source;
+            (StatementKind::Let { local, value }, decl.span)
+        })
+    }
+
+    #[inline(never)]
+    fn lower_if_statement(&mut self, branch: &ast::IfStmt) -> Option<(StatementKind, Span)> {
+        Some({
+            if let Some(selection) = self.static_selection(branch.span) {
+                let selected = match selection {
+                    CheckedStaticSelection::IfThen => Some(&branch.then_block),
+                    CheckedStaticSelection::IfElseIf(index) => match branch.else_ifs.get(index) {
+                        Some((_, block)) => Some(block),
+                        None => {
+                            self.parent.error(
+                                branch.span,
+                                "checked static else-if selection is out of range",
+                            );
+                            return None;
+                        }
+                    },
+                    CheckedStaticSelection::IfElse => match branch.else_block.as_ref() {
+                        Some(block) => Some(block),
+                        None => {
+                            self.parent.error(
+                                branch.span,
+                                "checked static else selection has no source branch",
+                            );
+                            return None;
+                        }
+                    },
+                    CheckedStaticSelection::IfNoBranch => {
+                        if branch.else_block.is_some() {
+                            self.parent.error(
+                                branch.span,
+                                "checked static no-branch selection disagrees with source else",
+                            );
+                            return None;
+                        }
+                        None
+                    }
+                    CheckedStaticSelection::MatchArm(_) => {
+                        self.parent.error(
+                            branch.span,
+                            "checked static match selection attached to an if statement",
+                        );
+                        return None;
+                    }
+                };
+                let Some(selected) = selected else {
+                    return None;
+                };
+                (
+                    StatementKind::Scope(self.lower_block(selected)),
+                    branch.span,
+                )
+            } else {
+                let condition = self.lower_expression(&branch.condition)?;
+                let then_block = self.lower_block(&branch.then_block);
+                let else_block =
+                    self.lower_else_chain(&branch.else_ifs, branch.else_block.as_ref());
+                (
+                    StatementKind::If {
+                        condition,
+                        then_block,
+                        else_block,
+                    },
+                    branch.span,
+                )
+            }
+        })
+    }
+
+    #[inline(never)]
+    fn lower_for_statement(&mut self, loop_stmt: &ast::ForStmt) -> Option<(StatementKind, Span)> {
+        Some({
+            let iterable = self.lower_expression(&loop_stmt.iterable)?;
+            self.visible_bindings.push(HashMap::new());
+            let key = self.allocate_declared_local(&loop_stmt.variable, false)?;
+            let value = match &loop_stmt.value_variable {
+                Some(binding) => Some(self.allocate_declared_local(binding, false)?),
+                None => None,
+            };
+            let saved_iteration_bindings = self.view_iteration_bindings.clone();
+            if loop_stmt.view {
+                let part = if matches!(
+                    self.parent.check.interner.resolve(iterable.ty),
+                    Type::Map(..)
+                ) {
+                    IterationPart::Key
+                } else {
+                    IterationPart::Element
+                };
+                let bindings = [(key, part)]
+                    .into_iter()
+                    .chain(value.map(|value| (value, IterationPart::Value)));
+                for (local, part) in bindings {
+                    let metadata = &self.locals[local.index() as usize];
+                    if metadata.mutable
+                        || metadata.view_source.is_some()
+                        || self.view_parameter_locals.contains(&local)
+                        || self.view_iteration_bindings.contains_key(&local)
+                    {
+                        self.parent.error(
+                            loop_stmt.span,
+                            "viewed iteration binder is not a fresh immutable local",
+                        );
+                        return None;
+                    }
+                    match checked_view_iteration_binding(
+                        &self.parent.check.interner,
+                        loop_stmt.span,
+                        iterable.ty,
+                        metadata.ty,
+                        part,
+                    ) {
+                        Ok(proof)
+                            if !jett_typecheck::ownership::is_implicitly_copyable(
+                                &self.parent.check.interner,
+                                proof.binder_type(),
+                            ) =>
+                        {
+                            self.view_iteration_bindings.insert(local, proof);
+                        }
+                        Ok(_) => {}
+                        Err(message) => {
+                            self.parent.error(loop_stmt.span, message);
+                            return None;
+                        }
+                    }
+                }
+            }
+            let body = if matches!(
+                self.parent.check.interner.resolve(iterable.ty),
+                Type::List(element) if *element == TypeInterner::NEVER
+            ) || matches!(
+                self.parent.check.interner.resolve(iterable.ty),
+                Type::Map(key, value)
+                    if *key == TypeInterner::NEVER || *value == TypeInterner::NEVER
+            ) {
+                // The frontend still checks this body. An uninhabited
+                // element type proves that no iteration can enter it;
+                // retain the iterable so MIR validates pending values.
+                self.consume_omitted_body_facts(loop_stmt.body.span);
+                Block {
+                    statements: Vec::new(),
+                    span: loop_stmt.body.span,
+                }
+            } else {
+                self.lower_block(&loop_stmt.body)
+            };
+            self.view_iteration_bindings = saved_iteration_bindings;
+            self.visible_bindings.pop();
+            (
+                StatementKind::For {
+                    key,
+                    value,
+                    by_view: loop_stmt.view,
+                    iterable,
+                    body,
+                },
+                loop_stmt.span,
+            )
+        })
+    }
+
+    #[inline(never)]
+    fn lower_match_statement(
+        &mut self,
+        match_stmt: &ast::MatchStmt,
+    ) -> Option<(StatementKind, Span)> {
+        Some({
+            if let Some(selection) = self.static_selection(match_stmt.span) {
+                let CheckedStaticSelection::MatchArm(index) = selection else {
+                    self.parent.error(
+                        match_stmt.span,
+                        "checked static if selection attached to a match statement",
+                    );
+                    return None;
+                };
+                let Some(arm) = match_stmt.arms.get(index) else {
+                    self.parent.error(
+                        match_stmt.span,
+                        "checked static match-arm selection is out of range",
+                    );
+                    return None;
+                };
+                if matches!(&arm.pattern, ast::Pattern::Variant(_, bindings) if !bindings.is_empty())
+                {
+                    self.parent.error(
+                        arm.span,
+                        "checked static match arm unexpectedly binds runtime payloads",
+                    );
+                    return None;
+                }
+                (
+                    StatementKind::Scope(self.lower_block(&arm.body)),
+                    match_stmt.span,
+                )
+            } else {
+                (self.lower_match(match_stmt)?, match_stmt.span)
+            }
+        })
     }
 
     fn lower_constant_trace(
@@ -3682,43 +3704,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             Expr::Binary(left, op @ (ast::BinOp::Eq | ast::BinOp::NotEq), right, _)
                 if self.method_calls.contains_key(&span) =>
             {
-                let function = self.resolve_user_call_target(left, span)?;
-                let args = vec![self.lower_expression(left)?, self.lower_expression(right)?];
-                let (parameter_types, _) = self
-                    .ownership_function_parameters(function)
-                    .map_err(|message| self.parent.error(span, message))
-                    .ok()?;
-                let ownership = self.generated_ownership(
-                    GeneratedOperation::Equality { method: function },
-                    &args,
-                    &parameter_types,
-                    &[CheckedCalleeAccess::View, CheckedCalleeAccess::View],
-                    ty,
-                    &[0, 1],
-                    span,
-                )?;
-                let call = ExpressionKind::EquatableResult(Box::new(Expression {
-                    kind: ExpressionKind::Call {
-                        ownership,
-                        function,
-                        args,
-                        evaluation_order: vec![0, 1],
-                    },
-                    ty,
-                    span,
-                }));
-                if *op == ast::BinOp::NotEq {
-                    ExpressionKind::Unary {
-                        op: UnaryOp::Not,
-                        value: Box::new(Expression {
-                            kind: call,
-                            ty,
-                            span,
-                        }),
-                    }
-                } else {
-                    call
-                }
+                self.lower_equality_expression(left, *op, right, ty, span)?
             }
             Expr::Binary(left, op, right, _) => ExpressionKind::Binary {
                 left: Box::new(self.lower_expression(left)?),
@@ -3869,81 +3855,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 ExpressionKind::Cancel(Box::new(self.lower_expression(value)?))
             }
             Expr::InlineFn(params, _, body, _) => {
-                let Type::Function {
-                    params: parameter_types,
-                    view_params: parameter_views,
-                    return_type,
-                    ..
-                } = self.parent.check.interner.resolve(ty).clone()
-                else {
-                    self.parent
-                        .error(span, "closure has no checked function signature");
-                    return None;
-                };
-                if params.len() != parameter_types.len()
-                    || params.len() != parameter_views.len()
-                    || params
-                        .iter()
-                        .zip(&parameter_views)
-                        .any(|(param, view)| param.view != *view)
-                {
-                    self.parent.error(
-                        span,
-                        "closure parameters disagree with its checked signature",
-                    );
-                    return None;
-                }
-                let local_floor = self.locals.len() as u32;
-                self.visible_bindings.push(HashMap::new());
-                let mut lowered_params = Vec::with_capacity(params.len());
-                let mut view_params = Vec::new();
-                for (param, param_type) in params.iter().zip(parameter_types) {
-                    let Some(definition) =
-                        self.parent.definition_at(param.name.span, DefKind::Param)
-                    else {
-                        self.parent
-                            .error(param.name.span, "closure parameter is unresolved");
-                        return None;
-                    };
-                    // A generic instantiation's expression signature contains
-                    // its concrete parameter types; global definition metadata
-                    // shares source DefIds across specializations.
-                    let local = self.allocate_local(
-                        definition,
-                        &param.name.name,
-                        param_type,
-                        param.mutable,
-                        param.span,
-                    );
-                    lowered_params.push(local);
-                    if param.view {
-                        view_params.push(local);
-                    }
-                }
-                let enclosing_return_type = self.return_type.replace(return_type);
-                let enclosing_context = std::mem::replace(
-                    &mut self.ownership_context,
-                    jett_typecheck::CheckedOwnershipContext::Ordinary,
-                );
-                let enclosing_view_parameters = std::mem::replace(
-                    &mut self.view_parameter_locals,
-                    view_params.iter().copied().collect(),
-                );
-                let enclosing_iteration_bindings =
-                    std::mem::take(&mut self.view_iteration_bindings);
-                let body = self.lower_block(body);
-                self.view_parameter_locals = enclosing_view_parameters;
-                self.view_iteration_bindings = enclosing_iteration_bindings;
-                self.ownership_context = enclosing_context;
-                self.return_type = enclosing_return_type;
-                self.visible_bindings.pop();
-                ExpressionKind::InlineFunction {
-                    scoped_type_bindings: self.scoped_type_bindings.clone(),
-                    params: lowered_params,
-                    view_params,
-                    local_floor,
-                    body,
-                }
+                self.lower_inline_function(params, body, ty, span)?
             }
             Expr::Spawn(inner, _) => self.lower_actor_spawn(inner, ty)?,
             Expr::Send(inner, _) => self.lower_actor_message(inner, ActorMessageKind::Send)?,
@@ -3984,6 +3896,141 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 lowered
             },
         )
+    }
+
+    #[inline(never)]
+    fn lower_equality_expression(
+        &mut self,
+        left: &Expr,
+        op: ast::BinOp,
+        right: &Expr,
+        ty: TypeId,
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        Some({
+            let function = self.resolve_user_call_target(left, span)?;
+            let args = vec![self.lower_expression(left)?, self.lower_expression(right)?];
+            let (parameter_types, _) = self
+                .ownership_function_parameters(function)
+                .map_err(|message| self.parent.error(span, message))
+                .ok()?;
+            let ownership = self.generated_ownership(
+                GeneratedOperation::Equality { method: function },
+                &args,
+                &parameter_types,
+                &[CheckedCalleeAccess::View, CheckedCalleeAccess::View],
+                ty,
+                &[0, 1],
+                span,
+            )?;
+            let call = ExpressionKind::EquatableResult(Box::new(Expression {
+                kind: ExpressionKind::Call {
+                    ownership,
+                    function,
+                    args,
+                    evaluation_order: vec![0, 1],
+                },
+                ty,
+                span,
+            }));
+            if op == ast::BinOp::NotEq {
+                ExpressionKind::Unary {
+                    op: UnaryOp::Not,
+                    value: Box::new(Expression {
+                        kind: call,
+                        ty,
+                        span,
+                    }),
+                }
+            } else {
+                call
+            }
+        })
+    }
+
+    #[inline(never)]
+    fn lower_inline_function(
+        &mut self,
+        params: &[ast::Param],
+        body: &ast::Block,
+        ty: TypeId,
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        Some({
+            let Type::Function {
+                params: parameter_types,
+                view_params: parameter_views,
+                return_type,
+                ..
+            } = self.parent.check.interner.resolve(ty).clone()
+            else {
+                self.parent
+                    .error(span, "closure has no checked function signature");
+                return None;
+            };
+            if params.len() != parameter_types.len()
+                || params.len() != parameter_views.len()
+                || params
+                    .iter()
+                    .zip(&parameter_views)
+                    .any(|(param, view)| param.view != *view)
+            {
+                self.parent.error(
+                    span,
+                    "closure parameters disagree with its checked signature",
+                );
+                return None;
+            }
+            let local_floor = self.locals.len() as u32;
+            self.visible_bindings.push(HashMap::new());
+            let mut lowered_params = Vec::with_capacity(params.len());
+            let mut view_params = Vec::new();
+            for (param, param_type) in params.iter().zip(parameter_types) {
+                let Some(definition) = self.parent.definition_at(param.name.span, DefKind::Param)
+                else {
+                    self.parent
+                        .error(param.name.span, "closure parameter is unresolved");
+                    return None;
+                };
+                // A generic instantiation's expression signature contains
+                // its concrete parameter types; global definition metadata
+                // shares source DefIds across specializations.
+                let local = self.allocate_local(
+                    definition,
+                    &param.name.name,
+                    param_type,
+                    param.mutable,
+                    param.span,
+                );
+                lowered_params.push(local);
+                if param.view {
+                    view_params.push(local);
+                }
+            }
+            let enclosing_return_type = self.return_type.replace(return_type);
+            let enclosing_context = std::mem::replace(
+                &mut self.ownership_context,
+                jett_typecheck::CheckedOwnershipContext::Ordinary,
+            );
+            let enclosing_view_parameters = std::mem::replace(
+                &mut self.view_parameter_locals,
+                view_params.iter().copied().collect(),
+            );
+            let enclosing_iteration_bindings = std::mem::take(&mut self.view_iteration_bindings);
+            let body = self.lower_block(body);
+            self.view_parameter_locals = enclosing_view_parameters;
+            self.view_iteration_bindings = enclosing_iteration_bindings;
+            self.ownership_context = enclosing_context;
+            self.return_type = enclosing_return_type;
+            self.visible_bindings.pop();
+            ExpressionKind::InlineFunction {
+                scoped_type_bindings: self.scoped_type_bindings.clone(),
+                params: lowered_params,
+                view_params,
+                local_floor,
+                body,
+            }
+        })
     }
 
     fn lower_actor_spawn(&mut self, inner: &Expr, ty: TypeId) -> Option<ExpressionKind> {

@@ -612,200 +612,209 @@ impl Builder<'_> {
             .begin_scope(original_call, self.types);
         let mut lowered = values.to_vec();
         for &index in order {
-            if let Some(endpoint) = &handled[index] {
-                // Keep the complete original conversion and inner Handle header.
-                // This endpoint already produces an owner; no Clone is inserted.
-                let value = self.lower_value(endpoint);
-                if value.ty != endpoint.ty || value.span != endpoint.span {
-                    return None;
-                }
-                let owner = self.temporary(value.ty, value.span);
-                self.push(
-                    StatementKind::Let {
-                        local: owner,
-                        value,
-                    },
-                    endpoint.span,
-                );
-                let projection = Expression {
-                    kind: ExpressionKind::View(Box::new(Expression {
-                        kind: ExpressionKind::Local(owner),
-                        ty: endpoint.ty,
-                        span: endpoint.span,
-                    })),
-                    ty: values[index].ty,
-                    span: values[index].span,
-                };
-                lowered[index] =
-                    self.stage_checked_call_view(index, None, owner, projection, ownership)?;
-                continue;
+            lowered[index] = self.lower_ordered_call_argument(
+                index,
+                &values[index],
+                handled[index].as_ref(),
+                inputs[index],
+                ownership,
+            )?;
+        }
+        Some(lowered)
+    }
+
+    #[inline(never)]
+    fn lower_ordered_call_argument(
+        &mut self,
+        index: usize,
+        actual: &Expression,
+        handled: Option<&Expression>,
+        input: OrderedCallViewInput,
+        ownership: &mut hir::CallOwnership,
+    ) -> Option<Expression> {
+        if let Some(endpoint) = handled {
+            // Keep the complete original conversion and inner Handle header.
+            // This endpoint already produces an owner; no Clone is inserted.
+            let value = self.lower_value(endpoint);
+            if value.ty != endpoint.ty || value.span != endpoint.span {
+                return None;
             }
-            if inputs[index] == OrderedCallViewInput::Borrowed
-                && matches!(ownership, hir::CallOwnership::Generated(_))
-            {
-                lowered[index] =
-                    self.lower_generated_call_view(index, &values[index], ownership)?;
-                continue;
-            }
-            if ownership.source_parameter_effect(index)
-                == Some(jett_typecheck::CheckedCallerEffect::ObserveData)
-                && ownership.parameter_physical_access(index)
-                    == Some(jett_typecheck::CheckedCalleeAccess::Owned)
-            {
-                let snapshot = observation_snapshot(self.types, &values[index], ownership, index)?;
-                let value = match snapshot {
-                    ObservationSnapshot::Direct => Expression {
-                        kind: ExpressionKind::Clone(Box::new(self.lower_value(&values[index]))),
-                        ty: values[index].ty,
-                        span: values[index].span,
-                    },
-                    ObservationSnapshot::Converted {
-                        actual_type,
-                        source_span,
-                    } => self.lower_converted_observation_snapshot(
-                        &values[index],
-                        actual_type,
-                        source_span,
-                    )?,
-                };
-                let owner = self.temporary(value.ty, value.span);
-                ownership.stage_observation(index, owner).ok()?;
-                self.push(
-                    StatementKind::Let {
-                        local: owner,
-                        value,
-                    },
-                    values[index].span,
-                );
-                lowered[index] = Expression {
+            let owner = self.temporary(value.ty, value.span);
+            self.push(
+                StatementKind::Let {
+                    local: owner,
+                    value,
+                },
+                endpoint.span,
+            );
+            let projection = Expression {
+                kind: ExpressionKind::View(Box::new(Expression {
                     kind: ExpressionKind::Local(owner),
-                    ty: values[index].ty,
-                    span: values[index].span,
-                };
-                continue;
-            }
-            if inputs[index] == OrderedCallViewInput::SourceOwningTransfer {
-                let ExpressionKind::View(original) = &values[index].kind else {
-                    return None;
-                };
-                // Evaluate the full endpoint/producer, not a projected parent.
-                // An ordinary Let moves a linear owner; no snapshot is inserted.
-                let value = self.lower_value(original);
-                let owner = self.temporary(value.ty, value.span);
-                self.push(
-                    StatementKind::Let {
-                        local: owner,
-                        value,
-                    },
-                    original.span,
-                );
-                let projection = Expression {
-                    kind: ExpressionKind::View(Box::new(Expression {
-                        kind: ExpressionKind::Local(owner),
-                        ty: original.ty,
-                        span: original.span,
-                    })),
-                    ty: values[index].ty,
-                    span: values[index].span,
-                };
-                lowered[index] =
-                    self.stage_checked_call_view(index, Some(owner), owner, projection, ownership)?;
-                continue;
-            }
-            if inputs[index] == OrderedCallViewInput::Borrowed
-                && let hir::CallOwnership::Source(source) = ownership
-                && source.arguments[index].retained_snapshot_type() == Some(values[index].ty)
-                && can_snapshot_view(self.types, values[index].ty)
-            {
-                let endpoint = retained_snapshot_place(&values[index])
-                    .unwrap_or_else(|| self.lower_value(&values[index]));
-                let value = Expression {
-                    kind: ExpressionKind::Clone(Box::new(endpoint)),
-                    ty: values[index].ty,
-                    span: values[index].span,
-                };
-                let owner = self.temporary(value.ty, value.span);
-                self.push(
-                    StatementKind::Let {
-                        local: owner,
-                        value,
-                    },
-                    values[index].span,
-                );
-                let projection = Expression {
-                    kind: ExpressionKind::View(Box::new(Expression {
-                        kind: ExpressionKind::Local(owner),
-                        ty: values[index].ty,
-                        span: values[index].span,
-                    })),
-                    ty: values[index].ty,
-                    span: values[index].span,
-                };
-                let loan = self.call_view_temporary(projection.ty, owner, projection.span);
-                ownership.stage_retained_snapshot(index, owner, loan).ok()?;
-                self.push(
-                    StatementKind::BeginCallView {
-                        local: loan,
-                        value: projection.clone(),
-                    },
-                    projection.span,
-                );
-                self.call_view_scopes.last_mut()?.push(loan);
-                lowered[index] = Expression {
-                    kind: ExpressionKind::View(Box::new(Expression {
-                        kind: ExpressionKind::Local(loan),
-                        ty: projection.ty,
-                        span: projection.span,
-                    })),
+                    ty: endpoint.ty,
+                    span: endpoint.span,
+                })),
+                ty: actual.ty,
+                span: actual.span,
+            };
+            return Some(self.stage_checked_call_view(index, None, owner, projection, ownership)?);
+        }
+        if input == OrderedCallViewInput::Borrowed
+            && matches!(ownership, hir::CallOwnership::Generated(_))
+        {
+            return Some(self.lower_generated_call_view(index, actual, ownership)?);
+        }
+        if ownership.source_parameter_effect(index)
+            == Some(jett_typecheck::CheckedCallerEffect::ObserveData)
+            && ownership.parameter_physical_access(index)
+                == Some(jett_typecheck::CheckedCalleeAccess::Owned)
+        {
+            let snapshot = observation_snapshot(self.types, actual, ownership, index)?;
+            let value = match snapshot {
+                ObservationSnapshot::Direct => Expression {
+                    kind: ExpressionKind::Clone(Box::new(self.lower_value(actual))),
+                    ty: actual.ty,
+                    span: actual.span,
+                },
+                ObservationSnapshot::Converted {
+                    actual_type,
+                    source_span,
+                } => self.lower_converted_observation_snapshot(actual, actual_type, source_span)?,
+            };
+            let owner = self.temporary(value.ty, value.span);
+            ownership.stage_observation(index, owner).ok()?;
+            self.push(
+                StatementKind::Let {
+                    local: owner,
+                    value,
+                },
+                actual.span,
+            );
+            return Some(Expression {
+                kind: ExpressionKind::Local(owner),
+                ty: actual.ty,
+                span: actual.span,
+            });
+        }
+        if input == OrderedCallViewInput::SourceOwningTransfer {
+            let ExpressionKind::View(original) = &actual.kind else {
+                return None;
+            };
+            // Evaluate the full endpoint/producer, not a projected parent.
+            // An ordinary Let moves a linear owner; no snapshot is inserted.
+            let value = self.lower_value(original);
+            let owner = self.temporary(value.ty, value.span);
+            self.push(
+                StatementKind::Let {
+                    local: owner,
+                    value,
+                },
+                original.span,
+            );
+            let projection = Expression {
+                kind: ExpressionKind::View(Box::new(Expression {
+                    kind: ExpressionKind::Local(owner),
+                    ty: original.ty,
+                    span: original.span,
+                })),
+                ty: actual.ty,
+                span: actual.span,
+            };
+            return Some(self.stage_checked_call_view(
+                index,
+                Some(owner),
+                owner,
+                projection,
+                ownership,
+            )?);
+        }
+        if input == OrderedCallViewInput::Borrowed
+            && let hir::CallOwnership::Source(source) = ownership
+            && source.arguments[index].retained_snapshot_type() == Some(actual.ty)
+            && can_snapshot_view(self.types, actual.ty)
+        {
+            let endpoint =
+                retained_snapshot_place(actual).unwrap_or_else(|| self.lower_value(actual));
+            let value = Expression {
+                kind: ExpressionKind::Clone(Box::new(endpoint)),
+                ty: actual.ty,
+                span: actual.span,
+            };
+            let owner = self.temporary(value.ty, value.span);
+            self.push(
+                StatementKind::Let {
+                    local: owner,
+                    value,
+                },
+                actual.span,
+            );
+            let projection = Expression {
+                kind: ExpressionKind::View(Box::new(Expression {
+                    kind: ExpressionKind::Local(owner),
+                    ty: actual.ty,
+                    span: actual.span,
+                })),
+                ty: actual.ty,
+                span: actual.span,
+            };
+            let loan = self.call_view_temporary(projection.ty, owner, projection.span);
+            ownership.stage_retained_snapshot(index, owner, loan).ok()?;
+            self.push(
+                StatementKind::BeginCallView {
+                    local: loan,
+                    value: projection.clone(),
+                },
+                projection.span,
+            );
+            self.call_view_scopes.last_mut()?.push(loan);
+            return Some(Expression {
+                kind: ExpressionKind::View(Box::new(Expression {
+                    kind: ExpressionKind::Local(loan),
                     ty: projection.ty,
                     span: projection.span,
-                };
-                continue;
-            }
-            if inputs[index] == OrderedCallViewInput::Borrowed
-                && let Some((source, projection)) = self.call_view_initializer(&values[index])
-            {
-                lowered[index] =
-                    self.stage_checked_call_view(index, None, source, projection, ownership)?;
-                continue;
-            }
-            if ownership.source_parameter_effect(index)
-                == Some(jett_typecheck::CheckedCallerEffect::TransferOwned)
-                && ownership.parameter_physical_access(index)
-                    == Some(jett_typecheck::CheckedCalleeAccess::Owned)
-            {
-                // Acquire the endpoint at this source position. A later
-                // handler cannot turn a required transfer into a snapshot.
-                let value = self.lower_value(&values[index]);
-                let owner = self.temporary(value.ty, value.span);
-                self.push(
-                    StatementKind::Let {
-                        local: owner,
-                        value,
-                    },
-                    values[index].span,
-                );
-                ownership.stage_acquisition(index, owner).ok()?;
-                lowered[index] = Expression {
-                    kind: ExpressionKind::Local(owner),
-                    ty: values[index].ty,
-                    span: values[index].span,
-                };
-                continue;
-            }
-            let single =
-                self.lower_ordered_owned_values(std::slice::from_ref(&values[index]), &[0])?;
-            lowered[index] = single.into_iter().next()?;
-            if matches!(
-                ownership.source_parameter_effect(index),
-                Some(
-                    jett_typecheck::CheckedCallerEffect::TransferOwned
-                        | jett_typecheck::CheckedCallerEffect::Copy
-                )
-            ) && let ExpressionKind::Local(local) = lowered[index].kind
-            {
-                ownership.stage_acquisition(index, local).ok()?;
-            }
+                })),
+                ty: projection.ty,
+                span: projection.span,
+            });
+        }
+        if input == OrderedCallViewInput::Borrowed
+            && let Some((source, projection)) = self.call_view_initializer(actual)
+        {
+            return Some(self.stage_checked_call_view(index, None, source, projection, ownership)?);
+        }
+        if ownership.source_parameter_effect(index)
+            == Some(jett_typecheck::CheckedCallerEffect::TransferOwned)
+            && ownership.parameter_physical_access(index)
+                == Some(jett_typecheck::CheckedCalleeAccess::Owned)
+        {
+            // Acquire the endpoint at this source position. A later
+            // handler cannot turn a required transfer into a snapshot.
+            let value = self.lower_value(actual);
+            let owner = self.temporary(value.ty, value.span);
+            self.push(
+                StatementKind::Let {
+                    local: owner,
+                    value,
+                },
+                actual.span,
+            );
+            ownership.stage_acquisition(index, owner).ok()?;
+            return Some(Expression {
+                kind: ExpressionKind::Local(owner),
+                ty: actual.ty,
+                span: actual.span,
+            });
+        }
+        let single = self.lower_ordered_owned_values(std::slice::from_ref(actual), &[0])?;
+        let lowered = single.into_iter().next()?;
+        if matches!(
+            ownership.source_parameter_effect(index),
+            Some(
+                jett_typecheck::CheckedCallerEffect::TransferOwned
+                    | jett_typecheck::CheckedCallerEffect::Copy
+            )
+        ) && let ExpressionKind::Local(local) = lowered.kind
+        {
+            ownership.stage_acquisition(index, local).ok()?;
         }
         Some(lowered)
     }
@@ -1179,13 +1188,42 @@ impl Builder<'_> {
             return expression.clone();
         }
 
+        if let Some(lowered) = self.try_lower_value_wrapper(expression) {
+            return lowered;
+        }
+        if let Some(lowered) = self.try_lower_value_binary(expression) {
+            return lowered;
+        }
+        if let Some(lowered) = self.try_lower_value_refinement(expression) {
+            return lowered;
+        }
+        if let Some(lowered) = self.try_lower_value_collection(expression) {
+            return lowered;
+        }
+        if let Some(lowered) = self.try_lower_value_sum(expression) {
+            return lowered;
+        }
+        if let Some(lowered) = self.try_lower_value_intrinsic(expression) {
+            return lowered;
+        }
+        if let Some(lowered) = self.try_lower_value_actor(expression) {
+            return lowered;
+        }
+        if let Some(lowered) = self.try_lower_value_call(expression) {
+            return lowered;
+        }
+        self.lower_sum_handle(expression)
+    }
+
+    #[inline(never)]
+    fn try_lower_value_wrapper(&mut self, expression: &Expression) -> Option<Expression> {
         if let ExpressionKind::FunctionAdapter { value, function } = &expression.kind {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::FunctionAdapter {
                 value: Box::new(self.lower_value(value)),
                 function: *function,
             };
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::InterfaceCoerce { value, adapters } = &expression.kind {
             let mut lowered = expression.clone();
@@ -1193,44 +1231,44 @@ impl Builder<'_> {
                 value: Box::new(self.lower_value(value)),
                 adapters: adapters.clone(),
             };
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::InterfaceType(value) = &expression.kind {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::InterfaceType(Box::new(self.lower_value(value)));
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::RefinementValidated(value) = &expression.kind {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::RefinementValidated(Box::new(self.lower_value(value)));
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::DisplayResult(value) = &expression.kind {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::DisplayResult(Box::new(self.lower_value(value)));
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::EquatableResult(value) = &expression.kind {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::EquatableResult(Box::new(self.lower_value(value)));
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::RuntimeFailureMessage(value) = &expression.kind {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::RuntimeFailureMessage(Box::new(self.lower_value(value)));
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::View(value) = &expression.kind {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::View(Box::new(self.lower_value(value)));
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::Clone(value) = &expression.kind
             && needs_eager_lowering(value)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::Clone(Box::new(self.lower_value(value)));
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::Run(value) = &expression.kind {
             let needs_snapshot = snapshotable_local(self.types, value);
@@ -1244,7 +1282,7 @@ impl Builder<'_> {
                     source
                 };
                 lowered.kind = ExpressionKind::Run(Box::new(source));
-                return lowered;
+                return Some(lowered);
             }
         }
         if let ExpressionKind::Join(value) = &expression.kind
@@ -1252,7 +1290,7 @@ impl Builder<'_> {
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::Join(Box::new(self.lower_value(value)));
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::Coarsen(value) = &expression.kind
             && (needs_eager_lowering(value) || snapshotable_local(self.types, value))
@@ -1265,7 +1303,7 @@ impl Builder<'_> {
                 source
             };
             lowered.kind = ExpressionKind::Coarsen(Box::new(source));
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::Declassify(value) = &expression.kind
             && (needs_eager_lowering(value) || snapshotable_local(self.types, value))
@@ -1278,7 +1316,7 @@ impl Builder<'_> {
                 source
             };
             lowered.kind = ExpressionKind::Declassify(Box::new(source));
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::Field {
             base,
@@ -1293,7 +1331,7 @@ impl Builder<'_> {
                 owner_type: *owner_type,
                 field: *field,
             };
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::StateIs { value, state } = &expression.kind
             && needs_eager_lowering(value)
@@ -1303,7 +1341,7 @@ impl Builder<'_> {
                 value: Box::new(self.lower_value(value)),
                 state: *state,
             };
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::Unary { op, value } = &expression.kind
             && needs_eager_lowering(value)
@@ -1313,8 +1351,13 @@ impl Builder<'_> {
                 op: *op,
                 value: Box::new(self.lower_value(value)),
             };
-            return lowered;
+            return Some(lowered);
         }
+        None
+    }
+
+    #[inline(never)]
+    fn try_lower_value_binary(&mut self, expression: &Expression) -> Option<Expression> {
         if let ExpressionKind::Binary { left, op, right } = &expression.kind
             && matches!(op, hir::BinaryOp::And | hir::BinaryOp::Or)
             && (needs_eager_lowering(left) || needs_eager_lowering(right))
@@ -1327,7 +1370,7 @@ impl Builder<'_> {
                     op: *op,
                     right: right.clone(),
                 };
-                return lowered;
+                return Some(lowered);
             }
             let span = expression.span;
             let left_local = self.temporary(TypeInterner::BOOL, left.span);
@@ -1383,11 +1426,11 @@ impl Builder<'_> {
             );
             self.close_to(continuation, span);
             self.current = continuation;
-            return Expression {
+            return Some(Expression {
                 kind: ExpressionKind::Local(output),
                 ty: TypeInterner::BOOL,
                 span,
-            };
+            });
         }
         if let ExpressionKind::Binary { left, op, right } = &expression.kind
             && !matches!(op, hir::BinaryOp::And | hir::BinaryOp::Or)
@@ -1432,8 +1475,13 @@ impl Builder<'_> {
                 op: *op,
                 right: Box::new(right_value),
             };
-            return lowered;
+            return Some(lowered);
         }
+        None
+    }
+
+    #[inline(never)]
+    fn try_lower_value_refinement(&mut self, expression: &Expression) -> Option<Expression> {
         if let ExpressionKind::Handle {
             target,
             kind: HandleKind::Refinement { predicates, .. },
@@ -1441,13 +1489,13 @@ impl Builder<'_> {
             failure,
         } = &expression.kind
         {
-            return self.lower_refinement_handle(
+            return Some(self.lower_refinement_handle(
                 expression,
                 target,
                 predicates,
                 *error_local,
                 failure,
-            );
+            ));
         }
         if let ExpressionKind::StructConstruct {
             struct_type,
@@ -1459,13 +1507,13 @@ impl Builder<'_> {
             && refinement_predicates.len() == fields.len()
             && refinement_predicates.iter().any(|chain| !chain.is_empty())
         {
-            return self.lower_refinement_struct_construct(
+            return Some(self.lower_refinement_struct_construct(
                 expression,
                 *struct_type,
                 fields,
                 evaluation_order,
                 refinement_predicates,
-            );
+            ));
         }
         if let ExpressionKind::Intrinsic {
             field_validation: Some(hir::ReflectedFieldValidation::Validate(plans)),
@@ -1474,9 +1522,10 @@ impl Builder<'_> {
         {
             // Invalid plans stay visible for native contract rejection; never
             // turn missing or malformed proof metadata into an unchecked read.
-            return self
-                .lower_reflected_field_read(expression, plans)
-                .unwrap_or_else(|| expression.clone());
+            return Some(
+                self.lower_reflected_field_read(expression, plans)
+                    .unwrap_or_else(|| expression.clone()),
+            );
         }
         if let ExpressionKind::Intrinsic {
             intrinsic: hir::IntrinsicId::TypeConstructFinish,
@@ -1485,8 +1534,13 @@ impl Builder<'_> {
         } = &expression.kind
             && refinement_predicates.iter().any(|chain| !chain.is_empty())
         {
-            return self.lower_refinement_builder_finish(expression, refinement_predicates);
+            return Some(self.lower_refinement_builder_finish(expression, refinement_predicates));
         }
+        None
+    }
+
+    #[inline(never)]
+    fn try_lower_value_collection(&mut self, expression: &Expression) -> Option<Expression> {
         if let ExpressionKind::ListConstruct { elements } = &expression.kind
             && elements.iter().any(needs_eager_lowering)
             && let Some(elements) =
@@ -1494,7 +1548,7 @@ impl Builder<'_> {
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::ListConstruct { elements };
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::StringInterpolation(segments) = &expression.kind
             && segments.iter().any(|segment| {
@@ -1523,7 +1577,7 @@ impl Builder<'_> {
                     .collect();
                 let mut lowered = expression.clone();
                 lowered.kind = ExpressionKind::StringInterpolation(segments);
-                return lowered;
+                return Some(lowered);
             }
         }
         if let ExpressionKind::MapConstruct { entries } = &expression.kind
@@ -1547,7 +1601,7 @@ impl Builder<'_> {
                     .collect();
                 let mut lowered = expression.clone();
                 lowered.kind = ExpressionKind::MapConstruct { entries };
-                return lowered;
+                return Some(lowered);
             }
         }
         if let ExpressionKind::StructConstruct {
@@ -1568,7 +1622,7 @@ impl Builder<'_> {
                 validates_refinements: *validates_refinements,
                 refinement_predicates: refinement_predicates.clone(),
             };
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::BitfieldConstruct {
             bitfield_type,
@@ -1586,7 +1640,7 @@ impl Builder<'_> {
                 evaluation_order: evaluation_order.clone(),
                 validates_widths: *validates_widths,
             };
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::EnumConstruct {
             enum_type,
@@ -1604,7 +1658,7 @@ impl Builder<'_> {
                 payloads,
                 evaluation_order: evaluation_order.clone(),
             };
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::MachineConstruct {
             state_type,
@@ -1621,7 +1675,7 @@ impl Builder<'_> {
                 state: *state,
                 payloads,
             };
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::MachineTransition {
             source,
@@ -1643,30 +1697,40 @@ impl Builder<'_> {
                     target: *target,
                     payloads: values,
                 };
-                return lowered;
+                return Some(lowered);
             }
         }
+        None
+    }
+
+    #[inline(never)]
+    fn try_lower_value_sum(&mut self, expression: &Expression) -> Option<Expression> {
         if let ExpressionKind::ResultOk(value) = &expression.kind
             && needs_eager_lowering(value)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::ResultOk(Box::new(self.lower_value(value)));
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::ResultFail(value) = &expression.kind
             && needs_eager_lowering(value)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::ResultFail(Box::new(self.lower_value(value)));
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::OptionalSome(value) = &expression.kind
             && needs_eager_lowering(value)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::OptionalSome(Box::new(self.lower_value(value)));
-            return lowered;
+            return Some(lowered);
         }
+        None
+    }
+
+    #[inline(never)]
+    fn try_lower_value_intrinsic(&mut self, expression: &Expression) -> Option<Expression> {
         if let ExpressionKind::Intrinsic {
             intrinsic,
             type_arguments,
@@ -1717,9 +1781,14 @@ impl Builder<'_> {
                     evaluation_order: evaluation_order.clone(),
                     ownership,
                 };
-                return self.finish_call_view_scope(lowered);
+                return Some(self.finish_call_view_scope(lowered));
             }
         }
+        None
+    }
+
+    #[inline(never)]
+    fn try_lower_value_actor(&mut self, expression: &Expression) -> Option<Expression> {
         if let ExpressionKind::ActorSpawn {
             actor_type,
             args,
@@ -1736,7 +1805,7 @@ impl Builder<'_> {
                 evaluation_order: evaluation_order.clone(),
                 constructor: *constructor,
             };
-            return lowered;
+            return Some(lowered);
         }
         if let ExpressionKind::ActorMessage {
             actor,
@@ -1774,8 +1843,13 @@ impl Builder<'_> {
                 evaluation_order: evaluation_order.clone(),
                 kind: *kind,
             };
-            return lowered;
+            return Some(lowered);
         }
+        None
+    }
+
+    #[inline(never)]
+    fn try_lower_value_call(&mut self, expression: &Expression) -> Option<Expression> {
         if let ExpressionKind::IndirectCall {
             callee,
             args,
@@ -1810,7 +1884,7 @@ impl Builder<'_> {
                 evaluation_order,
                 &mut ownership,
             ) else {
-                return expression.clone();
+                return Some(expression.clone());
             };
             // Source evaluates call arguments before resolving a function value
             // held in a mutable local. A handler may rebind that local.
@@ -1839,7 +1913,7 @@ impl Builder<'_> {
                 evaluation_order: evaluation_order.clone(),
                 ownership,
             };
-            return self.finish_call_view_scope(lowered);
+            return Some(self.finish_call_view_scope(lowered));
         }
         if let ExpressionKind::Call {
             function,
@@ -1858,7 +1932,7 @@ impl Builder<'_> {
                 evaluation_order,
                 &mut ownership,
             ) else {
-                return expression.clone();
+                return Some(expression.clone());
             };
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::Call {
@@ -1867,8 +1941,13 @@ impl Builder<'_> {
                 evaluation_order: evaluation_order.clone(),
                 ownership,
             };
-            return self.finish_call_view_scope(lowered);
+            return Some(self.finish_call_view_scope(lowered));
         }
+        None
+    }
+
+    #[inline(never)]
+    fn lower_sum_handle(&mut self, expression: &Expression) -> Expression {
         let ExpressionKind::Handle {
             target,
             kind: HandleKind::Result | HandleKind::Optional,

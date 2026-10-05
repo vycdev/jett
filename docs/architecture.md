@@ -4133,3 +4133,18 @@ The formatted affected gate passes 535 HIR/MIR/codegen/object-emission tests,
 32 type-library tests and the MIR doctest. Twelve focused ownership groups and
 the missing-nominal-table regression pass. These are compiler checks, not linked
 native Resource execution. See the [ownership handoff record](active/native_resource_hook_identity.md#source-authenticated-ownership-handoff).
+
+### Bounded recursive lowering frames on Windows
+
+Heavy HIR statement, equality and inline-function branches and MIR expression
+and per-actual branches now execute in private non-inlined helpers. Their
+existing Source checks, context restoration, lexical argument order, whole-call
+preflight and rollback remain unchanged. Resource call capture remains at the
+original expression-lowering entry. This reduces unrelated Debug branch locals
+in recursive callers without changing Source limits, worker stacks or launcher
+ordering. The original Windows CLI capture regression and all nine capture
+checks pass; compiler/object and driver/fixture gates pass. Measured MIR
+lower_value frames decrease from 169,448 to 15,272 bytes. See the
+[repair receipt](active/native_resource_hook_identity.md#windows-lowering-stack-repair)
+for individual frame measurements and exact verification scopes. Native
+Resource Source execution remains pending its connected ABI and cleanup.
