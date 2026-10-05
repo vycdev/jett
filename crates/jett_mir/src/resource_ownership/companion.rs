@@ -72,7 +72,8 @@ impl<'p> CompanionContext<'p> {
         for block in &current.blocks {
             for statement in &block.statements {
                 match &statement.kind {
-                    StatementKind::Let { value, .. }
+                    StatementKind::ResourceCall(ResourceCallNode::Stage { value, .. })
+                    | StatementKind::Let { value, .. }
                     | StatementKind::BeginCallView { value, .. }
                     | StatementKind::Evaluate(value)
                     | StatementKind::HandleDefault(value) => remember(value),

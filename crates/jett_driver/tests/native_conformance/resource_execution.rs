@@ -499,19 +499,19 @@ fn native_resource_original_source_lifecycle_matches_reference_and_retires_befor
                 root,
                 Some(("JETT_RESOURCE_NATIVE_TEST_SCRIPT_V1", &encoded)),
             );
+            let path = root.join("resource-native-report-v1.bin");
+            assert!(path.metadata().unwrap().len() <= 16 * 1024 * 1024);
+            let bytes = fs::read(path).unwrap();
+            let report = report::decode(&bytes).unwrap();
             assert_eq!(
                 actual.status.code(),
                 Some(case.exit),
-                "{} {}: {actual:?}",
+                "{} {}: {actual:?}; {report:?}",
                 case.name,
                 archive.profile
             );
             assert!(actual.stdout.is_empty(), "{actual:?}");
             assert!(actual.stderr.is_empty(), "{actual:?}");
-            let path = root.join("resource-native-report-v1.bin");
-            assert!(path.metadata().unwrap().len() <= 16 * 1024 * 1024);
-            let bytes = fs::read(path).unwrap();
-            let report = report::decode(&bytes).unwrap();
             assert_report(case, &report);
         }
     }

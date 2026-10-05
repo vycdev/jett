@@ -1,7 +1,9 @@
 //! Linear native places, call loans, and immutable nonowning local aliases.
 //! Definite availability is an intersection fixed point over actual CFG edges.
 use crate::copy_values::{CopyValuePlan, switch_bindings_on_edge};
-use crate::{ControlFlowGraph, Function, ParamMode, Program, StatementKind, TerminatorKind};
+use crate::{
+    ControlFlowGraph, Function, ParamMode, Program, ResourceCallNode, StatementKind, TerminatorKind,
+};
 use jett_hir::{BinaryOp, Expression, ExpressionKind, IntrinsicId, StringSegment};
 use jett_types::{Type, TypeId, TypeInterner};
 use std::collections::{BTreeMap, BTreeSet};
@@ -526,7 +528,12 @@ impl Flow<'_> {
                     self.aliases.remove(&id);
                     self.state.remove(&id);
                 }
-                StatementKind::Let { local, value } => {
+                StatementKind::ResourceCall(ResourceCallNode::Stage {
+                    value,
+                    ordinary: Some(local),
+                    ..
+                })
+                | StatementKind::Let { local, value } => {
                     let definition = self
                         .function
                         .local(*local)
@@ -584,6 +591,48 @@ impl Flow<'_> {
                         return Err("cannot overwrite a borrowed native place".into());
                     }
                     self.state.insert(local.index() as usize);
+                }
+                StatementKind::ResourceCall(ResourceCallNode::Stage {
+                    value,
+                    ordinary: None,
+                    ..
+                }) => {
+                    if self.companion.is_none() {
+                        return Err("Resource call stage requires its fresh companion plan".into());
+                    }
+                    self.expr(value, false)?;
+                }
+                StatementKind::ResourceCall(ResourceCallNode::Invoke { region, output }) => {
+                    if self.companion.is_none() {
+                        return Err("Resource call invoke requires its fresh companion plan".into());
+                    }
+                    let record = self
+                        .function
+                        .resource_call_region(*region)
+                        .ok_or("Resource call invoke lacks its sealed region")?;
+                    for actual in record.actuals() {
+                        if let Some(local) = actual.ordinary() {
+                            self.read(local, "Resource call arrived ordinary endpoint")?;
+                            let header = self
+                                .function
+                                .local(local)
+                                .ok_or("Resource call endpoint header missing")?;
+                            if is_linear(self.types, header.ty)
+                                || is_copy_owned(self.types, header.ty)
+                            {
+                                self.state.remove(&(local.index() as usize));
+                            }
+                        }
+                    }
+                    self.require_owned_definition(*output)?;
+                    self.state.insert(output.index() as usize);
+                }
+                StatementKind::ResourceCall(
+                    ResourceCallNode::Begin { .. } | ResourceCallNode::End { .. },
+                ) => {
+                    if self.companion.is_none() {
+                        return Err("Resource call region requires its fresh companion plan".into());
+                    }
                 }
                 StatementKind::Evaluate(value) => self.expr(value, false)?,
                 StatementKind::Assert { condition, message } => {

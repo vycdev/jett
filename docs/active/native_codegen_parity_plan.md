@@ -2338,3 +2338,21 @@ required. The about-85% estimate, fixed 207/182 inventory and 100% goal are unch
 ### Source plain Resource replacement
 
 Native assignment now executes exact checked plain Resource replacement, self-reseat and vacant-after-close transfer. Six new shared scenarios extend the original five; all 11 pass in both real-reference profiles and as generated native programs after Source deletion. Runtime preflight preserves invalid inputs before finalization, and failure tests distinguish an ordinary RHS error from old-finalizer cleanup failure. The formatted compiler gate passes 558 checks plus the MIR doctest and606 frontend/lowering checks pass. One temporary capture failure in the broad driver-library run passes isolated replay; clean full-library, complete native regression and supported-host results remain separate gates. Conditional/aggregate/projected replacement and broader Resource/provider/async/reflection work remain required. The coarse estimate remains about 85%, with fixed 207 fixtures and 182 object obligations unchanged.
+
+### Handled Resource call progress (2026-10-05)
+
+The local native Resource gate now includes eighteen shared original Source
+scenarios in both profiles (36 native and 36 reference executions). Direct Result
+handlers inside call arguments preserve lexical evaluation, prepared formals,
+acquired-prefix cleanup, retained views, clean skipped invocations and observed
+cleanup failure. Nested first-factory success/failure also distinguish Scope
+storage from the current execution frame. Every native case runs after Source
+deletion and observes zero obligations before destroy.
+
+The formatted affected compiler/object gate passes 573 checks plus the MIR
+doctest, with 606 frontend/lowering fixture checks, all four fixed inventory
+gates (182 emitted host objects), and the complete 92-test driver library.
+The final formatted Source replay passes all 36 native and 36 reference runs.
+This advances the Resource row without closing its remaining indirect, aggregate, refinement and broader
+control-flow obligations. The broad estimate remains about 85%; full current
+native/workspace and supported-host release gates remain separate requirements.

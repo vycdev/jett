@@ -6,7 +6,8 @@ mod call_owner_generations;
 mod call_ownership;
 mod resource_ownership;
 pub use resource_ownership::{
-    ResourceArgumentEffect, ResourceArgumentSyntax, ResourceCallFormal, ResourceCallOperand,
+    ResourceArgumentEffect, ResourceArgumentSyntax, ResourceCallActual, ResourceCallFormal,
+    ResourceCallNode, ResourceCallOperand, ResourceCallRegion, ResourceCallRegionId,
     ResourceCallResult, ResourceCompanionPlan, ResourceCompletion, ResourceFrame, ResourceFrameId,
     ResourceFrameRole, ResourceFunctionPlan, ResourceLoan, ResourceLoanId, ResourceLoanSource,
     ResourceOccupancy, ResourceOperation, ResourceOperationId, ResourceOperationRole,
@@ -187,6 +188,8 @@ impl SequenceSource {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StatementKind {
+    /// Constructor-authenticated Resource operation whose actuals span CFG blocks.
+    ResourceCall(ResourceCallNode),
     /// Empty, internal generation escrow; this is not an initialized Jett value.
     OpenCallOwnerGeneration {
         generation: CallOwnerGenerationId,
@@ -673,6 +676,20 @@ impl FunctionValidator<'_, '_> {
 
     fn statement(&mut self, statement: &Statement) {
         match &statement.kind {
+            StatementKind::ResourceCall(node) => match node {
+                ResourceCallNode::Stage {
+                    value, ordinary, ..
+                } => {
+                    self.expression(value);
+                    if let Some(local) = ordinary {
+                        self.check_local(*local, statement.span, "Resource call ordinary stage");
+                    }
+                }
+                ResourceCallNode::Invoke { output, .. } => {
+                    self.check_local(*output, statement.span, "Resource call output")
+                }
+                ResourceCallNode::Begin { .. } | ResourceCallNode::End { .. } => {}
+            },
             StatementKind::OpenCallOwnerGeneration { root, .. } => {
                 self.check_local(*root, statement.span, "generation root")
             }
@@ -1409,6 +1426,7 @@ struct Builder<'a> {
     current: BlockId,
     loops: Vec<(BlockId, BlockId, usize)>,
     call_view_scopes: Vec<Vec<LocalId>>,
+    resource_call_scopes: Vec<ResourceCallRegionId>,
     locals: Vec<Local>,
     handlers: Vec<(LocalId, BlockId)>,
     view_params: Vec<LocalId>,
@@ -1437,6 +1455,7 @@ impl<'a> Builder<'a> {
             current: BlockId(0),
             loops: Vec::new(),
             call_view_scopes: Vec::new(),
+            resource_call_scopes: Vec::new(),
             locals: Vec::new(),
             handlers: Vec::new(),
             view_params: Vec::new(),
@@ -1486,6 +1505,13 @@ impl<'a> Builder<'a> {
         self.generation_capture
             .statement(self.current, index, &value);
         self.resource_capture.statement(self.current, index, &value);
+        if let StatementKind::ResourceCall(node) = &value.kind {
+            let site = self
+                .resource_capture
+                .site(self.current, index)
+                .expect("authenticated Resource node");
+            self.resource_capture.normalized_node(site, node);
+        }
         self.blocks[self.current.index() as usize]
             .statements
             .push(value);
@@ -1602,20 +1628,28 @@ impl<'a> Builder<'a> {
             hir::StatementKind::Return(value) => {
                 // This branch abandons surrounding calls before the return
                 // operand may move their owner. Other CFG branches retain them.
+                let resource_scopes = self.abandon_resource_calls(statement.span);
                 self.end_call_views_since(0, statement.span);
                 let abandoned = std::mem::take(&mut self.call_view_scopes);
                 let generations = self.generation_capture.suspend();
                 let value = value.as_ref().map(|v| self.lower_value(v));
                 self.call_view_scopes = abandoned;
                 self.generation_capture.restore(generations);
+                self.resource_call_scopes = resource_scopes;
                 self.terminate(TerminatorKind::Return(value), statement.span);
             }
             hir::StatementKind::Break => {
+                if !self.resource_call_scopes.is_empty() {
+                    self.resource_error = Some(LowerError { span: statement.span, message: "pending Resource call region: Break needs its exact operation-depth exit proof".into() });
+                }
                 let (_, target, depth) = *self.loops.last().expect("validated break has a loop");
                 self.end_call_views_since(depth, statement.span);
                 self.terminate(TerminatorKind::Goto(target), statement.span);
             }
             hir::StatementKind::Continue => {
+                if !self.resource_call_scopes.is_empty() {
+                    self.resource_error = Some(LowerError { span: statement.span, message: "pending Resource call region: Continue needs its exact operation-depth exit proof".into() });
+                }
                 let (target, _, depth) = *self.loops.last().expect("validated continue has a loop");
                 self.end_call_views_since(depth, statement.span);
                 self.terminate(TerminatorKind::Goto(target), statement.span);

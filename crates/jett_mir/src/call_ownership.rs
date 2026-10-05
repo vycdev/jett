@@ -8,7 +8,9 @@ use jett_hir::{self as hir, Expression, ExpressionKind as E, LocalId};
 use jett_typecheck::{CheckedCallerEffect, CheckedOwnershipContext};
 use jett_types::{Type, TypeId, TypeInterner};
 
-use crate::{BlockId, Function, Program, StatementKind as S, TerminatorKind as T};
+use crate::{
+    BlockId, Function, Program, ResourceCallNode, StatementKind as S, TerminatorKind as T,
+};
 
 #[cfg(test)]
 mod tests;
@@ -373,7 +375,12 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                     statement: index,
                 };
                 match &statement.kind {
-                    S::Let { local, value } => {
+                    S::ResourceCall(ResourceCallNode::Stage {
+                        value,
+                        ordinary: Some(local),
+                        ..
+                    })
+                    | S::Let { local, value } => {
                         define(*local, site, statement.span, Definition::Let(value))
                     }
                     S::BeginCallView { local, value } => {
@@ -392,7 +399,8 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                             success: *success,
                         },
                     ),
-                    S::CheckRefinement { local, .. }
+                    S::ResourceCall(ResourceCallNode::Invoke { output: local, .. })
+                    | S::CheckRefinement { local, .. }
                     | S::SequenceLength { target: local, .. }
                     | S::SequenceGet { target: local, .. }
                     | S::SumTag { target: local, .. } => {
@@ -2963,7 +2971,8 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
         context: CheckedOwnershipContext,
     ) -> Result<(), String> {
         match statement {
-            S::Let { value, .. }
+            S::ResourceCall(ResourceCallNode::Stage { value, .. })
+            | S::Let { value, .. }
             | S::BeginCallView { value, .. }
             | S::Evaluate(value)
             | S::HandleDefault(value) => self.expression(value, site, context)?,

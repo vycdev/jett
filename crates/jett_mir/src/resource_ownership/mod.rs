@@ -3,6 +3,14 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(test)]
+mod execution_frames_tests;
+mod normalized_calls;
+#[cfg(test)]
+mod normalized_calls_tests;
+pub use normalized_calls::{
+    ResourceCallActual, ResourceCallNode, ResourceCallRegion, ResourceCallRegionId,
+};
 mod companion;
 pub(crate) use companion::CompanionContext;
 pub use companion::ResourceCompanionPlan;
@@ -178,6 +186,7 @@ pub struct ResourceLoan {
     id: ResourceLoanId,
     frame: ResourceFrameId,
     source: ResourceLoanSource,
+    parameter: Option<usize>,
 }
 impl ResourceLoan {
     pub fn id(&self) -> ResourceLoanId {
@@ -185,6 +194,10 @@ impl ResourceLoan {
     }
     pub fn frame(&self) -> ResourceFrameId {
         self.frame
+    }
+    /// Sealed call parameter, independent of any reached invocation.
+    pub fn parameter(&self) -> Option<usize> {
+        self.parameter
     }
     pub fn source(&self) -> ResourceLoanSource {
         self.source
@@ -203,7 +216,7 @@ pub enum ResourceCompletion {
     Return,
     Abort,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceCallOperand {
     Ordinary {
         parameter: usize,
@@ -301,6 +314,27 @@ impl ResourceCallFormal {
 /// Closed metadata roles. None is a public constructor for a validated plan.
 #[derive(Debug, Clone)]
 pub enum ResourceOperationRole {
+    BeginSourceFunction {
+        region: ResourceCallRegionId,
+        function: FunctionId,
+        source: hir::SourceCallOwnership,
+        formals: Vec<ResourceCallFormal>,
+        evaluation_order: Vec<usize>,
+        operands: Vec<ResourceCallOperand>,
+        result: ResourceCallResult,
+    },
+    /// One installed Borrow authority row; execution activates it only at Stage.
+    PrepareSourceBorrow {
+        loan: ResourceLoanId,
+        parameter: usize,
+    },
+    StageSourceActual {
+        region: ResourceCallRegionId,
+        source_index: usize,
+        parameter: usize,
+        operand: ResourceCallOperand,
+        ordinary: Option<LocalId>,
+    },
     Acquire {
         hook: hir::ResourceHookRef,
         destination: ResourceOwnerSlotId,
@@ -428,6 +462,7 @@ pub struct ResourceFunctionPlan {
     slots: Vec<ResourceOwnerSlot>,
     loans: Vec<ResourceLoan>,
     operations: Vec<ResourceOperation>,
+    execution_frames: Vec<(ResourceSite, ResourceFrameId)>,
 }
 impl ResourceFunctionPlan {
     pub fn function(&self) -> FunctionId {
@@ -465,6 +500,22 @@ impl ResourceFunctionPlan {
     }
     pub fn operations(&self) -> &[ResourceOperation] {
         &self.operations
+    }
+    /// Incoming execution frame at an exact reachable current site, captured
+    /// only after the custody CFG fixed point and original witness validate.
+    pub fn execution_frame(
+        &self,
+        block: BlockId,
+        position: ResourcePosition,
+    ) -> Option<ResourceFrameId> {
+        let site = ResourceSite {
+            function: self.function,
+            block,
+            position,
+        };
+        self.execution_frames
+            .iter()
+            .find_map(|(current, frame)| (*current == site).then_some(*frame))
     }
     /// Exact current occurrence, never a span/type/signature lookup.
     pub fn operations_for_expression(
@@ -527,6 +578,7 @@ impl OriginalCallAssociation {
 pub(super) struct ResourceLoweringWitness {
     original: hir::Function,
     calls: Vec<OriginalCallAssociation>,
+    regions: Vec<ResourceCallRegion>,
     source: hir::ResourceSourceArchive,
     execution: ResourceExecutionClosure,
     manifest: hir::ResourceManifest,
@@ -541,6 +593,16 @@ pub(super) struct Capture {
     witness: Option<ResourceLoweringWitness>,
 }
 impl Capture {
+    pub(super) fn site(&self, block: BlockId, index: usize) -> Option<ResourceSite> {
+        self.function().map(|function| ResourceSite {
+            function,
+            block,
+            position: ResourcePosition::Statement(index),
+        })
+    }
+    pub(super) fn function(&self) -> Option<FunctionId> {
+        self.witness.as_ref().map(|witness| witness.original.id)
+    }
     /// Only the checked lowering entry calls this, before any operand extraction.
     pub(super) fn authenticated(
         function: &hir::Function,
@@ -566,6 +628,7 @@ impl Capture {
             witness: needed.then(|| ResourceLoweringWitness {
                 original: function.clone(),
                 calls: Vec::new(),
+                regions: Vec::new(),
                 source: source.clone(),
                 execution: execution.clone(),
                 manifest: manifest.clone(),
@@ -744,6 +807,22 @@ impl ResourceLoweringWitness {
         {
             return Err("Resource ownership differs from its initially authenticated Source or constructor-emitted graph".into());
         }
+        for region in &self.regions {
+            region.current(function)?;
+            let mut original_count = 0;
+            walk::hir_block(&self.original.body, &mut |value| {
+                original_count += usize::from(crate::breakpoint_regions::expressions_equal(
+                    value,
+                    region.original(),
+                ))
+            });
+            if original_count != 1 {
+                return Err(
+                    "Resource normalized call lost its unique original checked Source occurrence"
+                        .into(),
+                );
+            }
+        }
         for (index, record) in self.calls.iter().enumerate() {
             if self.calls[..index].iter().any(|earlier| {
                 crate::breakpoint_regions::expressions_equal(&earlier.original, &record.original)
@@ -795,6 +874,12 @@ impl ResourceLoweringWitness {
                 .iter()
                 .zip(&other.calls)
                 .all(|(left, right)| left.same(right))
+            && self.regions.len() == other.regions.len()
+            && self
+                .regions
+                .iter()
+                .zip(&other.regions)
+                .all(|(a, b)| a.same(b))
             && self.source == other.source
             && self.execution == other.execution
             && self.manifest == other.manifest
@@ -851,6 +936,10 @@ pub(super) fn authenticate_original(
         return Err("Resource lowering differs from its original checked HIR archive".into());
     }
     ResourceExecutionClosure::from_original(archive.functions(), types)
+}
+
+pub(super) fn visit_expression(value: &Expression, visit: &mut impl FnMut(&Expression)) {
+    walk::expression(value, visit);
 }
 
 fn custody_type(types: &TypeInterner, ty: TypeId) -> bool {
@@ -1137,6 +1226,9 @@ pub(super) fn remap_blocks(
             *id = mapped;
         }
     };
+    for region in &mut witness.regions {
+        region.remap_blocks(map)?;
+    }
     remap(&mut witness.entry);
     for block in &mut witness.blocks {
         remap(&mut block.id);
@@ -1191,6 +1283,9 @@ pub(super) fn remap_locals(
     }
     for block in &mut witness.blocks {
         crate::sequences::prune::block_locals(block, &mut remap, &mut |_| {});
+    }
+    for region in &mut witness.regions {
+        region.remap_locals(&mut remap);
     }
     for record in &mut witness.calls {
         let mut block = BasicBlock {

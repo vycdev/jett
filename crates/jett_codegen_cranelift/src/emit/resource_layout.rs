@@ -609,13 +609,15 @@ impl<'a, 'p> Rows<'a, 'p> {
         // Fix all operation ordinals before projecting references to Borrow rows.
         for function in plan.functions() {
             for operation in function.operations() {
-                if !emitted(operation.role()) {
+                if !emitted(operation.role()) || staged_alias(function, operation)?.is_some() {
                     continue;
                 }
                 let id = ordinal(self.operations.len())?;
                 self.operation_ids
                     .insert((function.function().index(), operation.id().index()), id);
-                if let Role::Borrow { loan } = operation.role() {
+                if let Role::Borrow { loan } | Role::PrepareSourceBorrow { loan, .. } =
+                    operation.role()
+                {
                     if self
                         .borrow_ids
                         .insert((function.function().index(), loan.index()), id)
@@ -638,6 +640,26 @@ impl<'a, 'p> Rows<'a, 'p> {
                 };
                 let row = self.operation_row(function, operation)?;
                 self.operations[id as usize].1 = row;
+            }
+        }
+        // Prepared metadata owns the single wire row. Reached activations use its
+        // exact ordinal; the private region witness owns their cross-block sites.
+        for function in plan.functions() {
+            for operation in function.operations() {
+                let Some(prepared) = staged_alias(function, operation)? else {
+                    continue;
+                };
+                let id = *self
+                    .operation_ids
+                    .get(&(function.function().index(), prepared.id().index()))
+                    .ok_or_else(|| pending("staged activation lost its prepared row"))?;
+                if self
+                    .operation_ids
+                    .insert((function.function().index(), operation.id().index()), id)
+                    .is_some()
+                {
+                    return Err(pending("staged activation already owns another wire row"));
+                }
             }
         }
         for frame in &mut self.frames {
@@ -690,7 +712,7 @@ impl<'a, 'p> Rows<'a, 'p> {
                     self.slot(f, *destination)?,
                 ]
             }
-            Role::Borrow { loan } => {
+            Role::Borrow { loan } | Role::PrepareSourceBorrow { loan, .. } => {
                 let record = function
                     .loans()
                     .get(loan.index())
@@ -814,7 +836,15 @@ impl<'a, 'p> Rows<'a, 'p> {
             }
             Role::Complete { .. } => vec![13, frame],
             Role::Descriptor { hook } => vec![14, self.hook(hook)?],
-            Role::InvokeSourceFunction {
+            Role::BeginSourceFunction {
+                function: callee,
+                formals,
+                evaluation_order,
+                operands,
+                result,
+                ..
+            }
+            | Role::InvokeSourceFunction {
                 function: callee,
                 formals,
                 evaluation_order,
@@ -848,7 +878,7 @@ impl<'a, 'p> Rows<'a, 'p> {
                 self.slot(f, *destination)?,
                 self.shape(*failure)?,
             ],
-            Role::BoundedBorrowUse { .. } => {
+            Role::StageSourceActual { .. } | Role::BoundedBorrowUse { .. } => {
                 return Err(pending(
                     "bounded use is joined by the actual invocation row",
                 ));
@@ -1085,9 +1115,127 @@ impl<'a, 'p> Rows<'a, 'p> {
         Ok(output)
     }
 }
+fn staged_alias<'a>(
+    function: &'a custody::ResourceFunctionPlan,
+    operation: &custody::ResourceOperation,
+) -> Result<Option<&'a custody::ResourceOperation>, CodegenError> {
+    let mut prepared = function.operations().iter().filter(|candidate| {
+        match (operation.role(), candidate.role()) {
+            (Role::Borrow { loan }, Role::PrepareSourceBorrow { loan: expected, .. }) => {
+                loan == expected
+            }
+            (Role::InvokeSourceFunction { .. }, Role::BeginSourceFunction { .. }) => {
+                operation.frame() == candidate.frame()
+            }
+            _ => false,
+        }
+    });
+    let Some(selected) = prepared.next() else {
+        return Ok(None);
+    };
+    if prepared.next().is_some() || selected.frame() != operation.frame() {
+        return Err(pending(
+            "staged activation has ambiguous or foreign prepared metadata",
+        ));
+    }
+    match (operation.role(), selected.role()) {
+        (Role::Borrow { loan }, Role::PrepareSourceBorrow { parameter, .. }) => {
+            let record = function
+                .loans()
+                .get(loan.index())
+                .ok_or_else(|| pending("staged activation loan is absent"))?;
+            if record.frame() != operation.frame() || record.parameter() != Some(*parameter) {
+                return Err(pending("staged activation changes its sealed loan/formal"));
+            }
+        }
+        (
+            Role::InvokeSourceFunction {
+                function: current,
+                formals,
+                evaluation_order,
+                operands,
+                result,
+                ..
+            },
+            Role::BeginSourceFunction {
+                function: expected,
+                formals: originals,
+                evaluation_order: order,
+                operands: planned,
+                result: output,
+                ..
+            },
+        ) => {
+            if current != expected
+                || evaluation_order != order
+                || result != output
+                || formals.len() != originals.len()
+                || operands.len() != planned.len()
+                || !formals.iter().zip(originals).all(|(a, b)| {
+                    a.parameter() == b.parameter()
+                        && a.source_index() == b.source_index()
+                        && a.actual_type() == b.actual_type()
+                        && a.parameter_type() == b.parameter_type()
+                        && a.syntax() == b.syntax()
+                        && a.effect() == b.effect()
+                        && a.access() == b.access()
+                })
+                || !operands
+                    .iter()
+                    .zip(planned)
+                    .all(|(a, b)| same_operand(a, b))
+            {
+                return Err(pending(
+                    "staged Invoke changes its complete prepared Source tuple",
+                ));
+            }
+        }
+        _ => return Err(pending("staged activation selected another prepared role")),
+    }
+    Ok(Some(selected))
+}
+
+fn same_operand(a: &Operand, b: &Operand) -> bool {
+    match (a, b) {
+        (
+            Operand::Ordinary {
+                parameter: p,
+                ty: a,
+            },
+            Operand::Ordinary {
+                parameter: q,
+                ty: b,
+            },
+        ) => p == q && a == b,
+        (
+            Operand::Owned {
+                parameter: p,
+                slot: a,
+            },
+            Operand::Owned {
+                parameter: q,
+                slot: b,
+            },
+        ) => p == q && a == b,
+        (
+            Operand::Borrowed {
+                parameter: p,
+                loan: a,
+            },
+            Operand::Borrowed {
+                parameter: q,
+                loan: b,
+            },
+        ) => p == q && a == b,
+        _ => false,
+    }
+}
+
 fn emitted(role: &Role) -> bool {
     match role {
-        Role::BoundedBorrowUse { .. } | Role::SelfRebind { .. } => false,
+        Role::StageSourceActual { .. }
+        | Role::BoundedBorrowUse { .. }
+        | Role::SelfRebind { .. } => false,
         Role::InvokeHook { hook, .. } => {
             hook.recipe() == jett_types::ResourceKernelRecipe::NetworkBorrow
         }

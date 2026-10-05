@@ -2,7 +2,7 @@
 //! This deliberately rejects unextracted handlers rather than walking hidden
 //! control flow. Resources and other move-only values need a distinct
 //! move/borrow/drop analysis before their backend support can be enabled.
-use crate::{ControlFlowGraph, Function, StatementKind, TerminatorKind};
+use crate::{ControlFlowGraph, Function, ResourceCallNode, StatementKind, TerminatorKind};
 use jett_hir::{Expression, ExpressionKind, IntrinsicId, StringSegment};
 use jett_types::{Type, TypeId, TypeInterner};
 use std::collections::BTreeSet;
@@ -160,7 +160,12 @@ impl CopyValuePlan {
                         }
                         Some(target.index() as usize)
                     }
-                    StatementKind::Let { local, value }
+                    StatementKind::ResourceCall(ResourceCallNode::Stage {
+                        value,
+                        ordinary: Some(local),
+                        ..
+                    })
+                    | StatementKind::Let { local, value }
                     | StatementKind::BeginCallView { local, value } => {
                         let borrowed = function
                             .local(*local)
@@ -176,6 +181,45 @@ impl CopyValuePlan {
                             borrowed,
                         )?;
                         Some(local.index() as usize)
+                    }
+                    StatementKind::ResourceCall(ResourceCallNode::Stage {
+                        value,
+                        ordinary: None,
+                        ..
+                    }) => {
+                        if program.is_none() {
+                            return Err(
+                                "Resource call stage requires its fresh companion plan".into()
+                            );
+                        }
+                        visit(value, &mut reads, &mut temporaries, types, program, false)?;
+                        None
+                    }
+                    StatementKind::ResourceCall(ResourceCallNode::Invoke { region, output }) => {
+                        let record = function
+                            .resource_call_region(*region)
+                            .ok_or("Resource call output lacks its sealed region")?;
+                        for actual in record.actuals() {
+                            if let Some(local) = actual.ordinary() {
+                                reads.insert(local.index() as usize);
+                            }
+                        }
+                        let ty = function.locals[output.index() as usize].ty;
+                        temporaries += usize::from(
+                            crate::move_values::is_copy_owned(types, ty)
+                                || crate::move_values::is_linear(types, ty),
+                        );
+                        Some(output.index() as usize)
+                    }
+                    StatementKind::ResourceCall(
+                        ResourceCallNode::Begin { .. } | ResourceCallNode::End { .. },
+                    ) => {
+                        if program.is_none() {
+                            return Err(
+                                "Resource call region requires its fresh companion plan".into()
+                            );
+                        }
+                        None
                     }
                     StatementKind::EndCallView { local } => {
                         reads.insert(local.index() as usize);

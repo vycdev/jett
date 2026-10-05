@@ -541,6 +541,10 @@ impl Translator<'_, '_> {
                     let (context, active, ordinal) = self.resource_operation(operation)?;
                     // Clear compiler storage before the fallible retirement. Runtime owns any refusal.
                     self.clear_slot(resource.frames[frame.index()]);
+                    let zero = self.builder.ins().iconst(ir::types::I64, 0);
+                    self.builder
+                        .ins()
+                        .stack_store(zero, resource.frames[frame.index()], 8);
                     Leaf::OperationComplete.checked(
                         self.module,
                         self.builder,
@@ -573,10 +577,11 @@ impl Translator<'_, '_> {
                     self.resource_transfer(operation)?;
                 }
                 Role::Borrow { loan } => {
-                    let for_parameter = operations.iter().any(|operation| match operation.role() {
-                        Role::InvokeHook { operands, .. } | Role::InvokeSourceFunction { operands, .. } => operands.iter().any(|operand| matches!(operand, Operand::Borrowed { parameter: selected, loan: expected } if *selected == parameter && expected == loan)),
-                        _ => false,
-                    });
+                    let for_parameter = resource
+                        .function_plan()?
+                        .loans()
+                        .get(loan.index())
+                        .is_some_and(|record| record.parameter() == Some(parameter));
                     if for_parameter {
                         self.resource_begin_borrow(operation)?;
                     }
@@ -604,6 +609,282 @@ impl Translator<'_, '_> {
             }
         }
     }
+    fn resource_prepared_call(
+        &mut self,
+        frame: jett_mir::ResourceFrameId,
+    ) -> Result<Value, CodegenError> {
+        let resource = self
+            .resource
+            .ok_or_else(|| pending("staged call has no selected family"))?;
+        Ok(self
+            .builder
+            .ins()
+            .stack_load(ir::types::I64, resource.frames[frame.index()], 8))
+    }
+
+    fn resource_staged_call(
+        &mut self,
+        node: &jett_mir::ResourceCallNode,
+        span: Span,
+        operations: &[&jett_mir::ResourceOperation],
+    ) -> Result<(), CodegenError> {
+        use jett_mir::ResourceCallNode as Node;
+        let resource = self
+            .resource
+            .ok_or_else(|| pending("staged call has no selected family"))?;
+        let region_id = match node {
+            Node::Begin { region }
+            | Node::Stage { region, .. }
+            | Node::Invoke { region, .. }
+            | Node::End { region, .. } => *region,
+        };
+        let current = resource
+            .layout
+            .plan()
+            .program()
+            .functions
+            .get(resource.function.index() as usize)
+            .ok_or_else(|| pending("staged call current function is absent"))?;
+        let region = current
+            .resource_call_region(region_id)
+            .ok_or_else(|| pending("staged call lost its private constructor region"))?;
+        let mut preparations = resource.function_plan()?.operations().iter().filter(|operation|
+            matches!(operation.role(), Role::BeginSourceFunction { region, .. } if *region == region_id));
+        let begin = preparations
+            .next()
+            .ok_or_else(|| pending("staged region has no complete prepared tuple"))?;
+        if preparations.next().is_some() {
+            return Err(pending("staged region has duplicate prepared tuples"));
+        }
+        let Role::BeginSourceFunction {
+            function,
+            formals,
+            result,
+            ..
+        } = begin.role()
+        else {
+            unreachable!()
+        };
+        let context = self.resource_context();
+        match node {
+            Node::Begin { .. } => {
+                if !operations
+                    .iter()
+                    .any(|operation| operation.id() == begin.id())
+                {
+                    return Err(pending("staged Begin differs from its exact current site"));
+                }
+                self.resource_open_operation(begin.frame())?;
+                let (context, frame, ordinal) = self.resource_operation(begin)?;
+                let call = Leaf::SourcePrepare.output(
+                    self.module,
+                    self.builder,
+                    &[context, frame, ordinal],
+                    resource.failure,
+                    8,
+                )?;
+                self.builder
+                    .ins()
+                    .stack_store(call, resource.frames[begin.frame().index()], 8);
+                Ok(())
+            }
+            Node::Stage {
+                source_index,
+                parameter,
+                value,
+                ordinary,
+                ..
+            } => {
+                let mut stages = operations.iter().copied().filter(|operation|
+                    matches!(operation.role(), Role::StageSourceActual { region, source_index: index, parameter: selected, ordinary: endpoint, .. }
+                        if *region == region_id && index == source_index && selected == parameter && endpoint == ordinary));
+                let stage = stages
+                    .next()
+                    .ok_or_else(|| pending("Stage has no exact reached-prefix role"))?;
+                if stages.next().is_some() || stage.frame() != begin.frame() {
+                    return Err(pending(
+                        "Stage has ambiguous or foreign operation authority",
+                    ));
+                }
+                let Role::StageSourceActual { operand, .. } = stage.role() else {
+                    unreachable!()
+                };
+                let formal = formals
+                    .iter()
+                    .find(|formal| formal.parameter() == *parameter)
+                    .ok_or_else(|| pending("Stage lost its sealed original formal"))?;
+                if formal.source_index() != *source_index {
+                    return Err(pending("Stage changed its lexical/formal mapping"));
+                }
+                let evaluated = if resource.layout.plan().type_requires_custody(value.ty) {
+                    self.expression(value)?
+                } else {
+                    let borrowed = formal.access() == jett_mir::ParamMode::View
+                        && formal.effect() != jett_mir::ResourceArgumentEffect::RelinquishOwned;
+                    let binding = ordinary
+                        .and_then(|local| self.caller_acquisitions.owner_initializer(local))
+                        .and_then(|source| source.binding);
+                    let previous = std::mem::replace(&mut self.taking_binding, binding);
+                    let evaluated = self.argument(value, borrowed);
+                    self.taking_binding = previous;
+                    evaluated?
+                };
+                let mut ordinary_values = vec![None; formals.len()];
+                if let Some(local) = ordinary {
+                    self.define_local(*local, evaluated, span)?;
+                    let endpoint = Expression {
+                        kind: ExpressionKind::Local(*local),
+                        ty: self.local_types[local.index() as usize].ty,
+                        span,
+                    };
+                    ordinary_values[*parameter] = Some(self.argument(&endpoint, true)?);
+                }
+                self.resource_stage_actual(operations, begin.frame(), *parameter)?;
+                let bits = self.resource_operand(operand, &ordinary_values, span)?;
+                let call = self.resource_prepared_call(begin.frame())?;
+                let index = self
+                    .builder
+                    .ins()
+                    .iconst(ir::types::I32, *source_index as i64);
+                let parameter = self.builder.ins().iconst(ir::types::I32, *parameter as i64);
+                Leaf::SourceActual.checked(
+                    self.module,
+                    self.builder,
+                    &[context, call, index, parameter, bits],
+                    resource.failure,
+                )
+            }
+            Node::Invoke { output, .. } => {
+                let mut invocations = operations.iter().copied().filter(|operation|
+                    operation.frame() == begin.frame() && matches!(operation.role(), Role::InvokeSourceFunction { function: target, .. } if target == function));
+                let invocation = invocations
+                    .next()
+                    .ok_or_else(|| pending("staged Invoke has no exact reached role"))?;
+                if invocations.next().is_some()
+                    || region.invocation().map(|(_, local)| local) != Some(*output)
+                {
+                    return Err(pending("staged Invoke changed its constructor output"));
+                }
+                // The writer independently joins the full Begin/Invoke tuple to one row.
+                resource.ordinal(invocation)?;
+                let call = self.resource_prepared_call(begin.frame())?;
+                let scope = Leaf::SourceEnter.output(
+                    self.module,
+                    self.builder,
+                    &[context, call],
+                    resource.failure,
+                    8,
+                )?;
+                let environment = self.builder.ins().iconst(ir::types::I64, 0);
+                let mut native = vec![context, environment, scope];
+                for parameter in 0..formals.len() {
+                    let formal = formals
+                        .iter()
+                        .find(|formal| formal.parameter() == parameter)
+                        .ok_or_else(|| pending("staged Invoke lost a complete formal"))?;
+                    let index = self.builder.ins().iconst(ir::types::I32, parameter as i64);
+                    let installed = Leaf::SourceParameter.output(
+                        self.module,
+                        self.builder,
+                        &[context, scope, index],
+                        resource.failure,
+                        8,
+                    )?;
+                    let ty = formal.parameter_type();
+                    if resource.layout.plan().type_requires_custody(ty) {
+                        native.push(installed);
+                    } else {
+                        let unpacked = self.unpack_payload(installed, ty, span)?;
+                        native.push(self.scalar(unpacked, span)?);
+                        let local = region
+                            .actuals()
+                            .iter()
+                            .find(|actual| actual.parameter() == parameter)
+                            .and_then(|actual| actual.ordinary())
+                            .ok_or_else(|| {
+                                pending("staged ordinary formal has no current endpoint")
+                            })?;
+                        let endpoint = Expression {
+                            kind: ExpressionKind::Local(local),
+                            ty: self.local_types[local.index() as usize].ty,
+                            span,
+                        };
+                        if task_scalar(Some(resource.layout), self.types, ty)? {
+                            let ordinary = self.argument(&endpoint, true)?;
+                            native.push(self.scalar_task(ordinary, span)?.1);
+                        }
+                        if formal.access() == jett_mir::ParamMode::Owned
+                            && is_linear(self.types, ty)
+                        {
+                            let slot =
+                                self.local_slots[local.index() as usize].ok_or_else(|| {
+                                    pending("staged ordinary owned argument has no companion slot")
+                                })?;
+                            self.clear_slot(slot);
+                        }
+                    }
+                }
+                let declared = self.declarations.get(*function).ok_or_else(|| {
+                    pending("staged Source target is outside its declared family")
+                })?;
+                let reference = self
+                    .module
+                    .declare_func_in_func(declared.native_id, self.builder.func);
+                let native_call = self.builder.ins().call(reference, &native);
+                let returned = self.builder.inst_results(native_call).to_vec();
+                Leaf::SourceStatus.checked(
+                    self.module,
+                    self.builder,
+                    &[context, call],
+                    resource.failure,
+                )?;
+                self.check_failure()?;
+                let bits = returned
+                    .first()
+                    .copied()
+                    .ok_or_else(|| pending("staged Source result is absent"))?;
+                let lowered = match *result {
+                    CallResult::Owned { slot } => {
+                        if resource.local_slot(*output)? != Some(slot) {
+                            return Err(pending(
+                                "staged owned output differs from its exact Local slot",
+                            ));
+                        }
+                        self.resource_store(slot, bits)?;
+                        LoweredValue::Scalar(bits)
+                    }
+                    CallResult::Ordinary { ty }
+                        if task_scalar(Some(resource.layout), self.types, ty)? =>
+                    {
+                        let depth = returned
+                            .get(1)
+                            .copied()
+                            .ok_or_else(|| pending("staged primitive result lost Pending depth"))?;
+                        LoweredValue::ScalarTask(bits, depth)
+                    }
+                    CallResult::Ordinary { ty } if is_linear(self.types, ty) => {
+                        self.own_linear(bits)?
+                    }
+                    CallResult::Ordinary { ty } if is_copy_owned(self.types, ty) => {
+                        self.own(bits)?
+                    }
+                    CallResult::Ordinary { .. } => LoweredValue::Scalar(bits),
+                };
+                self.define_local(*output, lowered, span)
+            }
+            Node::End { outcome, .. } => {
+                let mut completions = operations.iter().copied().filter(|operation|
+                    operation.frame() == begin.frame() && matches!(operation.role(), Role::Complete { outcome: selected } if selected == outcome));
+                if completions.next().is_none() || completions.next().is_some() {
+                    return Err(pending(
+                        "staged End lost its exact normal/abandoned completion",
+                    ));
+                }
+                self.resource_finish_operation(operations, begin.frame())
+            }
+        }
+    }
+
     fn resource_invoke(
         &mut self,
         expression: &Expression,
@@ -1127,6 +1408,10 @@ impl Translator<'_, '_> {
             .filter(|operation| !operation.is_expression_operation())
             .collect::<Vec<_>>();
         match &statement.kind {
+            StatementKind::ResourceCall(node) => {
+                self.resource_staged_call(node, statement.span, &site_only)?;
+                Ok(true)
+            }
             StatementKind::Let { local, value }
                 if resource.layout.plan().type_requires_custody(value.ty) =>
             {
@@ -1253,7 +1538,13 @@ impl Translator<'_, '_> {
                     .ok_or_else(|| pending("Resource sum tag has no exact owner"))?;
                 let value = self.resource_owner(slot)?;
                 let context = self.resource_context();
-                let frame = self.builder.use_var(resource.scope);
+                let execution = resource
+                    .function_plan()?
+                    .execution_frame(resource.block, resource.position)
+                    .ok_or_else(|| {
+                        pending("Resource sum tag lost its exact current execution frame")
+                    })?;
+                let frame = self.resource_frame(execution)?;
                 let output = self.builder.create_sized_stack_slot(ir::StackSlotData::new(
                     ir::StackSlotKind::ExplicitSlot,
                     4,
@@ -1492,6 +1783,10 @@ impl Translator<'_, '_> {
                 .ins()
                 .iconst(ir::types::I32, i64::from(resource.ordinal(operation)?));
             self.clear_slot(resource.frames[header.id().index()]);
+            let zero = self.builder.ins().iconst(ir::types::I64, 0);
+            self.builder
+                .ins()
+                .stack_store(zero, resource.frames[header.id().index()], 8);
             // Attempt all enclosing retirement even after the first infrastructure failure.
             Leaf::OperationComplete.call(self.module, self.builder, &[context, active, ordinal])?;
             self.builder.ins().jump(next, &[]);

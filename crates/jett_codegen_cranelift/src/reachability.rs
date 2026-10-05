@@ -156,6 +156,20 @@ fn collect_function_references(function: &Function, references: &mut References<
     for block in &function.blocks {
         for statement in &block.statements {
             match &statement.kind {
+                StatementKind::ResourceCall(jett_mir::ResourceCallNode::Stage {
+                    value, ..
+                }) => {
+                    collect_expression_references(value, references);
+                }
+                StatementKind::ResourceCall(
+                    jett_mir::ResourceCallNode::Begin { region }
+                    | jett_mir::ResourceCallNode::Invoke { region, .. },
+                ) => {
+                    if let Some(region) = function.resource_call_region(*region) {
+                        references.push((region.function(), statement.span));
+                    }
+                }
+                StatementKind::ResourceCall(jett_mir::ResourceCallNode::End { .. }) => {}
                 StatementKind::Let { value, .. }
                 | StatementKind::BeginCallView { value, .. }
                 | StatementKind::CheckRefinement { call: value, .. }

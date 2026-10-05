@@ -2272,3 +2272,36 @@ and original-stream requirements remain intact. Child polling/kill/reap and
 deadline behavior are unchanged. This verification repair does not increase the
 about-85% feature estimate. Full native and supported-host acceptance of the next
 combined Source implementation remain separate gates.
+
+## Checked Source call staging and active-frame sums (2026-10-05)
+
+Direct Resource calls with handled actuals now lower to constructor-owned typed
+Begin/Stage/Invoke/End regions. The sealed witness keeps the complete original
+Source tuple and current graph; fresh CFG analysis proves lexical argument order,
+arrived-prefix custody, exact endpoints and retirement before a handler Return
+operand. Complete prepared Source and borrowed-formal metadata exists even when
+Invoke is skipped. Public graph edits cannot recreate that authority.
+
+A genuine first-factory failure initially returned native protocol refusal after
+ConstructionFailed, while the reference returned cleanly. The repair separates
+Scope storage from active execution: a private exact-site projection supplies the
+current frame for sum observations, transfers and extraction. Runtime top-frame,
+slot ancestry and original Source checks remain strict. Both first-factory
+success and failure now execute with their original outcomes.
+
+Eighteen shared Source cases pass in both reference and native profiles (36
+executions each). Native launch follows Source deletion; exact body, cleanup,
+channel, messages, events, script consumption and zero obligations are observed
+before teardown. Seven additions cover minimal and original-helper abandonment,
+successful invocation, retained written views, first-factory failure and success,
+and cleanup panic. The formatted compiler/object gate passes 573 checks plus the
+MIR doctest; 606 frontend/lowering fixture checks, all four inventory gates
+(including 182 host objects), and the complete 92-test driver library pass.
+The final formatted Source replay also passes all 36 reference and 36 native
+executions. The full current native regression and supported-host jobs remain
+separate release gates.
+
+Whole-language coverage remains about 85%. Indirect/refinement/aggregate calls,
+static region selection, broader exits and projections, production providers and
+shared scheduling remain part of the full objective. These local Source results
+do not establish complete native parity.

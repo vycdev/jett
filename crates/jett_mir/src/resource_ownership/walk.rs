@@ -174,7 +174,8 @@ pub(super) fn hir_block(block: &hir::Block, visit: &mut impl FnMut(&Expression))
 pub(super) fn mir_block(block: &BasicBlock, visit: &mut impl FnMut(&Expression)) {
     for statement in &block.statements {
         match &statement.kind {
-            StatementKind::Let { value, .. }
+            StatementKind::ResourceCall(ResourceCallNode::Stage { value, .. })
+            | StatementKind::Let { value, .. }
             | StatementKind::BeginCallView { value, .. }
             | StatementKind::CheckRefinement { call: value, .. }
             | StatementKind::Evaluate(value)
@@ -194,7 +195,12 @@ pub(super) fn mir_block(block: &BasicBlock, visit: &mut impl FnMut(&Expression))
                     expression(value, visit);
                 }
             }
-            StatementKind::OpenCallOwnerGeneration { .. }
+            StatementKind::ResourceCall(
+                ResourceCallNode::Begin { .. }
+                | ResourceCallNode::Invoke { .. }
+                | ResourceCallNode::End { .. },
+            )
+            | StatementKind::OpenCallOwnerGeneration { .. }
             | StatementKind::ReplaceCallOwnerGeneration { .. }
             | StatementKind::CloseCallOwnerGeneration { .. }
             | StatementKind::EndCallView { .. }
@@ -311,7 +317,8 @@ pub(super) fn nested_resource_declaration(
 pub(super) fn mir_site(block: &BasicBlock, position: usize, visit: &mut impl FnMut(&Expression)) {
     if let Some(statement) = block.statements.get(position) {
         match &statement.kind {
-            StatementKind::Let { value, .. }
+            StatementKind::ResourceCall(ResourceCallNode::Stage { value, .. })
+            | StatementKind::Let { value, .. }
             | StatementKind::BeginCallView { value, .. }
             | StatementKind::CheckRefinement { call: value, .. }
             | StatementKind::Evaluate(value)
@@ -331,7 +338,12 @@ pub(super) fn mir_site(block: &BasicBlock, position: usize, visit: &mut impl FnM
                     expression(value, visit);
                 }
             }
-            StatementKind::OpenCallOwnerGeneration { .. }
+            StatementKind::ResourceCall(
+                ResourceCallNode::Begin { .. }
+                | ResourceCallNode::Invoke { .. }
+                | ResourceCallNode::End { .. },
+            )
+            | StatementKind::OpenCallOwnerGeneration { .. }
             | StatementKind::ReplaceCallOwnerGeneration { .. }
             | StatementKind::CloseCallOwnerGeneration { .. }
             | StatementKind::EndCallView { .. }

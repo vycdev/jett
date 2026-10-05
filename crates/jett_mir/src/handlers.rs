@@ -4,6 +4,7 @@ use jett_hir::{ExpressionKind, HandleKind};
 use jett_types::{Type, TypeInterner};
 
 mod reflected;
+mod resource_calls;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LoweringRequirement {
@@ -1166,6 +1167,21 @@ impl Builder<'_> {
     }
 
     pub(super) fn lower_value(&mut self, expression: &Expression) -> Expression {
+        if self
+            .resource_capture
+            .normalized_call_needed(expression, self.types)
+        {
+            return match self.lower_resource_call(expression) {
+                Ok(value) => value,
+                Err(message) => {
+                    self.resource_error = Some(LowerError {
+                        span: expression.span,
+                        message,
+                    });
+                    expression.clone()
+                }
+            };
+        }
         match self
             .resource_capture
             .preserve_original_call(expression, self.types)

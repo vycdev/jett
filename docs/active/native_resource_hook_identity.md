@@ -691,3 +691,29 @@ The native plain-owner replacement protocol now validates both owners and reserv
 The original Source replacement gate failed at the missing evaluated-RHS layout field before this compiler change. MIR now seals that field, the writer emits exact existing tag 12, and native assignment handles live replacement, exact self-reseat and vacant-after-close transfer separately. Seven new both-profile compiler groups cover endpoints, Source/header mutation refusals and object routes. Actual compilation required one missing test-only ExpressionKind import; canonical formatting changed no Source behavior. The final compiler/object/HIR/MIR gate passes 558 checks plus the MIR doctest, and 606 frontend/lowering fixture checks pass. All eleven shared original Source cases now pass both real reference and Source-deleted native execution under debug and release (22 executions each). Six added cases cover live replacement/use, self-reseat, close/rebind, handled RHS failure borrowing old, ordinary RHS failure and old-finalizer panic cleaning both owners.
 
 The fresh runtime archives have measured receipt `54a38248`; both HOST C ABI profiles pass. The complete driver-library run passes 86/87, with one pre-spawn temporary capture PermissionDenied; that exact property replay passes in isolation. This is recorded separately from Source acceptance, and no clean complete driver-library or current full-native regression pass is inferred. Whole-language coverage remains about 85%; indirect/handled/aggregate/worker/provider/concurrency and supported-host obligations remain required.
+
+## Constructor-owned handled Source calls (2026-10-05)
+
+MIR now preserves handled direct calls through typed Begin/Stage/Invoke/End
+regions with private original/current witnesses. Fresh flow joins the exact
+operation stack, arrived lexical prefix, loans and owners. A handler Return ends
+its acquired prefix before lowering its original operand; clean abandonment
+creates no body error and performs no target invocation. Prepared formals and
+loan parameters are available without scanning a future reached Invoke.
+
+Native frame storage retains the dynamic operation and prepared call separately.
+Staging evaluates once and registers exact Source actuals; invocation uses arrived
+endpoints and checks Source status before publishing its output. Retirement uses
+the fresh prefix plan. Local sum storage can belong to an ancestor Scope while
+its instructions execute under the active Operation; a private validated current
+site projection supplies that execution frame. Wire-v2 and runtime checks stay
+unchanged.
+
+All eighteen shared Sources pass both real reference and Source-deleted native
+profiles, with exact outcomes/events and zero obligations before destroy (36
+executions each). The formatted affected gate passes 573 compiler/object checks
+and the MIR doctest, plus 606 frontend/lowering fixture checks, all four fixed
+inventory gates (182 host objects), and the complete 92-test driver library.
+The final formatted Source replay also passes all 36 reference and 36 native
+executions. Broader Resource transport and the final full-goal release gates
+remain required.

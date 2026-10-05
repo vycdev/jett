@@ -8470,12 +8470,18 @@ including when one source body is called with both secret and public errors.
 The native backend now emits direct checked Resource calls with an internal
 Scope parameter, exact lexical acquisition, provisional Return publication and
 ordinary companion cleanup. Ordinary callable signatures and Source rules stay
-the same. Exact indirect descriptor calls, statically aborted acquisition CFGs
-and conditional/aggregate replacement still require their dedicated native successors.
+the same. Direct Result handlers inside call arguments use constructor-owned
+Begin/Stage/Invoke/End regions. Arguments stage in lexical source order, and a
+handler Return retires only the acquired prefix before evaluating its original
+return operand. A skipped invocation preserves the handled Source outcome;
+cleanup failure retains its own observed failure channel. Temporary sum storage
+and the active execution frame are checked separately.
+Exact indirect descriptor calls, statically pruned acquisition regions and
+conditional/aggregate replacement still require their dedicated native successors.
 Compiler-test Resource providers are confined to a single runtime archive built
 with both `test` and `jett_resource_native_test_archive`; production providers
 remain disabled. Archive compilation and object emission alone do not establish
-linked Source execution. The first five original Source scenarios now pass in
+linked Source execution. Eighteen shared original Source scenarios now pass in
 both native profiles against their real reference outcomes, with Source files
 absent at launch and zero live obligations before teardown. This local test
 slice does not enable production Resource providers or complete broader native

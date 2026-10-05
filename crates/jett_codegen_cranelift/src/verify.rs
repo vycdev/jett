@@ -993,6 +993,82 @@ impl Verifier<'_> {
 
     fn statement(&self, function: &Function, statement: &Statement) -> Result<(), CodegenError> {
         match &statement.kind {
+            StatementKind::ResourceCall(node) => {
+                use jett_mir::ResourceCallNode as Node;
+                let ownership = self.resource.ok_or_else(|| {
+                    self.unsupported(
+                        function,
+                        statement.span,
+                        "staged Resource node has no constructor-owned ownership proof",
+                    )
+                })?;
+                let region_id = match node {
+                    Node::Begin { region }
+                    | Node::Stage { region, .. }
+                    | Node::Invoke { region, .. }
+                    | Node::End { region, .. } => *region,
+                };
+                let region = function.resource_call_region(region_id).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "staged Resource node lost its private region",
+                    )
+                })?;
+                let plan = ownership.function(function.id).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "staged region is outside the fresh execution family",
+                    )
+                })?;
+                if !plan.operations().iter().any(|operation| matches!(operation.role(),
+                    jett_mir::ResourceOperationRole::BeginSourceFunction { region, .. } if *region == region_id)) {
+                    return Err(self.contract_error(function, statement.span,
+                        "staged region has no complete fresh Begin projection"));
+                }
+                match node {
+                    Node::Stage {
+                        value, ordinary, ..
+                    } => {
+                        self.expression(function, value)?;
+                        if let Some(local) = ordinary {
+                            let endpoint = function.local(*local).ok_or_else(|| {
+                                self.contract_error(
+                                    function,
+                                    statement.span,
+                                    "staged ordinary endpoint is absent",
+                                )
+                            })?;
+                            self.require_same_type(
+                                function,
+                                statement.span,
+                                endpoint.ty,
+                                value.ty,
+                                "staged ordinary endpoint changes its evaluated type",
+                            )?;
+                        }
+                    }
+                    Node::Invoke { output, .. } => {
+                        let endpoint = function.local(*output).ok_or_else(|| {
+                            self.contract_error(
+                                function,
+                                statement.span,
+                                "staged invocation output is absent",
+                            )
+                        })?;
+                        self.require_same_type(
+                            function,
+                            statement.span,
+                            endpoint.ty,
+                            region.original().ty,
+                            "staged invocation changes its original result type",
+                        )?;
+                    }
+                    Node::Begin { .. } | Node::End { .. } => {}
+                }
+                Ok(())
+            }
             StatementKind::IterationBorrow { source, token, .. } => {
                 if !matches!(
                     self.types.resolve(self.sequence_source_type(

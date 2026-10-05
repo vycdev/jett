@@ -377,3 +377,263 @@ export function main(net: Network) returns nothing:
         );
     }
 }
+
+const STAGED_SOURCES: &[&str] = &[
+    include_str!("../resource_execution/staged_call/09_later_handle_minimal.jett"),
+    include_str!("../resource_execution/staged_call/10_later_handle_original.jett"),
+    include_str!("../resource_execution/staged_call/11_later_handle_success.jett"),
+    include_str!("../resource_execution/staged_call/12_later_handle_written_view.jett"),
+    include_str!("../resource_execution/staged_call/13_first_handle_failure.jett"),
+    include_str!("../resource_execution/staged_call/14_first_handle_success.jett"),
+];
+
+#[test]
+fn resource_staged_layout_keeps_complete_source_tuple_and_exact_activation_aliases() {
+    for release in [false, true] {
+        for &source in STAGED_SOURCES {
+            let checked = checked(source, release);
+            let program = lower_source(&checked);
+            let types = &checked.checked().interner;
+            let selected = entry(&program);
+            let layout = EmittedResourceLayout::from_program(&program, types, selected).unwrap();
+            let repeated = EmittedResourceLayout::from_program(&program, types, selected).unwrap();
+            assert_eq!(layout.bytes(), repeated.bytes());
+            assert_eq!(
+                u32::from_le_bytes(layout.bytes()[8..12].try_into().unwrap()),
+                2
+            );
+            let mut rows = Rows::new(layout.plan()).unwrap();
+            rows.populate().unwrap();
+            let mut regions = 0;
+            let mut aliases = 0;
+            let mut abandoned = 0;
+            for function in layout.plan().functions() {
+                for operation in function.operations() {
+                    if let Role::BeginSourceFunction {
+                        function: target,
+                        formals,
+                        evaluation_order,
+                        operands,
+                        ..
+                    } = operation.role()
+                    {
+                        regions += 1;
+                        assert_eq!(evaluation_order, &[1, 0, 2]);
+                        assert_eq!(formals.len(), 3);
+                        assert_eq!(operands.len(), 3);
+                        let id = layout
+                            .operation(function.function(), operation.id())
+                            .unwrap();
+                        let row = &rows.operations[id as usize].1;
+                        assert_eq!(row[0], 16);
+                        assert_eq!(row[2], target.index());
+                        assert_eq!(row[3], layout.function_signature(*target).unwrap());
+                        assert_eq!(
+                            rows.frames[row[1] as usize].signature,
+                            layout.function_signature(function.function()).unwrap()
+                        );
+                        // Full formal metadata exists on Begin before any reached Stage/Invoke.
+                        for operand in operands {
+                            if let Operand::Borrowed { parameter, loan } = operand {
+                                let record = &function.loans()[loan.index()];
+                                if let custody::ResourceLoanSource::Owner(_) = record.source() {
+                                    assert_eq!(record.parameter(), Some(*parameter));
+                                    let mut prepared = function.operations().iter().filter(|candidate|
+                                        matches!(candidate.role(), Role::PrepareSourceBorrow { loan: expected, parameter: p } if expected == loan && p == parameter));
+                                    let prepared = prepared.next().unwrap();
+                                    let borrow_id = layout
+                                        .operation(function.function(), prepared.id())
+                                        .unwrap();
+                                    assert_eq!(rows.operations[borrow_id as usize].1[0], 3);
+                                    assert_eq!(prepared.site(), operation.site());
+                                }
+                            }
+                        }
+                    }
+                    if let Some(prepared) = staged_alias(function, operation).unwrap() {
+                        aliases += 1;
+                        assert_eq!(
+                            layout.operation(function.function(), operation.id()),
+                            layout.operation(function.function(), prepared.id())
+                        );
+                    }
+                    if matches!(operation.role(), Role::StageSourceActual { .. }) {
+                        assert!(
+                            layout
+                                .operation(function.function(), operation.id())
+                                .is_none()
+                        );
+                    }
+                    if matches!(
+                        operation.role(),
+                        Role::Complete {
+                            outcome: custody::ResourceCompletion::Abort
+                        }
+                    ) && function.operations().iter().any(|begin| {
+                        begin.frame() == operation.frame()
+                            && matches!(begin.role(), Role::BeginSourceFunction { .. })
+                    }) {
+                        abandoned += 1;
+                        let id = layout
+                            .operation(function.function(), operation.id())
+                            .unwrap();
+                        assert_eq!(
+                            rows.operations[id as usize].1,
+                            [
+                                13,
+                                layout
+                                    .frame(function.function(), operation.frame())
+                                    .unwrap()
+                            ]
+                        );
+                    }
+                }
+            }
+            assert_eq!(regions, 1);
+            assert!(aliases >= 2);
+            assert!(abandoned >= 1);
+        }
+    }
+}
+
+#[test]
+fn resource_staged_layout_refuses_edited_and_copied_public_nodes_before_rows() {
+    for release in [false, true] {
+        let checked = checked(STAGED_SOURCES[0], release);
+        let original = lower_source(&checked);
+        let selected = entry(&original);
+        let stages = original
+            .functions
+            .iter()
+            .flat_map(|function| {
+                function.blocks.iter().flat_map(move |block| {
+                    block
+                        .statements
+                        .iter()
+                        .enumerate()
+                        .filter_map(move |(index, statement)| {
+                            matches!(
+                                statement.kind,
+                                StatementKind::ResourceCall(
+                                    custody::ResourceCallNode::Stage { .. }
+                                )
+                            )
+                            .then_some((function.id, block.id, index))
+                        })
+                })
+            })
+            .collect::<Vec<_>>();
+        assert!(stages.len() >= 3);
+        for mutation in 0..5 {
+            let mut changed = original.clone();
+            let (function, block, index) = stages[0];
+            let current = &mut changed.functions[function.index() as usize];
+            match mutation {
+                0 => {
+                    let StatementKind::ResourceCall(custody::ResourceCallNode::Stage {
+                        source_index,
+                        ..
+                    }) = &mut current.blocks[block.index() as usize].statements[index].kind
+                    else {
+                        unreachable!()
+                    };
+                    *source_index += 1;
+                }
+                1 => {
+                    let StatementKind::ResourceCall(custody::ResourceCallNode::Stage {
+                        parameter,
+                        ..
+                    }) = &mut current.blocks[block.index() as usize].statements[index].kind
+                    else {
+                        unreachable!()
+                    };
+                    *parameter = 0;
+                }
+                2 => {
+                    let StatementKind::ResourceCall(custody::ResourceCallNode::Stage {
+                        value, ..
+                    }) = &mut current.blocks[block.index() as usize].statements[index].kind
+                    else {
+                        unreachable!()
+                    };
+                    value.ty = TypeInterner::INT64;
+                }
+                3 => {
+                    let copied = current.blocks[block.index() as usize].statements[index].clone();
+                    current.blocks[block.index() as usize]
+                        .statements
+                        .insert(index, copied);
+                }
+                4 => {
+                    let copied = current.blocks[block.index() as usize].statements[index].clone();
+                    current.blocks[current.entry.index() as usize]
+                        .statements
+                        .push(copied);
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                matches!(
+                    EmittedResourceLayout::from_program(
+                        &changed,
+                        &checked.checked().interner,
+                        selected
+                    ),
+                    Err(CodegenError::InvalidMir(_))
+                ),
+                "mutation {mutation}"
+            );
+        }
+    }
+}
+
+#[test]
+fn resource_staged_sum_rows_preserve_scope_storage_and_active_execution() {
+    for release in [false, true] {
+        for &source in &STAGED_SOURCES[4..] {
+            let checked = checked(source, release);
+            let program = lower_source(&checked);
+            let selected = entry(&program);
+            let layout = EmittedResourceLayout::from_program(
+                &program,
+                &checked.checked().interner,
+                selected,
+            )
+            .unwrap();
+            let flow = layout.plan().function(selected).unwrap();
+            let active = flow
+                .operations()
+                .iter()
+                .find(|operation| matches!(operation.role(), Role::BeginSourceFunction { .. }))
+                .unwrap()
+                .frame();
+            let scope = flow.root_scope().id();
+            let mut rows = Rows::new(layout.plan()).unwrap();
+            rows.populate().unwrap();
+            let mut extractions = 0;
+            for operation in flow.operations() {
+                let source = match operation.role() {
+                    Role::SumTake {
+                        source,
+                        destination,
+                        ..
+                    } => {
+                        assert_eq!(flow.owner_slots()[destination.index()].frame(), scope);
+                        *source
+                    }
+                    Role::TakeFailureCompanion { source, .. } => *source,
+                    _ => continue,
+                };
+                extractions += 1;
+                assert_eq!(flow.owner_slots()[source.index()].frame(), scope);
+                assert_eq!(operation.frame(), active);
+                let ordinal = layout.operation(selected, operation.id()).unwrap();
+                assert_eq!(
+                    rows.operations[ordinal as usize].1[1],
+                    layout.frame(selected, active).unwrap()
+                );
+            }
+            assert_eq!(extractions, 2);
+        }
+    }
+}

@@ -225,6 +225,18 @@ fn visit_block_locals(
 ) {
     for statement in &mut block.statements {
         match &mut statement.kind {
+            StatementKind::ResourceCall(node) => match node {
+                ResourceCallNode::Stage {
+                    value, ordinary, ..
+                } => {
+                    if let Some(local) = ordinary {
+                        visit(local);
+                    }
+                    expression(value, visit, floor, metadata);
+                }
+                ResourceCallNode::Invoke { output, .. } => visit(output),
+                ResourceCallNode::Begin { .. } | ResourceCallNode::End { .. } => {}
+            },
             StatementKind::OpenCallOwnerGeneration { root, .. } => visit(root),
             StatementKind::ReplaceCallOwnerGeneration {
                 root, rhs_owner, ..

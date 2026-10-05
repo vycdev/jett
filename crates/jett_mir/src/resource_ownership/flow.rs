@@ -1,10 +1,12 @@
 //! Independent current-CFG occupancy proof. Abstract states are metadata,
 //! never runtime tokens and never an ordinary linearity classifier.
 use super::*;
+mod normalized;
 use hir::ExpressionKind as E;
 use jett_typecheck::{
     CheckedCalleeAccess as Access, CheckedCallerEffect as Effect, CheckedCallerSyntax as Syntax,
 };
+use normalized::{ActiveCall, PreparedCall};
 use std::collections::VecDeque;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,6 +25,7 @@ struct State {
     guards: BTreeMap<u32, (LocalId, bool)>,
     leases: BTreeSet<ResourceLoanId>,
     aborted: bool,
+    calls: Vec<ActiveCall>,
 }
 type Key = (u32, u8, usize, usize);
 fn key(site: ResourceSite, ordinal: usize) -> Key {
@@ -46,8 +49,25 @@ struct Analysis<'p> {
     emit: bool,
     active_frame: ResourceFrameId,
     return_frame: Option<ResourceFrameId>,
+    normalized_calls: BTreeMap<ResourceCallRegionId, PreparedCall>,
 }
 impl<'p> Analysis<'p> {
+    fn record_execution_frame(&mut self) -> Result<(), String> {
+        if self.emit {
+            if self
+                .plan
+                .execution_frames
+                .iter()
+                .any(|(site, _)| *site == self.site)
+            {
+                return Err("Resource execution frame has duplicate current-site authority".into());
+            }
+            self.plan
+                .execution_frames
+                .push((self.site, self.active_frame));
+        }
+        Ok(())
+    }
     fn operation(&mut self, frame: ResourceFrameId, role: ResourceOperationRole) {
         if self.emit {
             let id = ResourceOperationId(self.plan.operations.len());
@@ -137,7 +157,12 @@ impl<'p> Analysis<'p> {
             return *id;
         }
         let id = ResourceLoanId(self.plan.loans.len());
-        self.plan.loans.push(ResourceLoan { id, frame, source });
+        self.plan.loans.push(ResourceLoan {
+            id,
+            frame,
+            source,
+            parameter: (parameter != usize::MAX).then_some(parameter),
+        });
         self.loan_sites.insert(entry, id);
         id
     }
@@ -279,7 +304,7 @@ impl<'p> Analysis<'p> {
         if let Some(source) = value.owner {
             if source != destination {
                 self.operation(
-                    ResourceFrameId(0),
+                    self.active_frame,
                     ResourceOperationRole::Transfer {
                         source,
                         destination,
@@ -712,6 +737,10 @@ impl<'p> Analysis<'p> {
         block: &BasicBlock,
         mut state: State,
     ) -> Result<Vec<(BlockId, State)>, String> {
+        self.active_frame = state
+            .calls
+            .last()
+            .map_or(ResourceFrameId(0), |active| active.frame);
         for (index, statement) in block.statements.iter().enumerate() {
             self.site = ResourceSite {
                 function: self.function.id,
@@ -722,7 +751,9 @@ impl<'p> Analysis<'p> {
             if state.aborted {
                 break;
             }
+            self.record_execution_frame()?;
             match &statement.kind {
+                StatementKind::ResourceCall(node) => self.normalized_node(&mut state, node)?,
                 StatementKind::Let { local, value } => {
                     let taking = !self.function.is_view_local(*local);
                     let result = self.expression(&mut state, value, taking)?;
@@ -768,13 +799,13 @@ impl<'p> Analysis<'p> {
                             payload.shape = ResourceShape::Plain { kind: payload.shape.kind().clone() };
                             payload.owner = Some(self.local_slots[target.index() as usize].ok_or("Resource sum success has no exact output slot")?);
                             self.store(&mut state, *target, Some(payload), false, false)?;
-                            self.operation(ResourceFrameId(0), ResourceOperationRole::SumTake { source: owner, destination: self.local_slots[target.index() as usize].ok_or("Resource sum success has no dedicated output slot")?, tag, success: true });
+                            self.operation(self.active_frame, ResourceOperationRole::SumTake { source: owner, destination: self.local_slots[target.index() as usize].ok_or("Resource sum success has no dedicated output slot")?, tag, success: true });
                         } else {
                             let ResourceShape::Result { failure, .. } = &value.shape else { return Err("pending ResourceOwnershipPlan: Optional empty-arm extraction has no ordinary companion".into()); };
                             let header = self.function.local(*target).ok_or("Resource failure take has no exact destination")?.clone();
                             if header.ty != *failure { return Err("Resource failure take changes its exact companion type".into()); }
                             let owner = value.owner.ok_or("Resource failure companion has no exact sum shell holder")?;
-                            self.operation(ResourceFrameId(0), ResourceOperationRole::TakeFailureCompanion { source: owner, target: header, failure: *failure, tag });
+                            self.operation(self.active_frame, ResourceOperationRole::TakeFailureCompanion { source: owner, target: header, failure: *failure, tag });
                             self.read(&mut state, *source, true)?;
                             if shape(&self.program.resource_manifest, self.types, self.function.local(*target).ok_or("Resource failure take has no destination")?.ty)?.is_some() { return Err("Resource failure companion cannot become an occupied owner".into()); }
                         }
@@ -806,11 +837,16 @@ impl<'p> Analysis<'p> {
         };
         self.ordinal = 0;
         if state.aborted {
+            if !state.calls.is_empty() {
+                return Err("pending Resource call region: infrastructure abort needs its exact acquired-prefix retirement".into());
+            }
             self.finish(&mut state, ResourceFrameId(0), ResourceCompletion::Abort);
             return Ok(Vec::new());
         }
+        self.record_execution_frame()?;
         match &block.terminator.kind {
             TerminatorKind::Return(value) => {
+                if !state.calls.is_empty() { return Err("Resource Source Return reaches an unretired normalized operation suffix".into()); }
                 let mut outgoing = None;
                 if let Some(value) = value {
                     let returned = self.expression(&mut state, value, true)?;
@@ -830,7 +866,7 @@ impl<'p> Analysis<'p> {
                 if let Some(source) = outgoing { self.operation(self.return_frame.ok_or("Resource return frame disappeared")?, ResourceOperationRole::CompleteReturnAfterCleanup { source }); }
                 Ok(Vec::new())
             }
-            TerminatorKind::Unreachable => { self.finish(&mut state, ResourceFrameId(0), ResourceCompletion::Abort); Ok(Vec::new()) }
+            TerminatorKind::Unreachable => { if !state.calls.is_empty() { return Err("pending Resource call region: unreachable exit needs its exact operation suffix retirement".into()); } self.finish(&mut state, ResourceFrameId(0), ResourceCompletion::Abort); Ok(Vec::new()) }
             TerminatorKind::Goto(target) => Ok(vec![(*target, state)]),
             TerminatorKind::Branch { condition, then_block, else_block } => {
                 self.expression(&mut state, condition, false)?;
@@ -853,6 +889,9 @@ impl<'p> Analysis<'p> {
 
 fn join(left: &mut State, right: &State) -> Result<bool, String> {
     let before = left.clone();
+    if left.calls != right.calls {
+        return Err("Resource CFG join changed its exact operation stack, arrived prefix or retirement obligations".into());
+    }
     if left.leases != right.leases {
         return Err(
             "Resource CFG join cannot extend or silently end a loan from only one path".into(),
@@ -930,6 +969,7 @@ pub(super) fn analyze(
         slots: Vec::new(),
         loans: Vec::new(),
         operations: Vec::new(),
+        execution_frames: Vec::new(),
     };
     let mut analysis = Analysis {
         program,
@@ -946,6 +986,7 @@ pub(super) fn analyze(
         emit: false,
         active_frame: ResourceFrameId(0),
         return_frame,
+        normalized_calls: BTreeMap::new(),
     };
     let mut initial = State {
         values: vec![None; function.locals.len()],
@@ -955,6 +996,7 @@ pub(super) fn analyze(
         guards: BTreeMap::new(),
         leases: BTreeSet::new(),
         aborted: false,
+        calls: Vec::new(),
     };
     for local in &function.locals {
         if let Some(shape) = shape(&program.resource_manifest, types, local.ty)?
@@ -992,6 +1034,7 @@ pub(super) fn analyze(
                 analysis.plan.loans.push(ResourceLoan {
                     id: loan,
                     frame: ResourceFrameId(0),
+                    parameter: None,
                     source: ResourceLoanSource::IncomingViewFormal {
                         scope: ResourceFrameId(0),
                         parameter,

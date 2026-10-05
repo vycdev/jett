@@ -396,3 +396,241 @@ export function main(net: Network) returns nothing:
         assert!(imports.iter().any(|name| name.contains("failure")));
     }
 }
+
+#[test]
+fn resource_staged_real_source_emits_cross_block_prepare_stage_invoke_and_retirement_leaves() {
+    for release in [false, true] {
+        for source in [
+            include_str!("staged_call/09_later_handle_minimal.jett"),
+            include_str!("staged_call/10_later_handle_original.jett"),
+            include_str!("staged_call/11_later_handle_success.jett"),
+            include_str!("staged_call/12_later_handle_written_view.jett"),
+            include_str!("staged_call/13_first_handle_failure.jett"),
+            include_str!("staged_call/14_first_handle_success.jett"),
+        ] {
+            let checked = checked(source, release);
+            let original = lower_source(&checked);
+            let selected = entry(&original);
+            assert!(
+                original
+                    .functions
+                    .iter()
+                    .any(|function| function.blocks.iter().any(|block| block
+                        .statements
+                        .iter()
+                        .any(|statement| matches!(
+                            statement.kind,
+                            StatementKind::ResourceCall(jett_mir::ResourceCallNode::End {
+                                outcome: jett_mir::ResourceCompletion::Abort,
+                                ..
+                            })
+                        ))))
+            );
+            for function in &original.functions {
+                for block in &function.blocks {
+                    for statement in &block.statements {
+                        if let StatementKind::ResourceCall(jett_mir::ResourceCallNode::Stage {
+                            value,
+                            ..
+                        }) = &statement.kind
+                        {
+                            assert!(!matches!(value.kind, ExpressionKind::RuntimeFailure(_)));
+                        }
+                    }
+                }
+            }
+            let artifact = super::super::emit_for_triple(
+                &original,
+                &checked.checked().interner,
+                HOST,
+                Some(selected),
+                CodegenOptions { optimize: release },
+            )
+            .unwrap();
+            let (_, imports) = symbols(&artifact);
+            for leaf in [
+                "source_prepare",
+                "source_actual",
+                "source_enter",
+                "source_parameter",
+                "source_status",
+                "borrow_begin",
+                "borrow_end",
+                "operation_begin",
+                "operation_complete",
+                "scope_complete",
+                "entry_outcome",
+            ] {
+                assert!(
+                    imports
+                        .iter()
+                        .any(|name| name == &format!("jett_rt_v1_resource_{leaf}")),
+                    "{leaf}: {imports:?}"
+                );
+            }
+            // This inspects an emitted object only. Provider events and all-before-destroy
+            // outcomes belong to Root's linked Source-deleted conformance gate.
+        }
+    }
+}
+
+#[test]
+fn resource_staged_object_refuses_altered_ordinary_endpoint_and_forged_current_node() {
+    let source = include_str!("staged_call/09_later_handle_minimal.jett");
+    for release in [false, true] {
+        let checked = checked(source, release);
+        let original = lower_source(&checked);
+        let selected = entry(&original);
+        let (function, block, index, local) = original
+            .functions
+            .iter()
+            .find_map(|function| {
+                function.blocks.iter().find_map(|block| {
+                    block
+                        .statements
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, statement)| match &statement.kind {
+                            StatementKind::ResourceCall(jett_mir::ResourceCallNode::Stage {
+                                ordinary: Some(local),
+                                ..
+                            }) => Some((function.id, block.id, index, *local)),
+                            _ => None,
+                        })
+                })
+            })
+            .unwrap();
+        for mutation in 0..3 {
+            let mut changed = original.clone();
+            let current = &mut changed.functions[function.index() as usize];
+            match mutation {
+                0 => {
+                    assert!(current.locals[local.index() as usize].mutable);
+                    current.locals[local.index() as usize].mutable = false;
+                }
+                1 => {
+                    let StatementKind::ResourceCall(jett_mir::ResourceCallNode::Stage {
+                        ordinary,
+                        ..
+                    }) = &mut current.blocks[block.index() as usize].statements[index].kind
+                    else {
+                        unreachable!()
+                    };
+                    *ordinary = Some(current.params[0].local);
+                }
+                2 => {
+                    let copied = current.blocks[block.index() as usize].statements[index].clone();
+                    current.blocks[block.index() as usize]
+                        .statements
+                        .push(copied);
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                super::super::emit_for_triple(
+                    &changed,
+                    &checked.checked().interner,
+                    HOST,
+                    Some(selected),
+                    CodegenOptions { optimize: release }
+                )
+                .is_err(),
+                "mutation {mutation}"
+            );
+        }
+    }
+}
+
+#[test]
+fn resource_staged_scope_sum_keeps_active_operation_rows_and_forgery_refusal() {
+    for release in [false, true] {
+        for source in [
+            include_str!("staged_call/13_first_handle_failure.jett"),
+            include_str!("staged_call/14_first_handle_success.jett"),
+        ] {
+            let checked = checked(source, release);
+            let original = lower_source(&checked);
+            let selected = entry(&original);
+            let layout = EmittedResourceLayout::from_program(
+                &original,
+                &checked.checked().interner,
+                selected,
+            )
+            .unwrap();
+            let flow = layout.plan().function(selected).unwrap();
+            let active = flow
+                .operations()
+                .iter()
+                .find(|operation| matches!(operation.role(), Role::BeginSourceFunction { .. }))
+                .unwrap()
+                .frame();
+            let mut extractions = 0;
+            for operation in flow.operations() {
+                if matches!(
+                    operation.role(),
+                    Role::SumTake { .. } | Role::TakeFailureCompanion { .. }
+                ) {
+                    extractions += 1;
+                    assert_eq!(operation.frame(), active);
+                    assert!(layout.operation(selected, operation.id()).is_some());
+                }
+            }
+            assert_eq!(extractions, 2);
+            let main = &original.functions[selected.index() as usize];
+            let (block, index) = main
+                .blocks
+                .iter()
+                .find_map(|block| {
+                    block
+                        .statements
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, statement)| {
+                            matches!(statement.kind, StatementKind::SumTag { .. })
+                                .then_some((block.id, index))
+                        })
+                })
+                .unwrap();
+            assert_eq!(
+                flow.execution_frame(block, jett_mir::ResourcePosition::Statement(index)),
+                Some(active)
+            );
+            super::super::emit_for_triple(
+                &original,
+                &checked.checked().interner,
+                HOST,
+                Some(selected),
+                CodegenOptions { optimize: release },
+            )
+            .unwrap();
+            for copied in [false, true] {
+                let mut changed = original.clone();
+                let current = &mut changed.functions[selected.index() as usize];
+                if copied {
+                    let statement =
+                        current.blocks[block.index() as usize].statements[index].clone();
+                    current.blocks[block.index() as usize]
+                        .statements
+                        .insert(index, statement);
+                } else {
+                    let StatementKind::SumTag { source, .. } =
+                        &mut current.blocks[block.index() as usize].statements[index].kind
+                    else {
+                        unreachable!()
+                    };
+                    *source = current.params[0].local;
+                }
+                assert!(matches!(
+                    super::super::emit_for_triple(
+                        &changed,
+                        &checked.checked().interner,
+                        HOST,
+                        Some(selected),
+                        CodegenOptions { optimize: release }
+                    ),
+                    Err(CodegenError::InvalidMir(_))
+                ));
+            }
+        }
+    }
+}

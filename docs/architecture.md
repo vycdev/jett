@@ -4152,8 +4152,8 @@ acquisition log must determine reverse cleanup order; local-number order is not
 cleanup order. The plan's entry block is distinct from the driver-selected program
 entry function. The initial plain/Optional/Result analysis does not yet implement
 the execution ABI. A fresh plan now supplies the emitted native layout described
-below. Handled actual normalization, complete
-aggregate/scoped/reflected custody and concurrency remain required.
+below. Direct handled actuals use the constructor-owned call regions described
+below; complete aggregate/scoped/reflected custody and concurrency remain required.
 
 The formatted affected gate passes 535 HIR/MIR/codegen/object-emission tests,
 32 type-library tests and the MIR doctest. Twelve focused ownership groups and
@@ -4181,8 +4181,27 @@ After authenticating the entire original checked HIR archive, MIR derives a
 private execution family from Resource functions and their direct Source caller
 predecessors. Resource-free wrappers receive their own sealed constructor
 witnesses and fresh Scope and invocation proofs. Current graph edits cannot
-recompute or expand that authority. Nested calls remain refused when their
-evaluation needs canonical Source-order staging.
+recompute or expand that authority. Direct calls with handled actuals use typed
+Begin/Stage/Invoke/End statements. Their private witness retains the original
+call, lexical/formal permutation, generated endpoint headers, complete current
+graph and exact completion sites. Fresh CFG analysis tracks the active operation
+stack and arrived argument prefix across handler edges. Abandonment retires that
+prefix before the original Return operand; normal completion follows exactly one
+reached invocation.
+
+Each native operation-frame slot stores its dynamic frame and prepared Source
+call in sixteen bytes. Begin prepares the complete Source tuple without actual
+effects. Stage evaluates once, activates its exact transfer or loan, and records
+one lexical actual. Invoke consumes arrived endpoints and checks Source status
+before publishing its result. End clears prepared storage and retires only the
+proved prefix. Prepared borrowed-formal metadata remains complete even when no
+invocation is reached, using the existing wire-v2 rows and runtime ABI.
+
+The fresh custody plan also records the exact incoming execution frame at every
+reachable current statement and terminator. Sum tag reads, temporary transfers
+and selected extraction use that frame; their Local storage may remain in the
+ancestor Scope. This projection has no span, type or holder fallback, and public
+graph edits still fail the original/current witness checks.
 
 The code generator projects one fresh whole-program ownership plan into bounded,
 deterministic v2 layout bytes. Rows preserve exact containing-function signatures,

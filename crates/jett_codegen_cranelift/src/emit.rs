@@ -946,16 +946,16 @@ fn translate_function_inner(
         ]
         .into_iter()
         .zip([
-            plan.frames().len(),
-            plan.owner_slots().len(),
-            plan.loans().len(),
+            (plan.frames().len(), 16),
+            (plan.owner_slots().len(), 8),
+            (plan.loans().len(), 8),
         ]) {
-            for _ in 0..storage.1 {
+            for _ in 0..storage.1.0 {
                 storage
                     .0
                     .push(builder.create_sized_stack_slot(ir::StackSlotData::new(
                         ir::StackSlotKind::ExplicitSlot,
-                        8,
+                        storage.1.1,
                         3,
                     )));
             }
@@ -1034,6 +1034,9 @@ fn translate_function_inner(
                     .chain(&resource_loans)
                 {
                     builder.ins().stack_store(zero, *slot, 0);
+                }
+                for slot in &resource_frames {
+                    builder.ins().stack_store(zero, *slot, 8);
                 }
                 let failed = builder.ins().iconst(ir::types::I32, 1);
                 builder.def_var(resource_status, failed);
@@ -1382,6 +1385,9 @@ impl Translator<'_, '_> {
             return Ok(());
         }
         match &statement.kind {
+            StatementKind::ResourceCall(_) => Err(resource_layout::pending(
+                "staged Resource node has no constructor-owned native family",
+            )),
             StatementKind::ReflectedContainerReady { source, kind } => {
                 let ty = self.local_types[source.index() as usize].ty;
                 let expression = Expression {
