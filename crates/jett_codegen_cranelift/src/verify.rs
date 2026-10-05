@@ -195,6 +195,20 @@ pub(crate) fn verify_descriptor_bodies(
     program: &Program,
     types: &TypeInterner,
 ) -> Result<(), CodegenError> {
+    verify_descriptor_bodies_inner(program, types, None)
+}
+
+pub(crate) fn verify_resource_descriptor_bodies(
+    plan: &jett_mir::ResourceOwnershipPlan<'_>,
+) -> Result<(), CodegenError> {
+    verify_descriptor_bodies_inner(plan.program(), plan.types(), Some(plan))
+}
+
+fn verify_descriptor_bodies_inner<'a>(
+    program: &'a Program,
+    types: &'a TypeInterner,
+    resource: Option<&'a jett_mir::ResourceOwnershipPlan<'a>>,
+) -> Result<(), CodegenError> {
     jett_mir::validate_call_ownership(program, types).map_err(CodegenError::InvalidMir)?;
     // Shared inline tables and impossible sum arms contain valid Never metadata
     // that need not allocate a native frame slot. Validate original type shapes
@@ -203,7 +217,9 @@ pub(crate) fn verify_descriptor_bodies(
     for function in &program.functions {
         for local in &function.locals {
             for (ty, role) in [(local.ty, "local"), (local.debug_ty, "debug local")] {
-                if !exact_uninhabited_metadata_type(types, ty) {
+                if !resource.is_some_and(|plan| plan.type_requires_custody(ty))
+                    && !exact_uninhabited_metadata_type(types, ty)
+                {
                     scalar_kind_inner(
                         types,
                         ty,
@@ -267,6 +283,7 @@ pub(crate) fn verify_descriptor_bodies(
         verified: &verified,
         phase: VerifierPhase::DescriptorMetadata,
         metadata_functions: RefCell::new(HashSet::new()),
+        resource,
     };
     for function in &program.functions {
         if descriptor_only_function(function) {
@@ -322,6 +339,7 @@ pub(crate) fn verify_callable_expression_for_test(
         verified: &verified,
         phase: VerifierPhase::CallableNative,
         metadata_functions: RefCell::new(HashSet::new()),
+        resource: None,
     };
     verifier.expression(function, expression)
 }
@@ -398,8 +416,104 @@ pub(crate) fn verify_program(
                 VerifierPhase::CallableNative
             },
             metadata_functions: RefCell::new(HashSet::new()),
+            resource: None,
         };
         verifier.function(function)?;
+    }
+    Ok(verified)
+}
+
+pub(crate) fn verify_resource_program(
+    plan: &jett_mir::ResourceOwnershipPlan<'_>,
+) -> Result<VerifiedProgram, CodegenError> {
+    let program = plan.program();
+    let types = plan.types();
+    // Reachability may omit lifted bodies, but malformed source metadata must
+    // not disappear with an unused descriptor.
+    for function in &program.functions {
+        super::emit::debug::function_label(function).map_err(|message| {
+            CodegenError::InvalidMirContract {
+                function: function.identity.declaration.name.clone(),
+                span: function.span,
+                message: message.into(),
+            }
+        })?;
+    }
+
+    for (&owner, &method) in &program.equality_methods {
+        let (_, target) = function_by_id(program, method)?;
+        if owner.index() as usize >= types.len()
+            || !matches!(types.resolve(owner), Type::Struct(_))
+            || target.capture_count != 0
+            || target.params.len() != 2
+            || target.return_type != TypeInterner::BOOL
+            || target.params.iter().any(|parameter| {
+                parameter.ty != owner || parameter.mode != jett_mir::ParamMode::View
+            })
+        {
+            return Err(CodegenError::InvalidMirContract {
+                function: target.identity.declaration.name.clone(),
+                span: target.span,
+                message: "enum equality target must have two exact struct views and return bool"
+                    .into(),
+            });
+        }
+    }
+    let mut selected = reachable_function_ids_with_types(program, types)?;
+    for function in plan.functions() {
+        if !selected.contains(&function.function()) {
+            selected.push(function.function());
+        }
+    }
+    selected.sort_by_key(|id| id.index());
+    let mut functions = Vec::new();
+    let mut by_mir_index = vec![None; program.functions.len()];
+    let mut symbols = HashSet::new();
+    for id in selected {
+        let (index, function) = function_by_id(program, id)?;
+        let symbol = symbol_name(&function.identity, types)?;
+        if !symbols.insert(symbol.clone()) {
+            return Err(CodegenError::DuplicateSymbol(symbol));
+        }
+        by_mir_index[index] = Some(functions.len());
+        functions.push(VerifiedFunction { mir_id: id, symbol });
+    }
+    let verified = VerifiedProgram {
+        functions,
+        by_mir_index,
+    };
+
+    for function in &program.functions {
+        // The plan's archive authenticates all original Resource type graphs;
+        // unrelated ordinary metadata keeps the previous complete type visitor.
+        for local in &function.locals {
+            for ty in [local.ty, local.debug_ty] {
+                if !plan.type_requires_custody(ty) && !exact_uninhabited_metadata_type(types, ty) {
+                    scalar_kind_inner(
+                        types,
+                        ty,
+                        "original ordinary companion local".into(),
+                        &mut HashSet::new(),
+                        TypeValidationPhase::OriginalMetadata,
+                    )?;
+                }
+            }
+        }
+        if verified.get(function.id).is_some() {
+            let verifier = Verifier {
+                program,
+                types,
+                verified: &verified,
+                phase: if descriptor_only_function(function) {
+                    VerifierPhase::DescriptorMetadata
+                } else {
+                    VerifierPhase::CallableNative
+                },
+                metadata_functions: RefCell::new(HashSet::new()),
+                resource: Some(plan),
+            };
+            verifier.function(function)?;
+        }
     }
     Ok(verified)
 }
@@ -716,6 +830,7 @@ struct Verifier<'a> {
     phase: VerifierPhase,
     // This is an original-body integrity traversal, not callable reachability.
     metadata_functions: RefCell<HashSet<FunctionId>>,
+    resource: Option<&'a jett_mir::ResourceOwnershipPlan<'a>>,
 }
 
 impl Verifier<'_> {
@@ -754,18 +869,32 @@ impl Verifier<'_> {
 
         let name = self.function_name(function);
         for param in &function.params {
+            if self.resource.is_some_and(|plan| {
+                plan.function(function.id).is_some() && plan.type_requires_custody(param.ty)
+            }) {
+                continue;
+            }
             self.value_kind(
                 function,
                 param.ty,
                 format!("parameter `{}` of `{name}`", param.name),
             )?;
         }
-        self.value_kind(
-            function,
-            function.return_type,
-            format!("return type of `{name}`"),
-        )?;
+        if !(self.resource.is_some_and(|plan| {
+            plan.function(function.id).is_some() && plan.type_requires_custody(function.return_type)
+        })) {
+            self.value_kind(
+                function,
+                function.return_type,
+                format!("return type of `{name}`"),
+            )?;
+        }
         for local in &function.locals {
+            if self.resource.is_some_and(|plan| {
+                plan.function(function.id).is_some() && plan.type_requires_custody(local.ty)
+            }) {
+                continue;
+            }
             self.value_kind(
                 function,
                 local.ty,
@@ -790,8 +919,16 @@ impl Verifier<'_> {
         // machine-code frame. Their caller still validates capture evaluation,
         // initialization, ownership and cleanup normally.
         if self.phase == VerifierPhase::CallableNative {
-            jett_mir::move_values::MoveValuePlan::analyze(self.program, function, self.types)
-                .map_err(|message| self.contract_error(function, function.span, message))?;
+            if let Some(plan) = self
+                .resource
+                .filter(|plan| plan.function(function.id).is_some())
+            {
+                jett_mir::ResourceCompanionPlan::analyze(plan, function.id)
+                    .map_err(|message| self.contract_error(function, function.span, message))?;
+            } else {
+                jett_mir::move_values::MoveValuePlan::analyze(self.program, function, self.types)
+                    .map_err(|message| self.contract_error(function, function.span, message))?;
+            }
         }
         Ok(())
     }
@@ -1545,6 +1682,123 @@ impl Verifier<'_> {
     }
 
     fn expression(&self, function: &Function, expression: &Expression) -> Result<(), CodegenError> {
+        if let Some(ownership) = self.resource {
+            // Source signatures do not describe the selected family's hidden Scope.
+            // Descriptor and adapter emission requires its distinct authenticated ABI.
+            let family_descriptor = match &expression.kind {
+                ExpressionKind::FunctionRef(target)
+                | ExpressionKind::ClosureRef {
+                    function: target, ..
+                }
+                | ExpressionKind::FunctionAdapter {
+                    function: target, ..
+                } => ownership.function(*target).is_some(),
+                ExpressionKind::InterfaceCoerce { adapters, .. } => adapters
+                    .iter()
+                    .any(|adapter| ownership.function(adapter.function).is_some()),
+                _ => false,
+            };
+            if family_descriptor {
+                return Err(self.unsupported(
+                    function,
+                    expression.span,
+                    "pending Resource family descriptor hidden Scope ABI",
+                ));
+            }
+            if let ExpressionKind::Call {
+                function: target, ..
+            } = &expression.kind
+            {
+                if ownership.function(*target).is_some() && !ownership.function(function.id).is_some_and(|plan| plan.operations_for_expression(expression).any(|operation| matches!(operation.role(), jett_mir::ResourceOperationRole::InvokeSourceFunction { function: callee, .. } if callee == target))) {
+                    return Err(self.unsupported(function, expression.span, "Resource family direct edge has no exact Source scope activation"));
+                }
+            }
+        }
+        if let Some(plan) = self.resource.and_then(|plan| plan.function(function.id)) {
+            let invocation = plan.operations_for_expression(expression).any(|operation| {
+                matches!(
+                    operation.role(),
+                    jett_mir::ResourceOperationRole::InvokeHook { .. }
+                        | jett_mir::ResourceOperationRole::InvokeSourceFunction { .. }
+                )
+            });
+            if invocation
+                || self
+                    .resource
+                    .is_some_and(|proof| proof.type_requires_custody(expression.ty))
+            {
+                match &expression.kind {
+                    ExpressionKind::Local(local) => {
+                        let local = function.local(*local).ok_or_else(|| {
+                            self.contract_error(
+                                function,
+                                expression.span,
+                                "custody local is outside its exact current header",
+                            )
+                        })?;
+                        return self.require_same_type(
+                            function,
+                            expression.span,
+                            local.ty,
+                            expression.ty,
+                            "custody local type changed",
+                        );
+                    }
+                    ExpressionKind::View(inner)
+                    | ExpressionKind::OptionalSome(inner)
+                    | ExpressionKind::ResultOk(inner)
+                    | ExpressionKind::ResultFail(inner) => return self.expression(function, inner),
+                    ExpressionKind::OptionalNone | ExpressionKind::ResourceHookValue { .. } => {
+                        return Ok(());
+                    }
+                    ExpressionKind::Call { args, .. }
+                    | ExpressionKind::ResourceInvoke { args, .. } => {
+                        if !invocation {
+                            return Err(self.contract_error(
+                                function,
+                                expression.span,
+                                "Resource native call lost its exact fresh operation",
+                            ));
+                        }
+                        for actual in args {
+                            self.expression(function, actual)?;
+                        }
+                        if !self
+                            .resource
+                            .is_some_and(|proof| proof.type_requires_custody(expression.ty))
+                        {
+                            self.value_kind(
+                                function,
+                                expression.ty,
+                                "ordinary custody call result",
+                            )?;
+                        }
+                        return Ok(());
+                    }
+                    ExpressionKind::IndirectCall { callee, args, .. } => {
+                        if !invocation {
+                            return Err(self.contract_error(
+                                function,
+                                expression.span,
+                                "Resource indirect hook lost its exact fresh operation",
+                            ));
+                        }
+                        self.expression(function, callee)?;
+                        for actual in args {
+                            self.expression(function, actual)?;
+                        }
+                        return Ok(());
+                    }
+                    _ => {
+                        return Err(self.unsupported(
+                            function,
+                            expression.span,
+                            "dedicated Resource expression transport",
+                        ));
+                    }
+                }
+            }
+        }
         let kind = self.value_kind(
             function,
             expression.ty,

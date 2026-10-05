@@ -27,6 +27,15 @@ mod inventory_execution;
 #[path = "native_conformance/call_ownership.rs"]
 mod call_ownership;
 
+#[path = "native_conformance/resource_report.rs"]
+mod resource_report;
+
+#[path = "native_conformance/resource_cases.rs"]
+mod resource_cases;
+
+#[path = "native_conformance/resource_execution.rs"]
+mod resource_execution;
+
 #[path = "native_conformance/scoped_call_views.rs"]
 mod scoped_call_views;
 

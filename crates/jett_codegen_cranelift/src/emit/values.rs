@@ -281,9 +281,15 @@ impl Translator<'_, '_> {
     pub(super) fn check_failure(&mut self) -> Result<(), CodegenError> {
         let status = self.leaf(NativeLeaf::Status, &[], false)?;
         let success = self.builder.create_block();
-        self.builder
-            .ins()
-            .brif(status, self.failure_block, &[], success, &[]);
+        if let Some(resource) = self.resource {
+            self.builder
+                .ins()
+                .brif(status, resource.failure, &[status.into()], success, &[]);
+        } else {
+            self.builder
+                .ins()
+                .brif(status, self.failure_block, &[], success, &[]);
+        }
         self.builder.switch_to_block(success);
         Ok(())
     }

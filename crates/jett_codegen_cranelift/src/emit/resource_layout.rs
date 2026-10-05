@@ -237,7 +237,7 @@ impl<'p> EmittedResourceLayout<'p> {
         Ok(())
     }
 }
-fn pending(message: &str) -> CodegenError {
+pub(super) fn pending(message: &str) -> CodegenError {
     CodegenError::Backend(format!("pending native Resource execution: {message}"))
 }
 fn ordinal(value: usize) -> Result<u32, CodegenError> {

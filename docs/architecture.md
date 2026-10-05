@@ -4199,3 +4199,28 @@ associates roles with exact current expression occurrences; clones or same-span,
 same-type expressions cannot select those roles. This is a compiler prerequisite,
 not native body or runtime authority. Three focused both-profile groups and all
 546 HIR/MIR/codegen/object checks plus the MIR doctest pass.
+
+### Direct Resource emission and private matched archives
+
+The direct Resource emitter validates the original checked graph before native
+preparation, derives a fresh immutable custody/layout plan and retains the full
+ordinary companion/acquisition analyses. Only functions in that plan receive
+the internal Scope argument. Ordinary functions retain their previous CFG and
+storage: Resource failure blocks and Return cleanup slots are allocated only
+for selected Resource functions. The C entry reads the authenticated original
+root body outcome after retirement; Scope cleanup has its separate channel.
+
+One double-cfg `jett_runtime` staticlib owns the compiler-test main, private
+installation and read-only observations. It carries the actual wire-v2 codec
+and 32 Resource leaves. The matching receipt records actual profile, source,
+archive, native-library order, CRT fingerprints and complete symbol/import
+inspection. The driver report decoder preserves original outcome fields and
+pre-destruction counts; missing observations refuse acceptance. Ordinary
+runtime/test builds exclude the private modules. Actual HOST controls and five
+shared reference/native Source scenarios pass in both private archive profiles;
+the native programs run after deleting their Project and synthetic Stdlib files.
+Exact outcomes/events and zero obligations are observed before teardown. The
+private link uses its actual measured library ordering; the reviewed bcrypt/
+advapi32 prefix difference does not alter production launcher validation.
+This is a local compiler-test distribution seam, with production providers,
+supported-host distribution and broader Resource execution still pending.

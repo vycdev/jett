@@ -1,0 +1,11 @@
+namespace app
+function consume(token: resource_probe.TestHandle, label: int64) returns nothing:
+    use resource_probe
+    resource_probe.close(token)
+    return nothing
+function main(net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle token = resource_probe.create(view net, 1) handle error:
+        return nothing
+    consume(token, resource_probe.terminal_label())
+    return nothing

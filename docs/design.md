@@ -8466,3 +8466,17 @@ the set's existing equality semantics.
 
 Generic task joins preserve the instantiated error type in handler observations,
 including when one source body is called with both secret and public errors.
+
+The native backend now emits direct checked Resource calls with an internal
+Scope parameter, exact lexical acquisition, provisional Return publication and
+ordinary companion cleanup. Ordinary callable signatures and Source rules stay
+the same. Exact indirect descriptor calls, statically aborted acquisition CFGs
+and mutable replacement still require their dedicated native successors.
+Compiler-test Resource providers are confined to a single runtime archive built
+with both `test` and `jett_resource_native_test_archive`; production providers
+remain disabled. Archive compilation and object emission alone do not establish
+linked Source execution. The first five original Source scenarios now pass in
+both native profiles against their real reference outcomes, with Source files
+absent at launch and zero live obligations before teardown. This local test
+slice does not enable production Resource providers or complete broader native
+Resource semantics.

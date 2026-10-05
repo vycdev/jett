@@ -1,5 +1,6 @@
 pub(crate) mod debug;
 mod graphics;
+mod resource_execution;
 mod resource_layout;
 mod values;
 use jett_mir::move_values::{
@@ -215,6 +216,9 @@ fn emit_for_triple(
 ) -> Result<ObjectArtifact, CodegenError> {
     if let Some(entry) = entry {
         validate_program_entry_contract(program, types, entry)?;
+    }
+    if !program.resource_manifest.kinds().is_empty() {
+        return resource_execution::emit(program, types, target, entry, options);
     }
     jett_mir::validate(program).map_err(CodegenError::InvalidMir)?;
     for function in &program.functions {
@@ -747,6 +751,28 @@ fn translate_function(
     symbol: &str,
     context: &mut Context,
 ) -> Result<(), CodegenError> {
+    translate_function_inner(
+        module,
+        declarations,
+        program,
+        function,
+        types,
+        symbol,
+        context,
+        None,
+    )
+}
+
+fn translate_function_inner(
+    module: &mut ObjectModule,
+    declarations: &DeclaredFunctions,
+    program: &Program,
+    function: &Function,
+    types: &TypeInterner,
+    symbol: &str,
+    context: &mut Context,
+    resource_layout: Option<&resource_layout::EmittedResourceLayout<'_>>,
+) -> Result<(), CodegenError> {
     if crate::verify::descriptor_only_function(function) {
         let mut builder_context = FunctionBuilderContext::new();
         let mut builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
@@ -771,10 +797,44 @@ fn translate_function(
 
     let runtime_context = builder.declare_var(module.target_config().pointer_type());
     let environment_variable = builder.declare_var(ir::types::I64);
-    let caller_acquisitions = jett_mir::validate_caller_acquisitions(program, function, types)
+    let companion = resource_layout
+        .map(|layout| jett_mir::ResourceCompanionPlan::analyze(layout.plan(), function.id))
+        .transpose()
         .map_err(|message| contract_error(symbol, function.span, message))?;
-    let ownership = MoveValuePlan::analyze(program, function, types)
-        .map_err(|message| contract_error(symbol, function.span, message))?;
+    let ordinary_acquisitions = if companion.is_none() {
+        Some(
+            jett_mir::validate_caller_acquisitions(program, function, types)
+                .map_err(|message| contract_error(symbol, function.span, message))?,
+        )
+    } else {
+        None
+    };
+    let caller_acquisitions = companion
+        .as_ref()
+        .map(|plan| plan.caller_acquisitions())
+        .or(ordinary_acquisitions.as_ref())
+        .ok_or_else(|| {
+            contract_error(symbol, function.span, "missing exact Source acquisitions")
+        })?;
+    let ordinary_ownership = if companion.is_none() {
+        Some(
+            MoveValuePlan::analyze(program, function, types)
+                .map_err(|message| contract_error(symbol, function.span, message))?,
+        )
+    } else {
+        None
+    };
+    let ownership = companion
+        .as_ref()
+        .map(|plan| plan.storage())
+        .or(ordinary_ownership.as_ref())
+        .ok_or_else(|| {
+            contract_error(
+                symbol,
+                function.span,
+                "function has no exact ownership storage proof",
+            )
+        })?;
     let local_slots = function
         .locals
         .iter()
@@ -852,17 +912,70 @@ fn translate_function(
         });
     }
     let failure_block = builder.create_block();
+    let resource_failure = resource_layout.map(|_| {
+        let block = builder.create_block();
+        builder.append_block_param(block, ir::types::I32);
+        block
+    });
+    let resource_scope = builder.declare_var(ir::types::I64);
+    let resource_slots = resource_layout.map(|_| {
+        let returned = builder.create_sized_stack_slot(ir::StackSlotData::new(
+            ir::StackSlotKind::ExplicitSlot,
+            8,
+            3,
+        ));
+        let finished = builder.create_sized_stack_slot(ir::StackSlotData::new(
+            ir::StackSlotKind::ExplicitSlot,
+            8,
+            3,
+        ));
+        (returned, finished)
+    });
+    let resource_status = builder.declare_var(ir::types::I32);
+    let mut resource_frames = Vec::new();
+    let mut resource_owners = Vec::new();
+    let mut resource_loans = Vec::new();
+    if let Some(layout) = resource_layout {
+        let plan = layout.plan().function(function.id).ok_or_else(|| {
+            resource_layout::pending("function is outside its selected Resource family")
+        })?;
+        for storage in [
+            &mut resource_frames,
+            &mut resource_owners,
+            &mut resource_loans,
+        ]
+        .into_iter()
+        .zip([
+            plan.frames().len(),
+            plan.owner_slots().len(),
+            plan.loans().len(),
+        ]) {
+            for _ in 0..storage.1 {
+                storage
+                    .0
+                    .push(builder.create_sized_stack_slot(ir::StackSlotData::new(
+                        ir::StackSlotKind::ExplicitSlot,
+                        8,
+                        3,
+                    )));
+            }
+        }
+    }
 
     let mut variables = Vec::with_capacity(function.locals.len());
     let mut pending_variables = Vec::with_capacity(function.locals.len());
     for local in &function.locals {
-        variables
-            .push(clif_type(types, local.ty, "function local")?.map(|ty| builder.declare_var(ty)));
-        pending_variables.push(if is_task_scalar(types, local.ty)? {
-            Some(builder.declare_var(ir::types::I64))
-        } else {
-            None
-        });
+        variables.push(
+            resource_execution::clif_type(resource_layout, types, local.ty, "function local")?
+                .map(|ty| builder.declare_var(ty)),
+        );
+        pending_variables.push(
+            if resource_execution::task_scalar(resource_layout, types, local.ty)? {
+                Some(builder.declare_var(ir::types::I64))
+            } else {
+                None
+            },
+        );
     }
 
     let control_flow = ControlFlowGraph::analyze(function).map_err(|errors| {
@@ -912,6 +1025,19 @@ fn translate_function(
                 builder.ins().stack_store(zero, storage.owner_slot, 0);
                 builder.ins().stack_store(zero, storage.retired_slot, 0);
             }
+            if let Some((returned, finished)) = resource_slots {
+                builder.ins().stack_store(zero, returned, 0);
+                builder.ins().stack_store(zero, finished, 0);
+                for slot in resource_frames
+                    .iter()
+                    .chain(&resource_owners)
+                    .chain(&resource_loans)
+                {
+                    builder.ins().stack_store(zero, *slot, 0);
+                }
+                let failed = builder.ins().iconst(ir::types::I32, 1);
+                builder.def_var(resource_status, failed);
+            }
         }
 
         let mut translator = Translator {
@@ -928,7 +1054,7 @@ fn translate_function(
             equality_methods: &program.equality_methods,
             symbol,
             local_types: &function.locals,
-            caller_acquisitions: &caller_acquisitions,
+            caller_acquisitions,
             taking_binding: None,
             test_ownership: matches!(
                 function.identity.declaration.kind,
@@ -939,9 +1065,31 @@ fn translate_function(
             generation_slots: &generation_slots,
             next_temporary: 0,
             failure_block,
+            resource: None,
         };
+        translator.resource = resource_layout.map(|layout| resource_execution::ResourceEmission {
+            layout,
+            function: function.id,
+            scope: resource_scope,
+            return_companion: resource_slots.expect("selected Resource storage").0,
+            scope_finished: resource_slots.expect("selected Resource storage").1,
+            status: resource_status,
+            frames: &resource_frames,
+            owners: &resource_owners,
+            loans: &resource_loans,
+            failure: resource_failure.expect("selected Resource failure block"),
+            block: block.id,
+            position: jett_mir::ResourcePosition::Terminator,
+        });
         if block.id == function.entry {
             let incoming = translator.builder.block_params(native_block).to_vec();
+            if let Some(resource) = translator.resource {
+                let scope = incoming.get(2).copied().ok_or_else(|| {
+                    resource_layout::pending("dedicated function lost its hidden Scope")
+                })?;
+                translator.builder.def_var(resource.scope, scope);
+                translator.resource_validate_scope()?;
+            }
             let environment = incoming.get(1).copied().ok_or_else(|| {
                 contract_error(
                     symbol,
@@ -959,7 +1107,11 @@ fn translate_function(
                         format!("cannot bind native actor environment: {error}"),
                     )
                 })?;
-            let mut incoming_index = 2_usize;
+            let mut incoming_index = if resource_layout.is_some() {
+                3_usize
+            } else {
+                2_usize
+            };
             for (index, parameter) in function.params.iter().enumerate() {
                 let variable =
                     variable_for(&variables, parameter.local.index(), parameter.span, symbol)?;
@@ -1066,6 +1218,9 @@ fn translate_function(
                         })?;
                 }
             }
+            if translator.resource.is_some() {
+                translator.resource_bind_parameters(function)?;
+            }
             for parameter in &function.params {
                 if let Some(slot) = local_slots[parameter.local.index() as usize] {
                     let v = translator
@@ -1094,13 +1249,25 @@ fn translate_function(
         }
         translator.drop_dead_locals(&ownership.live_in[block_index])?;
         for (index, statement) in block.statements.iter().enumerate() {
+            if let Some(resource) = &mut translator.resource {
+                resource.position = jett_mir::ResourcePosition::Statement(index);
+            }
             translator.statement(statement)?;
             translator.drop_temporaries()?;
             translator.drop_dead_locals(&ownership.live_after_statement[block_index][index])?;
         }
+        if let Some(resource) = &mut translator.resource {
+            resource.position = jett_mir::ResourcePosition::Terminator;
+        }
         translator.terminator(&block.terminator)?;
     }
 
+    if let Some(resource_failure) = resource_failure {
+        builder.switch_to_block(resource_failure);
+        let status = builder.block_params(resource_failure)[0];
+        builder.def_var(resource_status, status);
+        builder.ins().jump(failure_block, &[]);
+    }
     builder.switch_to_block(failure_block);
     let mut translator = Translator {
         builder: &mut builder,
@@ -1116,7 +1283,7 @@ fn translate_function(
         equality_methods: &program.equality_methods,
         symbol,
         local_types: &function.locals,
-        caller_acquisitions: &caller_acquisitions,
+        caller_acquisitions,
         taking_binding: None,
         test_ownership: matches!(
             function.identity.declaration.kind,
@@ -1127,15 +1294,36 @@ fn translate_function(
         generation_slots: &generation_slots,
         next_temporary: temporary_slots.len(),
         failure_block,
+        resource: None,
     };
+    translator.resource = resource_layout.map(|layout| resource_execution::ResourceEmission {
+        layout,
+        function: function.id,
+        scope: resource_scope,
+        return_companion: resource_slots.expect("selected Resource storage").0,
+        scope_finished: resource_slots.expect("selected Resource storage").1,
+        status: resource_status,
+        frames: &resource_frames,
+        owners: &resource_owners,
+        loans: &resource_loans,
+        failure: resource_failure.expect("selected Resource failure block"),
+        block: function.entry,
+        position: jett_mir::ResourcePosition::Terminator,
+    });
     translator.drop_all()?;
-    let mut results = match clif_type(types, function.return_type, "failure return")? {
+    translator.resource_failure_cleanup()?;
+    let mut results = match resource_execution::clif_type(
+        resource_layout,
+        types,
+        function.return_type,
+        "failure return",
+    )? {
         None => vec![],
         Some(ir::types::F32) => vec![translator.builder.ins().f32const(0.0)],
         Some(ir::types::F64) => vec![translator.builder.ins().f64const(0.0)],
         Some(t) => vec![translator.builder.ins().iconst(t, 0)],
     };
-    if is_task_scalar(types, function.return_type)? {
+    if resource_execution::task_scalar(resource_layout, types, function.return_type)? {
         results.push(translator.builder.ins().iconst(ir::types::I64, 0));
     }
     translator.builder.ins().return_(&results);
@@ -1185,10 +1373,14 @@ struct Translator<'a, 'builder> {
     generation_slots: &'a [NativeCallGenerationStorage],
     next_temporary: usize,
     failure_block: ir::Block,
+    resource: Option<resource_execution::ResourceEmission<'a>>,
 }
 
 impl Translator<'_, '_> {
     fn statement(&mut self, statement: &Statement) -> Result<(), CodegenError> {
+        if self.resource_statement(statement)? {
+            return Ok(());
+        }
         match &statement.kind {
             StatementKind::ReflectedContainerReady { source, kind } => {
                 let ty = self.local_types[source.index() as usize].ty;
@@ -1706,6 +1898,9 @@ impl Translator<'_, '_> {
     }
 
     fn return_value(&mut self, value: Option<&Expression>, span: Span) -> Result<(), CodegenError> {
+        if self.resource.is_some() {
+            return self.resource_return(value, span);
+        }
         let mut result = match value {
             Some(value) => self.expression(value)?,
             None => self.nothing(),
@@ -1900,6 +2095,9 @@ impl Translator<'_, '_> {
     }
 
     fn expression_inner(&mut self, expression: &Expression) -> Result<LoweredValue, CodegenError> {
+        if let Some(value) = self.resource_expression(expression)? {
+            return Ok(value);
+        }
         let kind = scalar_kind(self.types, expression.ty, "native expression")?;
         match &expression.kind {
             ExpressionKind::ResourceHookValue { .. } | ExpressionKind::ResourceInvoke { .. } => {

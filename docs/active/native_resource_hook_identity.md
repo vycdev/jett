@@ -647,3 +647,37 @@ result for dedicated body emission. All three both-profile Source groups pass
 source/API review confirms the finite ordinary-analysis boundary. Dedicated
 body emission and linked native Resource lifecycle execution remain pending;
 whole-language coverage remains the about-85% estimate.
+
+## Direct body and matched archive checkpoint
+
+Direct original-Source body emission now compiles the selected Scope ABI,
+lexical Source/Hook actual staging, resident-view transport, typed sums,
+ordinary failure companions and provisional Return publication. Five focused
+groups check both compiler profiles. The full formatted compiler gate passes
+551 checks plus the MIR doctest after restricting Resource cleanup storage and
+blocks to the selected family. Exact indirect descriptors, eagerly aborted
+Resource acquisition CFGs and mutable Replace rows remain explicit successor
+work; they are part of the full goal.
+
+The actual double-cfg debug and release runtime archives compile on Windows
+MSVC with coherent `+crt-static` dependency flags. Complete symbol inspection
+finds exactly one main, eight private observation/host exports and all 32
+production Resource leaves in each. A separate production archive has no
+private main or test exports; the ordinary runtime suite passes 217 checks.
+The measured vectors retain their original order and duplication, including
+`/defaultlib:libcmt`. These are local Rust 1.93.1 checks; supported-host CI uses
+its separately pinned toolchain and remains a distinct gate.
+
+Four encoder controls run against exact current record declarations and the
+real report module; six driver decoder controls pass. They preserve unknown
+versus empty observations and original body/cleanup channels. Actual HOST C ABI
+negative controls pass with both measured profiles; these handwritten controls
+remain separate from Source conformance. The real reference and native gates
+each pass five shared original Source scenarios under both profiles, covering
+connected lifecycle, factory failure, partial actual failure, implicit drop and
+finalizer panic. Native execution runs after deleting Project and synthetic
+Stdlib Source directories and independently verifies outcomes, exact events,
+script exhaustion and zero Resource/ordinary obligations before one destroy.
+This accepts the first local compiler-test slice. It does not remove provider,
+aggregate, reflection, refinement, task, actor, concurrency or supported-host
+distribution obligations. The broader driver gate also passes 693 checks.

@@ -16,6 +16,10 @@ mod leaves;
 mod operations;
 mod provider;
 mod source;
+#[cfg(all(test, jett_resource_native_test_archive))]
+mod test_archive_api;
+#[cfg(all(test, jett_resource_native_test_archive))]
+mod test_archive_main;
 #[cfg(test)]
 pub(super) use provider::{DecodedScript, NativeTestEvent};
 use provider::{InstalledProvider, NativeProviderIdentity, NativeRestrictionIdentity};

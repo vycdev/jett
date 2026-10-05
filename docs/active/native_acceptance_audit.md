@@ -2197,3 +2197,39 @@ selects already validated roles; public ordinary Resource refusals remain.
 Readonly acquisitions borrow the same fresh immutable program. This compiler
 gate does not establish emitted Resource bodies or linked lifecycle execution;
 the fixed inventory and approximate 85% feature estimate are unchanged.
+
+## Direct Resource body and matched archive checkpoint
+
+The direct Resource emitter's five original-Source object/ABI groups pass in
+both compiler profiles. The formatted codegen/object/HIR/MIR gate passes
+551 checks plus the MIR doctest; a detected ordinary CFG regression is repaired
+by allocating Resource failure blocks and cleanup slots only in the selected
+family. Ordinary runtime checking passes 217 tests. Four exact report encoder
+controls and six actual driver decoder controls also pass.
+
+Both private Windows MSVC runtime profiles are compiled and inspected with
+the actual static-CRT flags, native-library vector and discovered SDK/linker.
+Each archive contains exactly one main, eight private test exports and 32
+Resource leaves. The production archive excludes private main/test exports.
+The HOST C ABI controls pass with each measured archive, including malformed
+input, foreign/stale context, repeated entry and output-capacity refusals. These
+handwritten controls add no Source coverage. Their actual primary report shows
+zero obligations before destroy and exact Constructed/Finalized events.
+
+The real reference gate and native gate each pass five original Source scenarios
+under both profiles: connected ownership/borrow/return/close, factory failure,
+later-actual ordinary failure, implicit drop and finalizer panic. Native binaries
+run after both Project and synthetic Stdlib directories are deleted. The strict
+report checks original body/cleanup outcomes, messages, events, exhausted script,
+ordinary storage and every Resource obligation before exactly one destroy.
+These are ten native executions in one conformance group, separate from the
+earlier 480-case corpus. The first local Windows compiler-test slice is accepted;
+production provider and supported-host distribution acceptance remain pending.
+
+The actual broader driver gate passes 693 tests, including all 182 lowering
+fixtures. Indirect/aborted/Replace and broader Resource semantics remain within
+the full goal. The fixed 207/182 inventory and rough 85% feature estimate retain
+their separate scopes. The private measured library order begins bcrypt then
+advapi32; the production canonical vector reverses those first two. The reviewed
+private prerequisite retains actual measured ordering and changes no production
+launcher validation or installed manifest.

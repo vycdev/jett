@@ -407,6 +407,10 @@ impl ResourceOperation {
     pub fn role(&self) -> &ResourceOperationRole {
         &self.role
     }
+    /// Separates constructor-captured expression roles from statement/terminator roles.
+    pub fn is_expression_operation(&self) -> bool {
+        self.expression.is_some()
+    }
 }
 
 #[derive(Debug)]
@@ -480,6 +484,10 @@ impl<'p> ResourceOwnershipPlan<'p> {
     }
     pub fn types(&self) -> &'p TypeInterner {
         self.types
+    }
+    /// Classification under this immutable validated graph; no ordinary carrier authority.
+    pub fn type_requires_custody(&self, ty: TypeId) -> bool {
+        resource_type_pending(self.types, ty)
     }
     pub fn functions(&self) -> &[ResourceFunctionPlan] {
         &self.functions

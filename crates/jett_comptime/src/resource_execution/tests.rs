@@ -1155,3 +1155,6 @@ fn closed_descriptor_mirror_identity_preserves_function_inequality_and_program_b
 
 #[path = "assignment_tests.rs"]
 mod mutable_assignment;
+
+#[path = "tests/native_source_oracles.rs"]
+mod native_source_oracles;
