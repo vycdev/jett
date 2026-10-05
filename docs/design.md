@@ -2287,6 +2287,12 @@ original program, including resource-free direct callers of Resource functions.
 It projects the fresh ownership plan into immutable layout bytes and the exact
 driver-selected entry tuple. These projections provide consistency metadata;
 they do not grant runtime authority or enable native Resource body execution.
+A separate ordinary companion plan borrows that fresh custody proof and its
+exact current function. It retains complete Source acquisitions, ordinary type,
+initialization, liveness, alias and move checks while excluding Resource carriers
+from ordinary ownership storage. Exact current expression identity selects
+already validated custody roles; identical cloned expressions cannot select them.
+Public ordinary move/copy/caller planning still refuses Resource authority.
 
 The private native runtime custody core separately tracks non-cloneable owned
 and borrowed tokens, checked frame destinations and reverse acquisition

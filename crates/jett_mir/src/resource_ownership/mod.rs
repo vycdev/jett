@@ -3,6 +3,9 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod companion;
+pub(crate) use companion::CompanionContext;
+pub use companion::ResourceCompanionPlan;
 mod execution_closure;
 #[cfg(test)]
 mod execution_closure_tests;
@@ -385,6 +388,8 @@ pub struct ResourceOperation {
     site: ResourceSite,
     ordinal: usize,
     role: ResourceOperationRole,
+    // Address identity is private, borrowed from this fresh plan's immutable Program.
+    expression: Option<usize>,
 }
 impl ResourceOperation {
     pub fn id(&self) -> ResourceOperationId {
@@ -451,6 +456,16 @@ impl ResourceFunctionPlan {
     }
     pub fn operations(&self) -> &[ResourceOperation] {
         &self.operations
+    }
+    /// Exact current occurrence, never a span/type/signature lookup.
+    pub fn operations_for_expression(
+        &self,
+        expression: &Expression,
+    ) -> impl Iterator<Item = &ResourceOperation> {
+        let address = std::ptr::from_ref(expression).addr();
+        self.operations
+            .iter()
+            .filter(move |operation| operation.expression == Some(address))
     }
 }
 #[derive(Debug)]

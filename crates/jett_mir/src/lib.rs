@@ -7,11 +7,11 @@ mod call_ownership;
 mod resource_ownership;
 pub use resource_ownership::{
     ResourceArgumentEffect, ResourceArgumentSyntax, ResourceCallFormal, ResourceCallOperand,
-    ResourceCallResult, ResourceCompletion, ResourceFrame, ResourceFrameId, ResourceFrameRole,
-    ResourceFunctionPlan, ResourceLoan, ResourceLoanId, ResourceLoanSource, ResourceOccupancy,
-    ResourceOperation, ResourceOperationId, ResourceOperationRole, ResourceOwnerSlot,
-    ResourceOwnerSlotId, ResourceOwnershipPlan, ResourcePath, ResourcePosition, ResourceShape,
-    ResourceSite, ResourceSlotStorage, validate_resource_ownership,
+    ResourceCallResult, ResourceCompanionPlan, ResourceCompletion, ResourceFrame, ResourceFrameId,
+    ResourceFrameRole, ResourceFunctionPlan, ResourceLoan, ResourceLoanId, ResourceLoanSource,
+    ResourceOccupancy, ResourceOperation, ResourceOperationId, ResourceOperationRole,
+    ResourceOwnerSlot, ResourceOwnerSlotId, ResourceOwnershipPlan, ResourcePath, ResourcePosition,
+    ResourceShape, ResourceSite, ResourceSlotStorage, validate_resource_ownership,
 };
 #[cfg(test)]
 mod resource_manifest_tests;

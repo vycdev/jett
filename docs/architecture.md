@@ -4184,4 +4184,18 @@ Return storage, absent sums and ordinary failure companions. Return publication
 uses the callee's completed root Scope while retaining the distinct Return slot.
 The immutable object accessor exposes that layout and the actual driver-selected
 entry function, signature and root Scope. It emits no Source body or provider.
-Connected ABI leaves and linked lifecycle execution remain required.
+Dedicated body calls to the runtime ABI, a matched archive and linked lifecycle
+execution remain required.
+
+ResourceCompanionPlan borrows one fresh ResourceOwnershipPlan and selects only
+its exact immutable current function and types. Its private context retains the
+complete Source caller validation and ordinary type/child, initialization,
+liveness, alias, loan and move checks. Ordinary ownership storage excludes
+Resource carriers; their custody remains in the independent CFG plan. The plan
+exposes readonly ordinary storage and complete Source acquisition facts with the
+same immutable program lifetime. Public ordinary CopyValuePlan, MoveValuePlan
+and caller admission keep their Resource-pending refusals. The CFG validator
+associates roles with exact current expression occurrences; clones or same-span,
+same-type expressions cannot select those roles. This is a compiler prerequisite,
+not native body or runtime authority. Three focused both-profile groups and all
+546 HIR/MIR/codegen/object checks plus the MIR doctest pass.

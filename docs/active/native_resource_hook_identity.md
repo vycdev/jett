@@ -624,3 +624,26 @@ The final reference Resource regression filter also passes **67/67** (`fd2bdb`).
 Independent current source/API reviews confirm the malformed ordinary-sum fix
 and exact readonly root-outcome boundary. Their finite scope does not establish
 multi-owned Source actual or recursive activation coverage or native execution.
+
+## Fresh-plan ordinary companion analysis
+
+ResourceCompanionPlan borrows the fresh custody plan, exact immutable current
+function and types. It retains ordinary storage/type/child, initialization,
+liveness, alias, loan and move analysis and complete original Source acquisition
+validation. Resource carriers do not enter ordinary owned storage. Readonly
+ordinary storage and CallerAcquisitions retain the same current program lifetime;
+public ordinary Copy/Move/Caller gates keep their Resource-pending refusals.
+Exact expression occurrence roles are captured by the fresh CFG validator;
+identical cloned expressions do not select operations.
+
+The guarded prerequisite applied seven paths and 24 hunks (`7bca1d`). Actual
+compilation exposed use of the public caller admission gate inside the private
+companion path (`12afac`). The repair uses the same complete internal Source
+validator only in the already authenticated companion context, retaining the
+ordinary public gate. The constructor also stores its readonly Source acquisition
+result for dedicated body emission. All three both-profile Source groups pass
+(`bbbf1d`). The formatted gate passes **546 checks**: 74 codegen, 63 object,
+192 HIR and 217 MIR tests, plus the MIR doctest (`f48b08`). Independent current
+source/API review confirms the finite ordinary-analysis boundary. Dedicated
+body emission and linked native Resource lifecycle execution remain pending;
+whole-language coverage remains the about-85% estimate.

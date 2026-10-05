@@ -8,6 +8,30 @@ use jett_types::{Type, TypeId, TypeInterner};
 use std::collections::BTreeSet;
 type Set = BTreeSet<usize>;
 
+#[derive(Clone, Copy)]
+struct PlanningContext<'a> {
+    program: Option<&'a crate::Program>,
+    companion: Option<&'a crate::resource_ownership::CompanionContext<'a>>,
+}
+impl<'a> PlanningContext<'a> {
+    fn is_some(self) -> bool {
+        self.program.is_some()
+    }
+    fn is_none(self) -> bool {
+        self.program.is_none()
+    }
+    fn is_some_and(self, f: impl FnOnce(&'a crate::Program) -> bool) -> bool {
+        self.program.is_some_and(f)
+    }
+    fn and_then<T>(self, f: impl FnOnce(&'a crate::Program) -> Option<T>) -> Option<T> {
+        self.program.and_then(f)
+    }
+    fn resource_type(self, ty: TypeId) -> bool {
+        self.companion
+            .is_some_and(|context| context.resource_type(ty))
+    }
+}
+
 #[derive(Debug)]
 pub struct CopyValuePlan {
     pub owned_locals: Vec<usize>,
@@ -30,11 +54,38 @@ impl CopyValuePlan {
         types: &TypeInterner,
         program: Option<&crate::Program>,
     ) -> Result<Self, String> {
-        if crate::resource_type_pending(types, function.return_type)
-            || function
-                .locals
-                .iter()
-                .any(|local| crate::resource_type_pending(types, local.ty))
+        Self::analyze_with_context(
+            function,
+            types,
+            PlanningContext {
+                program,
+                companion: None,
+            },
+        )
+    }
+    pub(crate) fn analyze_companion(
+        context: &crate::resource_ownership::CompanionContext<'_>,
+    ) -> Result<Self, String> {
+        Self::analyze_with_context(
+            context.function,
+            context.types,
+            PlanningContext {
+                program: Some(context.program),
+                companion: Some(context),
+            },
+        )
+    }
+    fn analyze_with_context(
+        function: &Function,
+        types: &TypeInterner,
+        program: PlanningContext<'_>,
+    ) -> Result<Self, String> {
+        if program.companion.is_none()
+            && (crate::resource_type_pending(types, function.return_type)
+                || function
+                    .locals
+                    .iter()
+                    .any(|local| crate::resource_type_pending(types, local.ty)))
         {
             return Err("pending ResourceOwnershipPlan: ordinary CopyValuePlan cannot plan Resource carriers or descriptors".into());
         }
@@ -359,6 +410,7 @@ impl CopyValuePlan {
                 .iter()
                 .filter(|l| {
                     l.view_source.is_none()
+                        && !program.resource_type(l.ty)
                         && (crate::move_values::is_copy_owned(types, l.ty)
                             || (program.is_some()
                                 && crate::move_values::is_linear(types, l.ty)
@@ -435,11 +487,21 @@ fn visit(
     reads: &mut Set,
     temporaries: &mut usize,
     types: &TypeInterner,
-    program: Option<&crate::Program>,
+    program: PlanningContext<'_>,
     borrowed: bool,
 ) -> Result<(), String> {
+    if let Some(context) = program.companion {
+        if !context.contains(value) {
+            return Err(
+                "Resource companion expression is outside its exact current function".into(),
+            );
+        }
+    }
     plan_type(types, value.ty, program)?;
-    if program.is_some() && crate::move_values::is_linear(types, value.ty) {
+    if program.is_some()
+        && !program.resource_type(value.ty)
+        && crate::move_values::is_linear(types, value.ty)
+    {
         *temporaries += usize::from(match &value.kind {
             ExpressionKind::Local(_) => !borrowed,
             ExpressionKind::Call { .. }
@@ -497,7 +559,8 @@ fn visit(
         | ExpressionKind::Call { .. }
         | ExpressionKind::IndirectCall { .. }
         | ExpressionKind::Field { .. }
-            if crate::move_values::is_copy_owned(types, value.ty) =>
+            if !program.resource_type(value.ty)
+                && crate::move_values::is_copy_owned(types, value.ty) =>
         {
             *temporaries += 1
         }
@@ -577,10 +640,19 @@ fn visit(
         _ => {}
     }
     match &value.kind {
+        ExpressionKind::ResourceHookValue { .. } if program.companion.is_some() => {},
+        ExpressionKind::ResourceInvoke { hook, args, evaluation_order, .. } if program.companion.is_some() => {
+            let Type::Function { view_params, .. } = types.resolve(hook.function_type()) else { return Err("Resource hook has no exact function signature".into()); };
+            for &parameter in evaluation_order {
+                visit(&args[parameter], reads, temporaries, types, program, view_params[parameter])?;
+            }
+            // Ordinary hook results still own normal runtime temporaries.
+            *temporaries += usize::from(!program.resource_type(value.ty) && (crate::move_values::is_copy_owned(types, value.ty) || crate::move_values::is_linear(types, value.ty)));
+        }
         ExpressionKind::ResourceInvoke { .. } | ExpressionKind::ResourceHookValue { .. } => return Err("pending ResourceOwnershipPlan: ordinary expression liveness cannot own Resource operation or descriptor temporaries".into()),
         ExpressionKind::Local(l) => {
             reads.insert(l.index() as usize);
-            if program.is_some() && !borrowed && crate::move_values::is_linear(types, value.ty) {
+            if program.is_some() && !program.resource_type(value.ty) && !borrowed && crate::move_values::is_linear(types, value.ty) {
                 // Test predicates clone local owners on each ordinary read;
                 // reserving this slot for all native functions is conservative.
                 *temporaries += 1;
@@ -876,17 +948,13 @@ fn copy_plan_type(types: &TypeInterner, ty: TypeId) -> Result<(), String> {
     ))
 }
 
-fn plan_type(
-    types: &TypeInterner,
-    ty: TypeId,
-    program: Option<&crate::Program>,
-) -> Result<(), String> {
+fn plan_type(types: &TypeInterner, ty: TypeId, program: PlanningContext<'_>) -> Result<(), String> {
     plan_type_inner(types, ty, program, &mut BTreeSet::new())
 }
 fn plan_type_inner(
     types: &TypeInterner,
     ty: TypeId,
-    program: Option<&crate::Program>,
+    program: PlanningContext<'_>,
     seen: &mut BTreeSet<u32>,
 ) -> Result<(), String> {
     if ty.index() as usize >= types.len() {
@@ -894,6 +962,32 @@ fn plan_type_inner(
     }
     if !seen.insert(ty.index()) {
         return Ok(());
+    }
+    if program.resource_type(ty) {
+        // The fresh custody proof owns only the carrier. Its ordinary companion
+        // and signature children keep their existing backend type checks.
+        match types.resolve(ty) {
+            Type::Resource(_) => return Ok(()),
+            Type::Optional(inner) => return plan_type_inner(types, *inner, program, seen),
+            Type::Result(ok, failure) => {
+                plan_type_inner(types, *ok, program, seen)?;
+                return plan_type_inner(types, *failure, program, seen);
+            }
+            Type::Function {
+                params,
+                return_type,
+                ..
+            } => {
+                for parameter in params {
+                    plan_type_inner(types, *parameter, program, seen)?;
+                }
+                return plan_type_inner(types, *return_type, program, seen);
+            }
+            _ => return Err(
+                "pending Resource companion: qualified or aggregate custody type is unsupported"
+                    .into(),
+            ),
+        }
     }
     if program.is_some() {
         match types.resolve(ty) {

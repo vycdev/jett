@@ -42,6 +42,7 @@ struct Analysis<'p> {
     loan_sites: BTreeMap<(Key, usize, ResourceLoanSource), ResourceLoanId>,
     site: ResourceSite,
     ordinal: usize,
+    expression: Option<usize>,
     emit: bool,
     active_frame: ResourceFrameId,
     return_frame: Option<ResourceFrameId>,
@@ -56,6 +57,7 @@ impl<'p> Analysis<'p> {
                 site: self.site,
                 ordinal: self.ordinal,
                 role,
+                expression: self.expression,
             });
         }
     }
@@ -309,6 +311,19 @@ impl<'p> Analysis<'p> {
         self.operation(frame, ResourceOperationRole::Complete { outcome });
     }
     fn expression(
+        &mut self,
+        state: &mut State,
+        expression: &Expression,
+        taking: bool,
+    ) -> Result<Option<Value>, String> {
+        let previous = self
+            .expression
+            .replace(std::ptr::from_ref(expression).addr());
+        let result = self.expression_inner(state, expression, taking);
+        self.expression = previous;
+        result
+    }
+    fn expression_inner(
         &mut self,
         state: &mut State,
         expression: &Expression,
@@ -903,6 +918,7 @@ pub(super) fn analyze(
         loan_sites: BTreeMap::new(),
         site,
         ordinal: 0,
+        expression: None,
         emit: false,
         active_frame: ResourceFrameId(0),
         return_frame,

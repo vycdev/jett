@@ -167,18 +167,46 @@ impl MoveValuePlan {
         function: &Function,
         types: &TypeInterner,
     ) -> Result<CopyValuePlan, String> {
-        if crate::resource_type_pending(types, function.return_type)
-            || function
-                .locals
-                .iter()
-                .any(|local| crate::resource_type_pending(types, local.ty))
+        Self::analyze_inner(program, function, types, None)
+    }
+    pub(crate) fn analyze_companion(
+        context: &crate::resource_ownership::CompanionContext<'_>,
+    ) -> Result<CopyValuePlan, String> {
+        Self::analyze_inner(
+            context.program,
+            context.function,
+            context.types,
+            Some(context),
+        )
+    }
+    fn analyze_inner(
+        program: &Program,
+        function: &Function,
+        types: &TypeInterner,
+        companion: Option<&crate::resource_ownership::CompanionContext<'_>>,
+    ) -> Result<CopyValuePlan, String> {
+        if companion.is_none()
+            && (crate::resource_type_pending(types, function.return_type)
+                || function
+                    .locals
+                    .iter()
+                    .any(|local| crate::resource_type_pending(types, local.ty)))
         {
             return Err("pending ResourceOwnershipPlan: ordinary MoveValuePlan cannot transfer or drop Resource custody".into());
         }
         validate_local_view_initializers(function, types)?;
         let call_views = crate::call_views::validate(function, types)?;
-        let caller_acquisitions = crate::validate_caller_acquisitions(program, function, types)?;
-        let mut plan = CopyValuePlan::analyze_storage(function, types, Some(program))?;
+        // The private companion context already borrows the exact fresh custody
+        // proof. Re-run complete Source call validation without the public
+        // ordinary admission gate; every ordinary acquisition check is retained.
+        let caller_acquisitions = match companion {
+            Some(_) => crate::call_ownership::validate_function(program, function, types)?,
+            None => crate::validate_caller_acquisitions(program, function, types)?,
+        };
+        let mut plan = match companion {
+            Some(context) => CopyValuePlan::analyze_companion(context)?,
+            None => CopyValuePlan::analyze_storage(function, types, Some(program))?,
+        };
         if function.identity.declaration.kind == jett_hir::DeclarationKind::ActorHandler {
             // Captured state is written back after a return/respond terminator.
             // Keep its owning slots live even when the source body stops reading it.
@@ -274,6 +302,7 @@ impl MoveValuePlan {
                     caller_acquisitions: &caller_acquisitions,
                     taking_binding: None,
                     validate: false,
+                    companion,
                 }
                 .block(id)?;
                 changed |= next != outgoing[id.index() as usize]
@@ -302,6 +331,7 @@ impl MoveValuePlan {
                 caller_acquisitions: &caller_acquisitions,
                 taking_binding: None,
                 validate: true,
+                companion,
             }
             .block(id)?;
         }
@@ -364,6 +394,7 @@ struct Flow<'a> {
     caller_acquisitions: &'a crate::CallerAcquisitions<'a>,
     taking_binding: Option<crate::LocalId>,
     validate: bool,
+    companion: Option<&'a crate::resource_ownership::CompanionContext<'a>>,
 }
 impl Flow<'_> {
     fn block(mut self, id: crate::BlockId) -> Result<(Set, Set, Set), String> {
@@ -661,6 +692,21 @@ impl Flow<'_> {
     }
 
     fn expr_inner(&mut self, value: &Expression, borrowed: bool) -> Result<(), String> {
+        if let Some(context) = self.companion {
+            if !context.contains(value) {
+                return Err("Resource companion move is outside its current function".into());
+            }
+            if context.resource_type(value.ty) {
+                match &value.kind {
+                    ExpressionKind::Local(local) => { self.read(*local, "Resource companion initialization")?; return Ok(()); }
+                    ExpressionKind::View(inner) => return self.expr(inner, true),
+                    ExpressionKind::ResourceHookValue { .. } | ExpressionKind::OptionalNone => return Ok(()),
+                    ExpressionKind::ResultOk(inner) | ExpressionKind::ResultFail(inner) | ExpressionKind::OptionalSome(inner) => return self.expr(inner, false),
+                    ExpressionKind::Call { .. } | ExpressionKind::IndirectCall { .. } | ExpressionKind::ResourceInvoke { .. } => {},
+                    _ => return Err("pending Resource companion: expression requires its dedicated custody transport".into()),
+                }
+            }
+        }
         match &value.kind {
             ExpressionKind::Local(local) => {
                 let id = local.index() as usize;
@@ -946,6 +992,12 @@ impl Flow<'_> {
                         return Err("cannot capture a borrowed native place".into());
                     }
                 }
+            }
+            ExpressionKind::ResourceInvoke { hook, args, evaluation_order, .. } if self.companion.is_some() => {
+                let Type::Function { view_params, .. } = self.types.resolve(hook.function_type()) else { return Err("Resource hook has no exact function signature".into()); };
+                let saved = self.loans.clone();
+                for &parameter in evaluation_order { self.expr(&args[parameter], view_params[parameter])?; }
+                self.loans = saved;
             }
             ExpressionKind::ResourceHookValue { .. } | ExpressionKind::ResourceInvoke { .. } => return Err("pending ResourceOwnershipPlan: ordinary move expression cannot own Resource descriptors or invokes".into()),
             ExpressionKind::Int(_)

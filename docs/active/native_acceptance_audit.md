@@ -2186,3 +2186,14 @@ fix (`bf61fa`) and passing after it (`5af1b8`). Root-outcome evidence (`4f200a`)
 preserves original body zero independently of cleanup failure and rejects
 active/stale/foreign or wrong-purpose observations before effects. These remain
 host/C protocol checks; generated Source-native lifecycle admission is pending.
+
+## Resource ordinary companion compiler gate
+
+The fresh-plan companion analysis passes three both-profile Source groups and
+**546 HIR/MIR/codegen/object checks plus the MIR doctest** (`f48b08`). It preserves
+ordinary initialization/liveness/alias/move/type/Source call checks and excludes
+Resource endpoints from ordinary owned storage. Current expression identity
+selects already validated roles; public ordinary Resource refusals remain.
+Readonly acquisitions borrow the same fresh immutable program. This compiler
+gate does not establish emitted Resource bodies or linked lifecycle execution;
+the fixed inventory and approximate 85% feature estimate are unchanged.
