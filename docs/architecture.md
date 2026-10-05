@@ -4224,3 +4224,7 @@ private link uses its actual measured library ordering; the reviewed bcrypt/
 advapi32 prefix difference does not alter production launcher validation.
 This is a local compiler-test distribution seam, with production providers,
 supported-host distribution and broader Resource execution still pending.
+
+### Resource replacement preflight
+
+The native replacement leaf preflights its exact old and evaluated replacement owners against the registered destination before removing handles or invoking finalizers. Core custody checks both current generations and runtime frames, exclusive destination occupancy, absent loans, nominal kind and reserved transfer capacity. The existing transfer rechecks custody after old cleanup; no reusable transfer permission is exposed. Cleanup failure still retires the independently staged replacement and keeps its original failure priority. Four focused replacement tests and all 220 runtime checks pass. Source Replace metadata and native assignment emission remain required.

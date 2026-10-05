@@ -581,16 +581,21 @@ impl NativeResourceState {
         if old_handle == replacement_handle {
             return Err(NativeResourceError::WrongOperation);
         }
-        let old = self.owner(old_handle, old_slot)?;
-        let old_frame = old.frame;
-        self.custody.validate_owned(&old.token, registry)?;
-        let replacement = self.owner(replacement_handle, replacement_slot)?;
-        self.custody.validate_owned(&replacement.token, registry)?;
-        let mut ids = self.reserve(1)?;
-        let handle = next_handle(&mut ids)?;
+        let old_frame = self.owner(old_handle, old_slot)?.frame;
+        self.owner(replacement_handle, replacement_slot)?;
         let holder = self
             .custody
             .holder(&self.frame(old_frame)?.token, &self.layout.slot(old_slot)?)?;
+        let (Some(NativeResourceEntry::Owner(old)), Some(NativeResourceEntry::Owner(replacement))) = (
+            self.handles.get(&old_handle),
+            self.handles.get(&replacement_handle),
+        ) else {
+            return Err(NativeResourceError::WrongFamily);
+        };
+        self.custody
+            .preflight_replacement(&old.token, &replacement.token, &holder, registry)?;
+        let mut ids = self.reserve(1)?;
+        let handle = next_handle(&mut ids)?;
         let Some(NativeResourceEntry::Owner(mut old)) = self.handles.remove(&old_handle) else {
             return Err(NativeResourceError::WrongFamily);
         };

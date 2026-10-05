@@ -746,3 +746,82 @@ fn custody_failed_provenance_cleanup_preserves_unretired_frame_and_continues_eli
 
 #[path = "tests/source_batch.rs"]
 mod source_batch;
+
+#[test]
+fn custody_replacement_preflight_generation_capacity_refuses_before_old_finalization() {
+    let mut registry = ResourceRegistry::new();
+    let program = test_program(&registry);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut core = ResourceCustody::new(program.clone(), &registry).unwrap();
+    let scope = core
+        .begin_frame(ResourceFrameKind::Scope, ResourcePurpose::Runtime)
+        .unwrap();
+    let mut old = acquire(
+        &mut core,
+        &mut registry,
+        &program,
+        &scope,
+        0,
+        61,
+        &events,
+        false,
+    );
+    let operation = core
+        .begin_frame(ResourceFrameKind::Operation, ResourcePurpose::Runtime)
+        .unwrap();
+    let mut replacement = acquire(
+        &mut core,
+        &mut registry,
+        &program,
+        &operation,
+        1,
+        62,
+        &events,
+        false,
+    );
+    let holder = destination(&core, &program, &scope, 0);
+    let old_key = core.validate_owned(&old, &registry).unwrap();
+    let rhs_key = core.validate_owned(&replacement, &registry).unwrap();
+    let before_holder = core.owners[replacement.owner].holder;
+    let before_generation = replacement.holder_generation;
+    let before_logs = (
+        core.frames[scope.index].acquisitions.len(),
+        core.frames[operation.index].acquisitions.len(),
+    );
+    // Deterministic private capacity fault, not an allocation/global-ID claim.
+    core.owners[replacement.owner].generation = u64::MAX;
+    replacement.holder_generation = u64::MAX;
+    assert_eq!(core.validate_owned(&replacement, &registry), Ok(rhs_key));
+    assert_eq!(
+        core.preflight_replacement(&old, &replacement, &holder, &registry),
+        Err(CustodyError::CapacityExhausted)
+    );
+    assert_eq!(core.validate_owned(&old, &registry), Ok(old_key));
+    assert_eq!(core.validate_owned(&replacement, &registry), Ok(rhs_key));
+    assert_eq!((core.live_owners(), registry.live_count()), (2, 2));
+    assert_eq!(core.owners[replacement.owner].holder, before_holder);
+    assert_eq!(replacement.holder_generation, u64::MAX);
+    assert_eq!(
+        (
+            core.frames[scope.index].acquisitions.len(),
+            core.frames[operation.index].acquisitions.len()
+        ),
+        before_logs
+    );
+    assert!(events.lock().unwrap().is_empty());
+    core.owners[replacement.owner].generation = before_generation;
+    replacement.holder_generation = before_generation;
+    core.preflight_replacement(&old, &replacement, &holder, &registry)
+        .unwrap();
+    assert!(events.lock().unwrap().is_empty());
+    assert_eq!(core.close(&mut old, &mut registry).failure(), None);
+    assert_eq!(*events.lock().unwrap(), [61]);
+    core.transfer(&mut replacement, &holder, &registry).unwrap();
+    assert_eq!(core.validate_owned(&replacement, &registry), Ok(rhs_key));
+    assert_eq!(replacement.holder_generation, before_generation + 1);
+    assert_eq!(core.end_frame(&operation, &mut registry).failure(), None);
+    assert_eq!(*events.lock().unwrap(), [61]);
+    assert_eq!(core.end_frame(&scope, &mut registry).failure(), None);
+    assert_eq!(*events.lock().unwrap(), [61, 62]);
+    clean(&core, &registry);
+}

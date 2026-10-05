@@ -599,6 +599,51 @@ impl ResourceCustody {
         Ok((holder, generation))
     }
 
+    /// Authenticate the exact occupied destination and reserve the impending
+    /// transfer before replacement runs either owner's finalizer. No reusable
+    /// transfer permission is returned; the ordinary transfer rechecks it later.
+    pub(crate) fn preflight_replacement(
+        &mut self,
+        old: &OwnedResourceToken,
+        replacement: &OwnedResourceToken,
+        destination: &ResourceHolderToken,
+        registry: &ResourceRegistry,
+    ) -> Result<(), CustodyError> {
+        let holder = self.holder_token(destination)?;
+        self.runtime_frame(holder.frame)?;
+        let old_owner = self.owner(old)?;
+        self.validate_registry_owner(old_owner, registry)?;
+        if old_owner.holder != holder || old.owner == replacement.owner {
+            return Err(CustodyError::InvalidOwner);
+        }
+        let replacement_owner = self.owner(replacement)?;
+        self.runtime_frame(replacement_owner.holder.frame)?;
+        self.validate_registry_owner(replacement_owner, registry)?;
+        if self.borrowed(old.owner) || self.borrowed(replacement.owner) {
+            return Err(CustodyError::ActiveBorrow);
+        }
+        if self.program.0.slots.get(holder.slot) != Some(&replacement_owner.kind) {
+            return Err(CustodyError::WrongKind);
+        }
+        if self
+            .owners
+            .iter()
+            .enumerate()
+            .any(|(index, owner)| index != old.owner && owner.live && owner.holder == holder)
+        {
+            return Err(CustodyError::OccupiedHolder);
+        }
+        replacement_owner
+            .generation
+            .checked_add(1)
+            .ok_or(CustodyError::CapacityExhausted)?;
+        self.frames[holder.frame]
+            .acquisitions
+            .try_reserve(1)
+            .map_err(|_| CustodyError::CapacityExhausted)?;
+        Ok(())
+    }
+
     /// A Source activation reserves its entire exact formal handoff before any
     /// owner moves. References are existing live tokens and registered metadata;
     /// this creates neither ownership nor a reusable transfer permission.

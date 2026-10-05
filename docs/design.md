@@ -8480,3 +8480,5 @@ both native profiles against their real reference outcomes, with Source files
 absent at launch and zero live obligations before teardown. This local test
 slice does not enable production Resource providers or complete broader native
 Resource semantics.
+
+Native plain Resource replacement validates both exact live owners, active runtime holders, loans, nominal kinds, generation capacity and acquisition storage before retiring the old value. An invalid replacement leaves both owners intact. This runtime protocol check does not yet admit Source replacement in native code generation.

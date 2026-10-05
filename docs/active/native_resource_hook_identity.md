@@ -681,3 +681,7 @@ script exhaustion and zero Resource/ordinary obligations before one destroy.
 This accepts the first local compiler-test slice. It does not remove provider,
 aggregate, reflection, refinement, task, actor, concurrency or supported-host
 distribution obligations. The broader driver gate also passes 693 checks.
+
+## Replacement refusal before finalization
+
+The native plain-owner replacement protocol now validates both owners and reserves generation/acquisition capacity before old cleanup. New causal controls cover a loan on either owner, a consumed stale RHS handle and deterministic RHS generation exhaustion; each refusal preserves live owners and finalizer events, followed by a valid replacement or transfer. The unchanged success/finalizer-panic baseline also passes. The formatted focused gate passes four tests, and the full runtime gate passes 220 checks (207 unit and 13 integration). These are runtime/HOST controls. Source Replace producer/writer/emitter and aggregate replacement remain required; the 85% estimate is unchanged. Earlier matched archives and ten Source-native executions apply to cc06aa1f, before this runtime change. Fresh private archives and Source acceptance must be measured separately.

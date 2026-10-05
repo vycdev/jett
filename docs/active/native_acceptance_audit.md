@@ -2233,3 +2233,7 @@ their separate scopes. The private measured library order begins bcrypt then
 advapi32; the production canonical vector reverses those first two. The reviewed
 private prerequisite retains actual measured ordering and changes no production
 launcher validation or installed manifest.
+
+### Plain Resource replacement pre-effect validation
+
+At the runtime successor to cc06aa1f, `native-resource-replacement-preflight-focused.log` passes four replacement groups and `native-resource-replacement-preflight-runtime.log` passes 220 runtime checks. Exact loan, consumed-handle and private generation-exhaustion controls preserve both owners before any old finalizer, then verify valid once-only cleanup. No wire or C ABI change is made. This evidence does not establish Source-native mutable replacement, aggregate replacement, or current supported-host acceptance. The earlier 486 native regression result and ten Source runs remain evidence for cc06aa1f. Rebuilt matched archives and Source replacements are required next; overall tracking remains about 85%.

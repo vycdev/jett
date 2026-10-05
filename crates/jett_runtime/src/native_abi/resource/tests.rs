@@ -859,3 +859,145 @@ fn native_resource_state_borrow_domain_error_retires_ordinary_sum_and_string() {
 
 #[path = "source_tests.rs"]
 mod source_tests;
+
+#[test]
+fn native_resource_replacement_preflight_keeps_both_owners_before_old_or_rhs_loan_refusal() {
+    for borrow_old in [false, true] {
+        context(|auth| {
+            install(auth, &[(1, 41, 0, ""), (1, 42, 0, "")], 1);
+            let (attempt, root, frame, network) = start(auth, ResourcePurpose::Runtime);
+            let original = construct(auth, frame, network, 41);
+            let old = auth
+                .with_resource(|state, ordinary, registry| {
+                    state.transfer(ordinary, registry, 2, frame, original, root)
+                })
+                .unwrap();
+            let replacement = construct(auth, frame, network, 42);
+            auth.with_resource(|state, ordinary, registry| {
+                let NativeResourceEntry::Owner(borrowed) = state
+                    .handles
+                    .get(&if borrow_old { old } else { replacement })
+                    .unwrap()
+                else {
+                    panic!("exact scripted owner");
+                };
+                let NativeResourceEntry::Frame(borrower) = state.handles.get(&frame).unwrap()
+                else {
+                    panic!("exact operation frame");
+                };
+                let mut loan =
+                    state
+                        .custody
+                        .begin_borrow(&borrowed.token, &borrower.token, registry)?;
+                let before = state.counts(ordinary, registry);
+                assert_eq!((before.owners, before.registry, before.loans), (2, 2, 1));
+                let old_key = state
+                    .custody
+                    .validate_owned(&state.owner(old, 0)?.token, registry)?;
+                let rhs_key = state
+                    .custody
+                    .validate_owned(&state.owner(replacement, 1)?.token, registry)?;
+                assert_eq!(
+                    state.replace(ordinary, registry, 10, frame, old, replacement),
+                    Err(NativeResourceError::Custody(CustodyError::ActiveBorrow))
+                );
+                assert_eq!(state.counts(ordinary, registry), before);
+                assert_eq!(
+                    state
+                        .custody
+                        .validate_owned(&state.owner(old, 0)?.token, registry)?,
+                    old_key
+                );
+                assert_eq!(
+                    state
+                        .custody
+                        .validate_owned(&state.owner(replacement, 1)?.token, registry)?,
+                    rhs_key
+                );
+                assert_eq!(
+                    state.provider.observe_events(|events| events
+                        .iter()
+                        .map(|event| (event.label, event.kind))
+                        .collect::<Vec<_>>()),
+                    vec![(41, 1), (42, 1)]
+                );
+                state.custody.end_borrow(&mut loan)?;
+                let installed = state.replace(ordinary, registry, 10, frame, old, replacement)?;
+                assert!(!state.handles.contains_key(&old));
+                assert!(!state.handles.contains_key(&replacement));
+                assert_eq!(
+                    state
+                        .custody
+                        .validate_owned(&state.owner(installed, 0)?.token, registry)?,
+                    rhs_key
+                );
+                assert_eq!(
+                    (
+                        state.counts(ordinary, registry).owners,
+                        registry.live_count()
+                    ),
+                    (1, 1)
+                );
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(events(auth), vec![(41, 1), (42, 1), (41, 5)]);
+            let completion = complete(auth, attempt, 0);
+            assert_eq!(
+                (
+                    completion.body_status,
+                    completion.cleanup_status,
+                    completion.selected_kind
+                ),
+                (0, 0, 0)
+            );
+            assert_empty(auth);
+            assert_eq!(events(auth), vec![(41, 1), (42, 1), (41, 5), (42, 5)]);
+        });
+    }
+}
+
+#[test]
+fn native_resource_replacement_preflight_stale_rhs_handle_has_no_finalizer_effect() {
+    context(|auth| {
+        install(auth, &[(1, 51, 0, ""), (1, 52, 0, "")], 1);
+        let (attempt, root, frame, network) = start(auth, ResourcePurpose::Runtime);
+        let stale = construct(auth, frame, network, 51);
+        let old = auth
+            .with_resource(|state, ordinary, registry| {
+                state.transfer(ordinary, registry, 2, frame, stale, root)
+            })
+            .unwrap();
+        let replacement = construct(auth, frame, network, 52);
+        auth.with_resource(|state, ordinary, registry| {
+            let before = state.counts(ordinary, registry);
+            assert_eq!((before.owners, before.registry), (2, 2));
+            assert!(!state.handles.contains_key(&stale));
+            assert_eq!(
+                state.replace(ordinary, registry, 10, frame, old, stale),
+                Err(NativeResourceError::InvalidHandle)
+            );
+            assert_eq!(state.counts(ordinary, registry), before);
+            state
+                .custody
+                .validate_owned(&state.owner(old, 0)?.token, registry)?;
+            state
+                .custody
+                .validate_owned(&state.owner(replacement, 1)?.token, registry)?;
+            assert_eq!(
+                state.provider.observe_events(|events| events
+                    .iter()
+                    .map(|event| (event.label, event.kind))
+                    .collect::<Vec<_>>()),
+                vec![(51, 1), (52, 1)]
+            );
+            state.replace(ordinary, registry, 10, frame, old, replacement)?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(events(auth), vec![(51, 1), (52, 1), (51, 5)]);
+        assert_eq!(complete(auth, attempt, 0).selected_kind, 0);
+        assert_empty(auth);
+        assert_eq!(events(auth), vec![(51, 1), (52, 1), (51, 5), (52, 5)]);
+    });
+}
