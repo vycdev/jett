@@ -567,3 +567,60 @@ checks** pass again (`45ddfe`). The driver gate passes **693/693**: 87 library,
 8 lowering and 598 frontend fixture checks (`b9de51`). These are Source, compiler
 and metadata checks. Dedicated body/ABI emission, ordinary companion cleanup,
 matched runtime archive and Source-deleted linked lifecycle runs remain required.
+
+## Native Source runtime and custody leaves
+
+The runtime validates complete v2 Source invocation rows and implements the
+32 exact Resource custody leaves. Formal permutation, lexical evaluation order,
+owned parameter slots, resident parent loans, callee Scope/Return roles and the
+original caller result destination are checked before execution. Version 1
+remains historical metadata and cannot activate the new Source transitions.
+
+Source entry preflights all owner generations, borrows, destination holders and
+capacity before transferring any owner. Resident views keep one parent loan.
+Return publication joins the completed callee Scope, current provisional Return
+activation and exact caller destination. Scope/Return cleanup failure cancels
+publication and outranks the separately retained observed body status. None and
+Fail shells move whole; ordinary Fail companions use ordinary recursive drop.
+C output alignment, overflow and known overlaps are refused before effects.
+Production state and providers remain disabled.
+
+The guarded runtime packet applied 16 paths and 61 hunks (`4788d3`). Its first
+nine Source controls passed (`ea7d1f`). The formatted focused gate passed three
+v2 registration, two batch-transfer and all fifteen previous adapter controls
+(`29d4b6`). The first full suite exposed an obsolete test that expected version 2
+to be an invalid header. The correction tests unsupported versions 0, the next
+version and u32::MAX; no decoder refusal was weakened. The repaired formatted
+runtime suite passes **196 unit and 13 integration tests** (`fd04d3`).
+
+These checks execute real private runtime transitions and C-boundary controls,
+not generated Jett Source bodies. Dedicated native body emission, ordinary
+companion cleanup, a matched archive and Source-deleted linked lifecycle runs
+remain required. Real providers, occupied aggregates, captured/reflected
+contexts and concurrency retain their full-goal obligations. The approximate
+85% estimate and fixed inventory are unchanged.
+
+Independent byte review found eight unrelated Unicode test literals changed by
+encoding conversion in the authored packet; Root restored the original HEAD
+bytes exactly and reran the runtime suite (`e45fe3`). Independent semantic review
+also found that ordinary nested sums could carry the wrong physical payload
+ownership bit. Three causal controls failed before the repair (`bf61fa`), then
+passed with exact immediate Optional/Result ownership validation (`5af1b8`),
+preserving malformed carriers and unrelated live strings on refusal.
+
+A selected pre-Rust root-outcome seam preserves the original body status after
+exact root Scope retirement. Its readonly C lookup joins the same installed
+entry tuple and current Runtime attempt, refusing active, stale, child, foreign
+or worker-purpose roots without latching a body fault. Output refusal precedes
+state effects. Body zero stays zero when cleanup panics; host completion retains
+its independent cleanup-first channel. The successor applied five paths and
+eleven hunks (`f54e7e`). One authored cleanup control incorrectly left its owner
+in an Operation holder; the actual failure (`5763d2`) led to moving it through
+real Source Return publication into the root holder. All five controls then
+passed (`4f200a`). The final formatted runtime suite passes **204 unit and 13
+integration tests** (`716d31`). Source-native execution remains pending.
+
+The final reference Resource regression filter also passes **67/67** (`fd2bdb`).
+Independent current source/API reviews confirm the malformed ordinary-sum fix
+and exact readonly root-outcome boundary. Their finite scope does not establish
+multi-owned Source actual or recursive activation coverage or native execution.

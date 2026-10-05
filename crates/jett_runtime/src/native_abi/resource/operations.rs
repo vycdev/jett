@@ -57,7 +57,7 @@ impl NativeResourceState {
                 attempt,
                 parent: Some(parent),
                 token,
-                incoming: BTreeMap::new(),
+                incoming: Vec::new(),
             }),
         );
         self.active_frames.push(handle);
@@ -72,7 +72,20 @@ impl NativeResourceState {
         if self.active_frames.last() != Some(&frame) {
             return Err(NativeResourceError::WrongFrame);
         }
-        if self.frame(frame)?.parent.is_none() {
+        if self.layout.frames()[self.frame(frame)?.template as usize].role()
+            != NativeFrameRole::Operation
+        {
+            return Err(NativeResourceError::WrongFrame);
+        }
+        self.retire_frame(ordinary, registry, frame)
+    }
+    pub(super) fn retire_frame(
+        &mut self,
+        ordinary: &mut values::NativeValues,
+        registry: &mut ResourceRegistry,
+        frame: ResourceHandleId,
+    ) -> ResourceResult<()> {
+        if self.active_frames.last() != Some(&frame) {
             return Err(NativeResourceError::WrongFrame);
         }
         let Some(NativeResourceEntry::Frame(header)) = self.handles.get(&frame) else {
@@ -90,9 +103,12 @@ impl NativeResourceState {
             NativeResourceEntry::Loan(loan) => loan.frame != frame,
             NativeResourceEntry::Prepared(prepared) => prepared.frame != frame,
             NativeResourceEntry::Call(call) => call.frame != frame,
+            NativeResourceEntry::SourceCall(call) => call.frame != frame,
             NativeResourceEntry::Sum(sum) if sum.frame == frame => {
-                if let NativeSumPayload::Fail { string, .. } = &sum.payload {
-                    ordinary_failed |= ordinary.drop_resource_ordinary_companion(*string).is_err();
+                if let NativeSumPayload::Fail { shape, string } = &sum.payload {
+                    ordinary_failed |= ordinary
+                        .drop_resource_typed_companion(&self.layout, *shape, *string)
+                        .is_err();
                 }
                 false
             }
@@ -111,10 +127,19 @@ impl NativeResourceState {
         }
         Ok(())
     }
-    fn owner(&self, handle: ResourceHandleId, slot: u32) -> ResourceResult<&NativeOwnerEntry> {
+    pub(super) fn owner(
+        &self,
+        handle: ResourceHandleId,
+        slot: u32,
+    ) -> ResourceResult<&NativeOwnerEntry> {
         match self.handles.get(&handle) {
             Some(NativeResourceEntry::Owner(owner)) if owner.slot == slot => {
                 self.frame(owner.frame)?;
+                let current = *self
+                    .active_frames
+                    .last()
+                    .ok_or(NativeResourceError::WrongFrame)?;
+                self.carrier_frame_at(current, handle, slot)?;
                 Ok(owner)
             }
             Some(NativeResourceEntry::Owner(_)) => Err(NativeResourceError::WrongOperation),
@@ -122,7 +147,7 @@ impl NativeResourceState {
             None => Err(NativeResourceError::InvalidHandle),
         }
     }
-    fn slot_frame(&self, slot: u32, frame: ResourceHandleId) -> ResourceResult<()> {
+    pub(super) fn slot_frame(&self, slot: u32, frame: ResourceHandleId) -> ResourceResult<()> {
         let layout_slot = self
             .layout
             .slots()
@@ -226,7 +251,10 @@ impl NativeResourceState {
         );
         Ok(handle)
     }
-    fn checked_call(&self, handle: ResourceHandleId) -> ResourceResult<&NativePreparedCall> {
+    pub(super) fn checked_call(
+        &self,
+        handle: ResourceHandleId,
+    ) -> ResourceResult<&NativePreparedCall> {
         let Some(NativeResourceEntry::Call(call)) = self.handles.get(&handle) else {
             return Err(NativeResourceError::WrongFamily);
         };
@@ -283,7 +311,9 @@ impl NativeResourceState {
             return Err(NativeResourceError::WrongOperation);
         }
         let kind = hook.kind();
-        self.slot_frame(destination, frame)?;
+        let destination_frame =
+            self.destination_frame(frame, self.checked_call(call_handle)?.target_operation)?;
+        self.slot_empty(destination_frame, destination)?;
         let slot = &self.layout.slots()[destination as usize];
         if slot.shape() != self.layout.signatures()[hook.signature() as usize].result()
             || slot.path() != [NativePayloadStep::Ok]
@@ -299,7 +329,7 @@ impl NativeResourceState {
         ordinary
             .prepare_resource_ordinary_output()
             .map_err(ordinary_error)?; // capacity only; unused identity range is burned
-        let frame_token = match self.handles.get(&frame) {
+        let frame_token = match self.handles.get(&destination_frame) {
             Some(NativeResourceEntry::Frame(frame)) => &frame.token,
             _ => return Err(NativeResourceError::WrongFrame),
         };
@@ -315,6 +345,7 @@ impl NativeResourceState {
                 call: call_handle,
                 frame,
                 destination,
+                destination_frame,
                 kind,
                 network,
                 token,
@@ -355,7 +386,17 @@ impl NativeResourceState {
             .prepare_resource_ordinary_output()
             .map_err(ordinary_error)?;
         // Rejoin occupancy immediately before the effect; this is not token reconstruction.
-        let frame = match self.handles.get(&prepared.frame) {
+        self.slot_frame(prepared.destination, prepared.destination_frame)?;
+        let destination_frame = self.destination_frame(call.frame, call.target_operation)?;
+        if destination_frame != prepared.destination_frame {
+            return Err(NativeResourceError::WrongFrame);
+        }
+        if self.handles.values().any(|entry| matches!(entry, NativeResourceEntry::Owner(owner)
+            if owner.frame == destination_frame && owner.slot == prepared.destination)
+            || matches!(entry, NativeResourceEntry::Sum(sum) if sum.frame == destination_frame && sum.slot == prepared.destination)) {
+            return Err(NativeResourceError::WrongOperation);
+        }
+        let frame = match self.handles.get(&prepared.destination_frame) {
             Some(NativeResourceEntry::Frame(frame)) => &frame.token,
             _ => return Err(NativeResourceError::WrongFrame),
         };
@@ -431,7 +472,7 @@ impl NativeResourceState {
         self.handles.insert(
             handle,
             NativeResourceEntry::Sum(NativeResourceSum {
-                frame: prepared.frame,
+                frame: prepared.destination_frame,
                 slot: prepared.destination,
                 shape,
                 payload,
@@ -447,6 +488,11 @@ impl NativeResourceState {
         match self.handles.get(&handle) {
             Some(NativeResourceEntry::Sum(sum)) => {
                 self.frame(sum.frame)?;
+                let current = *self
+                    .active_frames
+                    .last()
+                    .ok_or(NativeResourceError::WrongFrame)?;
+                self.carrier_frame_at(current, handle, sum.slot)?;
                 Ok(match &sum.payload {
                     NativeSumPayload::None | NativeSumPayload::Fail { .. } => 0,
                     _ => 1,
@@ -476,7 +522,7 @@ impl NativeResourceState {
             _ => return Err(NativeResourceError::WrongOperation),
         };
         self.owner(owner_handle, source)?;
-        self.slot_frame(destination, destination_frame)?;
+        self.slot_empty(destination_frame, destination)?;
         let slot = &self.layout.slots()[destination as usize];
         let shape = slot.shape();
         let step = match slot.path() {
@@ -610,13 +656,14 @@ impl NativeResourceState {
             } => (*source, *destination),
             _ => return Err(NativeResourceError::WrongOperation),
         };
-        self.slot_frame(destination, destination_frame)?;
+        self.slot_empty(destination_frame, destination)?;
         let Some(NativeResourceEntry::Sum(sum)) = self.handles.get(&sum_handle) else {
             return Err(NativeResourceError::WrongFamily);
         };
         if sum.slot != source {
             return Err(NativeResourceError::WrongOperation);
         }
+        self.carrier_frame_at(frame, sum_handle, source)?;
         let token = match &sum.payload {
             NativeSumPayload::Some(token) | NativeSumPayload::Ok(token) => token,
             _ => return Err(NativeResourceError::WrongOperation),
@@ -677,28 +724,16 @@ impl NativeResourceState {
             } => (*source, *destination),
             _ => return Err(NativeResourceError::WrongOperation),
         };
-        self.owner(owner_handle, source)?;
-        self.slot_frame(destination, destination_frame)?;
-        let mut ids = self.reserve(1)?;
-        let new_handle = next_handle(&mut ids)?;
-        let holder = self.custody.holder(
-            &self.frame(destination_frame)?.token,
-            &self.layout.slot(destination)?,
-        )?;
-        let Some(NativeResourceEntry::Owner(mut owner)) = self.handles.remove(&owner_handle) else {
-            return Err(NativeResourceError::WrongFamily);
-        };
-        if let Err(error) = self.custody.transfer(&mut owner.token, &holder, registry) {
-            self.handles
-                .insert(owner_handle, NativeResourceEntry::Owner(owner));
-            return Err(error.into());
-        }
-        owner.frame = destination_frame;
-        owner.slot = destination;
-        self.handles
-            .insert(new_handle, NativeResourceEntry::Owner(owner));
-        Ok(new_handle)
+        self.carrier_frame_at(frame, owner_handle, source)?;
+        self.move_carrier(
+            registry,
+            owner_handle,
+            source,
+            destination,
+            destination_frame,
+        )
     }
+
     pub(super) fn borrow_begin(
         &mut self,
         ordinary: &values::NativeValues,
@@ -746,7 +781,7 @@ impl NativeResourceState {
         );
         Ok(handle)
     }
-    fn exact_loan(
+    pub(super) fn exact_loan(
         &self,
         handle: ResourceHandleId,
         source: NativeLoanSource,
@@ -756,10 +791,18 @@ impl NativeResourceState {
         };
         match source {
             NativeLoanSource::ExistingBorrow { operation }
-                if operation == loan.borrow_operation => {}
-            // Resident source-formal leases require the later exact Source callee handoff.
-            NativeLoanSource::IncomingViewFormal { .. } => {
-                return Err(NativeResourceError::UnsupportedSourceBoundary);
+                if operation == loan.borrow_operation =>
+            {
+                let current = *self
+                    .active_frames
+                    .last()
+                    .ok_or(NativeResourceError::WrongFrame)?;
+                if self.activation_frame(current, self.frame(loan.frame)?.template)? != loan.frame {
+                    return Err(NativeResourceError::WrongFrame);
+                }
+            }
+            NativeLoanSource::IncomingViewFormal { scope, parameter } => {
+                self.validate_resident(handle, scope, parameter)?;
             }
             _ => return Err(NativeResourceError::WrongOperation),
         }
@@ -904,6 +947,7 @@ impl NativeResourceState {
             Some(NativeResourceEntry::Sum(sum)) if sum.slot == source => {}
             _ => return Err(NativeResourceError::WrongOperation),
         }
+        self.carrier_frame_at(frame, handle, source)?;
         let Some(NativeResourceEntry::Sum(mut sum)) = self.handles.remove(&handle) else {
             return Err(NativeResourceError::WrongFamily);
         };
@@ -911,8 +955,10 @@ impl NativeResourceState {
             NativeSumPayload::Ok(token) | NativeSumPayload::Some(token) => {
                 self.custody.close(token, registry)
             }
-            NativeSumPayload::Fail { string, .. } => {
-                if let Err(error) = ordinary.drop_resource_ordinary_companion(*string) {
+            NativeSumPayload::Fail { shape, string } => {
+                if let Err(error) =
+                    ordinary.drop_resource_typed_companion(&self.layout, *shape, *string)
+                {
                     self.handles.insert(handle, NativeResourceEntry::Sum(sum));
                     ordinary.cleanup_failed = true;
                     return Err(ordinary_error(error));

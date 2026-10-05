@@ -387,8 +387,23 @@ fn validate_operation(
             callee,
             signature,
             callee_scope,
+            ref source,
         } => {
             frame(f)?;
+            if let Some(source) = source {
+                return super::source_validation::invocation(
+                    layout,
+                    record,
+                    f,
+                    callee,
+                    signature,
+                    callee_scope,
+                    source,
+                );
+            }
+            if layout.version != 1 {
+                return Err(ResourceLayoutError::OperationMismatch);
+            }
             let scope = get(&layout.frames, callee_scope)?;
             if scope.role != NativeFrameRole::Scope
                 || scope.site.function != callee
@@ -396,6 +411,12 @@ fn validate_operation(
             {
                 return Err(ResourceLayoutError::FrameMismatch);
             }
+        }
+        TakeFailureCompanion { .. }
+        | PublishReturn { .. }
+        | CreateAbsentSum { .. }
+        | CreateFailureSum { .. } => {
+            return super::source_validation::operation(layout, record);
         }
     }
     Ok(())

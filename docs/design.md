@@ -2300,9 +2300,18 @@ and a paired Network grant are available only to compiler tests; production
 state remains absent and providers disabled. Completion cleans obligations
 before recording the outcome, preserving observed body status and separate
 ordinary, Resource body and cleanup errors. Ordinary Result companions use the
-existing recursive destruction path. Connected Source-call ABI, compiler
-transfer/drop execution, linked source execution and real providers remain
-required; these runtime protocol tests do not enable native Resource operations.
+existing recursive destruction path. The private runtime now validates complete
+v2 Source-call metadata and exports exact custody leaves for child Scope entry,
+owned actual transfer, resident views, provisional Return publication and absent
+or failed sum carriers. It checks every owned actual and reserves the callee
+acquisition log before any transfer. Return cancellation cleanup takes priority
+over body failure. The generated entry can read the original body status from
+its exact retired root Scope while the same Runtime attempt remains active;
+this read does not reset errors or replace the separate cleanup outcome.
+Ordinary optional/result companions validate each selected payload's physical
+ownership before recursive destruction. These runtime transitions still require dedicated compiler
+body emission, ordinary companion cleanup, a matched runtime archive and linked
+Source execution; production providers remain disabled.
 
 Moving a resource transfers its single cleanup obligation. A `view` borrows it
 without taking cleanup responsibility. An explicit close consumes the owner;

@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 #[path = "registration/schema.rs"]
 mod schema;
+#[path = "registration/source_validation.rs"]
+mod source_validation;
 #[path = "registration/validation.rs"]
 mod validation;
 #[path = "registration/wire.rs"]
@@ -17,8 +19,12 @@ mod wire;
 pub(crate) use schema::{
     NativeAccess, NativeFormal, NativeFrame, NativeFrameRole, NativeHook, NativeLoanSource,
     NativeOperation, NativeOperationRecord, NativeParent, NativePayloadStep, NativePosition,
-    NativeRecipe, NativeShape, NativeSignature, NativeSite, NativeSlot,
+    NativeRecipe, NativeShape, NativeSignature, NativeSite, NativeSlot, NativeSourceEffect,
+    NativeSourceFormal, NativeSourceInvocation, NativeSourceResult, NativeSourceSyntax,
+    NativeSourceValue,
 };
+
+pub(crate) const NATIVE_RESOURCE_LAYOUT_WIRE_VERSION: u32 = 2;
 
 static NEXT_NATIVE_KIND: AtomicU64 = AtomicU64::new(1);
 
@@ -72,6 +78,9 @@ pub(crate) struct RegisteredNativeLayout {
     wire: schema::WireLayout,
 }
 impl RegisteredNativeLayout {
+    pub(crate) fn wire_version(&self) -> u32 {
+        self.wire.version
+    }
     pub(crate) fn program(&self) -> &RegisteredResourceProgram {
         &self.core
     }

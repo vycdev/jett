@@ -4942,6 +4942,101 @@ impl NativeValues {
         authority
     }
 
+    /// Check ordinary carriers at the exact installed schema. This cannot recover
+    /// Resource tokens: occupied shapes are refused and the Resource table is separate.
+    pub(super) fn validate_resource_ordinary(
+        &self,
+        value: u64,
+        layout: &crate::resource_custody::RegisteredNativeLayout,
+        shape: u32,
+    ) -> LeafResult<()> {
+        use crate::resource_custody::NativeShape;
+        let mut shape = shape;
+        let mut value = value;
+        loop {
+            match layout.shapes().get(shape as usize).ok_or(INVALID_HANDLE)? {
+                NativeShape::Integer { .. } | NativeShape::Float { .. } => return Ok(()),
+                NativeShape::Bool if value <= 1 => return Ok(()),
+                NativeShape::Nothing if value == 0 => return Ok(()),
+                NativeShape::String
+                    if self
+                        .strings
+                        .get(&value)
+                        .is_some_and(|s| s.references > 0 && s.pending_depth == 0) =>
+                {
+                    return Ok(());
+                }
+                NativeShape::Network if self.validates_resource_network(value) => return Ok(()),
+                NativeShape::HookDescriptor { .. } => return Err(INVALID_HANDLE),
+                NativeShape::Optional { child } => {
+                    let sum = self.sums.get(&value).ok_or(INVALID_HANDLE)?;
+                    if sum.pending_depth != 0 || sum.payload_pending_depth != 0 || sum.tag > 1 {
+                        return Err(INVALID_HANDLE);
+                    }
+                    if sum.tag == 0 {
+                        return if !sum.owned && sum.bits == 0 {
+                            Ok(())
+                        } else {
+                            Err(INVALID_HANDLE)
+                        };
+                    }
+                    let payload = layout.shapes().get(*child as usize).ok_or(INVALID_HANDLE)?;
+                    let owned = matches!(
+                        payload,
+                        NativeShape::String
+                            | NativeShape::Optional { .. }
+                            | NativeShape::Result { .. }
+                    );
+                    if sum.owned != owned {
+                        return Err(INVALID_HANDLE);
+                    }
+                    shape = *child;
+                    value = sum.bits;
+                }
+                NativeShape::Result { ok, fail } => {
+                    let sum = self.sums.get(&value).ok_or(INVALID_HANDLE)?;
+                    if sum.pending_depth != 0 || sum.payload_pending_depth != 0 || sum.tag > 1 {
+                        return Err(INVALID_HANDLE);
+                    }
+                    shape = if sum.tag == SUM_SUCCESS { *ok } else { *fail };
+                    let payload = layout.shapes().get(shape as usize).ok_or(INVALID_HANDLE)?;
+                    let owned = matches!(
+                        payload,
+                        NativeShape::String
+                            | NativeShape::Optional { .. }
+                            | NativeShape::Result { .. }
+                    );
+                    if sum.owned != owned {
+                        return Err(INVALID_HANDLE);
+                    }
+                    value = sum.bits;
+                }
+                _ => return Err(INVALID_HANDLE),
+            }
+        }
+    }
+
+    pub(super) fn drop_resource_typed_companion(
+        &mut self,
+        layout: &crate::resource_custody::RegisteredNativeLayout,
+        shape: u32,
+        value: u64,
+    ) -> LeafResult<()> {
+        use crate::resource_custody::NativeShape;
+        self.validate_resource_ordinary(value, layout, shape)?;
+        match layout.shapes().get(shape as usize).ok_or(INVALID_HANDLE)? {
+            NativeShape::String | NativeShape::Optional { .. } | NativeShape::Result { .. } => {
+                self.drop_value(value).map(|_| ())
+            }
+            NativeShape::Integer { .. }
+            | NativeShape::Float { .. }
+            | NativeShape::Bool
+            | NativeShape::Nothing
+            | NativeShape::Network => Ok(()),
+            _ => Err(INVALID_HANDLE),
+        }
+    }
+
     pub(super) fn validates_resource_network(&self, authority: u64) -> bool {
         authority != 0 && self.opaque_capabilities.get("Network") == Some(&authority)
     }
@@ -10853,3 +10948,6 @@ mod tests {
 
 #[cfg(test)]
 mod reflected_container_tests;
+
+#[cfg(test)]
+mod resource_companion_tests;

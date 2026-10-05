@@ -2163,3 +2163,26 @@ native **480/480** result remains the separate adapter-head Windows test receipt
 it contains no admitted Resource lifecycle case. The approximate **85%** feature
 coverage estimate remains unchanged. Remaining aggregate, captured/reflected,
 refinement, provider and concurrency cases stay within the full goal.
+
+## Native Source runtime transition gate
+
+At the Source runtime successor, all nine focused Source controls pass, as do
+three v2 registration, two all-or-nothing transfer and fifteen retained adapter
+controls. The repaired formatted runtime package passes 196 unit and thirteen
+integration tests (`fd04d3`). One historical malformed-header assertion was
+updated because v2 is now supported; unsupported versions remain refused.
+
+This supplies host/runtime and C-boundary evidence only. It does not add a
+Source-native lifecycle fixture or close the Resource execution row. Generated
+bodies, ordinary companion cleanup, matched archive and Source-deleted linked
+runs remain pending; whole-language parity remains the goal and the broad
+estimate stays about 85%. See the [runtime handoff](native_resource_hook_identity.md#native-source-runtime-and-custody-leaves).
+
+The final Source runtime successor additionally passes three causal ordinary
+companion ownership regressions and five exact root-outcome controls. The final
+formatted runtime gate is **204 unit plus thirteen integration tests**
+(`716d31`). The malformed companion controls were observed failing before the
+fix (`bf61fa`) and passing after it (`5af1b8`). Root-outcome evidence (`4f200a`)
+preserves original body zero independently of cleanup failure and rejects
+active/stale/foreign or wrong-purpose observations before effects. These remain
+host/C protocol checks; generated Source-native lifecycle admission is pending.

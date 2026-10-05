@@ -856,3 +856,6 @@ fn native_resource_state_borrow_domain_error_retires_ordinary_sum_and_string() {
         assert_eq!(events(auth), vec![(503, 1), (503, 4), (503, 5)]);
     });
 }
+
+#[path = "source_tests.rs"]
+mod source_tests;

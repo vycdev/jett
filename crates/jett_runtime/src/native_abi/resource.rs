@@ -4,16 +4,18 @@ use super::*;
 use crate::resource_custody::{
     BorrowedResourceToken, CustodyError, JettResourceCallResultV1, NativeFrameRole,
     NativeLayoutInstallation, NativeLoanSource, NativeOperation, NativeParent, NativePayloadStep,
-    NativeRecipe, NativeShape, OwnedResourceToken, PreparedResourceAcquisition,
-    RESOURCE_DOMAIN_ERROR, RESOURCE_DOMAIN_OK, RegisteredNativeLayout, ResourceCleanupFailure,
-    ResourceCleanupOutcome, ResourceCustody, ResourceFrameKind, ResourceFrameToken,
-    ResourceLayoutError, ResourcePurpose, ResourceTransitionFailure,
+    NativeRecipe, NativeShape, NativeSourceInvocation, NativeSourceResult, NativeSourceValue,
+    OwnedResourceToken, PreparedResourceAcquisition, RESOURCE_DOMAIN_ERROR, RESOURCE_DOMAIN_OK,
+    RegisteredNativeLayout, ResourceCleanupFailure, ResourceCleanupOutcome, ResourceCustody,
+    ResourceFrameKind, ResourceFrameToken, ResourceLayoutError, ResourcePurpose,
+    ResourceTransitionFailure,
 };
 use crate::{AuthorityProvenance, RegistryError};
-use std::collections::BTreeMap;
 
+mod leaves;
 mod operations;
 mod provider;
+mod source;
 #[cfg(test)]
 pub(super) use provider::{DecodedScript, NativeTestEvent};
 use provider::{InstalledProvider, NativeProviderIdentity, NativeRestrictionIdentity};
@@ -163,7 +165,7 @@ struct NativeFrameEntry {
     attempt: ResourceHandleId,
     parent: Option<ResourceHandleId>,
     token: ResourceFrameToken,
-    incoming: BTreeMap<u32, NativeResidentLoan>,
+    incoming: Vec<Option<NativeResidentLoan>>,
 }
 struct NativeResidentLoan {
     parent_loan: ResourceHandleId,
@@ -191,6 +193,7 @@ struct NativePreparedCall {
     descriptor: Option<ResourceHandleId>,
 }
 struct NativePreparedEntry {
+    destination_frame: ResourceHandleId,
     call: ResourceHandleId,
     frame: ResourceHandleId,
     destination: u32,
@@ -217,6 +220,7 @@ enum NativeResourceEntry {
     Descriptor { hook: u32, signature: u32 },
     NetworkGrant(NativeNetworkGrant),
     Sum(NativeResourceSum),
+    SourceCall(source::NativeSourceCall),
 }
 struct NativeResourceSum {
     frame: ResourceHandleId,
@@ -241,6 +245,7 @@ struct NativeAttempt {
     entry: NativeEntry,
     purpose: ResourcePurpose,
     root_frame: ResourceHandleId,
+    root_body_status: Option<u32>,
     body: Option<NativeBodyFailure>,
     cleanup: Option<ResourceCleanupFailure>,
     phase: AttemptPhase,
@@ -383,7 +388,11 @@ impl NativeResourceState {
             | NativeOperation::SumDrop { frame, .. }
             | NativeOperation::Replace { frame, .. }
             | NativeOperation::Complete { frame, .. }
-            | NativeOperation::InvokeSourceFunction { frame, .. } => *frame,
+            | NativeOperation::InvokeSourceFunction { frame, .. }
+            | NativeOperation::TakeFailureCompanion { frame, .. }
+            | NativeOperation::PublishReturn { frame, .. }
+            | NativeOperation::CreateAbsentSum { frame, .. }
+            | NativeOperation::CreateFailureSum { frame, .. } => *frame,
             NativeOperation::Descriptor { .. } | NativeOperation::InvokeDescriptor { .. } => {
                 return Err(NativeResourceError::WrongOperation);
             }
@@ -469,7 +478,7 @@ impl NativeResourceState {
                 attempt: id,
                 parent: None,
                 token,
-                incoming: BTreeMap::new(),
+                incoming: Vec::new(),
             }),
         );
         self.active_frames.push(root_frame);
@@ -478,6 +487,7 @@ impl NativeResourceState {
             entry,
             purpose,
             root_frame,
+            root_body_status: None,
             body: None,
             cleanup: None,
             phase: AttemptPhase::Running,
@@ -526,6 +536,51 @@ impl NativeResourceState {
             _ => Err(NativeResourceError::WrongGrant),
         }
     }
+    /// Observe only the sole retired root Scope of this exact Runtime attempt.
+    /// Body/ordinary/cleanup failures are independent and must not gate this read.
+    pub(super) fn entry_outcome(
+        &self,
+        scope: ResourceHandleId,
+        function: u32,
+        signature: u32,
+        template: u32,
+    ) -> ResourceResult<u32> {
+        self.validate_installation()?;
+        self.runtime_purpose()?;
+        let attempt = self
+            .attempt
+            .as_ref()
+            .ok_or(NativeResourceError::InvalidEntry)?;
+        let selected = NativeEntry {
+            function,
+            signature,
+            scope: template,
+        };
+        if attempt.phase != AttemptPhase::Running
+            || attempt.entry != self.entry
+            || selected != self.entry
+            || attempt.root_frame != scope
+        {
+            return Err(NativeResourceError::InvalidEntry);
+        }
+        let row = self
+            .layout
+            .frames()
+            .get(template as usize)
+            .ok_or(NativeResourceError::WrongFrame)?;
+        if row.role() != NativeFrameRole::Scope
+            || row.site().function() != function
+            || row.signature() != signature
+            || self.handles.contains_key(&scope)
+            || self.active_frames.contains(&scope)
+        {
+            return Err(NativeResourceError::WrongFrame);
+        }
+        attempt
+            .root_body_status
+            .ok_or(NativeResourceError::WrongFrame)
+    }
+
     pub(super) fn complete_entry(
         &mut self,
         ordinary: &mut values::NativeValues,
@@ -553,8 +608,10 @@ impl NativeResourceState {
         let mut companion_failed = false;
         self.handles.retain(|_, entry| {
             if let NativeResourceEntry::Sum(sum) = entry {
-                if let NativeSumPayload::Fail { string, .. } = &sum.payload {
-                    companion_failed |= ordinary.drop_resource_ordinary_companion(*string).is_err();
+                if let NativeSumPayload::Fail { shape, string } = &sum.payload {
+                    companion_failed |= ordinary
+                        .drop_resource_typed_companion(&self.layout, *shape, *string)
+                        .is_err();
                 }
             }
             matches!(
@@ -701,7 +758,14 @@ impl NativeResourceState {
                     ..
                 }) => counts.owner_handles += 1,
                 NativeResourceEntry::Loan(_) => counts.loan_handles += 1,
-                NativeResourceEntry::Frame(_) => counts.frame_handles += 1,
+                NativeResourceEntry::Frame(frame) => {
+                    counts.frame_handles += 1;
+                    if self.layout.frames()[frame.template as usize].role()
+                        == NativeFrameRole::Return
+                    {
+                        counts.provisional += 1;
+                    }
+                }
                 _ => {}
             }
         }

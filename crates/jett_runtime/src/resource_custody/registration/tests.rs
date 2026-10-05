@@ -119,6 +119,7 @@ fn canonical() -> WireLayout {
             callee: 1,
             signature: 4,
             callee_scope: 3,
+            source: None,
         },
         InvokeBorrow {
             frame: 1,
@@ -140,6 +141,7 @@ fn canonical() -> WireLayout {
     })
     .collect();
     WireLayout {
+        version: 1,
         kinds: vec![0, 1],
         hooks: vec![
             NativeHook {
@@ -245,6 +247,121 @@ fn installed(registry: &ResourceRegistry) -> Arc<RegisteredNativeLayout> {
         .unwrap()
 }
 
+fn source_v2() -> WireLayout {
+    let mut layout = canonical();
+    layout.version = 2;
+    let NativeOperation::InvokeSourceFunction { source, .. } = &mut layout.operations[15].operation
+    else {
+        panic!("canonical Source row")
+    };
+    *source = Some(NativeSourceInvocation {
+        callee_return: None,
+        evaluation_order: vec![0],
+        formals: vec![NativeSourceFormal {
+            parameter: 0,
+            source_index: 0,
+            actual_shape: 4,
+            callee_shape: 4,
+            syntax: NativeSourceSyntax::WrittenView,
+            effect: NativeSourceEffect::RetainBorrow,
+            access: NativeAccess::View,
+            value: NativeSourceValue::ResidentView {
+                source: NativeLoanSource::ExistingBorrow { operation: 3 },
+            },
+        }],
+        result: NativeSourceResult::Ordinary { shape: 3 },
+    });
+    layout
+}
+
+#[test]
+fn native_registration_source_v2_roundtrips_the_complete_boundary_without_upgrading_v1() {
+    let layout = source_v2();
+    assert_eq!(parsed(&layout).unwrap(), layout);
+    let registry = ResourceRegistry::new();
+    let mut installation = NativeLayoutInstallation::new(&registry);
+    let installed = installation
+        .install(&registry, &encode_records(&layout))
+        .unwrap();
+    assert_eq!(
+        installed.wire_version(),
+        NATIVE_RESOURCE_LAYOUT_WIRE_VERSION
+    );
+    assert_eq!(parsed(&canonical()).unwrap().version, 1);
+    let mut missing = layout.clone();
+    let NativeOperation::InvokeSourceFunction { source, .. } =
+        &mut missing.operations[15].operation
+    else {
+        unreachable!()
+    };
+    *source = None;
+    assert!(parsed(&missing).is_err());
+    let mut wrong_version = layout;
+    wrong_version.version = 1;
+    assert!(parsed(&wrong_version).is_err());
+}
+
+#[test]
+fn native_registration_source_v2_rejects_unused_permutation_formal_and_resident_substitutions() {
+    for case in 0..7 {
+        let mut layout = source_v2();
+        let NativeOperation::InvokeSourceFunction {
+            source: Some(source),
+            ..
+        } = &mut layout.operations[15].operation
+        else {
+            unreachable!()
+        };
+        match case {
+            0 => source.evaluation_order[0] = 1,
+            1 => source.formals[0].source_index = 1,
+            2 => source.formals[0].syntax = NativeSourceSyntax::Bare,
+            3 => source.formals[0].effect = NativeSourceEffect::TransferOwned,
+            4 => source.formals[0].value = NativeSourceValue::Ordinary,
+            5 => {
+                source.formals[0].value = NativeSourceValue::ResidentView {
+                    source: NativeLoanSource::ExistingBorrow { operation: 0 },
+                }
+            }
+            6 => source.formals[0].actual_shape = 5,
+            _ => unreachable!(),
+        }
+        assert!(
+            parsed(&layout).is_err(),
+            "unused Source metadata case {case}"
+        );
+    }
+}
+
+#[test]
+fn native_registration_source_v2_rejects_unbound_return_and_occupied_failure_companion_roles() {
+    for operation in [
+        NativeOperation::PublishReturn {
+            frame: 3,
+            source_return_slot: 0,
+        },
+        NativeOperation::TakeFailureCompanion {
+            frame: 1,
+            source_sum_slot: 2,
+            failure_shape: 4,
+        },
+        NativeOperation::CreateFailureSum {
+            frame: 1,
+            destination_slot: 2,
+            failure_shape: 4,
+        },
+    ] {
+        let mut layout = source_v2();
+        let ordinal = layout.operations.len() as u32;
+        layout.operations.push(NativeOperationRecord {
+            ordinal,
+            site: site(1, 999),
+            operation,
+        });
+        assert!(parsed(&layout).is_err());
+    }
+}
+
 #[test]
 fn native_registration_roundtrips_closed_records_and_owns_input() {
     let layout = canonical();
@@ -296,10 +413,12 @@ fn native_registration_refuses_wire_headers_lengths_tags_and_ordinals() {
         altered[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
         altered
     };
-    assert_eq!(
-        decode(&mutate(8, 2)).unwrap_err(),
-        ResourceLayoutError::Header
-    );
+    for unsupported_version in [0, NATIVE_RESOURCE_LAYOUT_WIRE_VERSION + 1, u32::MAX] {
+        assert_eq!(
+            decode(&mutate(8, unsupported_version)).unwrap_err(),
+            ResourceLayoutError::Header
+        );
+    }
     assert_eq!(
         decode(&mutate(12, 1)).unwrap_err(),
         ResourceLayoutError::Reserved
@@ -447,6 +566,7 @@ fn native_registration_checks_all_frame_operation_and_loan_source_relations() {
         callee: 0,
         signature: 4,
         callee_scope: 3,
+        source: None,
     };
     assert_eq!(
         parsed(&layout).unwrap_err(),

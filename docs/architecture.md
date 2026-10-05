@@ -2405,12 +2405,30 @@ and counts. The caller's observed body status remains unchanged; ordinary first
 error, Resource body faults, host panic and cleanup failures determine the
 separate selected outcome. A legal ordinary FailureTake cannot erase a Resource
 fault. Ordinary borrow Result carriers and their error strings use the existing
-recursive native destruction path. The formatted runtime package passes 182
-unit tests and 13 integration tests, including 15 adapter controls, ten
-registration controls and thirteen core custody controls. Source child-scope and
-provisional-return activation, incoming-view forwarding, exported ABI,
-operational compiler cleanup and linked Resource execution remain pending. See
-[the adapter record](active/native_resource_hook_identity.md#native-context-adapter-and-custody-operations).
+recursive native destruction path. Complete v2 Source rows retain lexical/formal
+permutations, exact owned argument holders, resident parent loans, callee Scope
+and provisional Return frames, and the original caller result destination.
+Source entry validates every owned transfer and reserves the whole acquisition
+log before moving a prefix. Return publication requires the completed Scope and
+current Return activation; failed Scope or Return cleanup cancels publication
+and takes priority over body failure. Absent and failed sum shells move as whole
+carriers without recovering a Resource owner. Historical v1 metadata cannot
+activate these Source transitions.
+
+All 32 exact Resource leaves use the existing authenticated context; entry
+getters return its actual root Scope and paired Network carrier. Output checks
+precede effects and reject known context/output overlaps. The formatted runtime
+package passes 204 unit and 13 integration tests, including nine Source controls,
+three v2 registration controls, two batch-transfer controls and all fifteen
+previous adapter controls. The exact root-outcome getter reads the body status
+saved only after root Scope retirement in the same Runtime attempt; it neither
+resets errors nor substitutes cleanup status. Five controls pin the original
+status, active/stale/foreign refusal and body zero with cleanup panic. Ordinary
+failure-companion validation checks every selected nested sum payload's ownership
+bit before drop. These are runtime host/C-boundary checks. Dedicated
+compiler body emission and ordinary companion cleanup, the matched archive,
+linked Source lifecycle execution and production providers remain pending. See
+[the Source runtime record](active/native_resource_hook_identity.md#native-source-runtime-and-custody-leaves).
 
 Move dataflow transfers one cleanup obligation; views never own cleanup. Scope
 exit, return, handled failure, cancellation, dropped actor messages, and runtime

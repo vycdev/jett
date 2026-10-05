@@ -98,7 +98,7 @@ impl<'a> Reader<'a> {
             _ => return Err(ResourceLayoutError::UnknownTag),
         })
     }
-    fn operation(&mut self) -> Result<NativeOperation, ResourceLayoutError> {
+    fn operation(&mut self, version: u32) -> Result<NativeOperation, ResourceLayoutError> {
         Ok(match self.word()? {
             1 => NativeOperation::Acquire {
                 frame: self.word()?,
@@ -171,8 +171,120 @@ impl<'a> Reader<'a> {
                 callee: self.word()?,
                 signature: self.word()?,
                 callee_scope: self.word()?,
+                source: if version == 2 {
+                    Some(self.source_invocation()?)
+                } else {
+                    None
+                },
+            },
+            17 if version == 2 => NativeOperation::TakeFailureCompanion {
+                frame: self.word()?,
+                source_sum_slot: self.word()?,
+                failure_shape: self.word()?,
+            },
+            18 if version == 2 => NativeOperation::PublishReturn {
+                frame: self.word()?,
+                source_return_slot: self.word()?,
+            },
+            19 if version == 2 => NativeOperation::CreateAbsentSum {
+                frame: self.word()?,
+                destination_slot: self.word()?,
+            },
+            20 if version == 2 => NativeOperation::CreateFailureSum {
+                frame: self.word()?,
+                destination_slot: self.word()?,
+                failure_shape: self.word()?,
             },
             _ => return Err(ResourceLayoutError::UnknownTag),
+        })
+    }
+    fn source_invocation(&mut self) -> Result<NativeSourceInvocation, ResourceLayoutError> {
+        let callee_return = match self.word()? {
+            0 => None,
+            1 => Some(self.word()?),
+            _ => return Err(ResourceLayoutError::UnknownTag),
+        };
+        let count = self.count()?;
+        let mut evaluation_order = storage(count)?;
+        for _ in 0..count {
+            evaluation_order.push(self.word()?);
+        }
+        let count = self.count()?;
+        let mut formals = storage(count)?;
+        for _ in 0..count {
+            let parameter = self.word()?;
+            let source_index = self.word()?;
+            let actual_shape = self.word()?;
+            let callee_shape = self.word()?;
+            let syntax = match self.word()? {
+                1 => NativeSourceSyntax::Bare,
+                2 => NativeSourceSyntax::WrittenView,
+                _ => return Err(ResourceLayoutError::UnknownTag),
+            };
+            let effect = match self.word()? {
+                1 => NativeSourceEffect::Copy,
+                2 => NativeSourceEffect::TransferOwned,
+                3 => NativeSourceEffect::RelinquishOwned,
+                4 => NativeSourceEffect::RetainBorrow,
+                5 => NativeSourceEffect::ObserveData,
+                _ => return Err(ResourceLayoutError::UnknownTag),
+            };
+            let access = match self.word()? {
+                1 => NativeAccess::Owned,
+                2 => NativeAccess::View,
+                _ => return Err(ResourceLayoutError::UnknownTag),
+            };
+            let value = match self.word()? {
+                1 => NativeSourceValue::Ordinary,
+                2 => NativeSourceValue::Owned {
+                    caller_argument_slot: self.word()?,
+                    callee_parameter_slot: self.word()?,
+                },
+                3 => NativeSourceValue::ResidentView {
+                    source: self.loan()?,
+                },
+                _ => return Err(ResourceLayoutError::UnknownTag),
+            };
+            formals.push(NativeSourceFormal {
+                parameter,
+                source_index,
+                actual_shape,
+                callee_shape,
+                syntax,
+                effect,
+                access,
+                value,
+            });
+        }
+        let result = match self.word()? {
+            1 => NativeSourceResult::Ordinary {
+                shape: self.word()?,
+            },
+            2 => {
+                let shape = self.word()?;
+                let caller_destination_frame = self.word()?;
+                let caller_destination_slot = self.word()?;
+                let callee_return_frame = self.word()?;
+                let count = self.count()?;
+                let mut permitted_return_slots = storage(count)?;
+                for _ in 0..count {
+                    permitted_return_slots.push(self.word()?);
+                }
+                NativeSourceResult::Owned {
+                    shape,
+                    caller_destination_frame,
+                    caller_destination_slot,
+                    callee_return_frame,
+                    permitted_return_slots,
+                }
+            }
+            _ => return Err(ResourceLayoutError::UnknownTag),
+        };
+        Ok(NativeSourceInvocation {
+            callee_return,
+            evaluation_order,
+            formals,
+            result,
         })
     }
 }
@@ -193,7 +305,11 @@ pub(super) fn decode(bytes: &[u8]) -> Result<WireLayout, ResourceLayoutError> {
         return Err(ResourceLayoutError::Truncated);
     }
     let mut input = Reader { bytes, position: 0 };
-    if &input.take::<8>()? != MAGIC || input.word()? != 1 {
+    if &input.take::<8>()? != MAGIC {
+        return Err(ResourceLayoutError::Header);
+    }
+    let version = input.word()?;
+    if ![1, super::NATIVE_RESOURCE_LAYOUT_WIRE_VERSION].contains(&version) {
         return Err(ResourceLayoutError::Header);
     }
     if input.word()? != 0 {
@@ -322,13 +438,14 @@ pub(super) fn decode(bytes: &[u8]) -> Result<WireLayout, ResourceLayoutError> {
         operations.push(NativeOperationRecord {
             ordinal: i as u32,
             site,
-            operation: input.operation()?,
+            operation: input.operation(version)?,
         });
     }
     if input.position != bytes.len() {
         return Err(ResourceLayoutError::Trailing);
     }
     Ok(WireLayout {
+        version,
         kinds,
         hooks,
         signatures,
@@ -506,19 +623,132 @@ pub(super) fn encode_records(layout: &WireLayout) -> Vec<u8> {
                     callee,
                     signature,
                     callee_scope,
+                    ref source,
                 } => {
                     self.word(16);
                     self.word(frame);
                     self.word(callee);
                     self.word(signature);
                     self.word(callee_scope);
+                    if let Some(source) = source {
+                        self.source_invocation(source);
+                    }
+                }
+                TakeFailureCompanion {
+                    frame,
+                    source_sum_slot,
+                    failure_shape,
+                } => {
+                    self.word(17);
+                    self.word(frame);
+                    self.word(source_sum_slot);
+                    self.word(failure_shape);
+                }
+                PublishReturn {
+                    frame,
+                    source_return_slot,
+                } => {
+                    self.word(18);
+                    self.word(frame);
+                    self.word(source_return_slot);
+                }
+                CreateAbsentSum {
+                    frame,
+                    destination_slot,
+                } => {
+                    self.word(19);
+                    self.word(frame);
+                    self.word(destination_slot);
+                }
+                CreateFailureSum {
+                    frame,
+                    destination_slot,
+                    failure_shape,
+                } => {
+                    self.word(20);
+                    self.word(frame);
+                    self.word(destination_slot);
+                    self.word(failure_shape);
+                }
+            }
+        }
+        fn source_invocation(&mut self, source: &NativeSourceInvocation) {
+            match source.callee_return {
+                None => self.word(0),
+                Some(frame) => {
+                    self.word(1);
+                    self.word(frame);
+                }
+            }
+            self.word(source.evaluation_order.len() as u32);
+            for parameter in &source.evaluation_order {
+                self.word(*parameter);
+            }
+            self.word(source.formals.len() as u32);
+            for formal in &source.formals {
+                self.word(formal.parameter);
+                self.word(formal.source_index);
+                self.word(formal.actual_shape);
+                self.word(formal.callee_shape);
+                self.word(match formal.syntax {
+                    NativeSourceSyntax::Bare => 1,
+                    NativeSourceSyntax::WrittenView => 2,
+                });
+                self.word(match formal.effect {
+                    NativeSourceEffect::Copy => 1,
+                    NativeSourceEffect::TransferOwned => 2,
+                    NativeSourceEffect::RelinquishOwned => 3,
+                    NativeSourceEffect::RetainBorrow => 4,
+                    NativeSourceEffect::ObserveData => 5,
+                });
+                self.word(match formal.access {
+                    NativeAccess::Owned => 1,
+                    NativeAccess::View => 2,
+                });
+                match formal.value {
+                    NativeSourceValue::Ordinary => self.word(1),
+                    NativeSourceValue::Owned {
+                        caller_argument_slot,
+                        callee_parameter_slot,
+                    } => {
+                        self.word(2);
+                        self.word(caller_argument_slot);
+                        self.word(callee_parameter_slot);
+                    }
+                    NativeSourceValue::ResidentView { source } => {
+                        self.word(3);
+                        self.loan(source);
+                    }
+                }
+            }
+            match &source.result {
+                NativeSourceResult::Ordinary { shape } => {
+                    self.word(1);
+                    self.word(*shape);
+                }
+                NativeSourceResult::Owned {
+                    shape,
+                    caller_destination_frame,
+                    caller_destination_slot,
+                    callee_return_frame,
+                    permitted_return_slots,
+                } => {
+                    self.word(2);
+                    self.word(*shape);
+                    self.word(*caller_destination_frame);
+                    self.word(*caller_destination_slot);
+                    self.word(*callee_return_frame);
+                    self.word(permitted_return_slots.len() as u32);
+                    for slot in permitted_return_slots {
+                        self.word(*slot);
+                    }
                 }
             }
         }
     }
     let mut out = Writer(Vec::new());
     out.0.extend_from_slice(MAGIC);
-    out.word(1);
+    out.word(layout.version);
     out.word(0);
     out.0.extend_from_slice(&0u64.to_le_bytes());
     for count in [

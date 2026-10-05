@@ -91,6 +91,62 @@ pub(crate) enum NativeLoanSource {
     ExistingBorrow { operation: u32 },
     IncomingViewFormal { scope: u32, parameter: u32 },
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeSourceSyntax {
+    Bare,
+    WrittenView,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeSourceEffect {
+    Copy,
+    TransferOwned,
+    RelinquishOwned,
+    RetainBorrow,
+    ObserveData,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeSourceValue {
+    Ordinary,
+    Owned {
+        caller_argument_slot: u32,
+        callee_parameter_slot: u32,
+    },
+    ResidentView {
+        source: NativeLoanSource,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NativeSourceFormal {
+    pub(crate) parameter: u32,
+    pub(crate) source_index: u32,
+    pub(crate) actual_shape: u32,
+    pub(crate) callee_shape: u32,
+    pub(crate) syntax: NativeSourceSyntax,
+    pub(crate) effect: NativeSourceEffect,
+    pub(crate) access: NativeAccess,
+    pub(crate) value: NativeSourceValue,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NativeSourceResult {
+    Ordinary {
+        shape: u32,
+    },
+    Owned {
+        shape: u32,
+        caller_destination_frame: u32,
+        caller_destination_slot: u32,
+        callee_return_frame: u32,
+        permitted_return_slots: Vec<u32>,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NativeSourceInvocation {
+    pub(crate) callee_return: Option<u32>,
+    pub(crate) evaluation_order: Vec<u32>,
+    pub(crate) formals: Vec<NativeSourceFormal>,
+    pub(crate) result: NativeSourceResult,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum NativeOperation {
     Acquire {
@@ -166,6 +222,26 @@ pub(crate) enum NativeOperation {
         callee: u32,
         signature: u32,
         callee_scope: u32,
+        /// None is strict historical v1 metadata; it never enables Source activation.
+        source: Option<NativeSourceInvocation>,
+    },
+    TakeFailureCompanion {
+        frame: u32,
+        source_sum_slot: u32,
+        failure_shape: u32,
+    },
+    PublishReturn {
+        frame: u32,
+        source_return_slot: u32,
+    },
+    CreateAbsentSum {
+        frame: u32,
+        destination_slot: u32,
+    },
+    CreateFailureSum {
+        frame: u32,
+        destination_slot: u32,
+        failure_shape: u32,
     },
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,6 +252,7 @@ pub(crate) struct NativeOperationRecord {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct WireLayout {
+    pub(super) version: u32,
     pub(super) kinds: Vec<u32>,
     pub(super) hooks: Vec<NativeHook>,
     pub(super) signatures: Vec<NativeSignature>,

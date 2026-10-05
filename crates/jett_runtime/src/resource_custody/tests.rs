@@ -743,3 +743,6 @@ fn custody_failed_provenance_cleanup_preserves_unretired_frame_and_continues_eli
     assert_eq!(*events.lock().unwrap(), [2, 1]);
     clean(&core, &registry);
 }
+
+#[path = "tests/source_batch.rs"]
+mod source_batch;

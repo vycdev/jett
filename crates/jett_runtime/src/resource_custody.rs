@@ -16,10 +16,12 @@ static NEXT_CUSTODY: AtomicU64 = AtomicU64::new(1);
 #[path = "resource_custody/registration.rs"]
 mod registration;
 pub(crate) use registration::{
-    JettResourceCallResultV1, NativeAccess, NativeFormal, NativeFrame, NativeFrameRole, NativeHook,
-    NativeLayoutInstallation, NativeLoanSource, NativeOperation, NativeOperationRecord,
-    NativeParent, NativePayloadStep, NativePosition, NativeRecipe, NativeShape, NativeSignature,
-    NativeSite, NativeSlot, RESOURCE_DOMAIN_ERROR, RESOURCE_DOMAIN_OK, RegisteredNativeLayout,
+    JettResourceCallResultV1, NATIVE_RESOURCE_LAYOUT_WIRE_VERSION, NativeAccess, NativeFormal,
+    NativeFrame, NativeFrameRole, NativeHook, NativeLayoutInstallation, NativeLoanSource,
+    NativeOperation, NativeOperationRecord, NativeParent, NativePayloadStep, NativePosition,
+    NativeRecipe, NativeShape, NativeSignature, NativeSite, NativeSlot, NativeSourceEffect,
+    NativeSourceFormal, NativeSourceInvocation, NativeSourceResult, NativeSourceSyntax,
+    NativeSourceValue, RESOURCE_DOMAIN_ERROR, RESOURCE_DOMAIN_OK, RegisteredNativeLayout,
     ResourceLayoutError,
 };
 
@@ -573,12 +575,12 @@ impl ResourceCustody {
         self.validate_registry_owner(self.owner(owner)?, registry)
     }
 
-    pub(crate) fn transfer(
-        &mut self,
-        token: &mut OwnedResourceToken,
+    fn checked_transfer(
+        &self,
+        token: &OwnedResourceToken,
         destination: &ResourceHolderToken,
         registry: &ResourceRegistry,
-    ) -> Result<(), CustodyError> {
+    ) -> Result<(Holder, u64), CustodyError> {
         let holder = self.holder_token(destination)?;
         self.runtime_frame(holder.frame)?;
         let owner = self.owner(token)?;
@@ -594,6 +596,48 @@ impl ResourceCustody {
             .generation
             .checked_add(1)
             .ok_or(CustodyError::CapacityExhausted)?;
+        Ok((holder, generation))
+    }
+
+    /// A Source activation reserves its entire exact formal handoff before any
+    /// owner moves. References are existing live tokens and registered metadata;
+    /// this creates neither ownership nor a reusable transfer permission.
+    pub(crate) fn preflight_transfer_batch(
+        &mut self,
+        frame: &ResourceFrameToken,
+        transfers: &[(&OwnedResourceToken, &RegisteredOwnerSlot)],
+        registry: &ResourceRegistry,
+    ) -> Result<(), CustodyError> {
+        let frame_index = self.frame_token(frame)?;
+        let mut checked: Vec<(usize, Holder)> = Vec::new();
+        checked
+            .try_reserve_exact(transfers.len())
+            .map_err(|_| CustodyError::CapacityExhausted)?;
+        for &(token, slot) in transfers {
+            let destination = self.holder(frame, slot)?;
+            let (holder, _) = self.checked_transfer(token, &destination, registry)?;
+            if checked
+                .iter()
+                .any(|(owner, previous)| *owner == token.owner || *previous == holder)
+            {
+                return Err(CustodyError::OccupiedHolder);
+            }
+            checked.push((token.owner, holder));
+        }
+        self.frames[frame_index]
+            .acquisitions
+            .try_reserve(transfers.len())
+            .map_err(|_| CustodyError::CapacityExhausted)?;
+        Ok(())
+    }
+
+    pub(crate) fn transfer(
+        &mut self,
+        token: &mut OwnedResourceToken,
+        destination: &ResourceHolderToken,
+        registry: &ResourceRegistry,
+    ) -> Result<(), CustodyError> {
+        let (holder, generation) = self.checked_transfer(token, destination, registry)?;
         self.frames[holder.frame]
             .acquisitions
             .try_reserve(1)
