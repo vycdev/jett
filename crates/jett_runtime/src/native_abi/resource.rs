@@ -42,6 +42,7 @@ pub(super) enum NativeResourceError {
     WrongPurpose,
     ActiveAttempt,
     BodyFailed,
+    SourceBodyStatus(JettRuntimeStatusV1),
     UnsupportedSourceBoundary,
     Capacity,
     Layout(ResourceLayoutError),
@@ -72,7 +73,9 @@ impl NativeResourceError {
         match self {
             Self::Capacity => JettRuntimeStatusV1::RESOURCE_EXHAUSTED,
             Self::Context => JettRuntimeStatusV1::INVALID_CONTEXT,
-            Self::Ordinary(status) | Self::OrdinaryStorage(status) => status,
+            Self::Ordinary(status)
+            | Self::OrdinaryStorage(status)
+            | Self::SourceBodyStatus(status) => status,
             Self::Cleanup(ResourceCleanupFailure::FinalizerPanic) => JettRuntimeStatusV1::PANIC,
             _ => JettRuntimeStatusV1::INVALID_ARGUMENT,
         }

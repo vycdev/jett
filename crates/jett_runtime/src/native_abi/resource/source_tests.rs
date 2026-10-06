@@ -473,11 +473,41 @@ fn native_resource_source_failed_scope_cancels_provisional_return_before_any_pub
             );
             assert!(!s.handles.contains_key(&provisional));
             assert_eq!(s.counts(v, r).provisional, 0);
+            assert_eq!(s.source_completed_body_status(call)?, Some(71));
+            let original = NativeResourceError::SourceBodyStatus(JettRuntimeStatusV1(71));
+            assert_eq!(s.source_status(v, call), Err(original));
+            assert_eq!(original.status().code(), 71);
+            // A different current activation or tuple cannot borrow this outcome.
+            let root = s.root_frame(attempt)?;
+            s.active_frames.push(root);
+            assert_eq!(
+                s.source_status(v, call),
+                Err(NativeResourceError::WrongFrame)
+            );
+            s.active_frames.pop();
+            let Some(NativeResourceEntry::Frame(header)) = s.handles.get_mut(&op) else {
+                panic!("exact live caller operation")
+            };
+            let template = header.template;
+            header.template = 0;
+            assert_eq!(
+                s.source_status(v, call),
+                Err(NativeResourceError::WrongFrame)
+            );
+            let Some(NativeResourceEntry::Frame(header)) = s.handles.get_mut(&op) else {
+                panic!("unchanged live caller operation")
+            };
+            header.template = template;
+            assert_eq!(s.source_status(v, call), Err(original));
             assert!(
                 s.return_publish(v, r, scope, f.publish.unwrap(), provisional)
                     .is_err()
             );
             s.end_operation_frame(v, r, op)?;
+            assert_eq!(
+                s.source_status(v, call),
+                Err(NativeResourceError::WrongFamily)
+            );
             let completion = s.complete_entry(v, r, attempt, 71, false)?;
             assert_eq!((completion.body_status, completion.selected_kind), (71, 1));
             assert_eq!(s.counts(v, r).owners, 0);
@@ -616,3 +646,123 @@ fn native_resource_source_return_cleanup_panic_precedes_nonzero_observed_body_st
 
 #[path = "entry_outcome_tests.rs"]
 mod entry_outcome_tests;
+
+#[test]
+fn native_resource_source_clean_body_cleanup_panic_has_exact_completed_failure_status() {
+    context(|auth| {
+        let f = fixture(4, false, false);
+        let (attempt, _, op, network) = setup(auth, &f, &[(3, 501, 0, "")]);
+        let owner = acquire(auth, op, network);
+        auth.with_resource(|s, v, r| {
+            let call = s.source_prepare(v, op, f.source)?;
+            s.source_actual(v, r, call, 0, 0, owner.raw())?;
+            let scope = s.source_enter(v, r, call)?;
+            let parameter = ResourceHandleId::new(s.source_parameter(v, scope, 0)?)?;
+            let cleanup = NativeResourceError::Cleanup(ResourceCleanupFailure::FinalizerPanic);
+            assert_eq!(
+                s.scope_complete(v, r, scope, f.complete_scope, 0),
+                Err(cleanup)
+            );
+            assert_eq!(s.source_completed_body_status(call)?, Some(0));
+            assert_eq!(s.source_status(v, call), Err(cleanup));
+            assert_eq!(cleanup.status(), JettRuntimeStatusV1::PANIC);
+            assert!(!s.handles.contains_key(&scope));
+            assert!(!s.handles.contains_key(&parameter));
+            assert!(
+                s.return_publish(v, r, scope, f.publish.unwrap(), parameter)
+                    .is_err()
+            );
+            s.end_operation_frame(v, r, op)?;
+            let completion = s.complete_entry(v, r, attempt, 255, false)?;
+            assert_eq!(
+                (
+                    completion.body_status,
+                    completion.cleanup_status,
+                    completion.selected_kind
+                ),
+                (255, 255, 3)
+            );
+            let counts = s.counts(v, r);
+            assert_eq!(
+                (
+                    counts.owners,
+                    counts.loans,
+                    counts.frames,
+                    counts.registry,
+                    counts.provisional
+                ),
+                (0, 0, 0, 0, 0)
+            );
+            s.observe_events(|events| {
+                assert_eq!(
+                    events.iter().map(|event| event.kind).collect::<Vec<_>>(),
+                    [1, 5]
+                )
+            });
+            Ok(())
+        })
+        .unwrap();
+    });
+}
+
+#[test]
+fn native_resource_source_unfinished_and_merely_retired_frames_have_no_completion_receipt() {
+    context(|auth| {
+        let f = fixture(4, false, false);
+        let (attempt, root, op, network) = setup(auth, &f, &[(1, 501, 0, "")]);
+        let owner = acquire(auth, op, network);
+        auth.with_resource(|s, v, r| {
+            assert_eq!(
+                s.source_prepare(v, op, f.close),
+                Err(NativeResourceError::UnsupportedSourceBoundary)
+            );
+            assert_eq!(
+                s.source_status(v, root),
+                Err(NativeResourceError::WrongFamily)
+            );
+            let call = s.source_prepare(v, op, f.source)?;
+            assert_eq!(s.source_completed_body_status(call)?, None);
+            assert_eq!(
+                s.source_status(v, call),
+                Err(NativeResourceError::BodyFailed)
+            );
+            assert_eq!(
+                s.source_enter(v, r, call),
+                Err(NativeResourceError::WrongOperation)
+            );
+            assert_eq!(
+                s.source_status(v, call),
+                Err(NativeResourceError::BodyFailed)
+            );
+            s.source_actual(v, r, call, 0, 0, owner.raw())?;
+            let scope = s.source_enter(v, r, call)?;
+            assert_eq!(s.source_completed_body_status(call)?, None);
+            assert_eq!(
+                s.source_status(v, call),
+                Err(NativeResourceError::WrongFrame)
+            );
+            s.retire_frame(v, r, scope)?;
+            let return_frame = *s.active_frames.last().unwrap();
+            assert_ne!(return_frame, op);
+            s.retire_frame(v, r, return_frame)?;
+            // Physical retirement alone never mints a trusted Source completion.
+            assert_eq!(s.source_completed_body_status(call)?, None);
+            assert_eq!(
+                s.source_status(v, call),
+                Err(NativeResourceError::BodyFailed)
+            );
+            assert!(
+                s.return_publish(v, r, scope, f.publish.unwrap(), owner)
+                    .is_err()
+            );
+            s.end_operation_frame(v, r, op)?;
+            assert_eq!(
+                s.source_status(v, call),
+                Err(NativeResourceError::WrongFamily)
+            );
+            Ok(())
+        })
+        .unwrap();
+        finish(auth, attempt);
+    });
+}

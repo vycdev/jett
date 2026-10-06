@@ -4290,6 +4290,15 @@ impl Interpreter {
             }
 
             Stmt::Return(ret) => {
+                if let Some(transport) = self
+                    .resource_transport
+                    .as_mut()
+                    .filter(|transport| transport.checked_source_active)
+                {
+                    transport
+                        .retire_return_operations()
+                        .map_err(|error| error.to_string())?;
+                }
                 let source_type = ret.value.as_ref().and_then(|expression| {
                     self.checked_refinement_source_type(expression.span())
                         .cloned()
@@ -12608,6 +12617,10 @@ impl Interpreter {
         let saved_scope_floor = self.lexical_scope_floor;
         self.lexical_scope_floor = scope_depth;
         self.push_scope();
+        let ordinary_return_context = self
+            .resource_transport
+            .as_mut()
+            .is_some_and(|transport| transport.enter_ordinary_return());
         let saved_proofs = self.allow_checked_refinement_proofs;
         self.allow_checked_refinement_proofs &= source_types.is_some();
         let source_types = source_types.filter(|_| self.allow_checked_refinement_proofs);
@@ -12648,6 +12661,11 @@ impl Interpreter {
 
             Ok(value)
         })();
+        if ordinary_return_context {
+            if let Some(transport) = self.resource_transport.as_mut() {
+                transport.leave_return();
+            }
+        }
         self.allow_checked_refinement_proofs = saved_proofs;
         while self.scopes.len() > scope_depth {
             self.pop_scope();
@@ -13002,6 +13020,10 @@ impl Interpreter {
                     self.set_namespace_alias(name, target);
                 }
                 self.push_scope();
+                let ordinary_return_context = self
+                    .resource_transport
+                    .as_mut()
+                    .is_some_and(|transport| transport.enter_ordinary_return());
                 let saved_proofs = self.allow_checked_refinement_proofs;
                 self.allow_checked_refinement_proofs &= source_types.is_some();
                 let source_types = source_types.filter(|_| self.allow_checked_refinement_proofs);
@@ -13044,6 +13066,11 @@ impl Interpreter {
                     }
                     Ok(value)
                 })();
+                if ordinary_return_context {
+                    if let Some(transport) = self.resource_transport.as_mut() {
+                        transport.leave_return();
+                    }
+                }
                 self.allow_checked_refinement_proofs = saved_proofs;
                 while self.scopes.len() > scope_depth {
                     self.pop_scope();

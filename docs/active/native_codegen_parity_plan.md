@@ -2356,3 +2356,33 @@ The final formatted Source replay passes all 36 native and 36 reference runs.
 This advances the Resource row without closing its remaining indirect, aggregate, refinement and broader
 control-flow obligations. The broad estimate remains about 85%; full current
 native/workspace and supported-host release gates remain separate requirements.
+
+### Callable cleanup boundaries (2026-10-06)
+
+Three new original Source programs extend the shared lifecycle gate from 18 to
+22 scenarios. Both reference and native profiles pass all 44 executions each;
+native launch follows Source deletion and observes exact reports and zero
+obligations before teardown. The additions cover reversed lexical/formal order
+with two temporary view owners, a Return helper using an independent owner,
+a continuing default, and cleanup panic suppressing the Return helper.
+
+The reference evaluator now retires the pending call prefix before evaluating
+the original Return operand. Ordinary closure and named-callable bodies have
+their own operation floor and no inherited Resource return destination. Native
+Source joins retain authenticated terminal failure outcomes, keeping original
+body status separate from cleanup instead of replacing status 255 with 1.
+
+The affected gates pass all 508 reference-library tests, all 92 driver-library
+tests, and all 222 runtime tests (209 unit and 13 integration). Six private
+Return-prefix controls and eleven focused native Source controls are included
+in those totals. Fresh matched debug/release archives contain one main, eight
+private exports and all 32 Resource leaves each, with the unchanged ABI/wire.
+
+Parent a30ca97e's exact source tree passed the complete workspace on GNU and
+MSVC, including 486 default native tests per host and both source-absent installed
+package jobs. The local full run had 26 deadline failures; all 26 subsequently
+passed at the same deadlines, in a 25-case replay and an isolated inventory
+replay. This is not a clean full local run. The successor's complete workspace
+and supported-host checks remain separate release gates. Overall tracking stays
+about 85%; indirect/aggregate/refinement Resource calls, broader projections and
+reflection, production providers and shared scheduling remain in the full goal.

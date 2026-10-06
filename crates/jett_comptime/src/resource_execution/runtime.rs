@@ -41,6 +41,12 @@ impl ActiveFrame {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ReturnContext {
+    destination: Option<FrameId>,
+    operation_floor: usize,
+}
+
 /// The lexical declaration survives consuming its value. No copied physical
 /// carrier can repopulate this slot or restore an owning cleanup ticket.
 struct ResourceBindingSlot {
@@ -58,8 +64,10 @@ pub(crate) struct ResourceTransport {
     provider: InstalledResourceProvider,
     scopes: Vec<(FrameId, HashMap<DefId, ResourceBindingSlot>)>,
     operations: Vec<FrameId>,
+    operation_parents: HashMap<FrameId, FrameId>,
+    abandoned_operations: HashMap<FrameId, FrameId>,
     active_frames: Vec<ActiveFrame>,
-    returns: Vec<FrameId>,
+    returns: Vec<ReturnContext>,
     defaults: Vec<FrameId>,
     next_temporary: usize,
     cleanup_error: Option<ResourceExecutionError>,
@@ -80,6 +88,8 @@ impl ResourceTransport {
             provider: InstalledResourceProvider::Disabled,
             scopes: Vec::new(),
             operations: Vec::new(),
+            operation_parents: HashMap::new(),
+            abandoned_operations: HashMap::new(),
             active_frames: Vec::new(),
             returns: Vec::new(),
             defaults: Vec::new(),
@@ -150,6 +160,7 @@ impl ResourceTransport {
         let parent = self.current_frame()?;
         let frame = self.ledger.frame();
         self.operations.push(frame);
+        self.operation_parents.insert(frame, parent);
         self.active_frames.push(ActiveFrame::Operation(frame));
         Ok(OperationFrame { frame, parent })
     }
@@ -160,6 +171,7 @@ impl ResourceTransport {
         value: Option<&mut EvaluatedValue>,
     ) -> Result<(), ResourceExecutionError> {
         if self.operations.last() != Some(&operation.frame)
+            || self.operation_parents.get(&operation.frame) != Some(&operation.parent)
             || self.active_frames.last() != Some(&ActiveFrame::Operation(operation.frame))
         {
             return Err(ResourceExecutionError::InvalidFrame);
@@ -176,6 +188,7 @@ impl ResourceTransport {
         let cleanup = self.ledger.unwind(operation.frame, &mut self.registry);
         if !self.ledger.frame_is_live(operation.frame) {
             self.operations.pop();
+            self.operation_parents.remove(&operation.frame);
             self.active_frames.pop();
         }
         match (preserved, cleanup, self.check_cleanup()) {
@@ -322,7 +335,117 @@ impl ResourceTransport {
     }
 
     pub(crate) fn enter_return(&mut self, destination: FrameId) {
-        self.returns.push(destination);
+        self.returns.push(ReturnContext {
+            destination: Some(destination),
+            operation_floor: self.operations.len(),
+        });
+    }
+
+    /// Ordinary callable bodies cannot inherit a caller's custody destination.
+    pub(crate) fn enter_ordinary_return(&mut self) -> bool {
+        if !self.checked_source_active {
+            return false;
+        }
+        self.returns.push(ReturnContext {
+            destination: None,
+            operation_floor: self.operations.len(),
+        });
+        true
+    }
+
+    /// Cancel only calls opened in this checked function, before Return effects.
+    pub(crate) fn retire_return_operations(&mut self) -> Result<(), ResourceExecutionError> {
+        use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
+        let context = self
+            .returns
+            .last()
+            .copied()
+            .ok_or(ResourceExecutionError::InvalidFrame)?;
+        if !self.checked_source_active || context.operation_floor > self.operations.len() {
+            return Err(ResourceExecutionError::InvalidFrame);
+        }
+        let suffix = self.operations[context.operation_floor..]
+            .iter()
+            .rev()
+            .copied()
+            .collect::<Vec<_>>();
+        let mut first_error = None;
+        let mut first_panic = None;
+        for frame in suffix {
+            match catch_unwind(AssertUnwindSafe(|| self.retire_return_operation(frame))) {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    first_error.get_or_insert(error);
+                }
+                Err(payload) if first_panic.is_none() => first_panic = Some(payload),
+                Err(payload) => std::mem::forget(payload),
+            }
+        }
+        if let Some(payload) = first_panic {
+            resume_unwind(payload);
+        }
+        first_error.map_or_else(|| self.check_cleanup(), Err)
+    }
+
+    fn retire_return_operation(&mut self, frame: FrameId) -> Result<(), ResourceExecutionError> {
+        use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
+        let parent = self
+            .operation_parents
+            .get(&frame)
+            .copied()
+            .ok_or(ResourceExecutionError::InvalidFrame)?;
+        if !self.ledger.frame_is_live(frame)
+            || self.abandoned_operations.contains_key(&frame)
+            || self.operations.iter().filter(|&&id| id == frame).count() != 1
+            || self
+                .active_frames
+                .iter()
+                .filter(|&&active| active == ActiveFrame::Operation(frame))
+                .count()
+                != 1
+        {
+            return Err(ResourceExecutionError::InvalidFrame);
+        }
+        let cleanup = catch_unwind(AssertUnwindSafe(|| {
+            self.ledger.unwind(frame, &mut self.registry)
+        }));
+        // Handler/block Scopes may be interleaved. Retain their exact owners
+        // and loans; only the physically retired Operation leaves this stack.
+        if !self.ledger.frame_is_live(frame) {
+            self.operations.retain(|&id| id != frame);
+            self.operation_parents.remove(&frame);
+            self.active_frames
+                .retain(|&active| active != ActiveFrame::Operation(frame));
+            self.abandoned_operations.insert(frame, parent);
+        }
+        match cleanup {
+            Ok(result) => result,
+            Err(payload) => resume_unwind(payload),
+        }
+    }
+
+    /// Exact one-shot completion; called only for a propagated Return or error.
+    pub(crate) fn acknowledge_return_operation(
+        &mut self,
+        operation: &OperationFrame,
+    ) -> Result<bool, ResourceExecutionError> {
+        let Some(parent) = self.abandoned_operations.get(&operation.frame) else {
+            return Ok(false);
+        };
+        if *parent != operation.parent
+            || self.ledger.frame_is_live(operation.frame)
+            || self.operation_parents.contains_key(&operation.frame)
+            || self.operations.contains(&operation.frame)
+            || self
+                .active_frames
+                .contains(&ActiveFrame::Operation(operation.frame))
+        {
+            return Err(ResourceExecutionError::InvalidFrame);
+        }
+        self.abandoned_operations.remove(&operation.frame);
+        Ok(true)
     }
     pub(crate) fn leave_return(&mut self) {
         self.returns.pop();
@@ -337,7 +460,7 @@ impl ResourceTransport {
         let destination = self
             .returns
             .last()
-            .copied()
+            .and_then(|context| context.destination)
             .ok_or(ResourceExecutionError::InvalidFrame)?;
         let holder = self.temporary(destination)?;
         self.ledger.transfer(&mut value.custody, holder)
@@ -839,6 +962,7 @@ impl ResourceTransport {
                 ActiveFrame::Operation(_) => {
                     if self.operations.last() == Some(&frame) {
                         self.operations.pop();
+                        self.operation_parents.remove(&frame);
                         true
                     } else {
                         false
@@ -881,7 +1005,10 @@ impl ResourceTransport {
                 Err(payload) => std::mem::forget(payload),
             }
         }
-        if !self.operations.is_empty() || !self.scopes.is_empty() {
+        if !self.operations.is_empty()
+            || !self.operation_parents.is_empty()
+            || !self.scopes.is_empty()
+        {
             first_error.get_or_insert(ResourceExecutionError::InvalidFrame);
         }
         if let Some(payload) = first_panic {
@@ -895,6 +1022,8 @@ impl ResourceTransport {
         scope_depth: usize,
     ) -> Result<(), ResourceExecutionError> {
         if !self.operations.is_empty()
+            || !self.operation_parents.is_empty()
+            || !self.abandoned_operations.is_empty()
             || !self.returns.is_empty()
             || !self.defaults.is_empty()
             || self.ledger.live_owners() != 0
@@ -922,6 +1051,7 @@ impl ResourceTransport {
     ) -> Result<(), ResourceExecutionError> {
         if !self.active_frames.is_empty()
             || !self.operations.is_empty()
+            || !self.operation_parents.is_empty()
             || !self.scopes.is_empty()
             || self.ledger.has_live_frames()
             || self.ledger.live_owners() != 0
@@ -931,6 +1061,9 @@ impl ResourceTransport {
         }
         self.returns.clear();
         self.defaults.clear();
+        // Panics skip suspended envelopes. Receipts expire only after the
+        // complete entry has no remaining frame, owner or registry obligation.
+        self.abandoned_operations.clear();
         let prior_cleanup = self.check_cleanup();
         for _ in 0..scope_depth {
             self.push_scope();
@@ -977,6 +1110,8 @@ impl ResourceTransport {
 
 #[cfg(test)]
 mod absence_tests;
+#[cfg(test)]
+mod return_prefix_tests;
 
 #[cfg(test)]
 mod tests {

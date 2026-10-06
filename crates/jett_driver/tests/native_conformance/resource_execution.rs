@@ -17,7 +17,7 @@ use std::{
 };
 
 const RECEIPT_ENV: &str = "JETT_RESOURCE_NATIVE_TEST_ARCHIVE_RECEIPT_V1";
-const RECEIPT_SHA256: &str = "54a38248f8975fad43e964100abdd14f2b2445c39ee37e8c3eb07f19357b541a";
+const RECEIPT_SHA256: &str = "bf0c7805fa72dbd15250d0b07a03426a99a580de4d744e602fa75a5cc4ae5438";
 struct Archive {
     path: PathBuf,
     target: String,
@@ -390,7 +390,7 @@ fn assert_report(case: &cases::Case, report: &report::Report) {
     let attempt = &report.attempts[0];
     assert_eq!(
         attempt.completion.body_status, case.body,
-        "{} original body",
+        "{} original body; full report: {report:?}",
         case.name
     );
     assert_eq!(

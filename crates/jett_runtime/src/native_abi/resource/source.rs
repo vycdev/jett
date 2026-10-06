@@ -9,6 +9,14 @@ enum SourcePhase {
     Completed,
     Aborted,
 }
+#[derive(Clone, Copy)]
+struct SourceCompletion {
+    scope: ResourceHandleId,
+    return_frame: Option<ResourceHandleId>,
+    original_body_status: u32,
+    failure: Option<NativeResourceError>,
+}
+
 pub(super) struct NativeSourceCall {
     pub(super) frame: ResourceHandleId,
     operation: u32,
@@ -20,6 +28,7 @@ pub(super) struct NativeSourceCall {
     destination: Option<ResourceHandleId>,
     body_status: u32,
     phase: SourcePhase,
+    completion: Option<SourceCompletion>,
 }
 
 impl NativeResourceState {
@@ -440,6 +449,7 @@ impl NativeResourceState {
                 destination,
                 body_status: 0,
                 phase: SourcePhase::Prepared,
+                completion: None,
             }),
         );
         Ok(handle)
@@ -804,18 +814,79 @@ impl NativeResourceState {
         }
         Ok(value)
     }
+    fn record_source_completion(
+        &mut self,
+        handle: ResourceHandleId,
+        failure: Option<NativeResourceError>,
+    ) -> ResourceResult<()> {
+        let call = self.source_call(handle)?;
+        let scope = call.scope.ok_or(NativeResourceError::WrongFrame)?;
+        if !matches!(call.phase, SourcePhase::Completed | SourcePhase::Aborted)
+            || self.handles.contains_key(&scope)
+            || self.active_frames.contains(&scope)
+            || call.return_frame.is_some_and(|frame| {
+                self.handles.contains_key(&frame) || self.active_frames.contains(&frame)
+            })
+        {
+            // Refused retirement and pending publication carry no completion authority.
+            return Ok(());
+        }
+        let completion = SourceCompletion {
+            scope,
+            return_frame: call.return_frame,
+            original_body_status: call.body_status,
+            failure,
+        };
+        let Some(NativeResourceEntry::SourceCall(call)) = self.handles.get_mut(&handle) else {
+            return Err(NativeResourceError::WrongFamily);
+        };
+        call.completion = Some(completion);
+        Ok(())
+    }
+
     pub(super) fn source_status(
         &self,
         ordinary: &values::NativeValues,
         handle: ResourceHandleId,
     ) -> ResourceResult<()> {
         let call = self.source_call(handle)?;
-        self.frame(call.frame)?;
-        if call.phase != SourcePhase::Completed || call.body_status != 0 {
-            return Err(NativeResourceError::BodyFailed);
+        self.operation_frame(call.operation, call.frame)?;
+        self.source_row(call.operation)?;
+        let completion = call.completion.ok_or(NativeResourceError::BodyFailed)?;
+        if call.scope != Some(completion.scope)
+            || call.return_frame != completion.return_frame
+            || call.body_status != completion.original_body_status
+            || self.handles.contains_key(&completion.scope)
+            || self.active_frames.contains(&completion.scope)
+            || completion.return_frame.is_some_and(|frame| {
+                self.handles.contains_key(&frame) || self.active_frames.contains(&frame)
+            })
+        {
+            return Err(NativeResourceError::WrongFrame);
         }
-        self.running(ordinary)?;
-        Ok(())
+        match call.phase {
+            SourcePhase::Aborted => {
+                Err(completion.failure.ok_or(NativeResourceError::BodyFailed)?)
+            }
+            SourcePhase::Completed
+                if completion.original_body_status == 0 && completion.failure.is_none() =>
+            {
+                self.running(ordinary)?;
+                Ok(())
+            }
+            _ => Err(NativeResourceError::BodyFailed),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn source_completed_body_status(
+        &self,
+        handle: ResourceHandleId,
+    ) -> ResourceResult<Option<u32>> {
+        Ok(self
+            .source_call(handle)?
+            .completion
+            .map(|completion| completion.original_body_status))
     }
     pub(super) fn scope_complete(
         &mut self,
@@ -901,6 +972,22 @@ impl NativeResourceState {
                 };
             }
         }
+        if let Some(handle) = call {
+            // Preserve the original nonzero body independently of selected cleanup.
+            // A clean body whose real Scope cleanup failed must still stop its caller.
+            let failure = if body_status != 0 {
+                Some(NativeResourceError::SourceBodyStatus(JettRuntimeStatusV1(
+                    body_status,
+                )))
+            } else {
+                cleanup
+                    .as_ref()
+                    .err()
+                    .copied()
+                    .or_else(|| body.as_ref().err().copied())
+            };
+            self.record_source_completion(handle, failure)?;
+        }
         cleanup?;
         body
     }
@@ -968,6 +1055,7 @@ impl NativeResourceState {
             return Err(NativeResourceError::WrongFamily);
         };
         call.phase = SourcePhase::Completed;
+        self.record_source_completion(handle, None)?;
         Ok(output)
     }
     pub(super) fn absent_sum(

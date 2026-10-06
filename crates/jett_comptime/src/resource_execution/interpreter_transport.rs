@@ -395,6 +395,24 @@ impl Interpreter {
         operation: OperationFrame,
         result: Result<ExprFlow, String>,
     ) -> Result<ExprFlow, String> {
+        // A handler Return already retired its exact acquired suffix before
+        // evaluating its operand. Its suspended envelopes acknowledge once;
+        // ordinary success and output adoption never consume that authority.
+        if matches!(
+            &result,
+            Err(_)
+                | Ok(ExprFlow::Signal(
+                    Signal::Return(..) | Signal::ResourceReturn(..)
+                ))
+        ) && self
+            .resource_transport
+            .as_mut()
+            .ok_or("missing checked Resource transport")?
+            .acknowledge_return_operation(&operation)
+            .map_err(|error| error.to_string())?
+        {
+            return result;
+        }
         let mut result = result;
         let value = match &mut result {
             Ok(ExprFlow::Resource(value)) => Some(value),

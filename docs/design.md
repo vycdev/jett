@@ -8476,12 +8476,20 @@ handler Return retires only the acquired prefix before evaluating its original
 return operand. A skipped invocation preserves the handled Source outcome;
 cleanup failure retains its own observed failure channel. Temporary sum storage
 and the active execution frame are checked separately.
+The reference evaluator records a separate operation floor for each callable
+body. A Return retires only operations opened within that body, preserving
+interleaved Scope owners and loans. Ordinary callable bodies cannot inherit
+a Resource return destination from their caller. Cleanup failure prevents
+evaluation of the original Return operand.
+Native call joins propagate the callee's completed failure status without
+replacing it with a protocol refusal. The callee's original body outcome
+stays separate from failure during cleanup.
 Exact indirect descriptor calls, statically pruned acquisition regions and
 conditional/aggregate replacement still require their dedicated native successors.
 Compiler-test Resource providers are confined to a single runtime archive built
 with both `test` and `jett_resource_native_test_archive`; production providers
 remain disabled. Archive compilation and object emission alone do not establish
-linked Source execution. Eighteen shared original Source scenarios now pass in
+linked Source execution. Twenty-two shared original Source scenarios now pass in
 both native profiles against their real reference outcomes, with Source files
 absent at launch and zero live obligations before teardown. This local test
 slice does not enable production Resource providers or complete broader native

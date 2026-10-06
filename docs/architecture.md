@@ -4189,6 +4189,23 @@ stack and arrived argument prefix across handler edges. Abandonment retires that
 prefix before the original Return operand; normal completion follows exactly one
 reached invocation.
 
+The reference interpreter records each callable body's operation floor and
+Return destination separately from its lexical Scopes. Checked Source functions
+retain the exact caller destination; ordinary closure and named-callable bodies
+have no Resource publication destination. Return retires only newer Operations,
+innermost first, while interleaved Scope owners and loans remain live. Private
+one-shot receipts bind a canceled Operation to its exact parent and permit
+completion only while propagating Return or error, never ordinary successful
+output adoption. Cleanup failure drains the eligible prefix before preventing
+the original Return operand.
+
+Native Source status checks validate a terminal completion record tied to the
+exact caller Operation, immutable Source tuple and retired callee Scope/Return
+frames. That record keeps the original body status separate from cleanup
+failure. An aborted call propagates its recorded failure without permitting
+output publication; incomplete or unrelated calls cannot acquire a completion
+record. Clean output still requires a running attempt with no latched failure.
+
 Each native operation-frame slot stores its dynamic frame and prepared Source
 call in sixteen bytes. Begin prepares the complete Source tuple without actual
 effects. Stage evaluates once, activates its exact transfer or loan, and records

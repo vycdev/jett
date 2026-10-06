@@ -717,3 +717,27 @@ inventory gates (182 host objects), and the complete 92-test driver library.
 The final formatted Source replay also passes all 36 reference and 36 native
 executions. Broader Resource transport and the final full-goal release gates
 remain required.
+
+## Callable boundaries and failed native joins (2026-10-06)
+
+The shared Source lifecycle gate now has 22 scenarios, all passing reference and
+source-deleted native execution in debug/release (44 each). Three new programs
+exercise reversed temporary-owner ordering, an independent Return helper and a
+continuing default. A fourth scenario reuses the helper program with real cleanup
+panic and proves the helper is not evaluated while both owners are retired.
+
+Reference Return cancels only newer operations within the current callable's
+floor. Ordinary closure/named fallback bodies have no Resource publication
+destination. Exact one-shot cancellation receipts cannot authorize normal
+success or output adoption. Native SourceStatus validates a terminal completion
+record tied to the caller operation, immutable Source row and physically retired
+callee Scope/Return. Nonzero original body 71 stays 71; body 0 plus actual cleanup
+panic remains original 0 internally and carries cleanup 255 to its caller.
+
+The full affected suites pass 508 reference-library, 92 driver-library and 222
+runtime checks. Fresh measured debug/release archives and all 44 native runs pass
+with unchanged ABI 1, wire 2, one main, eight private exports and 32 Resource
+leaves per archive. Exact parent a30ca97e workspace/default-native and all four
+supported-host distribution jobs pass; successor release gates remain separate.
+These results advance lifecycle coverage while the broader 85% estimate and
+full language/provider/concurrency objective remain unchanged.

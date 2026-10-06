@@ -2305,3 +2305,37 @@ Whole-language coverage remains about 85%. Indirect/refinement/aggregate calls,
 static region selection, broader exits and projections, production providers and
 shared scheduling remain part of the full objective. These local Source results
 do not establish complete native parity.
+
+### Return-prefix and completed failure propagation (2026-10-06)
+
+The shared original Source gate now passes 22 scenarios in both reference and
+native profiles (44 executions each). Later handled argument failure retires
+both temporary view owners in reverse lexical acquisition order. A handler
+Return retires its earlier temporary owner before its original helper borrows
+an independent retained owner. A default continues to one invocation; actual
+cleanup panic prevents the Return helper and still cleans the retained owner.
+All native programs launch after Source deletion and require exact channels,
+messages, events, script consumption and zero obligations before one destroy.
+
+Two causal mismatches were repaired without changing those oracles. The reference
+Return operand originally ran before pending-operation retirement; ordinary
+callables then exposed an inherited caller-floor regression. Each callable now
+has its own boundary. Native cleanup already retired both owners, but SourceStatus
+converted the callee's recorded status 255 into generic refusal 1. A private
+terminal completion record preserves original body and actual cleanup separately,
+while exact caller/Source identity and retired Scope/Return guards remain strict.
+
+All 508 reference-library, 92 driver-library and 222 runtime checks pass. Six
+Return-prefix controls cover floor/Scope/receipt/refusal/panic behavior; eleven
+native Source controls include exact body 71, clean body 0 with real cleanup
+panic, wrong activation/tuple and absent completion authority. Fresh measured
+single-runtime archives in both profiles retain one main, eight private exports,
+32 Resource leaves, static CRT, ABI 1 and layout wire 2. The source-deleted gate
+passes against those archives; production providers remain disabled.
+
+The parent a30ca97e source tree has all four supported-host jobs green, with
+full workspace and 486 default native tests on each host. Its local full run's
+26 deadline failures subsequently passed unchanged deadlines in 25 plus one
+replays; that does not replace a clean complete local run. Full successor
+workspace/platform release acceptance remains distinct from the local gates.
+The full 100% objective is active, with the coarse estimate unchanged at 85%.
