@@ -1758,6 +1758,10 @@ impl Verifier<'_> {
     }
 
     fn expression(&self, function: &Function, expression: &Expression) -> Result<(), CodegenError> {
+        let named_value = self
+            .resource
+            .and_then(|ownership| ownership.function(function.id))
+            .and_then(|plan| plan.named_callable_value(expression));
         if let Some(ownership) = self.resource {
             // Source signatures do not describe the selected family's hidden Scope.
             // Descriptor and adapter emission requires its distinct authenticated ABI.
@@ -1774,7 +1778,13 @@ impl Verifier<'_> {
                     .any(|adapter| ownership.function(adapter.function).is_some()),
                 _ => false,
             };
-            if family_descriptor {
+            let named_producer = ownership
+                .function(function.id)
+                .and_then(|plan| plan.named_callable_producer(expression));
+            let proved_named_descriptor = matches!(&expression.kind,
+                ExpressionKind::FunctionRef(target) if named_producer.is_some_and(|proof|
+                    proof.function() == *target && proof.signature_type() == expression.ty));
+            if family_descriptor && !proved_named_descriptor {
                 return Err(self.unsupported(
                     function,
                     expression.span,
@@ -1799,9 +1809,10 @@ impl Verifier<'_> {
                 )
             });
             if invocation
-                || self
-                    .resource
-                    .is_some_and(|proof| proof.type_requires_custody(expression.ty))
+                || (named_value.is_none()
+                    && self
+                        .resource
+                        .is_some_and(|proof| proof.type_requires_custody(expression.ty)))
             {
                 match &expression.kind {
                     ExpressionKind::Local(local) => {
@@ -1859,6 +1870,24 @@ impl Verifier<'_> {
                                 "Resource indirect hook lost its exact fresh operation",
                             ));
                         }
+                        for operation in plan.operations_for_expression(expression) {
+                            if let jett_mir::ResourceOperationRole::InvokeSourceFunction {
+                                function: target,
+                                source,
+                                ..
+                            } = operation.role()
+                            {
+                                let proof = operation.named_indirect_target().ok_or_else(|| self.contract_error(
+                                    function, expression.span, "Resource indirect Source call lost its exact named target proof"))?;
+                                if proof.function() != *target
+                                    || proof.signature_type() != callee.ty
+                                    || !matches!(source.target, jett_hir::CallTarget::Indirect { signature_type } if signature_type == callee.ty)
+                                {
+                                    return Err(self.contract_error(function, expression.span,
+                                        "Resource indirect Source call changes its sealed selected target"));
+                                }
+                            }
+                        }
                         self.expression(function, callee)?;
                         for actual in args {
                             self.expression(function, actual)?;
@@ -1875,11 +1904,24 @@ impl Verifier<'_> {
                 }
             }
         }
-        let kind = self.value_kind(
-            function,
-            expression.ty,
-            format!("expression in `{}`", self.function_name(function)),
-        )?;
+        let kind = if let Some(proof) = named_value {
+            if proof.signature_type() != expression.ty
+                || !matches!(self.types.resolve(expression.ty), Type::Function { .. })
+            {
+                return Err(self.contract_error(
+                    function,
+                    expression.span,
+                    "named descriptor occurrence changes its sealed signature",
+                ));
+            }
+            ScalarKind::Function
+        } else {
+            self.value_kind(
+                function,
+                expression.ty,
+                format!("expression in `{}`", self.function_name(function)),
+            )?
+        };
         match &expression.kind {
             ExpressionKind::ResourceHookValue { .. } | ExpressionKind::ResourceInvoke { .. } => Err(self.contract_error(function, expression.span, "pending ResourceOwnershipPlan: native Resource descriptor and invocation ABI are not admitted")),
             ExpressionKind::Int(value) => self.integer_literal(function, expression, *value, kind),

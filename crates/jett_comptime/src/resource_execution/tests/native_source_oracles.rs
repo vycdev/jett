@@ -104,7 +104,9 @@ fn native_resource_source_cases_match_real_reference_events_and_cleanup_before_t
             }));
             match case.reference {
                 cases::ReferenceOutcome::Clean => assert_eq!(
-                    outcome.unwrap().unwrap(),
+                    outcome
+                        .unwrap()
+                        .unwrap_or_else(|error| panic!("{} release={release}: {error}", case.name)),
                     Value::Nothing,
                     "{} release={release}",
                     case.name

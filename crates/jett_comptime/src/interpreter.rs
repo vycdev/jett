@@ -4135,7 +4135,18 @@ impl Interpreter {
                 .type_contains_resource(fact.ty)
                 .map_err(|error| error.to_string())?
             {
-                return self.exec_resource_binding(declaration);
+                // A sealed named descriptor has a Resource signature but no
+                // physical Resource payload or capture environment.
+                if declaration.mutable
+                    || fact.mutable
+                    || transport
+                        .checked
+                        .prepare_named_callable(&declaration.value)
+                        .map_err(|error| error.to_string())?
+                        .is_none()
+                {
+                    return self.exec_resource_binding(declaration);
+                }
             }
         }
         match stmt {

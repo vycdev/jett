@@ -2386,3 +2386,29 @@ replay. This is not a clean full local run. The successor's complete workspace
 and supported-host checks remain separate release gates. Overall tracking stays
 about 85%; indirect/aggregate/refinement Resource calls, broader projections and
 reflection, production providers and shared scheduling remain in the full goal.
+
+### Named Resource function values, 2026-10-06
+
+Exact named non-generic, capability-free callbacks now retain their original
+Indirect Source authority through immutable root-scope locals and aliases. A
+private original/current producer/use proof selects the retained body; native
+code and empty-environment checks precede the existing hidden-Scope Source
+bridge. Ordinary descriptor storage is admitted only for exact proved values,
+with public signature refusals and raw hook descriptor handling unchanged.
+
+The shared Resource corpus increases from 22 to 28 scenarios. All 56 genuine reference
+and 56 linked native executions pass in both profiles, including distinct
+same-signature body selection and separate body/cleanup failure propagation.
+The complete reference library passes 511 tests, MIR 233, native codegen 93 and
+object emission 63. Runtime sources/archives are unchanged; native Source is
+removed before launch and obligations retire before teardown. The complete
+driver library passes 92 tests; ordinary callable regression groups pass
+13 function, one captured-closure, one collection-callback and 16 caller-ownership
+tests. Parent a5e33b1f passed the full workspace and 486 default native tests on
+both GNU and MSVC, plus both Source-absent installed package jobs. Its tested
+merge has the identical source tree. Fresh supported-host acceptance of this
+named-callback successor remains a separate gate.
+Namespace-member/returned/captured/scoped/generic/handled/pipeline forms,
+aggregate/refinement Resource paths and production provider/concurrency work
+remain required. The coarse 85% estimate, 207-fixture/182-object inventory and
+whole-language 100% goal remain unchanged.

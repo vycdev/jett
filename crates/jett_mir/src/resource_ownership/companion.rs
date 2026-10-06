@@ -1,6 +1,7 @@
 //! Ordinary ownership remains independent of the fresh Resource custody proof.
 use super::*;
 use crate::copy_values::CopyValuePlan;
+use std::collections::HashSet;
 #[cfg(test)]
 mod tests;
 
@@ -51,10 +52,12 @@ pub(crate) struct CompanionContext<'p> {
     pub(crate) function: &'p Function,
     pub(crate) types: &'p TypeInterner,
     expressions: BTreeSet<usize>,
+    named_values: BTreeSet<usize>,
+    named_locals: HashSet<LocalId>,
 }
 impl<'p> CompanionContext<'p> {
     fn new(ownership: &ResourceOwnershipPlan<'p>, function: FunctionId) -> Result<Self, String> {
-        ownership
+        let plan = ownership
             .function(function)
             .ok_or("Resource companion has no exact fresh function plan")?;
         let current = ownership
@@ -116,6 +119,21 @@ impl<'p> CompanionContext<'p> {
             function: current,
             types: ownership.types,
             expressions,
+            named_values: plan
+                .named_callable_values
+                .iter()
+                .map(|(address, _)| *address)
+                .collect(),
+            named_locals: current
+                .resource_lowering
+                .as_ref()
+                .map_or_else(HashSet::new, |witness| {
+                    witness
+                        .named_callables
+                        .iter()
+                        .map(named_callables::NamedCallableBinding::local)
+                        .collect()
+                }),
         })
     }
     pub(crate) fn contains(&self, value: &Expression) -> bool {
@@ -123,5 +141,14 @@ impl<'p> CompanionContext<'p> {
     }
     pub(crate) fn resource_type(&self, ty: TypeId) -> bool {
         resource_type_pending(self.types, ty)
+    }
+    pub(crate) fn resource_expression(&self, value: &Expression) -> bool {
+        self.resource_type(value.ty)
+            && !self
+                .named_values
+                .contains(&std::ptr::from_ref(value).addr())
+    }
+    pub(crate) fn resource_local(&self, local: &Local) -> bool {
+        self.resource_type(local.ty) && !self.named_locals.contains(&local.id)
     }
 }

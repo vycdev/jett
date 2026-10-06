@@ -745,7 +745,7 @@ impl Flow<'_> {
             if !context.contains(value) {
                 return Err("Resource companion move is outside its current function".into());
             }
-            if context.resource_type(value.ty) {
+            if context.resource_expression(value) {
                 match &value.kind {
                     ExpressionKind::Local(local) => { self.read(*local, "Resource companion initialization")?; return Ok(()); }
                     ExpressionKind::View(inner) => return self.expr(inner, true),

@@ -30,6 +30,14 @@ impl<'a> PlanningContext<'a> {
         self.companion
             .is_some_and(|context| context.resource_type(ty))
     }
+    fn resource_expression(self, value: &Expression) -> bool {
+        self.companion
+            .is_some_and(|context| context.resource_expression(value))
+    }
+    fn resource_local(self, local: &jett_hir::Local) -> bool {
+        self.companion
+            .is_some_and(|context| context.resource_local(local))
+    }
 }
 
 #[derive(Debug)]
@@ -454,7 +462,7 @@ impl CopyValuePlan {
                 .iter()
                 .filter(|l| {
                     l.view_source.is_none()
-                        && !program.resource_type(l.ty)
+                        && !program.resource_local(l)
                         && (crate::move_values::is_copy_owned(types, l.ty)
                             || (program.is_some()
                                 && crate::move_values::is_linear(types, l.ty)
@@ -543,7 +551,7 @@ fn visit(
     }
     plan_type(types, value.ty, program)?;
     if program.is_some()
-        && !program.resource_type(value.ty)
+        && !program.resource_expression(value)
         && crate::move_values::is_linear(types, value.ty)
     {
         *temporaries += usize::from(match &value.kind {
@@ -603,7 +611,7 @@ fn visit(
         | ExpressionKind::Call { .. }
         | ExpressionKind::IndirectCall { .. }
         | ExpressionKind::Field { .. }
-            if !program.resource_type(value.ty)
+            if !program.resource_expression(value)
                 && crate::move_values::is_copy_owned(types, value.ty) =>
         {
             *temporaries += 1
@@ -691,12 +699,12 @@ fn visit(
                 visit(&args[parameter], reads, temporaries, types, program, view_params[parameter])?;
             }
             // Ordinary hook results still own normal runtime temporaries.
-            *temporaries += usize::from(!program.resource_type(value.ty) && (crate::move_values::is_copy_owned(types, value.ty) || crate::move_values::is_linear(types, value.ty)));
+            *temporaries += usize::from(!program.resource_expression(value) && (crate::move_values::is_copy_owned(types, value.ty) || crate::move_values::is_linear(types, value.ty)));
         }
         ExpressionKind::ResourceInvoke { .. } | ExpressionKind::ResourceHookValue { .. } => return Err("pending ResourceOwnershipPlan: ordinary expression liveness cannot own Resource operation or descriptor temporaries".into()),
         ExpressionKind::Local(l) => {
             reads.insert(l.index() as usize);
-            if program.is_some() && !program.resource_type(value.ty) && !borrowed && crate::move_values::is_linear(types, value.ty) {
+            if program.is_some() && !program.resource_expression(value) && !borrowed && crate::move_values::is_linear(types, value.ty) {
                 // Test predicates clone local owners on each ordinary read;
                 // reserving this slot for all native functions is conservative.
                 *temporaries += 1;

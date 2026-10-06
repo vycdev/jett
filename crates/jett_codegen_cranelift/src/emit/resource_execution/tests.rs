@@ -5,6 +5,7 @@ use jett_resolve::ResourceKernelSpec;
 use jett_typecheck::{CheckOptions, CheckedResourceProgram};
 use jett_types::ResourceKernelRecipe;
 use std::{collections::HashMap, sync::Arc};
+mod named_indirect;
 const SUPPORT: &str = r#"namespace resource_probe
 export resource TestHandle
 export function create(view net: Network, label: int64) returns result[TestHandle, string]:

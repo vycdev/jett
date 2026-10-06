@@ -2104,7 +2104,11 @@ impl Translator<'_, '_> {
         if let Some(value) = self.resource_expression(expression)? {
             return Ok(value);
         }
-        let kind = scalar_kind(self.types, expression.ty, "native expression")?;
+        let kind = if self.resource_is_named_value(expression)? {
+            ScalarKind::Function
+        } else {
+            scalar_kind(self.types, expression.ty, "native expression")?
+        };
         match &expression.kind {
             ExpressionKind::ResourceHookValue { .. } | ExpressionKind::ResourceInvoke { .. } => {
                 Err(contract_error(
@@ -2216,6 +2220,7 @@ impl Translator<'_, '_> {
                 }
             }
             ExpressionKind::FunctionRef(function) => {
+                self.resource_validate_named_producer(expression, *function)?;
                 self.function_descriptor(*function, None, expression.span)
             }
             ExpressionKind::ClosureRef { function, captures } => {

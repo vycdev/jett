@@ -6,6 +6,7 @@ use jett_mir::{
     ResourceFrameRole as FrameRole, ResourceOperationRole as Role, ResourceSlotStorage as Storage,
 };
 mod leaves;
+mod named_indirect;
 #[cfg(test)]
 mod tests;
 use leaves::Leaf;
@@ -918,13 +919,10 @@ impl Translator<'_, '_> {
             ),
             _ => return Err(pending("invocation selected another exact role")),
         };
-        let indirect_hook = descriptor.is_some();
-        let descriptor = if let Some(callee) = descriptor {
-            let value = self.expression(callee)?;
-            self.scalar(value, callee.span)?
-        } else {
-            self.builder.ins().iconst(ir::types::I64, 0)
-        };
+        let indirect_hook =
+            descriptor.is_some() && matches!(invocation.role(), Role::InvokeHook { .. });
+        self.resource_validate_named_invocation(invocation, descriptor)?;
+        let hook_descriptor = self.builder.ins().iconst(ir::types::I64, 0);
         self.resource_open_operation(invocation.frame())?;
         let physical = match invocation.role() {
             Role::InvokeHook { hook, .. }
@@ -970,7 +968,7 @@ impl Translator<'_, '_> {
             Role::InvokeHook { .. } => Leaf::HookPrepare.output(
                 self.module,
                 self.builder,
-                &[context, frame, ordinal, descriptor],
+                &[context, frame, ordinal, hook_descriptor],
                 resource.failure,
                 8,
             )?,
@@ -1027,6 +1025,13 @@ impl Translator<'_, '_> {
                     resource.failure,
                 )?;
             }
+        }
+        // Original indirect Source semantics evaluate the callable only after
+        // all actuals. Its ordinary descriptor never uses the ordinary call ABI.
+        if let Some(callee) = descriptor {
+            let lowered = self.expression(callee)?;
+            let descriptor = self.scalar(lowered, callee.span)?;
+            self.resource_validate_named_descriptor(descriptor, invocation, callee.span)?;
         }
         let result_value = match invocation.role() {
             Role::InvokeHook { hook, .. } => {
@@ -1252,7 +1257,9 @@ impl Translator<'_, '_> {
                 "statically aborted Resource actual needs its exact custody CFG emitter",
             ));
         }
-        if !resource.layout.plan().type_requires_custody(expression.ty) {
+        if self.resource_is_named_value(expression)?
+            || !resource.layout.plan().type_requires_custody(expression.ty)
+        {
             return Ok(None);
         }
         let value = match &expression.kind {
@@ -1413,7 +1420,8 @@ impl Translator<'_, '_> {
                 Ok(true)
             }
             StatementKind::Let { local, value }
-                if resource.layout.plan().type_requires_custody(value.ty) =>
+                if resource.layout.plan().type_requires_custody(value.ty)
+                    && !self.resource_is_named_value(value)? =>
             {
                 let evaluated = self.expression(value)?;
                 let bits = if let Some(destination) = resource.local_slot(*local)? {

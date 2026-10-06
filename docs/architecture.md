@@ -4275,3 +4275,38 @@ The native replacement leaf preflights its exact old and evaluated replacement o
 ### Source Resource replacement emission
 
 The fresh MIR custody constructor seals the evaluated RHS slot into Replace, alongside its original mutable destination and old occupancy. The layout projects these exact distinct plain-owner slots to existing tag 12; equal nominal shape and the containing Scope are checked independently. Assignment emits the composite replacement once and publishes its new handle only after Status0, without replaying descriptive Drop/Transfer rows. Constructor-authenticated Local-to-same-Local reseating has no runtime row; vacant assignment uses its exact Transfer. Public Source/witness, ordinary companion and current activation checks stay mandatory. Eleven original Source scenarios pass the real reference and generated native programs in both profiles, with Source deleted before native launch and all native obligations retired before destroy. Conditional/sum, aggregate and projected replacement remain separate transport work.
+
+### Named Resource function values
+
+Checked named-indirect body selection retains the original Indirect invocation
+and exact argument packet. A private proof joins the original callee occurrence,
+immutable local initializer/alias chain, signature and retained declaration under
+the current checked program/body attempt. The reached function value and runtime
+registration must identify that declaration; matching a signature or supplying a
+public function name cannot select a replacement body. Execution uses the
+retained Source body and the existing Scope, argument envelopes and Return floor.
+
+MIR captures the original root-scope immutable producer and aliases, authenticates
+current headers/initializers after local remaps, and derives target facts through
+the current CFG. An independent current-use check refuses escapes even if a
+private current-body witness is copied and resealed. Exact current producer,
+value and reached invocation occurrences receive readonly projections. Ordinary
+companion storage admits only those proven descriptor expressions and locals;
+public type-only Resource signature refusals and compiler-hook descriptor
+handling remain unchanged.
+
+The native callee is evaluated once after the original actuals. Callable checks,
+exact selected code-address equality and environment-zero validation precede
+SourceEnter. Refusal reaches ordinary failure cleanup and retires the acquired
+prefix. Accepted calls use the selected Resource family's context/environment/
+Scope/actual ABI, followed by SourceStatus; an ordinary indirect call cannot
+supply that Scope. The descriptor has its ordinary owner lifetime and does not
+create another Resource owner or finalizer. Runtime ABI and wire-v2 are unchanged.
+
+Twenty-eight shared Source scenarios pass in both reference and linked native
+profiles, including exact same-signature target selection, immutable aliases,
+construction failure, terminal body failure, finalizer failure and combined
+body/cleanup failure. Native Source is absent at launch and obligations are zero
+before teardown. This is local MSVC private-archive acceptance; returned hook,
+namespace-member, captured/scoped/generic and handled/pipeline callback forms and
+GNU private-archive Source execution remain separate required work.

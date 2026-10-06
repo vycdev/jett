@@ -6,7 +6,7 @@ pub(crate) use assignment::CheckedAssignment;
 mod body_reference;
 pub(crate) use body_reference::{
     CheckedAttemptKey, CheckedBodyReference, PreparedDirectScope, PreparedIntrinsicArguments,
-    PreparedPipelineStep, PreparedRequiredExpression,
+    PreparedNamedCallable, PreparedPipelineStep, PreparedRequiredExpression,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -95,6 +95,10 @@ pub(crate) struct FunctionParameter {
 /// External checked entry is not a fabricated source call packet.
 pub(crate) enum FunctionInvocation<'a> {
     Source(&'a CheckedInvocation),
+    NamedSource {
+        source: &'a CheckedInvocation,
+        target: &'a PreparedNamedCallable,
+    },
     Entry {
         definition: DefId,
         signature: TypeId,
@@ -102,12 +106,22 @@ pub(crate) enum FunctionInvocation<'a> {
 }
 
 impl FunctionInvocation<'_> {
+    pub(crate) fn source(&self) -> Option<&CheckedInvocation> {
+        match self {
+            Self::Source(source) | Self::NamedSource { source, .. } => Some(source),
+            Self::Entry { .. } => None,
+        }
+    }
+
     pub(crate) fn signature(
         &self,
         checked: &CheckedExecution,
     ) -> Result<TypeId, ResourceExecutionError> {
         match self {
-            Self::Source(invocation) => match &invocation.packet.shape {
+            Self::Source(invocation)
+            | Self::NamedSource {
+                source: invocation, ..
+            } => match &invocation.packet.shape {
                 CheckedInvocationShape::Function { signature_type } => Ok(*signature_type),
                 CheckedInvocationShape::Intrinsic { .. } => {
                     Err(ResourceExecutionError::InvalidInvocation)
@@ -136,7 +150,10 @@ impl FunctionInvocation<'_> {
             return Err(ResourceExecutionError::InvalidInvocation);
         };
         match self {
-            Self::Source(invocation) => Ok(invocation
+            Self::Source(invocation)
+            | Self::NamedSource {
+                source: invocation, ..
+            } => Ok(invocation
                 .arguments()
                 .iter()
                 .map(|argument| FunctionParameter {

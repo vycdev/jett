@@ -15,6 +15,8 @@ mod companion;
 pub(crate) use companion::CompanionContext;
 pub use companion::ResourceCompanionPlan;
 mod execution_closure;
+mod named_callables;
+pub use named_callables::ResourceNamedCallableProof;
 #[cfg(test)]
 mod execution_closure_tests;
 mod flow;
@@ -429,6 +431,7 @@ pub struct ResourceOperation {
     role: ResourceOperationRole,
     // Address identity is private, borrowed from this fresh plan's immutable Program.
     expression: Option<usize>,
+    named_indirect: Option<ResourceNamedCallableProof>,
 }
 impl ResourceOperation {
     pub fn id(&self) -> ResourceOperationId {
@@ -450,6 +453,10 @@ impl ResourceOperation {
     pub fn is_expression_operation(&self) -> bool {
         self.expression.is_some()
     }
+    /// Exact reached Indirect Source body selection, never target-name authority.
+    pub fn named_indirect_target(&self) -> Option<&ResourceNamedCallableProof> {
+        self.named_indirect.as_ref()
+    }
 }
 
 #[derive(Debug)]
@@ -463,6 +470,8 @@ pub struct ResourceFunctionPlan {
     loans: Vec<ResourceLoan>,
     operations: Vec<ResourceOperation>,
     execution_frames: Vec<(ResourceSite, ResourceFrameId)>,
+    named_callable_producers: Vec<(usize, ResourceNamedCallableProof)>,
+    named_callable_values: Vec<(usize, ResourceNamedCallableProof)>,
 }
 impl ResourceFunctionPlan {
     pub fn function(&self) -> FunctionId {
@@ -527,6 +536,27 @@ impl ResourceFunctionPlan {
             .iter()
             .filter(move |operation| operation.expression == Some(address))
     }
+    /// Only an authenticated original FunctionRef producer at this exact current occurrence.
+    pub fn named_callable_producer(
+        &self,
+        expression: &Expression,
+    ) -> Option<&ResourceNamedCallableProof> {
+        let address = std::ptr::from_ref(expression).addr();
+        self.named_callable_producers
+            .iter()
+            .find_map(|(current, proof)| (*current == address).then_some(proof))
+    }
+    /// Exact original producer, immutable alias initializer or reached callee descriptor value.
+    /// Callable signatures alone never make a physical Resource owner.
+    pub fn named_callable_value(
+        &self,
+        expression: &Expression,
+    ) -> Option<&ResourceNamedCallableProof> {
+        let address = std::ptr::from_ref(expression).addr();
+        self.named_callable_values
+            .iter()
+            .find_map(|(current, proof)| (*current == address).then_some(proof))
+    }
 }
 #[derive(Debug)]
 pub struct ResourceOwnershipPlan<'p> {
@@ -579,6 +609,7 @@ pub(super) struct ResourceLoweringWitness {
     original: hir::Function,
     calls: Vec<OriginalCallAssociation>,
     regions: Vec<ResourceCallRegion>,
+    named_callables: Vec<named_callables::NamedCallableBinding>,
     source: hir::ResourceSourceArchive,
     execution: ResourceExecutionClosure,
     manifest: hir::ResourceManifest,
@@ -629,6 +660,7 @@ impl Capture {
                 original: function.clone(),
                 calls: Vec::new(),
                 regions: Vec::new(),
+                named_callables: named_callables::capture(function, source, types, execution),
                 source: source.clone(),
                 execution: execution.clone(),
                 manifest: manifest.clone(),
@@ -880,6 +912,7 @@ impl ResourceLoweringWitness {
                 .iter()
                 .zip(&other.regions)
                 .all(|(a, b)| a.same(b))
+            && self.named_callables == other.named_callables
             && self.source == other.source
             && self.execution == other.execution
             && self.manifest == other.manifest
@@ -1108,7 +1141,8 @@ pub(super) fn validate_witnesses(
                                     .into(),
                             );
                         }
-                        witness.current(function)
+                        witness.current(function)?;
+                        named_callables::validate(witness, function, types)
                     });
                 if let Err(message) = result {
                     errors.push(ValidationError {
@@ -1287,6 +1321,7 @@ pub(super) fn remap_locals(
     for region in &mut witness.regions {
         region.remap_locals(&mut remap);
     }
+    named_callables::remap_locals(&mut witness.named_callables, &mut remap);
     for record in &mut witness.calls {
         let mut block = BasicBlock {
             id: BlockId(0),

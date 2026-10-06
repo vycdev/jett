@@ -21,6 +21,7 @@ struct State {
     values: Vec<Option<Value>>,
     moved: Vec<bool>,
     descriptors: Vec<Option<hir::ResourceHookRef>>,
+    named_callables: Vec<Option<usize>>,
     tags: BTreeMap<u32, LocalId>,
     guards: BTreeMap<u32, (LocalId, bool)>,
     leases: BTreeSet<ResourceLoanId>,
@@ -78,6 +79,7 @@ impl<'p> Analysis<'p> {
                 ordinal: self.ordinal,
                 role,
                 expression: self.expression,
+                named_indirect: None,
             });
         }
     }
@@ -172,6 +174,98 @@ impl<'p> Analysis<'p> {
             .retain(|target, source| *target != local.index() && *source != local);
         state.guards.remove(&local.index());
         state.descriptors[local.index() as usize] = None;
+        state.named_callables[local.index() as usize] = None;
+    }
+    fn named_binding(&self, state: &State, local: LocalId, value: &Expression) -> Option<usize> {
+        let witness = self.function.resource_lowering.as_ref()?;
+        witness
+            .named_callables
+            .iter()
+            .enumerate()
+            .find_map(|(index, binding)| {
+                if binding.local() != local
+                    || !crate::breakpoint_regions::expressions_equal(binding.initializer(), value)
+                {
+                    return None;
+                }
+                if let Some(parent) = binding.parent() {
+                    let parent_local = witness.named_callables[parent].local();
+                    (state.named_callables[parent_local.index() as usize] == Some(parent))
+                        .then_some(index)
+                } else {
+                    matches!(value.kind, E::FunctionRef(_)).then_some(index)
+                }
+            })
+    }
+    fn named_indirect_target(
+        &self,
+        state: &State,
+        expression: &Expression,
+    ) -> Result<Option<ResourceNamedCallableProof>, String> {
+        let E::IndirectCall {
+            callee,
+            ownership: hir::CallOwnership::Source(source),
+            ..
+        } = &expression.kind
+        else {
+            return Ok(None);
+        };
+        let E::Local(local) = callee.kind else {
+            return Ok(None);
+        };
+        let Some(index) = state.named_callables[local.index() as usize] else {
+            return Ok(None);
+        };
+        let witness = self
+            .function
+            .resource_lowering
+            .as_ref()
+            .ok_or("Resource named call lost its constructor witness")?;
+        let binding = witness
+            .named_callables
+            .get(index)
+            .ok_or("Resource named call has no exact private producer")?;
+        let proof = binding.proof();
+        let association = witness
+            .calls
+            .iter()
+            .find(|association| {
+                crate::breakpoint_regions::expressions_equal(&association.current, expression)
+            })
+            .ok_or("Resource named call has no exact original Indirect occurrence")?;
+        let E::IndirectCall {
+            callee: original_callee,
+            ..
+        } = &association.original.kind
+        else {
+            return Err("Resource named call changed its original invocation kind".into());
+        };
+        if binding.local() != local
+            || !binding.original_callee_matches(original_callee)
+            || callee.ty != proof.signature_type()
+            || source.target
+                != (hir::CallTarget::Indirect {
+                    signature_type: proof.signature_type(),
+                })
+            || source.bridge != hir::CallBridge::Direct
+            || !source.generated_operands.is_empty()
+        {
+            return Err("Resource named call differs from its exact immutable callee or original Source signature".into());
+        }
+        let target = self
+            .program
+            .functions
+            .get(proof.function().index() as usize)
+            .filter(|target| target.id == proof.function())
+            .ok_or("Resource named call lost its selected declaration")?;
+        let selected = target
+            .resource_lowering
+            .as_ref()
+            .ok_or("Resource named call has no selected original Source body")?;
+        if selected.source != witness.source || target.identity != *proof.identity() {
+            return Err("Resource named call selected a foreign archive or declaration".into());
+        }
+        Ok(Some(proof.clone()))
     }
     fn read(
         &self,
@@ -390,8 +484,8 @@ impl<'p> Analysis<'p> {
                 self.operation(ResourceFrameId(0), ResourceOperationRole::Descriptor { hook: hook.clone() });
                 Ok(None)
             }
-            E::ResourceInvoke { hook, args, evaluation_order, ownership } => self.invocation(state, expression, Some(hook.clone()), None, args, evaluation_order, ownership, ordinal),
-            E::Call { function, args, evaluation_order, ownership } => self.invocation(state, expression, None, Some(*function), args, evaluation_order, ownership, ordinal),
+            E::ResourceInvoke { hook, args, evaluation_order, ownership } => self.invocation(state, expression, Some(hook.clone()), None, args, evaluation_order, ownership, ordinal, None),
+            E::Call { function, args, evaluation_order, ownership } => self.invocation(state, expression, None, Some(*function), args, evaluation_order, ownership, ordinal, None),
             E::IndirectCall { callee, args, evaluation_order, ownership } => {
                 let hook = match &callee.kind {
                     E::ResourceHookValue { hook } => Some(hook.clone()),
@@ -399,9 +493,14 @@ impl<'p> Analysis<'p> {
                     _ => None,
                 };
                 if expected.is_some() || args.iter().any(|arg| resource_type_pending(self.types, arg.ty)) {
-                    let hook = hook.ok_or("pending ResourceOwnershipPlan: indirect custody call lacks an exact descriptor producer")?;
-                    if callee.ty != hook.function_type() { return Err("Resource indirect descriptor has a different exact signature".into()); }
-                    self.invocation(state, expression, Some(hook), None, args, evaluation_order, ownership, ordinal)
+                    if let Some(hook) = hook {
+                        if callee.ty != hook.function_type() { return Err("Resource indirect descriptor has a different exact signature".into()); }
+                        self.invocation(state, expression, Some(hook), None, args, evaluation_order, ownership, ordinal, None)
+                    } else if let Some(proof) = self.named_indirect_target(state, expression)? {
+                        self.invocation(state, expression, None, Some(proof.function()), args, evaluation_order, ownership, ordinal, Some(proof))
+                    } else {
+                        Err("pending ResourceOwnershipPlan: indirect custody call lacks an exact descriptor producer".into())
+                    }
                 } else {
                     self.expression(state, callee, false)?;
                     for &index in evaluation_order { self.expression(state, &args[index], true)?; }
@@ -469,6 +568,7 @@ impl<'p> Analysis<'p> {
         order: &[usize],
         ownership: &hir::CallOwnership,
         ordinal: usize,
+        named_indirect: Option<ResourceNamedCallableProof>,
     ) -> Result<Option<Value>, String> {
         let resource = hook.is_some()
             || function.is_some_and(|id| {
@@ -626,6 +726,22 @@ impl<'p> Analysis<'p> {
                 }
             }
         }
+        if !state.aborted
+            && let Some(proof) = &named_indirect
+        {
+            let E::IndirectCall { callee, .. } = &expression.kind else {
+                return Err(
+                    "Resource named body proof is not attached to an original Indirect call".into(),
+                );
+            };
+            self.expression(state, callee, false)?;
+            if self.named_indirect_target(state, expression)?.as_ref() != Some(proof) {
+                return Err(
+                    "Resource named callee lost its exact provenance after actual evaluation"
+                        .into(),
+                );
+            }
+        }
         let outcome_shape = shape(&self.program.resource_manifest, self.types, expression.ty)?;
         let output = outcome_shape
             .as_ref()
@@ -690,6 +806,16 @@ impl<'p> Analysis<'p> {
                         result,
                     },
                 );
+                if self.emit
+                    && let Some(proof) = named_indirect
+                {
+                    let invocation = self
+                        .plan
+                        .operations
+                        .last_mut()
+                        .ok_or("Resource named call has no invocation operation")?;
+                    invocation.named_indirect = Some(proof);
+                }
             }
         } else {
             // Every earlier owned actual must retain a cleanup destination even if the callee never runs.
@@ -755,6 +881,7 @@ impl<'p> Analysis<'p> {
             match &statement.kind {
                 StatementKind::ResourceCall(node) => self.normalized_node(&mut state, node)?,
                 StatementKind::Let { local, value } => {
+                    let named = self.named_binding(&state, *local, value);
                     let taking = !self.function.is_view_local(*local);
                     let result = self.expression(&mut state, value, taking)?;
                     if !state.aborted {
@@ -764,6 +891,15 @@ impl<'p> Analysis<'p> {
                             E::Local(source) => state.descriptors[source.index() as usize].clone(),
                             _ => None,
                         };
+                        state.named_callables[local.index() as usize] = named;
+                        if self.emit && let Some(index) = named
+                            && matches!(value.kind, E::FunctionRef(_))
+                        {
+                            let proof = self.function.resource_lowering.as_ref()
+                                .and_then(|witness| witness.named_callables.get(index))
+                                .ok_or("Resource named producer lost its constructor record")?.proof().clone();
+                            self.plan.named_callable_producers.push((std::ptr::from_ref(value).addr(), proof));
+                        }
                     }
                 }
                 StatementKind::Assign { target, value } => {
@@ -909,6 +1045,9 @@ fn join(left: &mut State, right: &State) -> Result<bool, String> {
         if left.descriptors[index] != right.descriptors[index] {
             left.descriptors[index] = None;
         }
+        if left.named_callables[index] != right.named_callables[index] {
+            left.named_callables[index] = None;
+        }
     }
     left.tags
         .retain(|id, source| right.tags.get(id) == Some(source));
@@ -970,6 +1109,14 @@ pub(super) fn analyze(
         loans: Vec::new(),
         operations: Vec::new(),
         execution_frames: Vec::new(),
+        named_callable_producers: Vec::new(),
+        named_callable_values: named_callables::current_values(
+            function
+                .resource_lowering
+                .as_ref()
+                .ok_or("Resource named values lost their constructor witness")?,
+            function,
+        )?,
     };
     let mut analysis = Analysis {
         program,
@@ -992,6 +1139,7 @@ pub(super) fn analyze(
         values: vec![None; function.locals.len()],
         moved: vec![false; function.locals.len()],
         descriptors: vec![None; function.locals.len()],
+        named_callables: vec![None; function.locals.len()],
         tags: BTreeMap::new(),
         guards: BTreeMap::new(),
         leases: BTreeSet::new(),

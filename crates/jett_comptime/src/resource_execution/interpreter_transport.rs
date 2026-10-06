@@ -212,7 +212,13 @@ impl Interpreter {
                         .map_err(|error| error.to_string())?;
                     return Ok(Some(Self::resource_flow(value)));
                 }
-                if self.resource_type_at(identifier.span)? {
+                if self.resource_type_at(identifier.span)?
+                    && transport
+                        .checked
+                        .prepare_named_callable(expression)
+                        .map_err(|error| error.to_string())?
+                        .is_none()
+                {
                     return Err("Resource source binding has no live cleanup custody".to_string());
                 }
                 Ok(None)
@@ -669,6 +675,22 @@ impl Interpreter {
                             .invoke_hook(invocation, &descriptor, formal).map_err(|error| error.to_string())?;
                         Ok(Self::resource_flow(value))
                     }
+                    Value::NamedFunction(name) if function.custody.is_empty()
+                        && (formal.iter().any(|argument| !argument.custody.is_empty() || argument.value.contains_live_resource_or_grant())
+                            || self.resource_type_at(bare_callee.span())?) => {
+                        let target = self.resource_transport.as_ref().ok_or("missing checked Resource transport")?
+                            .checked.prepare_named_indirect(invocation, bare_callee).map_err(|error| error.to_string())?;
+                        let expected = self.exact_registered_resource_function(target.definition())?;
+                        if name != expected {
+                            return Err("named Resource callable differs from its exact original target".to_string());
+                        }
+                        let value = self.call_registered_function_envelopes(
+                            &expected, &[], formal,
+                            &FunctionInvocation::NamedSource { source: invocation, target: &target },
+                            return_destination,
+                        )?;
+                        Ok(Self::resource_flow(value))
+                    }
                     value if function.custody.is_empty() && !value.contains_live_resource_or_grant()
                         && formal.iter().all(|argument| argument.custody.is_empty() && !argument.value.contains_live_resource_or_grant()) => {
                         Ok(ExprFlow::Value(self.call_fn_value_from_source(value, formal.into_iter().map(|value| value.value).collect(), None)?))
@@ -787,6 +809,7 @@ impl Interpreter {
             .ok_or("missing checked Resource transport")?;
         let definition = match invocation {
             FunctionInvocation::Entry { definition, .. } => *definition,
+            FunctionInvocation::NamedSource { target, .. } => target.definition(),
             FunctionInvocation::Source(invocation) => match invocation.target() {
                 CheckedInvocationTarget::Resolved(definition) => *definition,
                 CheckedInvocationTarget::Generic(call) => call.definition,
@@ -928,7 +951,8 @@ impl Interpreter {
                         .map_err(|error| error.to_string())?;
                 } else {
                     let source_type = match invocation {
-                        FunctionInvocation::Source(call) => call
+                        FunctionInvocation::Source(call)
+                        | FunctionInvocation::NamedSource { source: call, .. } => call
                             .arguments()
                             .iter()
                             .find(|argument| argument.parameter_index == index)

@@ -45,6 +45,9 @@ pub(crate) use pipeline::PreparedPipelineStep;
 #[path = "body_reference/intrinsic.rs"]
 mod intrinsic;
 pub(crate) use intrinsic::PreparedIntrinsicArguments;
+#[path = "body_reference/named_callable.rs"]
+mod named_callable;
+pub(crate) use named_callable::PreparedNamedCallable;
 
 /// Minted only from one retained program and an exact accepted body selection.
 #[derive(Debug, Clone)]
@@ -142,6 +145,10 @@ impl CheckedExecution {
     ) -> Result<CheckedBodyReference, ResourceExecutionError> {
         let (definition, root) = match invocation {
             FunctionInvocation::Entry { definition, .. } => (*definition, BodyRoot::Ordinary),
+            FunctionInvocation::NamedSource { source, target } => {
+                self.validate_named_indirect(source, target)?;
+                (target.definition(), BodyRoot::Ordinary)
+            }
             FunctionInvocation::Source(invocation) => {
                 self.validate_executable_cursor(&invocation.body)?;
                 if self.facts(&invocation.body)?.calls.get(&invocation.span)
@@ -217,7 +224,7 @@ impl CheckedExecution {
                 }
             }
         }
-        if let FunctionInvocation::Source(source) = invocation {
+        if let Some(source) = invocation.source() {
             if source.arguments().len() != params.len()
                 || source.arguments().iter().any(|argument| {
                     params.get(argument.parameter_index) != Some(&argument.parameter_type)
