@@ -8486,7 +8486,9 @@ replacing it with a protocol refusal. The callee's original body outcome
 stays separate from failure during cleanup.
 Native function values initialized from exact named, non-generic,
 capability-free declarations now support Resource calls through root-scope
-immutable locals and immutable aliases. Their original invocation remains
+immutable locals and immutable aliases, including namespace-qualified
+functions selected by their full-expression resolver identity. Their original
+invocation remains
 indirect. The backend verifies the selected code address and empty environment,
 then supplies the selected body's internal Scope through the checked Source
 bridge. Descriptor storage remains ordinary; the Resource argument retains its
@@ -8496,7 +8498,7 @@ and conditional/aggregate replacement still require their dedicated successors.
 Compiler-test Resource providers are confined to a single runtime archive built
 with both `test` and `jett_resource_native_test_archive`; production providers
 remain disabled. Archive compilation and object emission alone do not establish
-linked Source execution. Twenty-eight shared original Source scenarios now pass in
+linked Source execution. Thirty-two shared original Source scenarios now pass in
 both native profiles against their real reference outcomes, with Source files
 absent at launch and zero live obligations before teardown. This local test
 slice does not enable production Resource providers or complete broader native

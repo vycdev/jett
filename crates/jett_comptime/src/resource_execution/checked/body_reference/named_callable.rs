@@ -57,11 +57,26 @@ impl CheckedExecution {
         if let Expr::Paren(inner, _) = expression {
             return self.named_callable_in(region, inner, aliases);
         }
-        let Expr::Ident(identifier) = expression else {
-            return Ok(None);
+        let (definition, identifier, member) = match expression {
+            Expr::Ident(identifier) => (
+                self.resolved_definition(identifier.span)?,
+                Some(identifier),
+                None,
+            ),
+            Expr::FieldAccess(_, member, span) => {
+                // Namespace resolution authenticates the complete producer,
+                // not its base/member spelling or a runtime dotted name.
+                if self.program.checked().method_values.contains_key(span) {
+                    return Ok(None);
+                }
+                let Some(definition) = self.program.resolved().resolutions.get(span).copied()
+                else {
+                    return Ok(None);
+                };
+                (definition, None, Some(member))
+            }
+            _ => return Ok(None),
         };
-        let definition = self.resolved_definition(identifier.span)?;
-        let signature = self.expression_type(expression.span())?;
         let info = self
             .program
             .resolved()
@@ -69,25 +84,40 @@ impl CheckedExecution {
             .definitions
             .get(definition.index() as usize)
             .ok_or(ResourceExecutionError::InvalidInvocation)?;
-        if info.id != definition
-            || !matches!(
-                self.program.checked().interner.resolve(signature),
-                Type::Function { .. }
-            )
-        {
+        if info.id != definition {
             return Ok(None);
         }
         match info.kind {
             jett_resolve::DefKind::Function if !self.has_hook(definition) => {
                 let function = self.retained_function(definition)?;
                 if !function.type_params.is_empty()
-                    || self.program.checked().definition_types.get(&definition) != Some(&signature)
+                    || member.is_some_and(|member| {
+                        info.namespace.is_none() || member.name != function.name.name
+                    })
+                {
+                    return Ok(None);
+                }
+                let signature = self.expression_type(expression.span())?;
+                if !matches!(
+                    self.program.checked().interner.resolve(signature),
+                    Type::Function { .. }
+                ) || self.program.checked().definition_types.get(&definition) != Some(&signature)
                 {
                     return Ok(None);
                 }
                 Ok(Some((definition, signature)))
             }
             jett_resolve::DefKind::Variable => {
+                let Some(identifier) = identifier else {
+                    return Ok(None);
+                };
+                let signature = self.expression_type(expression.span())?;
+                if !matches!(
+                    self.program.checked().interner.resolve(signature),
+                    Type::Function { .. }
+                ) {
+                    return Ok(None);
+                }
                 if aliases.iter().any(|(_, seen)| *seen == definition) {
                     return Err(ResourceExecutionError::InvalidInvocation);
                 }

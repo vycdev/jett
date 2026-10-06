@@ -70,9 +70,10 @@ remains a separate gate.
 
 ## Remaining full-goal work
 
-Namespace-member callbacks, returned compiler hook descriptors, dynamic and
-captured callables, scoped and
-generic bodies, reflected/pipeline/handled invocation and occupied aggregate
+Qualified namespace members are covered by the subsequent
+[namespace callback proof](native_namespace_resource_callbacks.md). Returned
+compiler hook descriptors, dynamic and captured callables, scoped and generic
+bodies, reflected/pipeline/handled invocation and occupied aggregate
 Resource paths remain required. Reference fixture07 returns a compiler hook
 descriptor and does not prove named Source callback support. This milestone does
 not count those separate invocation forms as covered.

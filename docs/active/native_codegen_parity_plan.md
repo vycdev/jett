@@ -2412,3 +2412,27 @@ Namespace-member/returned/captured/scoped/generic/handled/pipeline forms,
 aggregate/refinement Resource paths and production provider/concurrency work
 remain required. The coarse 85% estimate, 207-fixture/182-object inventory and
 whole-language 100% goal remain unchanged.
+
+### Namespace-qualified Resource callbacks, 2026-10-06
+
+The interpreter now joins a qualified function value to its exact full-span
+resolved declaration and retained checked header/signature. Instance fields,
+method adapters, generic functions and compiler hooks cannot mint named-body
+proof. Original expression identity, alias chain, body attempt and indirect
+argument tuple remain authenticated.
+
+Two new Source programs and four shared oracles grow the Resource corpus from
+28 to 32 scenarios. All 64 reference and 64 Source-absent linked native executions
+pass across debug and release, including alias close, handled factory failure
+and cleanup panic. Seven callback-proof tests and the complete 515-test reference
+library pass; the complete driver library passes 92 tests. Fresh supported-host
+acceptance remains a separate gate. Runtime sources and matched archives are
+unchanged.
+
+Returned Resource hook callbacks are the next executed baseline. MIR currently
+loses exact hook identity across a factory return, and native invocation still
+refuses the descriptor route. Existing runtime descriptor validation and frame
+staging provide a compatible ABI path; exact return provenance, opaque carrier
+transport and emitted descriptor invocation rows remain to implement. Dynamic,
+captured/scoped/generic/handled/pipeline/required callbacks, aggregates, providers
+and concurrency remain required. Overall tracking remains about 85%.

@@ -4281,7 +4281,10 @@ The fresh MIR custody constructor seals the evaluated RHS slot into Replace, alo
 Checked named-indirect body selection retains the original Indirect invocation
 and exact argument packet. A private proof joins the original callee occurrence,
 immutable local initializer/alias chain, signature and retained declaration under
-the current checked program/body attempt. The reached function value and runtime
+the current checked program/body attempt. Namespace-qualified producers require
+the whole expression span to resolve to that Function definition and exact
+retained header/signature; instance fields and method adapters carry no such
+namespace authority. The reached function value and runtime
 registration must identify that declaration; matching a signature or supplying a
 public function name cannot select a replacement body. Execution uses the
 retained Source body and the existing Scope, argument envelopes and Return floor.
@@ -4303,10 +4306,10 @@ Scope/actual ABI, followed by SourceStatus; an ordinary indirect call cannot
 supply that Scope. The descriptor has its ordinary owner lifetime and does not
 create another Resource owner or finalizer. Runtime ABI and wire-v2 are unchanged.
 
-Twenty-eight shared Source scenarios pass in both reference and linked native
+Thirty-two shared Source scenarios pass in both reference and linked native
 profiles, including exact same-signature target selection, immutable aliases,
 construction failure, terminal body failure, finalizer failure and combined
 body/cleanup failure. Native Source is absent at launch and obligations are zero
 before teardown. This is local MSVC private-archive acceptance; returned hook,
-namespace-member, captured/scoped/generic and handled/pipeline callback forms and
+captured/scoped/generic and handled/pipeline callback forms and
 GNU private-archive Source execution remain separate required work.
