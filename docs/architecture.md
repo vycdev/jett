@@ -4313,3 +4313,33 @@ body/cleanup failure. Native Source is absent at launch and obligations are zero
 before teardown. This is local MSVC private-archive acceptance; returned hook,
 captured/scoped/generic and handled/pipeline callback forms and
 GNU private-archive Source execution remain separate required work.
+
+
+### Returned Resource hook descriptor transport
+
+Exact hook Return summaries are captured from the retained checked Source archive.
+Current producer/alias/Return occurrences, headers and CFG state are joined to
+that archive, with an independent body/entry/header snapshot checked before
+canonical remaps. Readonly getters select only exact current opaque metadata
+occurrences. A preceding ordinary branch can preserve a single root Return;
+nested returns, captures and dynamic alternatives do not inherit that proof.
+
+Returned hook shape 10 and indirect invocation tag 15 select the exact hook and
+signature plus a separate Acquire, Borrow or Close row at the same sealed frame.
+Actual staging precedes the once-only callee evaluation and HookPrepare. Source
+results are read only after SourceStatus completes Scope retirement. Exact opaque
+metadata avoids ordinary Function cloning/ownership storage; it creates no
+Resource owner or finalizer. Existing runtime wire-v2 and custody leaves are
+unchanged. Authenticated Resource function roots seed typed dependency traversal,
+so ordinary helpers receive normal declarations, verification and their existing
+context/environment ABI.
+
+All 46 shared Source scenarios pass in both reference and Source-absent linked
+native profiles (92 executions each), with zero obligations before teardown.
+Nine focused MIR groups and 242 MIR library tests, seven focused codegen groups,
+100 codegen library tests, 63 object tests and all 92 driver-library tests pass.
+This is local MSVC private-archive acceptance. Required/comptime materialization, returned named callbacks,
+dynamic/captured/scoped/generic/handled/pipeline forms, aggregates and production
+provider/concurrency integration remain in the whole goal, as do GNU private-
+archive Source execution and final-revision release gates. See the
+[returned descriptor note](active/native_returned_resource_hooks.md).

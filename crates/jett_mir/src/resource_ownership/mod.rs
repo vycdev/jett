@@ -16,6 +16,7 @@ pub(crate) use companion::CompanionContext;
 pub use companion::ResourceCompanionPlan;
 mod execution_closure;
 mod named_callables;
+mod returned_descriptors;
 pub use named_callables::ResourceNamedCallableProof;
 #[cfg(test)]
 mod execution_closure_tests;
@@ -432,6 +433,7 @@ pub struct ResourceOperation {
     // Address identity is private, borrowed from this fresh plan's immutable Program.
     expression: Option<usize>,
     named_indirect: Option<ResourceNamedCallableProof>,
+    indirect_hook: Option<hir::ResourceHookRef>,
 }
 impl ResourceOperation {
     pub fn id(&self) -> ResourceOperationId {
@@ -454,6 +456,9 @@ impl ResourceOperation {
         self.expression.is_some()
     }
     /// Exact reached Indirect Source body selection, never target-name authority.
+    pub fn indirect_hook_target(&self) -> Option<&hir::ResourceHookRef> {
+        self.indirect_hook.as_ref()
+    }
     pub fn named_indirect_target(&self) -> Option<&ResourceNamedCallableProof> {
         self.named_indirect.as_ref()
     }
@@ -472,6 +477,9 @@ pub struct ResourceFunctionPlan {
     execution_frames: Vec<(ResourceSite, ResourceFrameId)>,
     named_callable_producers: Vec<(usize, ResourceNamedCallableProof)>,
     named_callable_values: Vec<(usize, ResourceNamedCallableProof)>,
+    descriptor_return: Option<hir::ResourceHookRef>,
+    descriptor_values: Vec<(usize, hir::ResourceHookRef)>,
+    descriptor_locals: Vec<(LocalId, hir::ResourceHookRef)>,
 }
 impl ResourceFunctionPlan {
     pub fn function(&self) -> FunctionId {
@@ -537,6 +545,22 @@ impl ResourceFunctionPlan {
             .filter(move |operation| operation.expression == Some(address))
     }
     /// Only an authenticated original FunctionRef producer at this exact current occurrence.
+    /// Exact retained hook Return summary, rechecked against current reachable returns.
+    pub fn descriptor_return(&self) -> Option<&hir::ResourceHookRef> {
+        self.descriptor_return.as_ref()
+    }
+    /// Installation-owned metadata at this exact current expression occurrence.
+    pub fn descriptor_value(&self, expression: &Expression) -> Option<&hir::ResourceHookRef> {
+        let address = std::ptr::from_ref(expression).addr();
+        self.descriptor_values
+            .iter()
+            .find_map(|(current, hook)| (*current == address).then_some(hook))
+    }
+    pub fn descriptor_local(&self, local: LocalId) -> Option<&hir::ResourceHookRef> {
+        self.descriptor_locals
+            .iter()
+            .find_map(|(current, hook)| (*current == local).then_some(hook))
+    }
     pub fn named_callable_producer(
         &self,
         expression: &Expression,
@@ -610,6 +634,7 @@ pub(super) struct ResourceLoweringWitness {
     calls: Vec<OriginalCallAssociation>,
     regions: Vec<ResourceCallRegion>,
     named_callables: Vec<named_callables::NamedCallableBinding>,
+    descriptors: returned_descriptors::DescriptorWitness,
     source: hir::ResourceSourceArchive,
     execution: ResourceExecutionClosure,
     manifest: hir::ResourceManifest,
@@ -661,6 +686,7 @@ impl Capture {
                 calls: Vec::new(),
                 regions: Vec::new(),
                 named_callables: named_callables::capture(function, source, types, execution),
+                descriptors: returned_descriptors::capture(function, source),
                 source: source.clone(),
                 execution: execution.clone(),
                 manifest: manifest.clone(),
@@ -815,11 +841,14 @@ impl Capture {
         }
     }
     pub(super) fn finish(
-        self,
+        mut self,
         function: &Function,
     ) -> Result<Option<ResourceLoweringWitness>, String> {
         if let Some(witness) = &self.witness {
             witness.current(function)?;
+        }
+        if let Some(witness) = &mut self.witness {
+            witness.descriptors.seal(function);
         }
         Ok(self.witness)
     }
@@ -839,6 +868,7 @@ impl ResourceLoweringWitness {
         {
             return Err("Resource ownership differs from its initially authenticated Source or constructor-emitted graph".into());
         }
+        self.descriptors.current(function)?;
         for region in &self.regions {
             region.current(function)?;
             let mut original_count = 0;
@@ -913,6 +943,7 @@ impl ResourceLoweringWitness {
                 .zip(&other.regions)
                 .all(|(a, b)| a.same(b))
             && self.named_callables == other.named_callables
+            && self.descriptors == other.descriptors
             && self.source == other.source
             && self.execution == other.execution
             && self.manifest == other.manifest
@@ -1142,7 +1173,8 @@ pub(super) fn validate_witnesses(
                             );
                         }
                         witness.current(function)?;
-                        named_callables::validate(witness, function, types)
+                        named_callables::validate(witness, function, types)?;
+                        returned_descriptors::validate(witness, function)
                     });
                 if let Err(message) = result {
                     errors.push(ValidationError {
@@ -1263,6 +1295,7 @@ pub(super) fn remap_blocks(
     for region in &mut witness.regions {
         region.remap_blocks(map)?;
     }
+    returned_descriptors::remap_blocks(&mut witness.descriptors, map)?;
     remap(&mut witness.entry);
     for block in &mut witness.blocks {
         remap(&mut block.id);
@@ -1322,6 +1355,7 @@ pub(super) fn remap_locals(
         region.remap_locals(&mut remap);
     }
     named_callables::remap_locals(&mut witness.named_callables, &mut remap);
+    returned_descriptors::remap_locals(&mut witness.descriptors, map, &mut remap);
     for record in &mut witness.calls {
         let mut block = BasicBlock {
             id: BlockId(0),

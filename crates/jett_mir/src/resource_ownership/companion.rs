@@ -53,6 +53,7 @@ pub(crate) struct CompanionContext<'p> {
     pub(crate) types: &'p TypeInterner,
     expressions: BTreeSet<usize>,
     named_values: BTreeSet<usize>,
+    descriptor_values: BTreeSet<usize>,
     named_locals: HashSet<LocalId>,
 }
 impl<'p> CompanionContext<'p> {
@@ -119,6 +120,11 @@ impl<'p> CompanionContext<'p> {
             function: current,
             types: ownership.types,
             expressions,
+            descriptor_values: plan
+                .descriptor_values
+                .iter()
+                .map(|(address, _)| *address)
+                .collect(),
             named_values: plan
                 .named_callable_values
                 .iter()
@@ -141,6 +147,10 @@ impl<'p> CompanionContext<'p> {
     }
     pub(crate) fn resource_type(&self, ty: TypeId) -> bool {
         resource_type_pending(self.types, ty)
+    }
+    pub(crate) fn descriptor_expression(&self, value: &Expression) -> bool {
+        self.descriptor_values
+            .contains(&std::ptr::from_ref(value).addr())
     }
     pub(crate) fn resource_expression(&self, value: &Expression) -> bool {
         self.resource_type(value.ty)

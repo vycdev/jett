@@ -6,24 +6,9 @@ use jett_typecheck::{CheckOptions, CheckedResourceProgram};
 use jett_types::ResourceKernelRecipe;
 use std::{collections::HashMap, sync::Arc};
 mod named_indirect;
-const SUPPORT: &str = r#"namespace resource_probe
-export resource TestHandle
-export function create(view net: Network, label: int64) returns result[TestHandle, string]:
-    return kernel_create(label: label, net: view net)
-export function borrow(view net: Network, view token: TestHandle) returns result[int64, string]:
-    return kernel_borrow(view net, view token)
-export function close(token: TestHandle) returns nothing:
-    kernel_close(token)
-    return nothing
-export function empty() returns optional[TestHandle]:
-    return none
-export function descriptor() returns function(TestHandle) returns nothing:
-    return kernel_close
-export function terminal_label() returns int64:
-    list[int64] numbers = list(1)
-    list[int64] removed = list.__remove_at[int64](numbers, -1)
-    return 1
-"#;
+mod returned_hooks;
+const SUPPORT: &str =
+    include_str!("../../../../jett_driver/tests/native_conformance/resource/resource_probe.jett");
 fn checked(source: &str, release: bool) -> Arc<CheckedResourceProgram> {
     let stdlib = FileId::new(10_000);
     let project = FileId::new(0);

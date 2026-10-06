@@ -7,6 +7,7 @@ use jett_mir::{
 };
 mod leaves;
 mod named_indirect;
+mod returned_hooks;
 #[cfg(test)]
 mod tests;
 use leaves::Leaf;
@@ -844,6 +845,20 @@ impl Translator<'_, '_> {
                     .first()
                     .copied()
                     .ok_or_else(|| pending("staged Source result is absent"))?;
+                let opaque_output = resource.function_plan()?.descriptor_local(*output);
+                if let Some(hook) = opaque_output {
+                    let selected = resource.layout.plan().function(*function).ok_or_else(|| {
+                        pending("staged descriptor target has no exact Source plan")
+                    })?;
+                    if selected.descriptor_return() != Some(hook)
+                        || self.local_types[output.index() as usize].ty != hook.function_type()
+                        || !matches!(result, CallResult::Ordinary { ty } if *ty == hook.function_type())
+                    {
+                        return Err(pending(
+                            "staged descriptor output changes its exact callee Return or current endpoint",
+                        ));
+                    }
+                }
                 let lowered = match *result {
                     CallResult::Owned { slot } => {
                         if resource.local_slot(*output)? != Some(slot) {
@@ -852,6 +867,9 @@ impl Translator<'_, '_> {
                             ));
                         }
                         self.resource_store(slot, bits)?;
+                        LoweredValue::Scalar(bits)
+                    }
+                    CallResult::Ordinary { .. } if opaque_output.is_some() => {
                         LoweredValue::Scalar(bits)
                     }
                     CallResult::Ordinary { ty }
@@ -922,7 +940,8 @@ impl Translator<'_, '_> {
         let indirect_hook =
             descriptor.is_some() && matches!(invocation.role(), Role::InvokeHook { .. });
         self.resource_validate_named_invocation(invocation, descriptor)?;
-        let hook_descriptor = self.builder.ins().iconst(ir::types::I64, 0);
+        self.resource_validate_hook_invocation(invocation, descriptor)?;
+        let opaque_result = self.resource_is_hook_descriptor(expression)?;
         self.resource_open_operation(invocation.frame())?;
         let physical = match invocation.role() {
             Role::InvokeHook { hook, .. }
@@ -951,27 +970,26 @@ impl Translator<'_, '_> {
             }
             _ => invocation,
         };
-        if indirect_hook {
-            return Err(pending(
-                "indirect Resource hook requires its exact descriptor-target wire row",
-            ));
-        }
         let (context, frame, ordinal) = self.resource_operation(physical)?;
         let call = match invocation.role() {
-            Role::InvokeSourceFunction { .. } => Leaf::SourcePrepare.output(
+            Role::InvokeSourceFunction { .. } => Some(Leaf::SourcePrepare.output(
                 self.module,
                 self.builder,
                 &[context, frame, ordinal],
                 resource.failure,
                 8,
-            )?,
-            Role::InvokeHook { .. } => Leaf::HookPrepare.output(
-                self.module,
-                self.builder,
-                &[context, frame, ordinal, hook_descriptor],
-                resource.failure,
-                8,
-            )?,
+            )?),
+            Role::InvokeHook { .. } if !indirect_hook => {
+                let no_descriptor = self.builder.ins().iconst(ir::types::I64, 0);
+                Some(Leaf::HookPrepare.output(
+                    self.module,
+                    self.builder,
+                    &[context, frame, ordinal, no_descriptor],
+                    resource.failure,
+                    8,
+                )?)
+            }
+            Role::InvokeHook { .. } => None,
             _ => unreachable!(),
         };
         let mut evaluated = vec![None; args.len()];
@@ -1021,18 +1039,44 @@ impl Translator<'_, '_> {
                 Leaf::SourceActual.checked(
                     self.module,
                     self.builder,
-                    &[context, call, source_index, parameter, bits],
+                    &[
+                        context,
+                        call.expect("Source call was prepared"),
+                        source_index,
+                        parameter,
+                        bits,
+                    ],
                     resource.failure,
                 )?;
             }
         }
-        // Original indirect Source semantics evaluate the callable only after
-        // all actuals. Its ordinary descriptor never uses the ordinary call ABI.
-        if let Some(callee) = descriptor {
+        // Original indirect semantics evaluate the callable once after all actuals.
+        // Opaque hook metadata and ordinary named descriptors use distinct checks.
+        let hook_descriptor = if let Some(callee) = descriptor {
             let lowered = self.expression(callee)?;
             let descriptor = self.scalar(lowered, callee.span)?;
-            self.resource_validate_named_descriptor(descriptor, invocation, callee.span)?;
-        }
+            if !indirect_hook {
+                self.resource_validate_named_descriptor(descriptor, invocation, callee.span)?;
+            }
+            descriptor
+        } else {
+            self.builder.ins().iconst(ir::types::I64, 0)
+        };
+        let call = if indirect_hook {
+            let ordinal = self
+                .builder
+                .ins()
+                .iconst(ir::types::I32, i64::from(resource.ordinal(invocation)?));
+            Leaf::HookPrepare.output(
+                self.module,
+                self.builder,
+                &[context, frame, ordinal, hook_descriptor],
+                resource.failure,
+                8,
+            )?
+        } else {
+            call.expect("direct hook or Source call was prepared")
+        };
         let result_value = match invocation.role() {
             Role::InvokeHook { hook, .. } => {
                 let find = |parameter| {
@@ -1199,6 +1243,7 @@ impl Translator<'_, '_> {
                 self.resource_store(slot, result_value)?;
                 LoweredValue::Scalar(result_value)
             }
+            CallResult::Ordinary { .. } if opaque_result => LoweredValue::Scalar(result_value),
             CallResult::Ordinary { ty } if is_linear(self.types, ty) => {
                 self.own_linear(result_value)?
             }
@@ -1257,6 +1302,9 @@ impl Translator<'_, '_> {
                 "statically aborted Resource actual needs its exact custody CFG emitter",
             ));
         }
+        if self.resource_is_hook_descriptor(expression)? {
+            return self.resource_hook_value(expression, &operations).map(Some);
+        }
         if self.resource_is_named_value(expression)?
             || !resource.layout.plan().type_requires_custody(expression.ty)
         {
@@ -1274,23 +1322,7 @@ impl Translator<'_, '_> {
             }
             ExpressionKind::View(inner) => return self.expression(inner).map(Some),
             ExpressionKind::ResourceHookValue { .. } => {
-                let operation = operations
-                    .iter()
-                    .copied()
-                    .find(|operation| matches!(operation.role(), Role::Descriptor { .. }))
-                    .ok_or_else(|| pending("hook value lost its exact descriptor row"))?;
-                let context = self.resource_context();
-                let ordinal = self
-                    .builder
-                    .ins()
-                    .iconst(ir::types::I32, i64::from(resource.ordinal(operation)?));
-                Leaf::Descriptor.output(
-                    self.module,
-                    self.builder,
-                    &[context, ordinal],
-                    resource.failure,
-                    8,
-                )?
+                return Err(pending("hook value has no exact current descriptor proof"));
             }
             ExpressionKind::OptionalSome(inner) | ExpressionKind::ResultOk(inner) => {
                 self.expression(inner)?;
@@ -1668,6 +1700,22 @@ impl Translator<'_, '_> {
             .resource
             .ok_or_else(|| pending("return has no selected family"))?;
         let operations = resource.at_site()?;
+        let opaque_return = match (resource.function_plan()?.descriptor_return(), expression) {
+            (Some(hook), Some(value)) => {
+                if resource.function_plan()?.descriptor_value(value) != Some(hook)
+                    || value.ty != hook.function_type()
+                {
+                    return Err(pending(
+                        "returned hook metadata changes its sealed Return proof",
+                    ));
+                }
+                true
+            }
+            (Some(_), None) => {
+                return Err(pending("hook descriptor Return omitted its exact value"));
+            }
+            (None, _) => false,
+        };
         let mut result = if let Some(expression) = expression {
             self.expression(expression)?
         } else {
@@ -1696,7 +1744,9 @@ impl Translator<'_, '_> {
             };
             let transfer = operations.iter().copied().find(|operation| matches!(operation.role(), Role::Transfer { destination, .. } if destination == source)).ok_or_else(|| pending("owned return has no exact provisional transfer"))?;
             self.resource_transfer(transfer)?;
-        } else if expression.is_some_and(|expression| is_copy_owned(self.types, expression.ty)) {
+        } else if !opaque_return
+            && expression.is_some_and(|expression| is_copy_owned(self.types, expression.ty))
+        {
             let value = self.scalar(result, span)?;
             let leaf =
                 if expression.is_some_and(|expression| is_function(self.types, expression.ty)) {

@@ -459,13 +459,7 @@ pub(crate) fn verify_resource_program(
             });
         }
     }
-    let mut selected = reachable_function_ids_with_types(program, types)?;
-    for function in plan.functions() {
-        if !selected.contains(&function.function()) {
-            selected.push(function.function());
-        }
-    }
-    selected.sort_by_key(|id| id.index());
+    let selected = crate::reachability::reachable_resource_function_ids(plan)?;
     let mut functions = Vec::new();
     let mut by_mir_index = vec![None; program.functions.len()];
     let mut symbols = HashSet::new();
@@ -1762,6 +1756,40 @@ impl Verifier<'_> {
             .resource
             .and_then(|ownership| ownership.function(function.id))
             .and_then(|plan| plan.named_callable_value(expression));
+        let descriptor_value = self
+            .resource
+            .and_then(|ownership| ownership.function(function.id))
+            .and_then(|plan| plan.descriptor_value(expression));
+        if let Some(hook) = descriptor_value {
+            if hook.function_type() != expression.ty
+                || !self.resource.is_some_and(|ownership| {
+                    ownership.program().resource_manifest.contains_hook(hook)
+                })
+            {
+                return Err(self.contract_error(
+                    function,
+                    expression.span,
+                    "opaque descriptor occurrence changes its exact hook proof",
+                ));
+            }
+            if let ExpressionKind::Call {
+                function: target, ..
+            } = &expression.kind
+            {
+                if self
+                    .resource
+                    .and_then(|ownership| ownership.function(*target))
+                    .and_then(|callee| callee.descriptor_return())
+                    != Some(hook)
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "returned descriptor changes its exact Source callee Return proof",
+                    ));
+                }
+            }
+        }
         if let Some(ownership) = self.resource {
             // Source signatures do not describe the selected family's hidden Scope.
             // Descriptor and adapter emission requires its distinct authenticated ABI.
@@ -1835,7 +1863,27 @@ impl Verifier<'_> {
                     | ExpressionKind::OptionalSome(inner)
                     | ExpressionKind::ResultOk(inner)
                     | ExpressionKind::ResultFail(inner) => return self.expression(function, inner),
-                    ExpressionKind::OptionalNone | ExpressionKind::ResourceHookValue { .. } => {
+                    ExpressionKind::Clone(inner) if descriptor_value.is_some() => {
+                        if plan.descriptor_value(inner) != descriptor_value {
+                            return Err(self.contract_error(
+                                function,
+                                expression.span,
+                                "opaque descriptor alias changes its exact producer",
+                            ));
+                        }
+                        return self.expression(function, inner);
+                    }
+                    ExpressionKind::ResourceHookValue { hook } => {
+                        if descriptor_value != Some(hook) {
+                            return Err(self.contract_error(
+                                function,
+                                expression.span,
+                                "opaque hook value has no exact current producer proof",
+                            ));
+                        }
+                        return Ok(());
+                    }
+                    ExpressionKind::OptionalNone => {
                         return Ok(());
                     }
                     ExpressionKind::Call { args, .. }
@@ -1871,6 +1919,24 @@ impl Verifier<'_> {
                             ));
                         }
                         for operation in plan.operations_for_expression(expression) {
+                            if let jett_mir::ResourceOperationRole::InvokeHook {
+                                hook,
+                                source,
+                                ..
+                            } = operation.role()
+                            {
+                                if operation.indirect_hook_target() != Some(hook)
+                                    || plan.descriptor_value(callee) != Some(hook)
+                                    || callee.ty != hook.function_type()
+                                    || !matches!(source.target, jett_hir::CallTarget::Indirect { signature_type }
+                                        if signature_type == callee.ty)
+                                    || source.bridge != jett_hir::CallBridge::Direct
+                                    || !source.generated_operands.is_empty()
+                                {
+                                    return Err(self.contract_error(function, expression.span,
+                                        "Resource indirect hook changes its sealed descriptor target or Source tuple"));
+                                }
+                            }
                             if let jett_mir::ResourceOperationRole::InvokeSourceFunction {
                                 function: target,
                                 source,

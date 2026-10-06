@@ -2294,6 +2294,20 @@ from ordinary ownership storage. Exact current expression identity selects
 already validated custody roles; identical cloned expressions cannot select them.
 Public ordinary move/copy/caller planning still refuses Resource authority.
 
+Native lowering also retains exact returned compiler-hook descriptors through
+immutable bindings, aliases and root Return relays. Immediately invoked returned
+callees execute once after the original actuals. Installation-owned hook
+metadata carries no Resource cleanup obligation and is distinct from the
+ordinary named Function object. Its exact original/current producer, body,
+header and Return proof selects the hook; a public callable type or matching
+signature cannot do so. Canonical remaps authenticate an independent body proof
+before pruning, and runtime invocation still validates installation, hook,
+signature and exact physical operation frame. Pure helper dependencies retain
+their ordinary ABI. The local native/reference corpus passes all 46 scenarios
+in both profiles; dynamic, captured, scoped/generic, required/comptime and
+returned named callbacks remain separate work. See the
+[returned hook implementation](active/native_returned_resource_hooks.md).
+
 The private native runtime custody core separately tracks non-cloneable owned
 and borrowed tokens, checked frame destinations and reverse acquisition
 cleanup. Its protocol tests cover generation/provenance refusal and

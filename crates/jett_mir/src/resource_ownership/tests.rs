@@ -8,7 +8,7 @@ use jett_typecheck::{CheckOptions, CheckedResourceProgram};
 use jett_types::ResourceKernelRecipe;
 use std::{collections::HashMap, sync::Arc};
 
-const SUPPORT: &str = r#"namespace resource_probe
+pub(super) const SUPPORT: &str = r#"namespace resource_probe
 export resource TestHandle
 export function create(view net: Network, label: int64) returns result[TestHandle, string]:
     return kernel_create(label: label, net: view net)
@@ -46,9 +46,16 @@ function scenario(view net: Network) returns nothing:
     return nothing
 "#;
 pub(super) fn checked(source: &str, release: bool) -> Arc<CheckedResourceProgram> {
+    checked_support(source, SUPPORT, release)
+}
+pub(super) fn checked_support(
+    source: &str,
+    support: &str,
+    release: bool,
+) -> Arc<CheckedResourceProgram> {
     let stdlib = FileId::new(10_000);
     let project = FileId::new(0);
-    let mut parsed = parse(SUPPORT, stdlib);
+    let mut parsed = parse(support, stdlib);
     let primary = parse(source, project);
     assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
     assert!(primary.errors.is_empty(), "{:?}", primary.errors);

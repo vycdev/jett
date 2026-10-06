@@ -80,6 +80,7 @@ impl<'p> Analysis<'p> {
                 role,
                 expression: self.expression,
                 named_indirect: None,
+                indirect_hook: None,
             });
         }
     }
@@ -175,6 +176,18 @@ impl<'p> Analysis<'p> {
         state.guards.remove(&local.index());
         state.descriptors[local.index() as usize] = None;
         state.named_callables[local.index() as usize] = None;
+    }
+    fn descriptor_value(&self, state: &State, value: &Expression) -> Option<hir::ResourceHookRef> {
+        let expected = self.plan.descriptor_value(value)?;
+        match &value.kind {
+            E::Local(local) => (state.descriptors[local.index() as usize].as_ref()
+                == Some(expected))
+            .then(|| expected.clone()),
+            E::Clone(inner) => (self.descriptor_value(state, inner).as_ref() == Some(expected))
+                .then(|| expected.clone()),
+            E::Call { .. } | E::ResourceHookValue { .. } => Some(expected.clone()),
+            _ => None,
+        }
     }
     fn named_binding(&self, state: &State, local: LocalId, value: &Expression) -> Option<usize> {
         let witness = self.function.resource_lowering.as_ref()?;
@@ -474,7 +487,16 @@ impl<'p> Analysis<'p> {
         let ordinal = self.ordinal;
         let expected = shape(&self.program.resource_manifest, self.types, expression.ty)?;
         match &expression.kind {
-            E::Local(local) => self.read(state, *local, taking),
+            E::Local(local) => {
+                if self.plan.descriptor_value(expression).is_some() && self.descriptor_value(state, expression).is_none() {
+                    return Err("Resource descriptor has no live exact producer at this current CFG read".into());
+                }
+                self.read(state, *local, taking)
+            }
+            E::Clone(inner) if self.plan.descriptor_value(expression).is_some() => {
+                if self.descriptor_value(state, expression).is_none() { return Err("Resource descriptor alias lost its current exact producer".into()); }
+                self.expression(state, inner, false)
+            }
             E::View(inner) => {
                 if taking && expected.is_some() { return Err("Resource View cannot be adopted as an owned result".into()); }
                 self.expression(state, inner, false)
@@ -487,11 +509,7 @@ impl<'p> Analysis<'p> {
             E::ResourceInvoke { hook, args, evaluation_order, ownership } => self.invocation(state, expression, Some(hook.clone()), None, args, evaluation_order, ownership, ordinal, None),
             E::Call { function, args, evaluation_order, ownership } => self.invocation(state, expression, None, Some(*function), args, evaluation_order, ownership, ordinal, None),
             E::IndirectCall { callee, args, evaluation_order, ownership } => {
-                let hook = match &callee.kind {
-                    E::ResourceHookValue { hook } => Some(hook.clone()),
-                    E::Local(local) => state.descriptors[local.index() as usize].clone(),
-                    _ => None,
-                };
+                let hook = self.descriptor_value(state, callee);
                 if expected.is_some() || args.iter().any(|arg| resource_type_pending(self.types, arg.ty)) {
                     if let Some(hook) = hook {
                         if callee.ty != hook.function_type() { return Err("Resource indirect descriptor has a different exact signature".into()); }
@@ -502,8 +520,8 @@ impl<'p> Analysis<'p> {
                         Err("pending ResourceOwnershipPlan: indirect custody call lacks an exact descriptor producer".into())
                     }
                 } else {
-                    self.expression(state, callee, false)?;
                     for &index in evaluation_order { self.expression(state, &args[index], true)?; }
+                    if !state.aborted { self.expression(state, callee, false)?; }
                     Ok(None)
                 }
             }
@@ -742,6 +760,26 @@ impl<'p> Analysis<'p> {
                 );
             }
         }
+        if !state.aborted
+            && hook.is_some()
+            && let E::IndirectCall { callee, .. } = &expression.kind
+        {
+            self.expression(state, callee, false)?;
+            if !state.aborted && self.descriptor_value(state, callee).as_ref() != hook.as_ref() {
+                return Err("Resource indirect hook lost its exact descriptor provenance after actual evaluation".into());
+            }
+            if source.target
+                != (hir::CallTarget::Indirect {
+                    signature_type: callee.ty,
+                })
+                || source.bridge != hir::CallBridge::Direct
+                || !source.generated_operands.is_empty()
+            {
+                return Err(
+                    "Resource indirect hook changed its original Indirect Source authority".into(),
+                );
+            }
+        }
         let outcome_shape = shape(&self.program.resource_manifest, self.types, expression.ty)?;
         let output = outcome_shape
             .as_ref()
@@ -762,6 +800,13 @@ impl<'p> Analysis<'p> {
                         result,
                     },
                 );
+                if self.emit && matches!(expression.kind, E::IndirectCall { .. }) {
+                    self.plan
+                        .operations
+                        .last_mut()
+                        .ok_or("Resource indirect hook lost its Invoke operation")?
+                        .indirect_hook = Some(hook.clone());
+                }
                 match hook.recipe() {
                     jett_types::ResourceKernelRecipe::NetworkFactory => {
                         let destination = output
@@ -882,15 +927,14 @@ impl<'p> Analysis<'p> {
                 StatementKind::ResourceCall(node) => self.normalized_node(&mut state, node)?,
                 StatementKind::Let { local, value } => {
                     let named = self.named_binding(&state, *local, value);
+                    let descriptor = self.descriptor_value(&state, value);
                     let taking = !self.function.is_view_local(*local);
                     let result = self.expression(&mut state, value, taking)?;
                     if !state.aborted {
                         self.store(&mut state, *local, result, false, false)?;
-                        state.descriptors[local.index() as usize] = match &value.kind {
-                            E::ResourceHookValue { hook } => Some(hook.clone()),
-                            E::Local(source) => state.descriptors[source.index() as usize].clone(),
-                            _ => None,
-                        };
+                        let expected_descriptor = self.function.resource_lowering.as_ref().and_then(|witness| witness.descriptors.binding(*local, value));
+                        if descriptor.as_ref() != expected_descriptor { return Err("Resource descriptor binding lost its exact original immutable initializer".into()); }
+                        state.descriptors[local.index() as usize] = descriptor;
                         state.named_callables[local.index() as usize] = named;
                         if self.emit && let Some(index) = named
                             && matches!(value.kind, E::FunctionRef(_))
@@ -985,7 +1029,12 @@ impl<'p> Analysis<'p> {
                 if !state.calls.is_empty() { return Err("Resource Source Return reaches an unretired normalized operation suffix".into()); }
                 let mut outgoing = None;
                 if let Some(value) = value {
+                    let descriptor = self.descriptor_value(&state, value);
                     let returned = self.expression(&mut state, value, true)?;
+                    if !state.aborted && let Some(expected) = self.plan.descriptor_return() {
+                        let witnessed = self.function.resource_lowering.as_ref().is_some_and(|witness| witness.descriptors.return_matches(value));
+                        if descriptor.as_ref() != Some(expected) || !witnessed { return Err("Resource descriptor Return differs from its exact current producer and archived return summary".into()); }
+                    }
                     if let Some(returned) = returned {
                         if returned.loan.is_some() { return Err("Resource resident lease cannot escape as an owning return".into()); }
                         let expected = shape(&self.program.resource_manifest, self.types, self.function.return_type)?.ok_or("Resource return has an ordinary declared result")?;
@@ -1109,6 +1158,28 @@ pub(super) fn analyze(
         loans: Vec::new(),
         operations: Vec::new(),
         execution_frames: Vec::new(),
+        descriptor_return: function
+            .resource_lowering
+            .as_ref()
+            .and_then(|witness| witness.descriptors.returned())
+            .cloned(),
+        descriptor_values: returned_descriptors::current_values(
+            function
+                .resource_lowering
+                .as_ref()
+                .ok_or("Resource descriptors lost their constructor witness")?,
+            function,
+        )?,
+        descriptor_locals: function
+            .resource_lowering
+            .as_ref()
+            .map_or_else(Vec::new, |witness| {
+                witness
+                    .descriptors
+                    .locals()
+                    .map(|(local, hook)| (local, hook.clone()))
+                    .collect()
+            }),
         named_callable_producers: Vec::new(),
         named_callable_values: named_callables::current_values(
             function

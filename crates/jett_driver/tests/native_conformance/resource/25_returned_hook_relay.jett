@@ -1,0 +1,11 @@
+namespace app
+function relay() returns function(resource_probe.TestHandle) returns nothing:
+    use resource_probe
+    return resource_probe.descriptor()
+export function main(net: Network) returns nothing:
+    use resource_probe
+    function(resource_probe.TestHandle) returns nothing dispose = relay()
+    resource_probe.TestHandle token = resource_probe.create(view net, 721) handle error:
+        return nothing
+    dispose(token)
+    return nothing

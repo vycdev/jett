@@ -9,14 +9,27 @@ use crate::CodegenError;
 /// declaration and object-symbol order stay deterministic.
 #[cfg(test)]
 fn reachable_function_ids(program: &Program) -> Result<Vec<FunctionId>, CodegenError> {
-    reachable_functions(program, None)
+    reachable_functions(program, None, &[])
 }
 
 pub(crate) fn reachable_function_ids_with_types(
     program: &Program,
     types: &jett_types::TypeInterner,
 ) -> Result<Vec<FunctionId>, CodegenError> {
-    reachable_functions(program, Some(types))
+    reachable_functions(program, Some(types), &[])
+}
+
+/// Constructor-selected families are executable roots even when ordinary
+/// project reachability did not use their descriptor-producing bodies.
+pub(crate) fn reachable_resource_function_ids(
+    plan: &jett_mir::ResourceOwnershipPlan<'_>,
+) -> Result<Vec<FunctionId>, CodegenError> {
+    let roots = plan
+        .functions()
+        .iter()
+        .map(|function| function.function())
+        .collect::<Vec<_>>();
+    reachable_functions(plan.program(), Some(plan.types()), &roots)
 }
 
 struct References<'a> {
@@ -33,6 +46,7 @@ impl References<'_> {
 fn reachable_functions(
     program: &Program,
     types: Option<&jett_types::TypeInterner>,
+    additional_roots: &[FunctionId],
 ) -> Result<Vec<FunctionId>, CodegenError> {
     let mut reachable = vec![false; program.functions.len()];
     let mut pending = Vec::new();
@@ -52,6 +66,22 @@ fn reachable_functions(
                 &mut pending,
             )?;
         }
+    }
+
+    for &id in additional_roots {
+        let function = resolve_function(program, id).ok_or_else(|| {
+            CodegenError::Backend(
+                "authenticated Resource root is absent from the current MIR function table".into(),
+            )
+        })?;
+        mark_reachable(
+            program,
+            id,
+            function.span,
+            function,
+            &mut reachable,
+            &mut pending,
+        )?;
     }
 
     while let Some((function_id, function_span)) = pending.pop() {

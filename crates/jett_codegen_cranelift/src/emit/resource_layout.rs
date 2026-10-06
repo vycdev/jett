@@ -286,6 +286,7 @@ struct Rows<'a, 'p> {
     operations: Vec<(custody::ResourceSite, Vec<u32>)>,
     operation_ids: BTreeMap<(u32, usize), u32>,
     borrow_ids: BTreeMap<(u32, usize), u32>,
+    descriptor_borrow_targets: BTreeMap<(u32, usize), u32>,
 }
 impl<'a, 'p> Rows<'a, 'p> {
     fn new(plan: &'a custody::ResourceOwnershipPlan<'p>) -> Result<Self, CodegenError> {
@@ -305,6 +306,7 @@ impl<'a, 'p> Rows<'a, 'p> {
             operations: Vec::new(),
             operation_ids: BTreeMap::new(),
             borrow_ids: BTreeMap::new(),
+            descriptor_borrow_targets: BTreeMap::new(),
         })
     }
     fn shape(&mut self, ty: TypeId) -> Result<u32, CodegenError> {
@@ -518,31 +520,14 @@ impl<'a, 'p> Rows<'a, 'p> {
                 plan.types().resolve(function.return_type()),
                 Type::Function { .. }
             ) {
-                let current = plan
-                    .program()
-                    .functions
-                    .get(function.function().index() as usize)
-                    .ok_or_else(|| pending("descriptor-return function disappeared"))?;
-                let mut returned = None;
-                for block in &current.blocks {
-                    if let TerminatorKind::Return(Some(value)) = &block.terminator.kind {
-                        let ExpressionKind::ResourceHookValue { hook } = &value.kind else {
-                            return Err(pending(
-                                "descriptor return needs its exact original hook producer",
-                            ));
-                        };
-                        if value.ty != function.return_type()
-                            || returned.as_ref().is_some_and(|previous| previous != hook)
-                        {
-                            return Err(pending(
-                                "descriptor return producer differs across selected paths",
-                            ));
-                        }
-                        returned = Some(hook.clone());
-                    }
+                let hook = function.descriptor_return().ok_or_else(|| {
+                    pending("descriptor result has no exact original/current Return proof")
+                })?;
+                if hook.function_type() != function.return_type() {
+                    return Err(pending(
+                        "descriptor Return proof changes its function signature",
+                    ));
                 }
-                let hook = returned
-                    .ok_or_else(|| pending("descriptor result has no original Return producer"))?;
                 let words = vec![10, self.hook(&hook)?];
                 if let Some(index) = self.shapes.iter().position(|shape| shape == &words) {
                     ordinal(index)?
@@ -609,7 +594,9 @@ impl<'a, 'p> Rows<'a, 'p> {
         // Fix all operation ordinals before projecting references to Borrow rows.
         for function in plan.functions() {
             for operation in function.operations() {
-                if !emitted(operation.role()) || staged_alias(function, operation)?.is_some() {
+                if (!emitted(operation.role()) && operation.indirect_hook_target().is_none())
+                    || staged_alias(function, operation)?.is_some()
+                {
                     continue;
                 }
                 let id = ordinal(self.operations.len())?;
@@ -627,6 +614,17 @@ impl<'a, 'p> Rows<'a, 'p> {
                     }
                 }
                 self.operations.push((operation.site(), Vec::new()));
+                if operation.indirect_hook_target().is_some()
+                    && matches!(operation.role(), Role::InvokeHook { hook, .. }
+                        if hook.recipe() == jett_types::ResourceKernelRecipe::NetworkBorrow)
+                {
+                    let target = ordinal(self.operations.len())?;
+                    self.descriptor_borrow_targets.insert(
+                        (function.function().index(), operation.id().index()),
+                        target,
+                    );
+                    self.operations.push((operation.site(), Vec::new()));
+                }
             }
         }
         for function in plan.functions() {
@@ -640,6 +638,14 @@ impl<'a, 'p> Rows<'a, 'p> {
                 };
                 let row = self.operation_row(function, operation)?;
                 self.operations[id as usize].1 = row;
+                if let Some(target) = self
+                    .descriptor_borrow_targets
+                    .get(&(function.function().index(), operation.id().index()))
+                    .copied()
+                {
+                    self.operations[target as usize].1 =
+                        self.borrow_hook_row(function, operation)?;
+                }
             }
         }
         // Prepared metadata owns the single wire row. Reached activations use its
@@ -676,6 +682,57 @@ impl<'a, 'p> Rows<'a, 'p> {
     ) -> Result<Vec<u32>, CodegenError> {
         let f = function.function();
         let frame = self.frame(f, operation.frame())?;
+        if let Some(proof) = operation.indirect_hook_target() {
+            let Role::InvokeHook { hook, source, .. } = operation.role() else {
+                return Err(pending(
+                    "descriptor target proof is not an exact hook invocation",
+                ));
+            };
+            if hook != proof
+                || !matches!(source.target, jett_hir::CallTarget::Indirect { signature_type }
+                    if signature_type == hook.function_type())
+                || source.bridge != jett_hir::CallBridge::Direct
+                || !source.generated_operands.is_empty()
+            {
+                return Err(pending(
+                    "descriptor wire projection changes its exact original hook tuple",
+                ));
+            }
+            let target = if hook.recipe() == jett_types::ResourceKernelRecipe::NetworkBorrow {
+                *self
+                    .descriptor_borrow_targets
+                    .get(&(f.index(), operation.id().index()))
+                    .ok_or_else(|| pending("indirect Borrow has no separate physical target row"))?
+            } else {
+                let mut targets = function.operations().iter().filter(|physical| {
+                    physical.frame() == operation.frame()
+                        && match physical.role() {
+                            Role::Acquire { hook: current, .. } => {
+                                current == hook
+                                    && hook.recipe()
+                                        == jett_types::ResourceKernelRecipe::NetworkFactory
+                            }
+                            Role::Close { hook: current, .. } => {
+                                current == hook
+                                    && hook.recipe() == jett_types::ResourceKernelRecipe::Finalize
+                            }
+                            _ => false,
+                        }
+                });
+                let target = targets
+                    .next()
+                    .ok_or_else(|| pending("indirect hook has no exact physical target"))?;
+                if targets.next().is_some() {
+                    return Err(pending("indirect hook has multiple physical targets"));
+                }
+                *self
+                    .operation_ids
+                    .get(&(f.index(), target.id().index()))
+                    .ok_or_else(|| pending("indirect hook physical target has no fixed row"))?
+            };
+            let hook = self.hook(hook)?;
+            return Ok(vec![15, hook, self.hooks[hook as usize].2, target]);
+        }
         Ok(match operation.role() {
             Role::Acquire { hook, destination } => {
                 vec![1, frame, self.hook(hook)?, self.slot(f, *destination)?]
@@ -736,23 +793,11 @@ impl<'a, 'p> Rows<'a, 'p> {
                 }
                 vec![5, frame, source[1]]
             }
-            Role::InvokeHook { hook, operands, .. } => {
+            Role::InvokeHook { hook, .. } => {
                 if hook.recipe() != jett_types::ResourceKernelRecipe::NetworkBorrow {
                     return Err(pending("unexpected emitted hook metadata role"));
                 }
-                let loan = operands
-                    .iter()
-                    .find_map(|operand| {
-                        if let Operand::Borrowed { loan, .. } = operand {
-                            Some(*loan)
-                        } else {
-                            None
-                        }
-                    })
-                    .ok_or_else(|| pending("Borrow hook has no exact resource loan"))?;
-                let mut row = vec![6, frame, self.hook(hook)?];
-                row.extend(self.loan(function, loan)?);
-                row
+                self.borrow_hook_row(function, operation)?
             }
             Role::Close { hook, source } => {
                 vec![7, frame, self.hook(hook)?, self.slot(f, *source)?]
@@ -884,6 +929,40 @@ impl<'a, 'p> Rows<'a, 'p> {
                 ));
             }
         })
+    }
+    fn borrow_hook_row(
+        &mut self,
+        function: &custody::ResourceFunctionPlan,
+        operation: &custody::ResourceOperation,
+    ) -> Result<Vec<u32>, CodegenError> {
+        let Role::InvokeHook { hook, operands, .. } = operation.role() else {
+            return Err(pending(
+                "physical Borrow target is not an exact hook operation",
+            ));
+        };
+        if hook.recipe() != jett_types::ResourceKernelRecipe::NetworkBorrow {
+            return Err(pending("physical Borrow target changes its hook recipe"));
+        }
+        let mut loans = operands.iter().filter_map(|operand| {
+            if let Operand::Borrowed { loan, .. } = operand {
+                Some(*loan)
+            } else {
+                None
+            }
+        });
+        let loan = loans
+            .next()
+            .ok_or_else(|| pending("Borrow hook has no exact resource loan"))?;
+        if loans.next().is_some() {
+            return Err(pending("Borrow hook has multiple resource loan operands"));
+        }
+        let mut row = vec![
+            6,
+            self.frame(function.function(), operation.frame())?,
+            self.hook(hook)?,
+        ];
+        row.extend(self.loan(function, loan)?);
+        Ok(row)
     }
     fn source_row(
         &mut self,

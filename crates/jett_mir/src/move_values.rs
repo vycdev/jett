@@ -749,6 +749,7 @@ impl Flow<'_> {
                 match &value.kind {
                     ExpressionKind::Local(local) => { self.read(*local, "Resource companion initialization")?; return Ok(()); }
                     ExpressionKind::View(inner) => return self.expr(inner, true),
+                    ExpressionKind::Clone(inner) if context.descriptor_expression(value) => return self.expr(inner, false),
                     ExpressionKind::ResourceHookValue { .. } | ExpressionKind::OptionalNone => return Ok(()),
                     ExpressionKind::ResultOk(inner) | ExpressionKind::ResultFail(inner) | ExpressionKind::OptionalSome(inner) => return self.expr(inner, false),
                     ExpressionKind::Call { .. } | ExpressionKind::IndirectCall { .. } | ExpressionKind::ResourceInvoke { .. } => {},

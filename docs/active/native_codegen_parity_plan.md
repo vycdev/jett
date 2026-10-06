@@ -2436,3 +2436,28 @@ staging provide a compatible ABI path; exact return provenance, opaque carrier
 transport and emitted descriptor invocation rows remain to implement. Dynamic,
 captured/scoped/generic/handled/pipeline/required callbacks, aggregates, providers
 and concurrency remain required. Overall tracking remains about 85%.
+
+
+### Returned compiler-hook callbacks, 2026-10-06
+
+Exact returned Factory, Borrow and Close descriptors now pass all 46 shared
+Resource scenarios in both reference and Source-absent linked native profiles:
+92 executions each, including stored/alias/relay/unused metadata, immediate
+callees, observable argument-before-callee order and factory/actual/callee/
+finalizer failure cleanup. Immutable return provenance and independent current
+body/entry/header proofs survive canonical remaps. Copied/resealed pruning
+regressions are refused before evidence can be erased. Returned metadata is
+installation-owned; only exact proved occurrences bypass ordinary Function
+storage. Existing wire-v2/runtime leaves and matched archives remain unchanged.
+
+Nine focused MIR groups and 242 MIR library tests pass. Seven focused codegen
+groups, all 100 codegen library tests and 63 object tests pass. Authenticated
+Resource roots now seed typed reachability before walking ordinary dependencies;
+pure helpers retain their normal ABI. All 92 driver-library tests pass; fresh
+supported-host gates remain pending. See
+[the contract and remaining forms](native_returned_resource_hooks.md).
+Required/comptime materialization, returned named callbacks, dynamic/captured/
+scoped/generic/handled/pipeline forms, nested returns, aggregates and production
+providers/concurrency remain required. The coarse estimate remains about 85%,
+the fixed inventory remains 207 fixtures/182 objects, and the whole-language
+100% goal is active.
