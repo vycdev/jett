@@ -98,12 +98,18 @@ fn original_value(
     locals: &BTreeMap<u32, hir::ResourceHookRef>,
     summaries: &[Option<hir::ResourceHookRef>],
     manifest: &hir::ResourceManifest,
+    function: &hir::Function,
+    archive: &hir::ResourceSourceArchive,
 ) -> Option<hir::ResourceHookRef> {
+    if let Some(hook) = required_hook(function, archive, value) {
+        return (manifest.contains_hook(hook) && hook.function_type() == value.ty)
+            .then(|| hook.clone());
+    }
     let hook = match &value.kind {
         E::ResourceHookValue { hook } if manifest.contains_hook(hook) => hook.clone(),
         E::Local(local) => locals.get(&local.index())?.clone(),
         E::Clone(inner) if inner.ty == value.ty && inner.span == value.span => {
-            original_value(inner, locals, summaries, manifest)?
+            original_value(inner, locals, summaries, manifest, function, archive)?
         }
         E::Call {
             function,
@@ -124,6 +130,45 @@ fn original_value(
     };
     (hook.function_type() == value.ty).then_some(hook)
 }
+
+fn required_original<'a>(
+    function: &hir::Function,
+    archive: &'a hir::ResourceSourceArchive,
+    value: &Expression,
+) -> Option<&'a Expression> {
+    archive.required_materializations().iter().find_map(|row| {
+        let hook = row.hook()?;
+        (row.function() == function.id
+            && row.identity() == &function.identity
+            && crate::breakpoint_regions::expressions_equal(row.current(), value)
+            && archive.materialized_hook(function.id, row.original(), value) == Some(hook))
+        .then_some(row.original())
+    })
+}
+
+fn required_hook<'a>(
+    function: &hir::Function,
+    archive: &'a hir::ResourceSourceArchive,
+    value: &Expression,
+) -> Option<&'a hir::ResourceHookRef> {
+    let original = required_original(function, archive, value)?;
+    archive.materialized_hook(function.id, original, value)
+}
+
+fn descriptor_value(
+    function: &hir::Function,
+    archive: &hir::ResourceSourceArchive,
+    expression: &Expression,
+    hook: &hir::ResourceHookRef,
+) -> DescriptorValue {
+    DescriptorValue {
+        original: required_original(function, archive, expression)
+            .unwrap_or(expression)
+            .clone(),
+        current: expression.clone(),
+        hook: hook.clone(),
+    }
+}
 fn immutable_local<'a>(
     function: &'a hir::Function,
     local: LocalId,
@@ -143,8 +188,10 @@ fn root_summary(
     function: &hir::Function,
     summaries: &[Option<hir::ResourceHookRef>],
     manifest: &hir::ResourceManifest,
+    archive: &hir::ResourceSourceArchive,
 ) -> Option<hir::ResourceHookRef> {
-    if function.capture_count != 0
+    if archive.required_only_function_ids().contains(&function.id)
+        || function.capture_count != 0
         || function.source_definition.is_none()
         || !function.identity.type_arguments.is_empty()
         || !function.identity.scoped_type_bindings.is_empty()
@@ -160,12 +207,14 @@ fn root_summary(
             hir::StatementKind::Let { local, value }
                 if immutable_local(function, *local, value).is_some() =>
             {
-                if let Some(hook) = original_value(value, &locals, summaries, manifest) {
+                if let Some(hook) =
+                    original_value(value, &locals, summaries, manifest, function, archive)
+                {
                     locals.insert(local.index(), hook);
                 }
             }
             hir::StatementKind::Return(Some(value)) => {
-                let hook = original_value(value, &locals, summaries, manifest)?;
+                let hook = original_value(value, &locals, summaries, manifest, function, archive)?;
                 if function.return_type != hook.function_type()
                     || returned.as_ref().is_some_and(|old| old != &hook)
                 {
@@ -207,9 +256,9 @@ fn summaries(archive: &hir::ResourceSourceArchive) -> Vec<Option<hir::ResourceHo
     // Relay chains are finite. Cycles cannot fabricate a descriptor base producer.
     for _ in 0..archive.functions().len() {
         let next: Vec<_> = archive
-            .functions()
+            .execution_functions()
             .iter()
-            .map(|function| root_summary(function, &summaries, manifest))
+            .map(|function| root_summary(function, &summaries, manifest, archive))
             .collect();
         if next == summaries {
             break;
@@ -222,19 +271,17 @@ fn remember(
     values: &mut Vec<DescriptorValue>,
     expression: &Expression,
     hook: &hir::ResourceHookRef,
+    function: &hir::Function,
+    archive: &hir::ResourceSourceArchive,
 ) {
     if !values
         .iter()
-        .any(|value| crate::breakpoint_regions::expressions_equal(&value.original, expression))
+        .any(|value| crate::breakpoint_regions::expressions_equal(&value.current, expression))
     {
-        values.push(DescriptorValue {
-            original: expression.clone(),
-            current: expression.clone(),
-            hook: hook.clone(),
-        });
+        values.push(descriptor_value(function, archive, expression, hook));
     }
     if let E::Clone(inner) = &expression.kind {
-        remember(values, inner, hook);
+        remember(values, inner, hook, function, archive);
     }
 }
 
@@ -242,6 +289,11 @@ pub(super) fn capture(
     function: &hir::Function,
     archive: &hir::ResourceSourceArchive,
 ) -> DescriptorWitness {
+    if archive.required_only_function_ids().contains(&function.id) {
+        // The full lowering witness still authenticates this checked body. Its
+        // required-only role supplies no runtime descriptor occurrence or plan.
+        return DescriptorWitness::default();
+    }
     let summaries = summaries(archive);
     let mut witness = DescriptorWitness {
         returned: summaries
@@ -257,30 +309,26 @@ pub(super) fn capture(
     for statement in &function.body.statements {
         if let hir::StatementKind::Let { local, value } = &statement.kind
             && let Some(header) = immutable_local(function, *local, value)
-            && let Some(hook) = original_value(value, &locals, &summaries, manifest)
+            && let Some(hook) =
+                original_value(value, &locals, &summaries, manifest, function, archive)
         {
-            remember(&mut witness.values, value, &hook);
+            remember(&mut witness.values, value, &hook, function, archive);
             locals.insert(local.index(), hook.clone());
             witness.bindings.push(DescriptorBinding {
                 original: header.clone(),
                 current: header.clone(),
-                value: DescriptorValue {
-                    original: value.clone(),
-                    current: value.clone(),
-                    hook,
-                },
+                value: descriptor_value(function, archive, value, &hook),
             });
         }
         if let hir::StatementKind::Return(Some(value)) = &statement.kind
-            && let Some(hook) = original_value(value, &locals, &summaries, manifest)
+            && let Some(hook) =
+                original_value(value, &locals, &summaries, manifest, function, archive)
             && witness.returned.as_ref() == Some(&hook)
         {
-            remember(&mut witness.values, value, &hook);
-            witness.returns.push(DescriptorValue {
-                original: value.clone(),
-                current: value.clone(),
-                hook,
-            });
+            remember(&mut witness.values, value, &hook, function, archive);
+            witness
+                .returns
+                .push(descriptor_value(function, archive, value, &hook));
         }
     }
     walk::hir_block(&function.body, &mut |value| {
@@ -295,9 +343,10 @@ pub(super) fn capture(
                 })
             && source.bridge == hir::CallBridge::Direct
             && source.generated_operands.is_empty()
-            && let Some(hook) = original_value(callee, &locals, &summaries, manifest)
+            && let Some(hook) =
+                original_value(callee, &locals, &summaries, manifest, function, archive)
         {
-            remember(&mut witness.values, callee, &hook);
+            remember(&mut witness.values, callee, &hook, function, archive);
         }
     });
     witness
@@ -407,6 +456,13 @@ pub(super) fn remap_blocks(
     Ok(())
 }
 fn mapped_value_valid(value: &DescriptorValue, witness: &ResourceLoweringWitness) -> bool {
+    if matches!(value.original.kind, E::Comptime { .. } | E::Constant { .. }) {
+        return witness.source.materialized_hook(
+            witness.original.id,
+            &value.original,
+            &value.current,
+        ) == Some(&value.hook);
+    }
     if matches!(value.original.kind, E::Call { .. }) {
         return witness.calls.iter().any(|call| {
             crate::breakpoint_regions::expressions_equal(&call.original, &value.original)
@@ -442,6 +498,35 @@ pub(super) fn validate(
     let expected = capture(&witness.original, &witness.source);
     let current = &witness.descriptors;
     current.current(function)?;
+    if witness
+        .source
+        .required_materializations()
+        .iter()
+        .any(|row| row.function() == function.id)
+        && current.graph.is_none()
+    {
+        return Err(
+            "required Resource materialization lost its authenticated current body transport"
+                .into(),
+        );
+    }
+    if witness
+        .source
+        .required_only_function_ids()
+        .contains(&function.id)
+    {
+        // No runtime operation or callable authority is projected for a
+        // required-only body. Source/header/type/call authentication ran first.
+        return (current.graph.is_some()
+            && current.returned.is_none()
+            && current.values.is_empty()
+            && current.bindings.is_empty()
+            && current.returns.is_empty())
+        .then_some(())
+        .ok_or_else(|| {
+            "required-only Resource helper acquired runtime descriptor authority".into()
+        });
+    }
     if current.graph.is_none() && (!current.values.is_empty() || current.returned.is_some()) {
         return Err("Resource descriptor lost its authenticated current body transport".into());
     }
@@ -586,13 +671,16 @@ impl DescriptorWitness {
 
     pub(super) fn seal(&mut self, function: &Function) {
         if self.returned.is_some() || !self.values.is_empty() {
-            self.graph = Some(DescriptorGraph {
-                parameters: function.params.clone(),
-                locals: function.locals.clone(),
-                blocks: function.blocks.clone(),
-                entry: function.entry,
-            });
+            self.seal_body(function);
         }
+    }
+    pub(super) fn seal_body(&mut self, function: &Function) {
+        self.graph = Some(DescriptorGraph {
+            parameters: function.params.clone(),
+            locals: function.locals.clone(),
+            blocks: function.blocks.clone(),
+            entry: function.entry,
+        });
     }
     pub(super) fn returned(&self) -> Option<&hir::ResourceHookRef> {
         self.returned.as_ref()
@@ -623,3 +711,7 @@ impl DescriptorWitness {
 #[cfg(test)]
 #[path = "returned_descriptors_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "required_descriptors_tests.rs"]
+mod required_tests;

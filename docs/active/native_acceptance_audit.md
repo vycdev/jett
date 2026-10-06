@@ -2339,3 +2339,30 @@ full workspace and 486 default native tests on each host. Its local full run's
 replays; that does not replace a clean complete local run. Full successor
 workspace/platform release acceptance remains distinct from the local gates.
 The full 100% objective is active, with the coarse estimate unchanged at 85%.
+
+
+### Required Resource values and exact ordinary helper bodies (2026-10-06)
+
+The latest local shared Source checkpoint is 61 scenarios and 122 executions per
+backend in debug/release. It supersedes the earlier 22/32/46-scenario checkpoints
+above. Required evaluation runs once through a provider-free checked cache before
+runtime registration; the native path retains original Source provenance through
+materialization, production value conversion, MIR validation, object emission,
+linking and Source-deleted launch. Exact events, script consumption, failure
+channels and zero obligations before teardown remain mandatory.
+
+All nine required-value MIR controls and 251 MIR library tests pass. The genuine
+scalar-helper baseline accepted a changed required value and canonical pruning;
+current body-only proof capture rejects both without changing that helper's
+ordinary calling convention. Typed sum headers and normalized operation nodes
+also participate in disconnected-custody detection. Exact guarded absence still
+creates no Resource payload owner or finalizer at runtime.
+
+These results are local MSVC private-archive acceptance. GNU private execution,
+full current workspace/default-native/platform gates and the remaining semantic
+families remain separate requirements. Whole-language tracking remains about 85%;
+the full 100% objective is active.
+
+The complete affected codegen suite passes 100 library and 63 object tests;
+all 93 driver-library tests also pass. Final Rust/Jett formatting and whitespace
+checks pass, and all 2,168 frozen source/config inputs revalidate unchanged.

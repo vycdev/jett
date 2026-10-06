@@ -1,0 +1,8 @@
+namespace app
+export function main(net: Network) returns nothing:
+    use resource_probe
+    optional[resource_probe.TestHandle] empty = comptime resource_probe.empty()
+    resource_probe.TestHandle token = empty handle:
+        return nothing
+    resource_probe.close(token)
+    return nothing

@@ -1,5 +1,9 @@
 //! Original checked HIR and type meanings; raw lowering cannot mint this archive.
-use crate::{Function, FunctionId, Program, ResourceManifest};
+use crate::{
+    Expression, Function, FunctionId, FunctionIdentity, Program, ResourceHookRef, ResourceManifest,
+};
+use jett_comptime::CheckedRequiredValue;
+use jett_typecheck::CheckedResourceProgram;
 use jett_types::{Type, TypeId, TypeInterner};
 use std::{collections::HashMap, sync::Arc};
 
@@ -46,15 +50,61 @@ struct TypeRow {
 }
 #[derive(Debug)]
 struct Original {
+    checked: Arc<CheckedResourceProgram>,
     manifest: ResourceManifest,
     functions: Vec<Function>,
     equality_methods: HashMap<TypeId, FunctionId>,
     types: Vec<TypeRow>,
+    exported: Vec<FunctionId>,
+}
+
+/// A checked required occurrence and the expression derived from its opaque value.
+#[derive(Clone)]
+pub struct RequiredMaterialization {
+    pub(crate) function: FunctionId,
+    pub(crate) identity: FunctionIdentity,
+    pub(crate) original: Expression,
+    pub(crate) current: Expression,
+    pub(crate) hook: Option<ResourceHookRef>,
+    pub(crate) proof: CheckedRequiredValue,
+}
+impl std::fmt::Debug for RequiredMaterialization {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RequiredMaterialization")
+            .field("function", &self.function)
+            .field("original", &self.original)
+            .field("current", &self.current)
+            .finish()
+    }
+}
+impl RequiredMaterialization {
+    pub fn function(&self) -> FunctionId {
+        self.function
+    }
+    pub fn identity(&self) -> &FunctionIdentity {
+        &self.identity
+    }
+    pub fn original(&self) -> &Expression {
+        &self.original
+    }
+    pub fn current(&self) -> &Expression {
+        &self.current
+    }
+    pub fn hook(&self) -> Option<&ResourceHookRef> {
+        self.hook.as_ref()
+    }
+}
+#[derive(Debug)]
+pub(crate) struct Materialized {
+    pub(crate) functions: Vec<Function>,
+    pub(crate) values: Vec<RequiredMaterialization>,
+    pub(crate) required_only: Vec<FunctionId>,
 }
 /// Clone shares immutable records; empty/default supplies no Source authority.
 #[derive(Clone, Default)]
 pub struct ResourceSourceArchive {
     data: Option<Arc<Original>>,
+    execution: Option<Arc<Materialized>>,
 }
 impl std::fmt::Debug for ResourceSourceArchive {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -67,7 +117,14 @@ impl PartialEq for ResourceSourceArchive {
     fn eq(&self, other: &Self) -> bool {
         match (&self.data, &other.data) {
             (None, None) => true,
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (Some(a), Some(b)) => {
+                Arc::ptr_eq(a, b)
+                    && match (&self.execution, &other.execution) {
+                        (None, None) => true,
+                        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                        _ => false,
+                    }
+            }
             _ => false,
         }
     }
@@ -78,7 +135,11 @@ impl ResourceSourceArchive {
         Self::default()
     }
     // Called only at successful completion of the original checked lowering.
-    pub(crate) fn checked(program: &Program, types: &TypeInterner) -> Self {
+    pub(crate) fn checked(
+        program: &Program,
+        checked: &Arc<CheckedResourceProgram>,
+        types: &TypeInterner,
+    ) -> Self {
         let rows = types
             .type_ids()
             .map(|ty| TypeRow {
@@ -90,12 +151,63 @@ impl ResourceSourceArchive {
             .collect();
         Self {
             data: Some(Arc::new(Original {
+                checked: checked.clone(),
                 manifest: program.resource_manifest.clone(),
                 functions: program.functions.clone(),
                 equality_methods: program.equality_methods.clone(),
                 types: rows,
+                exported: super::resource_materialization::exported_functions(program, checked),
             })),
+            execution: None,
         }
+    }
+    /// Original checked functions stay immutable; this view contains only checked replacements.
+    pub fn execution_functions(&self) -> &[Function] {
+        self.execution
+            .as_ref()
+            .map_or_else(|| self.functions(), |view| view.functions.as_slice())
+    }
+    /// Exact checked session identity; equal source text cannot replace it.
+    pub fn belongs_to(&self, checked: &Arc<CheckedResourceProgram>) -> bool {
+        self.data
+            .as_ref()
+            .is_some_and(|data| Arc::ptr_eq(&data.checked, checked))
+    }
+    pub fn required_materializations(&self) -> &[RequiredMaterialization] {
+        self.execution
+            .as_ref()
+            .map_or(&[], |view| view.values.as_slice())
+    }
+    pub fn required_only_function_ids(&self) -> &[FunctionId] {
+        self.execution
+            .as_ref()
+            .map_or(&[], |view| view.required_only.as_slice())
+    }
+    pub fn exported_function_ids(&self) -> &[FunctionId] {
+        self.data
+            .as_ref()
+            .map_or(&[], |data| data.exported.as_slice())
+    }
+    pub fn materialized_hook(
+        &self,
+        function: FunctionId,
+        original: &Expression,
+        current: &Expression,
+    ) -> Option<&ResourceHookRef> {
+        self.required_materializations()
+            .iter()
+            .find(|row| {
+                row.function == function
+                    && super::resource_materialization::expression_equal(&row.original, original)
+                    && super::resource_materialization::expression_equal(&row.current, current)
+            })?
+            .hook()
+    }
+    pub(crate) fn checked_program(&self) -> Option<&Arc<CheckedResourceProgram>> {
+        self.data.as_ref().map(|data| &data.checked)
+    }
+    pub(crate) fn install_materialized(&mut self, view: Materialized) {
+        self.execution = Some(Arc::new(view));
     }
     pub fn functions(&self) -> &[Function] {
         self.data

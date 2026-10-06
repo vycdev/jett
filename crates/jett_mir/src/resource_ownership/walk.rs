@@ -235,13 +235,35 @@ pub(super) fn mir_block(block: &BasicBlock, visit: &mut impl FnMut(&Expression))
         TerminatorKind::Goto(_) | TerminatorKind::Unreachable => {}
     }
 }
-pub(super) fn mir_block_has_custody(block: &BasicBlock, types: &TypeInterner) -> bool {
+pub(super) fn mir_block_has_custody(
+    block: &BasicBlock,
+    function: &Function,
+    types: &TypeInterner,
+) -> bool {
     let mut found = false;
     mir_block(block, &mut |value| {
         found |= resource_type_pending(types, value.ty)
             && !matches!(types.resolve(value.ty), Type::Function { .. });
     });
+    // SumTag/SumTake hold typed local headers rather than expression nodes.
+    // Normalized calls also own an exact operation prefix at header-only sites.
+    let occupied = |id| {
+        function
+            .local(id)
+            .is_some_and(|local| custody_type(types, local.ty))
+    };
     found
+        || block
+            .statements
+            .iter()
+            .any(|statement| match &statement.kind {
+                StatementKind::SumTag { source, target }
+                | StatementKind::SumTake { source, target, .. } => {
+                    occupied(*source) || occupied(*target)
+                }
+                StatementKind::ResourceCall(_) => true,
+                _ => false,
+            })
 }
 pub(super) fn mir_block_has_resource(block: &BasicBlock) -> bool {
     let mut found = false;

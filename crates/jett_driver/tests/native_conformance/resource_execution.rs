@@ -231,7 +231,19 @@ fn checked(
 }
 fn object(project: &Path, stdlib: &Path, release: bool) -> jett_codegen_cranelift::ObjectArtifact {
     let (checked, span) = checked(project, stdlib, release);
-    let hir = jett_hir::lower_checked_resource_program(&checked).unwrap();
+    let required = jett_driver::evaluate_checked_resource_required_values(&checked);
+    assert!(
+        required.diagnostics.is_empty(),
+        "required Source evaluation: {:?}",
+        required.diagnostics
+    );
+    assert!(required.debug_events.is_empty());
+    required
+        .values
+        .checked_required_values(&checked)
+        .expect("required checked cache must not contain runtime Resource authority");
+    let mut hir = jett_hir::lower_checked_resource_program(&checked).unwrap();
+    jett_driver::bake_checked_resource_values(&mut hir, &checked, &required.values).unwrap();
     // Same original declaration span -> FunctionId join as the actual driver.
     let entries = hir
         .functions
@@ -246,7 +258,9 @@ fn object(project: &Path, stdlib: &Path, release: bool) -> jett_codegen_cranelif
     let [entry] = entries.as_slice() else {
         panic!("original driver entry has no unique HIR identity");
     };
+    jett_hir::complete_value_conversions(&mut hir, &checked.checked().interner).unwrap();
     let mir = jett_mir::lower(&hir, &checked.checked().interner).unwrap();
+    jett_mir::validate(&mir).unwrap();
     jett_codegen_cranelift::emit_host_program_object_with_options(
         &mir,
         &checked.checked().interner,

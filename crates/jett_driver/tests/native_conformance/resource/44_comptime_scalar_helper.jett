@@ -1,0 +1,12 @@
+namespace app
+function selector() returns bool:
+    return comptime false
+export function main(net: Network) returns nothing:
+    use resource_probe
+    bool stop = selector()
+    if stop:
+        int64 ignored = resource_probe.terminal_label()
+    resource_probe.TestHandle token = resource_probe.create(view net, 761) handle error:
+        return nothing
+    resource_probe.close(token)
+    return nothing

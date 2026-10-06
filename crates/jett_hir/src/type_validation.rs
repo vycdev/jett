@@ -1236,6 +1236,7 @@ mod tests {
         let statement = Statement {
             kind: StatementKind::Expression(Expression {
                 kind: ExpressionKind::Comptime {
+                    scopes: Vec::new(),
                     source_span: span,
                     value: Box::new(Expression {
                         kind: ExpressionKind::Int(7),

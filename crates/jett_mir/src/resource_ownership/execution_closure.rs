@@ -7,6 +7,20 @@ pub(crate) struct ResourceExecutionClosure {
     functions: BTreeSet<u32>,
 }
 impl ResourceExecutionClosure {
+    pub(super) fn from_archive(
+        archive: &hir::ResourceSourceArchive,
+        types: &TypeInterner,
+    ) -> Result<Self, String> {
+        let mut family = Self::from_original(archive.execution_functions(), types)?;
+        family.functions.retain(|index| {
+            !archive
+                .required_only_function_ids()
+                .iter()
+                .any(|function| function.index() == *index)
+        });
+        Ok(family)
+    }
+
     pub(super) fn contains(&self, function: FunctionId) -> bool {
         self.functions.contains(&function.index())
     }

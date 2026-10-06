@@ -8,6 +8,9 @@ pub(crate) use body_reference::{
     CheckedAttemptKey, CheckedBodyReference, PreparedDirectScope, PreparedIntrinsicArguments,
     PreparedNamedCallable, PreparedPipelineStep, PreparedRequiredExpression,
 };
+pub use body_reference::{
+    CheckedRequiredOwner, CheckedRequiredResourceHook, CheckedRequiredScope, CheckedRequiredValue,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 

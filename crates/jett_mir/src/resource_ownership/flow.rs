@@ -567,7 +567,7 @@ impl<'p> Analysis<'p> {
                     if !std::ptr::eq(value, expression) {
                         has_resource |= resource_type_pending(self.types, value.ty) && !matches!(self.types.resolve(value.ty), Type::Function { .. });
                         if let E::Call { function, .. } = value.kind {
-                            has_resource |= self.program.functions.get(function.index() as usize).is_some_and(|callee| callee.id == function && callee.resource_lowering.is_some());
+                            has_resource |= self.program.functions.get(function.index() as usize).is_some_and(|callee| callee.id == function && has_execution_records(callee, self.types));
                         }
                     }
                 });
@@ -593,7 +593,9 @@ impl<'p> Analysis<'p> {
                 self.program
                     .functions
                     .get(id.index() as usize)
-                    .is_some_and(|callee| callee.id == id && callee.resource_lowering.is_some())
+                    .is_some_and(|callee| {
+                        callee.id == id && has_execution_records(callee, self.types)
+                    })
             })
             || shape(&self.program.resource_manifest, self.types, expression.ty)?.is_some()
             || args.iter().any(|arg| {
@@ -626,7 +628,7 @@ impl<'p> Analysis<'p> {
                 .get(function.index() as usize)
                 .filter(|callee| callee.id == function)
                 .ok_or("Resource Source callee has no exact function")?;
-            if callee.resource_lowering.is_none() {
+            if !has_execution_records(callee, self.types) {
                 return Err("Resource Source callee lacks its original custody witness".into());
             }
         }
@@ -1058,9 +1060,11 @@ impl<'p> Analysis<'p> {
                 if state.aborted { self.finish(&mut state, ResourceFrameId(0), ResourceCompletion::Abort); return Ok(Vec::new()); }
                 let mut yes = state.clone(); let mut no = state;
                 if let E::Local(tag) = condition.kind && let Some(source) = yes.tags.get(&tag.index()).copied() {
-                    let occupancy = yes.values[source.index() as usize].as_ref().ok_or("Resource tag source was consumed before its selecting edge")?.occupancy;
-                    if occupancy == ResourceOccupancy::Occupied { yes.guards.insert(source.index(), (tag, true)); return Ok(vec![(*then_block, yes)]); }
-                    if occupancy == ResourceOccupancy::Empty { no.guards.insert(source.index(), (tag, false)); return Ok(vec![(*else_block, no)]); }
+                    let value = yes.values[source.index() as usize].as_ref().ok_or("Resource tag source was consumed before its selecting edge")?;
+                    if !value.shape.conditional() || value.loan.is_some() { return Err("Resource selecting edge lost its exact owned sum tag source".into()); }
+                    // Plan both authenticated CFG edges. A known empty/occupied
+                    // producer does not remove either runtime SumTag edge;
+                    // the exact selecting guard still gates each SumTake.
                     if let Some(value) = &mut yes.values[source.index() as usize] { value.occupancy = ResourceOccupancy::Occupied; }
                     if let Some(value) = &mut no.values[source.index() as usize] { value.occupancy = ResourceOccupancy::Empty; }
                     yes.guards.insert(source.index(), (tag, true)); no.guards.insert(source.index(), (tag, false));
@@ -1299,7 +1303,9 @@ pub(super) fn analyze(
     for block in &function.blocks {
         if let Some(state) = &states[block.id.index() as usize] {
             analysis.block(block, state.clone())?;
-        } else if walk::mir_block_has_resource(block) || walk::mir_block_has_custody(block, types) {
+        } else if walk::mir_block_has_resource(block)
+            || walk::mir_block_has_custody(block, function, types)
+        {
             return Err(
                 "Resource custody operation is disconnected from its authenticated entry CFG"
                     .into(),

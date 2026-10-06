@@ -8521,3 +8521,10 @@ Resource semantics.
 Native plain Resource replacement validates both exact live owners, active runtime holders, loans, nominal kinds, generation capacity and acquisition storage before retiring the old value. An invalid replacement leaves both owners intact. The native compiler consumes this check for exact plain-owner replacement.
 
 Native plain Resource assignment now retains the evaluated RHS while the old owner remains live. Successful replacement retires old and installs RHS once; failed RHS evaluation preserves old for its handler or scope cleanup. Exact self-assignment moves and reseats the same local without a runtime transfer or finalizer. Assignment after close transfers into the vacant local. Conditional, aggregate and projected native replacement remain pending.
+
+Native required Resource values retain their compile-time authority separately
+from the public span/context cache. Only a successful required evaluation in the
+same checked program can select its exact hook. Materialization preserves the
+original comptime expression and its full concrete generic and scoped context.
+Pure branch selection, aliases and relays do not introduce a separate eligibility
+rule; no runtime capability or provider enters the required worker.

@@ -2461,3 +2461,49 @@ scoped/generic/handled/pipeline forms, nested returns, aggregates and production
 providers/concurrency remain required. The coarse estimate remains about 85%,
 the fixed inventory remains 207 fixtures/182 objects, and the whole-language
 100% goal is active.
+
+### Required Resource descriptors: candidate extension
+
+The shared original Source corpus has 60 candidate scenarios (46 previously
+accepted plus fourteen new cases across eleven Source files). The reference
+oracle now runs the real provider-free required worker, installs its same-program
+checked cache before runtime registration, and refuses missing or failed required
+evaluation. All 120 debug/release reference executions pass. The initial native
+baseline fails on the first new comptime descriptor with pending nested Resource
+evaluation requiring exact Source-order staging.
+
+Implementation in progress uses opaque private checked required proofs and an
+authenticated materialized HIR view that preserves original Source. New candidate
+cases cover Factory/Borrow/Close, factory and cleanup failure, aliases, relays,
+unused storage, immediate invocation, absence, pure conditional selection and
+generic/scoped selectors. They do not count as accepted native execution until
+the same cases pass both profiles with source absent, exact event/status oracles
+and zero obligations before teardown. The whole-language estimate remains about
+85%, and the full completion obligations remain active.
+
+
+### Verified required Resource values and ordinary helper seals (2026-10-06)
+
+The shared original Source corpus now contains 61 scenarios. All 122 reference
+and 122 source-absent native executions pass in both profiles against the
+unchanged matched MSVC compiler-test archives. Required capture and materialization
+use the actual driver seams; acceptance also includes production HIR value
+conversion and general MIR validation before native object emission.
+
+Opaque private-cache proofs retain the exact checked program, original owner,
+required region, specialization and scoped selection. The original archive is
+immutable. Every required row seals its current body, including ordinary runtime
+helpers that retain their normal ABI and receive no Resource execution authority.
+Exact guarded sum arms are both planned; runtime absence still skips extraction
+and finalization. Disconnected Resource headers and normalized operation nodes
+remain custody obligations.
+
+Nine focused MIR controls, 251 MIR library tests and the driver foreign-context
+control pass. Full native coverage remains active: qualified/complex required
+transport, broader callbacks/aggregates/views/reflection, production providers,
+concurrency, GNU private-archive execution and final coherent workspace/platform
+acceptance are still required. The rough tracking estimate remains about 85%.
+
+The complete affected codegen suite passes 100 library and 63 object tests;
+all 93 driver-library tests also pass. Final Rust/Jett formatting and whitespace
+checks pass, and all 2,168 frozen source/config inputs revalidate unchanged.

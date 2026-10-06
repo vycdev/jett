@@ -39,6 +39,9 @@ enum OriginalRegion<'a> {
 #[path = "body_reference/required.rs"]
 mod required;
 pub(crate) use required::{CheckedAttemptKey, PreparedRequiredExpression};
+pub use required::{
+    CheckedRequiredOwner, CheckedRequiredResourceHook, CheckedRequiredScope, CheckedRequiredValue,
+};
 #[path = "body_reference/pipeline.rs"]
 mod pipeline;
 pub(crate) use pipeline::PreparedPipelineStep;

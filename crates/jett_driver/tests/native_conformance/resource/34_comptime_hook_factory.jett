@@ -1,0 +1,8 @@
+namespace app
+export function main(net: Network) returns nothing:
+    use resource_probe
+    function(view Network, int64) returns result[resource_probe.TestHandle, string] acquire = comptime resource_probe.create_descriptor()
+    resource_probe.TestHandle token = acquire(view net, 771) handle error:
+        return nothing
+    resource_probe.close(token)
+    return nothing

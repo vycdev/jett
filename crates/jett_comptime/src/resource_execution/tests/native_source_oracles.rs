@@ -85,17 +85,96 @@ fn event(input: &cases::Event) -> ProviderEvent {
         cases::Event::Finalized(label) => ProviderEvent::Finalized(label),
     }
 }
+
+fn reference_with_required_values(
+    checked: &Arc<CheckedResourceProgram>,
+    case: &cases::Case,
+    release: bool,
+) -> Interpreter {
+    // Check the worker's existing purpose boundary without executing Source or
+    // installing a provider. The real required worker below receives no grant.
+    let mut worker_guard = Interpreter::new();
+    worker_guard
+        .install_checked_resource_program(checked.clone(), ExecutionPurpose::ExplicitComptime)
+        .unwrap();
+    worker_guard
+        .authorize_checked_resource_worker(checked.module(), ExecutionPurpose::ExplicitComptime)
+        .unwrap();
+    assert!(
+        worker_guard
+            .install_resource_test_script(Vec::new())
+            .is_err(),
+        "{} release={release}: required purpose must refuse a runtime provider",
+        case.name
+    );
+    assert_eq!(worker_guard.resource_test_custody_counts().unwrap(), (0, 0));
+    assert!(worker_guard.resource_test_observations().is_err());
+
+    let types = Arc::new(crate::checked_types::CheckedExpressionTypes {
+        resource_program: Some(checked.clone()),
+        expressions: checked
+            .checked()
+            .type_map
+            .iter()
+            .map(|(span, ty)| (*span, checked.checked().interner.type_name(*ty)))
+            .collect(),
+        ..Default::default()
+    });
+    let metadata = Arc::new(jett_types::ReflectionMetadata::new());
+    let exclusions = Arc::new(HashMap::new());
+    let required = crate::evaluate_explicit_comptime_expressions_capture(
+        checked.module(),
+        metadata.clone(),
+        types.clone(),
+        exclusions.clone(),
+    );
+    assert!(
+        required.diagnostics.is_empty(),
+        "{} release={release}: required evaluation failed: {:?}",
+        case.name,
+        required.diagnostics
+    );
+    assert!(
+        required.debug_events.is_empty(),
+        "{} release={release}: unexpected required-phase debug observations: {:?}",
+        case.name,
+        required.debug_events
+    );
+    assert!(required.values.checked_values_are_mirrored());
+    assert_eq!(required.values.len(), required.values.values().count());
+    assert!(
+        required
+            .values
+            .values()
+            .all(|value| !value.contains_live_resource_or_grant()),
+        "{} release={release}: required values cannot import runtime authority",
+        case.name
+    );
+
+    // Install even an empty checked cache. Expr::Comptime then refuses a missing
+    // exact checked key instead of falling back to evaluating its runtime body.
+    // Match the driver's order so namespace constants cannot replay at register.
+    let mut interpreter = Interpreter::new();
+    interpreter.set_reflection_metadata(metadata);
+    interpreter.set_checked_expression_types(types);
+    interpreter.set_breakpoint_exclusions(exclusions);
+    interpreter.set_explicit_comptime_values(Arc::new(required.values));
+    interpreter.register_module(checked.module());
+    interpreter
+        .install_checked_resource_program(checked.clone(), ExecutionPurpose::ReferenceRuntime)
+        .unwrap();
+    assert_eq!(interpreter.resource_test_custody_counts().unwrap(), (0, 0));
+    assert!(interpreter.resource_test_observations().is_err());
+    interpreter
+}
+
 #[test]
 fn native_resource_source_cases_match_real_reference_events_and_cleanup_before_teardown() {
     for release in [false, true] {
         for case in cases::CASES {
             let checked = checked_case(case, release);
             let definition = entry(&checked, "main");
-            let mut interpreter = Interpreter::from_checked_resource_program(
-                checked,
-                ExecutionPurpose::ReferenceRuntime,
-            )
-            .unwrap();
+            let mut interpreter = reference_with_required_values(&checked, case, release);
             let grant = interpreter
                 .install_resource_test_script(case.script.iter().copied().map(script).collect())
                 .unwrap();

@@ -11,6 +11,7 @@ pub const INTERPRETER_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 pub use debug::{DebugEvent, DebugEventKind, render_debug_events};
 pub use explicit::{
+    CheckedRequiredOwner, CheckedRequiredResourceHook, CheckedRequiredScope, CheckedRequiredValue,
     ComptimeContext, ExplicitComptimeEvaluation, ExplicitComptimeValues,
     evaluate_explicit_comptime_expressions, evaluate_explicit_comptime_expressions_capture,
 };

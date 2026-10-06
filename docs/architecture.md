@@ -4343,3 +4343,29 @@ dynamic/captured/scoped/generic/handled/pipeline forms, aggregates and productio
 provider/concurrency integration remain in the whole goal, as do GNU private-
 archive Source execution and final-revision release gates. See the
 [returned descriptor note](active/native_returned_resource_hooks.md).
+
+Required Resource materialization uses an opaque value proof produced from
+jett_comptime's private program-bound checked cache. HIR consumes that proof
+through an acyclic compiler-internal dependency, derives the admitted replacement
+itself and records an authenticated execution view while retaining the immutable
+original ResourceSourceArchive. MIR checks the original-to-materialized occurrence,
+function identity, specialization and same-manifest hook relation through CFG
+transforms. Public mirrored cache data or a fresh snapshot of mutated HIR cannot
+supply this authority.
+
+The driver exposes checked required evaluation and baking seams using one
+CheckedResourceProgram. Runtime Resource operations are preserved during baking;
+only explicit required values are replaced. Compile-time-only helper classification
+must be authenticated from the original checked call graph and exported/runtime
+roots. It cannot be inferred from a callable signature or used to erase original
+body, header or type integrity checks.
+
+
+Required-value rows also seal ordinary helpers' current MIR bodies. Proof capture
+is distinct from runtime custody classification: it cannot add Resource frames,
+executable Resource roots or hidden Resource ABI parameters to an ordinary helper.
+Both syntactic arms of an exact sum-tag guard are planned; the emitted runtime
+branch and extraction checks retain actual absence/occupancy. Typed sum headers
+and normalized operation nodes remain visible to disconnected-custody checks.
+The current shared checkpoint passes 61 scenarios in both reference and Source-
+absent native profiles (122 runs each) against the unchanged matched MSVC archives.

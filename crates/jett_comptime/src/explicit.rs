@@ -8,6 +8,9 @@ use jett_parser::ast::{Block, Expr, Item, Module, Stmt, StringPart};
 use jett_types::{ReflectionMetadata, ReflectionTypeInfo};
 
 use crate::resource_execution::{CheckedAttemptKey, PreparedRequiredExpression};
+pub use crate::resource_execution::{
+    CheckedRequiredOwner, CheckedRequiredResourceHook, CheckedRequiredScope, CheckedRequiredValue,
+};
 use crate::value::ClosureScopedTypeBinding;
 use crate::{DebugEvent, Interpreter, Value};
 
@@ -70,6 +73,29 @@ impl ExplicitComptimeValues {
         self.values.insert((span, context), value);
     }
 
+    /// Authenticate successful private required entries for this exact checked
+    /// program. Public span/context mirrors are never used to mint proof.
+    pub fn checked_required_values(
+        &self,
+        program: &Arc<jett_typecheck::CheckedResourceProgram>,
+    ) -> Result<Vec<CheckedRequiredValue>, String> {
+        self.checked_values
+            .keys()
+            .map(|key| CheckedRequiredValue::from_cache(self, key, program))
+            .collect()
+    }
+
+    /// Readonly hook projections of the same private successful entries.
+    pub fn checked_resource_hook_values(
+        &self,
+        program: &Arc<jett_typecheck::CheckedResourceProgram>,
+    ) -> Result<Vec<CheckedRequiredResourceHook>, String> {
+        Ok(self
+            .checked_required_values(program)?
+            .into_iter()
+            .filter_map(CheckedRequiredResourceHook::from_value)
+            .collect())
+    }
     pub(crate) fn checked_get(&self, key: &CheckedAttemptKey) -> Option<&Value> {
         self.checked_values.get(key)
     }

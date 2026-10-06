@@ -587,6 +587,7 @@ pub struct ResourceOwnershipPlan<'p> {
     program: &'p Program,
     types: &'p TypeInterner,
     functions: Vec<ResourceFunctionPlan>,
+    required_only_functions: Vec<FunctionId>,
 }
 impl<'p> ResourceOwnershipPlan<'p> {
     pub fn program(&self) -> &'p Program {
@@ -602,13 +603,24 @@ impl<'p> ResourceOwnershipPlan<'p> {
     pub fn functions(&self) -> &[ResourceFunctionPlan] {
         &self.functions
     }
+    /// Exact checked helpers omitted only as implicit native roots. This grants
+    /// no runtime body, carrier or invocation authority for those functions.
+    pub fn required_only_function_ids(&self) -> &[FunctionId] {
+        &self.required_only_functions
+    }
     pub fn original_source(&self, id: FunctionId) -> Option<&'p hir::Function> {
         self.program
             .functions
             .get(id.index() as usize)
             .filter(|function| function.id == id)
             .and_then(|function| function.resource_lowering.as_ref())
-            .map(|witness| &witness.original)
+            .and_then(|witness| {
+                witness
+                    .source
+                    .functions()
+                    .get(id.index() as usize)
+                    .filter(|function| function.id == id)
+            })
     }
     pub fn function(&self, id: FunctionId) -> Option<&ResourceFunctionPlan> {
         self.functions
@@ -667,19 +679,12 @@ impl Capture {
         types: &TypeInterner,
         execution: &ResourceExecutionClosure,
     ) -> Self {
-        let mut needed = execution.contains(function.id)
-            || resource_type_pending(types, function.return_type)
-            || function
-                .locals
+        let needed = runtime_custody_needed(function, types, execution)
+            || source.required_only_function_ids().contains(&function.id)
+            || source
+                .required_materializations()
                 .iter()
-                .any(|local| resource_type_pending(types, local.ty));
-        walk::hir_block(&function.body, &mut |value| {
-            needed |= matches!(
-                value.kind,
-                hir::ExpressionKind::ResourceHookValue { .. }
-                    | hir::ExpressionKind::ResourceInvoke { .. }
-            ) || custody_type(types, value.ty);
-        });
+                .any(|row| row.function() == function.id);
         Self {
             witness: needed.then(|| ResourceLoweringWitness {
                 original: function.clone(),
@@ -848,7 +853,20 @@ impl Capture {
             witness.current(function)?;
         }
         if let Some(witness) = &mut self.witness {
-            witness.descriptors.seal(function);
+            if witness
+                .source
+                .required_only_function_ids()
+                .contains(&function.id)
+                || witness
+                    .source
+                    .required_materializations()
+                    .iter()
+                    .any(|row| row.function() == function.id)
+            {
+                witness.descriptors.seal_body(function);
+            } else {
+                witness.descriptors.seal(function);
+            }
         }
         Ok(self.witness)
     }
@@ -990,16 +1008,16 @@ pub(super) fn authenticate_original(
     archive.validate_types(types)?;
     if archive.manifest() != Some(&program.resource_manifest)
         || archive.equality_methods() != Some(&program.equality_methods)
-        || archive.functions().len() != program.functions.len()
+        || archive.execution_functions().len() != program.functions.len()
         || !archive
-            .functions()
+            .execution_functions()
             .iter()
             .zip(&program.functions)
             .all(|(left, right)| original_function_equal(left, right))
     {
         return Err("Resource lowering differs from its original checked HIR archive".into());
     }
-    ResourceExecutionClosure::from_original(archive.functions(), types)
+    ResourceExecutionClosure::from_archive(archive, types)
 }
 
 pub(super) fn visit_expression(value: &Expression, visit: &mut impl FnMut(&Expression)) {
@@ -1008,6 +1026,35 @@ pub(super) fn visit_expression(value: &Expression, visit: &mut impl FnMut(&Expre
 
 fn custody_type(types: &TypeInterner, ty: TypeId) -> bool {
     resource_type_pending(types, ty) && !matches!(types.resolve(ty), Type::Function { .. })
+}
+/// The original runtime classification, independent of required-value records.
+fn runtime_custody_needed(
+    function: &hir::Function,
+    types: &TypeInterner,
+    execution: &ResourceExecutionClosure,
+) -> bool {
+    let mut needed = execution.contains(function.id)
+        || resource_type_pending(types, function.return_type)
+        || function
+            .locals
+            .iter()
+            .any(|local| resource_type_pending(types, local.ty));
+    walk::hir_block(&function.body, &mut |value| {
+        needed |= matches!(
+            value.kind,
+            hir::ExpressionKind::ResourceHookValue { .. }
+                | hir::ExpressionKind::ResourceInvoke { .. }
+        ) || custody_type(types, value.ty);
+    });
+    needed
+}
+/// A proof-only required row seals a body without granting Resource execution.
+/// The immutable archived body and checked execution family select this role.
+pub(super) fn has_execution_records(function: &Function, types: &TypeInterner) -> bool {
+    function
+        .resource_lowering
+        .as_ref()
+        .is_some_and(|witness| runtime_custody_needed(&witness.original, types, &witness.execution))
 }
 fn source_custody_call(
     value: &Expression,
@@ -1052,9 +1099,7 @@ pub(super) fn original_call_at(
         return Ok(false);
     }
     witness.source.validate_types(types)?;
-    if witness.execution
-        != ResourceExecutionClosure::from_original(witness.source.functions(), types)?
-    {
+    if witness.execution != ResourceExecutionClosure::from_archive(&witness.source, types)? {
         return Err(
             "Resource call execution closure differs from its original checked bodies".into(),
         );
@@ -1065,7 +1110,7 @@ pub(super) fn original_call_at(
         || witness.source.manifest() != Some(manifest)
         || !witness
             .source
-            .functions()
+            .execution_functions()
             .iter()
             .any(|original| original_function_equal(original, &witness.original))
     {
@@ -1115,13 +1160,18 @@ pub(super) fn validate_witnesses(
     types: &TypeInterner,
 ) -> Result<(), Vec<ValidationError>> {
     let mut errors = Vec::new();
+    let source = program
+        .functions
+        .iter()
+        .find_map(|function| function.resource_lowering.as_ref())
+        .map(|witness| &witness.source);
     let execution = program
         .functions
         .iter()
         .find_map(|function| function.resource_lowering.as_ref())
         .map(|witness| {
             witness.source.validate_types(types)?;
-            ResourceExecutionClosure::from_original(witness.source.functions(), types)
+            ResourceExecutionClosure::from_archive(&witness.source, types)
         })
         .transpose()
         .map_err(|message| {
@@ -1138,13 +1188,22 @@ pub(super) fn validate_witnesses(
         .unwrap_or_default();
     for function in &program.functions {
         let needed = execution.contains(function.id)
+            || source
+                .is_some_and(|archive| archive.required_only_function_ids().contains(&function.id))
+            || source.is_some_and(|archive| {
+                archive
+                    .required_materializations()
+                    .iter()
+                    .any(|row| row.function() == function.id)
+            })
             || resource_type_pending(types, function.return_type)
             || function
                 .locals
                 .iter()
                 .any(|local| resource_type_pending(types, local.ty))
             || function.blocks.iter().any(|block| {
-                walk::mir_block_has_resource(block) || walk::mir_block_has_custody(block, types)
+                walk::mir_block_has_resource(block)
+                    || walk::mir_block_has_custody(block, function, types)
             });
         match &function.resource_lowering {
             Some(witness) => {
@@ -1153,11 +1212,14 @@ pub(super) fn validate_witnesses(
                     .validate_types(types)
                     .and_then(|()| witness.manifest.validate(types))
                     .and_then(|()| {
+                        if source != Some(&witness.source) {
+                            return Err("Resource ownership mixes foreign original/materialized archives".into());
+                        }
                         if witness.execution != execution {
                             return Err("Resource execution closure differs from the original checked call graph".into());
                         }
                         if witness.source.manifest() != Some(&witness.manifest)
-                            || !witness.source.functions().iter().any(|original| {
+                            || !witness.source.execution_functions().iter().any(|original| {
                                 original_function_equal(original, &witness.original)
                             })
                         {
@@ -1206,10 +1268,18 @@ pub fn validate_resource_ownership<'p>(
 ) -> Result<ResourceOwnershipPlan<'p>, Vec<ValidationError>> {
     validate_call_ownership(program, types)?;
     validate_witnesses(program, types)?;
+    let required_only_functions = program
+        .functions
+        .iter()
+        .find_map(|function| function.resource_lowering.as_ref())
+        .map_or_else(Vec::new, |witness| {
+            witness.source.required_only_function_ids().to_vec()
+        });
     let mut functions = Vec::new();
     let mut errors = Vec::new();
     for function in &program.functions {
-        if function.resource_lowering.is_none() {
+        if !has_execution_records(function, types) || required_only_functions.contains(&function.id)
+        {
             continue;
         }
         match flow::analyze(program, function, types) {
@@ -1225,6 +1295,7 @@ pub fn validate_resource_ownership<'p>(
             program,
             types,
             functions,
+            required_only_functions,
         })
     } else {
         Err(errors)

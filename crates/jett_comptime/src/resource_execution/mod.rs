@@ -19,6 +19,9 @@ pub(crate) use checked::{
     CheckedInvocation, FunctionInvocation, PreparedIntrinsicArguments, PreparedPipelineStep,
     PreparedRequiredExpression,
 };
+pub use checked::{
+    CheckedRequiredOwner, CheckedRequiredResourceHook, CheckedRequiredScope, CheckedRequiredValue,
+};
 pub(crate) use custody::{
     EvaluatedValue, FrameId, OwnerHolder, OwnerLedger, PayloadStep, ValueCustody,
 };

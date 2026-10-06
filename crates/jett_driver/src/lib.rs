@@ -4,6 +4,7 @@ use jett_comptime::checked_types::{
 mod native_builder_constants;
 mod native_constants;
 mod native_property_cases;
+mod native_resource_constants;
 use jett_common::{FileId, STDLIB_FILE_ID_START, Span};
 use jett_comptime::evaluate_explicit_comptime_expressions_capture;
 use jett_comptime::value::Value;
@@ -27,6 +28,9 @@ use jett_typecheck::{
 };
 use jett_types::ReflectionMetadata;
 pub use native_property_cases::NativePropertyPlan;
+pub use native_resource_constants::{
+    bake_checked_resource_values, evaluate_checked_resource_required_values,
+};
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;

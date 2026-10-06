@@ -27,11 +27,13 @@ use jett_types::{
 
 mod call_ownership;
 mod resource_manifest;
+mod resource_materialization;
 mod resource_source;
 pub use resource_manifest::{
     ResourceHookRef, ResourceKind, ResourceKindId, ResourceKindRef, ResourceManifest,
 };
-pub use resource_source::ResourceSourceArchive;
+pub use resource_materialization::materialize_checked_required_values;
+pub use resource_source::{RequiredMaterialization, ResourceSourceArchive};
 mod iteration_bindings;
 pub use iteration_bindings::{IterationPart, ViewIterationBinding, checked_view_iteration_binding};
 #[cfg(test)]
@@ -178,6 +180,14 @@ pub struct ScopedTypeBinding {
     pub name: String,
     pub ty: TypeId,
     pub reflection: jett_types::ReflectionTypeInfo,
+}
+
+/// Exact checker-selected lexical scope of a required expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequiredScopeIdentity {
+    pub owner: Span,
+    pub index: usize,
+    pub selection: CheckedComptimeTypeSelection,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -481,6 +491,7 @@ pub enum ExpressionKind {
     Comptime {
         value: Box<Expression>,
         bindings: Vec<ScopedTypeBinding>,
+        scopes: Vec<RequiredScopeIdentity>,
         /// Stable lookup identity, even when parentheses widen the expression span.
         source_span: Span,
     },
@@ -1269,7 +1280,7 @@ fn lower_resource_program(
     lowerer.resource_manifest = manifest;
     let mut program = lowerer.lower()?;
     program.resource_source =
-        ResourceSourceArchive::checked(&program, &original.checked().interner);
+        ResourceSourceArchive::checked(&program, original, &original.checked().interner);
     Ok(program)
 }
 
@@ -2685,6 +2696,7 @@ struct BodyLowerer<'lowerer, 'program> {
     locals: Vec<Local>,
     visible_bindings: Vec<HashMap<String, LocalId>>,
     scoped_type_bindings: Vec<ScopedTypeBinding>,
+    required_scopes: Vec<RequiredScopeIdentity>,
     return_type: Option<TypeId>,
     ownership_context: jett_typecheck::CheckedOwnershipContext,
     view_parameter_locals: HashSet<LocalId>,
@@ -2744,6 +2756,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             locals: Vec::new(),
             visible_bindings: vec![HashMap::new()],
             scoped_type_bindings: Vec::new(),
+            required_scopes: Vec::new(),
             return_type: None,
             ownership_context: jett_typecheck::CheckedOwnershipContext::Ordinary,
             view_parameter_locals: HashSet::new(),
@@ -3366,7 +3379,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 .next()
                 .expect("single checked binding exists");
             return Some(StatementKind::Scope(
-                self.lower_bound_type_body(binding, checked),
+                self.lower_bound_type_body(binding, 0, checked),
             ));
         }
 
@@ -3401,7 +3414,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         }
         let mut arms = Vec::with_capacity(bindings.len());
         let mut bound_types = HashSet::new();
-        for checked in bindings {
+        for (index, checked) in bindings.into_iter().enumerate() {
             let CheckedComptimeTypeSelection::ReflectedIteration(iteration_index) =
                 checked.selection
             else {
@@ -3418,7 +3431,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 iteration_index,
                 bound_type: checked.bound_type,
                 reflection_identity,
-                body: self.lower_bound_type_body(binding, checked),
+                body: self.lower_bound_type_body(binding, index, checked),
             });
         }
         Some(StatementKind::ReflectedTypeDispatch { type_info, arms })
@@ -3427,6 +3440,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
     fn lower_bound_type_body(
         &mut self,
         binding: &ast::ComptimeTypeBindStmt,
+        index: usize,
         checked: CheckedComptimeTypeBinding,
     ) -> Block {
         self.scoped_type_bindings.push(ScopedTypeBinding {
@@ -3434,7 +3448,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             ty: checked.bound_type,
             reflection: checked.reflection.clone(),
         });
+        self.required_scopes.push(RequiredScopeIdentity {
+            owner: binding.span,
+            index,
+            selection: checked.selection,
+        });
         let body = self.lower_block_with_checked_facts(&binding.body, checked.body);
+        self.required_scopes.pop();
         self.scoped_type_bindings.pop();
         body
     }
@@ -3815,6 +3835,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             Expr::Comptime(value, source_span) => ExpressionKind::Comptime {
                 value: Box::new(self.lower_expression(value)?),
                 bindings: self.scoped_type_bindings.clone(),
+                scopes: self.required_scopes.clone(),
                 source_span: *source_span,
             },
             Expr::Declassify(value, _) => {

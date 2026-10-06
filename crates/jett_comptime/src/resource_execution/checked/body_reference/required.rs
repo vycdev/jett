@@ -6,6 +6,12 @@ use crate::checked_types::CheckedFunctionTypes;
 use crate::value::ClosureScopedTypeBinding;
 use std::hash::{Hash, Hasher};
 
+pub use value_proof::{
+    CheckedRequiredOwner, CheckedRequiredResourceHook, CheckedRequiredScope, CheckedRequiredValue,
+};
+#[path = "required/value_proof.rs"]
+mod value_proof;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct AttemptNode {
     origin: ExecutableOrigin,
