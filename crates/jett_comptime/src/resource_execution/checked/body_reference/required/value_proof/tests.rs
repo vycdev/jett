@@ -365,6 +365,8 @@ fn resource_required_value_proof_covers_actual_all_recipe_alias_relay_unused_and
                 "/../jett_driver/tests/native_conformance/resource/33_comptime_hook_close.jett"
             )),
             Some(ResourceHookKind::Close),
+            2,
+            Some(761),
         ),
         (
             include_str!(concat!(
@@ -372,6 +374,8 @@ fn resource_required_value_proof_covers_actual_all_recipe_alias_relay_unused_and
                 "/../jett_driver/tests/native_conformance/resource/34_comptime_hook_factory.jett"
             )),
             Some(ResourceHookKind::Construct),
+            1,
+            None,
         ),
         (
             include_str!(concat!(
@@ -379,6 +383,8 @@ fn resource_required_value_proof_covers_actual_all_recipe_alias_relay_unused_and
                 "/../jett_driver/tests/native_conformance/resource/35_comptime_hook_borrow.jett"
             )),
             Some(ResourceHookKind::BorrowOperation),
+            1,
+            None,
         ),
         (
             include_str!(concat!(
@@ -386,6 +392,8 @@ fn resource_required_value_proof_covers_actual_all_recipe_alias_relay_unused_and
                 "/../jett_driver/tests/native_conformance/resource/36_comptime_hook_alias.jett"
             )),
             Some(ResourceHookKind::Close),
+            1,
+            None,
         ),
         (
             include_str!(concat!(
@@ -393,6 +401,8 @@ fn resource_required_value_proof_covers_actual_all_recipe_alias_relay_unused_and
                 "/../jett_driver/tests/native_conformance/resource/37_comptime_hook_relay.jett"
             )),
             Some(ResourceHookKind::Close),
+            1,
+            None,
         ),
         (
             include_str!(concat!(
@@ -400,6 +410,8 @@ fn resource_required_value_proof_covers_actual_all_recipe_alias_relay_unused_and
                 "/../jett_driver/tests/native_conformance/resource/38_comptime_hook_unused.jett"
             )),
             Some(ResourceHookKind::Close),
+            1,
+            None,
         ),
         (
             include_str!(concat!(
@@ -407,12 +419,16 @@ fn resource_required_value_proof_covers_actual_all_recipe_alias_relay_unused_and
                 "/../jett_driver/tests/native_conformance/resource/39_immediate_comptime_hook_close.jett"
             )),
             Some(ResourceHookKind::Close),
+            1,
+            None,
         ),
         (
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/../jett_driver/tests/native_conformance/resource/40_comptime_hook_absence.jett"
             )),
+            None,
+            1,
             None,
         ),
         (
@@ -421,6 +437,8 @@ fn resource_required_value_proof_covers_actual_all_recipe_alias_relay_unused_and
                 "/../jett_driver/tests/native_conformance/resource/41_comptime_hook_pure_choice.jett"
             )),
             Some(ResourceHookKind::Close),
+            1,
+            None,
         ),
         (
             include_str!(concat!(
@@ -428,6 +446,8 @@ fn resource_required_value_proof_covers_actual_all_recipe_alias_relay_unused_and
                 "/../jett_driver/tests/native_conformance/resource/42_comptime_hook_generic.jett"
             )),
             Some(ResourceHookKind::Close),
+            1,
+            None,
         ),
         (
             include_str!(concat!(
@@ -435,27 +455,93 @@ fn resource_required_value_proof_covers_actual_all_recipe_alias_relay_unused_and
                 "/../jett_driver/tests/native_conformance/resource/43_comptime_hook_scoped.jett"
             )),
             Some(ResourceHookKind::Close),
+            1,
+            None,
         ),
     ];
     for release in [false, true] {
-        for (source, expected) in sources {
+        for (source, expected, expected_values, expected_scalar) in sources {
             let program = shared_program(source, release);
             let cache = successful(&program);
             let values = cache.checked_required_values(&program).unwrap();
-            assert_eq!(values.len(), 1);
-            assert!(values[0].matches_original_comptime(values[0].original_comptime().unwrap()));
+            assert_eq!(values.len(), expected_values);
+            let main = program
+                .module()
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::Function(function) if function.name.name == "main" => Some(function),
+                    _ => None,
+                })
+                .unwrap();
+            let checked =
+                CheckedExecution::new(program.clone(), ExecutionPurpose::ExplicitComptime).unwrap();
+            let owner = CheckedRequiredOwner::Function {
+                definition: checked.declaration_definition(main.name.span).unwrap(),
+                declaration: main.name.span,
+            };
+            for value in &values {
+                assert!(value.belongs_to(&program));
+                assert!(value.is_explicit_comptime());
+                assert_eq!(value.owner(), owner);
+                let original = value.original_comptime().unwrap();
+                assert!(matches!(original, Expr::Comptime(_, _)));
+                assert_eq!(value.source_span(), original.span());
+                assert!(value.matches_original_comptime(original));
+                assert!(!value.matches_original_comptime(&original.clone()));
+            }
             let hooks = cache.checked_resource_hook_values(&program).unwrap();
             match expected {
                 Some(kind) => {
                     assert_eq!(hooks.len(), 1);
-                    assert_eq!(hooks[0].checked_hook(&program).unwrap().kind, kind);
-                    assert_eq!(
-                        values[0].checked_hook(&program).unwrap(),
-                        Some(hooks[0].checked_hook(&program).unwrap())
+                    let hook = hooks[0].checked_hook(&program).unwrap();
+                    assert_eq!(hook.kind, kind);
+                    let selected = values
+                        .iter()
+                        .filter(|value| value.checked_hook(&program).unwrap() == Some(hook))
+                        .collect::<Vec<_>>();
+                    assert_eq!(selected.len(), 1);
+                    assert!(
+                        selected[0]
+                            .matches_original_comptime(hooks[0].original_comptime().unwrap())
                     );
+                    if let Some(expected_scalar) = expected_scalar {
+                        let label = main
+                            .body
+                            .stmts
+                            .iter()
+                            .find_map(|statement| match statement {
+                                Stmt::VarDecl(declaration) if declaration.name.name == "label" => {
+                                    Some(&declaration.value)
+                                }
+                                _ => None,
+                            })
+                            .unwrap();
+                        let scalar = values
+                            .iter()
+                            .filter(|value| value.matches_original_comptime(label))
+                            .collect::<Vec<_>>();
+                        assert_eq!(scalar.len(), 1);
+                        assert_eq!(scalar[0].value(), &Value::Int64(expected_scalar));
+                        assert!(scalar[0].checked_hook(&program).unwrap().is_none());
+                        assert!(matches!(
+                            label,
+                            Expr::Comptime(inner, _) if matches!(
+                                inner.as_ref(), Expr::IntLiteral(value, _)
+                                    if *value == i128::from(expected_scalar)
+                            )
+                        ));
+                        assert_ne!(scalar[0].source_span(), selected[0].source_span());
+                        assert!(!selected[0].matches_original_comptime(label));
+                        assert!(
+                            !scalar[0].matches_original_comptime(
+                                selected[0].original_comptime().unwrap()
+                            )
+                        );
+                    }
                 }
                 None => {
-                    assert!(hooks.is_empty());
+                    assert_eq!(hooks.len(), 0);
                     assert_eq!(values[0].value(), &Value::OptionalNone);
                     assert!(values[0].checked_hook(&program).unwrap().is_none());
                 }
