@@ -4338,10 +4338,11 @@ All 46 shared Source scenarios pass in both reference and Source-absent linked
 native profiles (92 executions each), with zero obligations before teardown.
 Nine focused MIR groups and 242 MIR library tests, seven focused codegen groups,
 100 codegen library tests, 63 object tests and all 92 driver-library tests pass.
-This is local MSVC private-archive acceptance. Required/comptime materialization, returned named callbacks,
-dynamic/captured/scoped/generic/handled/pipeline forms, aggregates and production
-provider/concurrency integration remain in the whole goal, as do GNU private-
-archive Source execution and final-revision release gates. See the
+This is local MSVC private-archive acceptance. Broader implemented callback,
+aggregate and reflection combinations, GNU private-archive Source execution and
+coherent-revision release gates remain in current parity scope. Production
+provider and asynchronous scheduler integration are unimplemented extension work.
+See the
 [returned descriptor note](active/native_returned_resource_hooks.md).
 
 Required Resource materialization uses an opaque value proof produced from

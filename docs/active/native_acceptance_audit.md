@@ -65,11 +65,6 @@ The following semantic and implementation gaps prevent a full parity claim:
   and use construction/rebinding. The checker now rejects immutable, temporary,
   and known view roots before either execution backend; owned mutable roots
   remain admitted without an implemented update contract.
-- [Global constant execution](../open_design/global_constant_execution.md):
-  both backends now receive shared immutable compile-time primitive values,
-  including transparent aliases, without startup initialization. Move-only and
-  nominal constant types still require a read, lifetime, and authority contract;
-  conservative E9001 rejection does not close that broader design obligation.
 - [List summation types](../open_design/list_sum_type_contract.md): numeric
   primitives and transparent aliases work in both paths, but the unconstrained
   source signature still admits refinements, secret wrappers, and nonnumeric
@@ -88,6 +83,41 @@ The following semantic and implementation gaps prevent a full parity claim:
 The [interface audit](native_interface_values.md) also retains the remaining
 facade, refinement-composition, and comptime combinations that need scrutiny.
 Passing its growing regression suite does not remove those audit obligations.
+
+## Selected boundaries and unimplemented extensions
+
+Namespace constants have a selected current domain in `docs/design.md`:
+implicitly copyable primitive values and transparent aliases are baked once by
+the shared required evaluator; aggregates, nominal refinements, resources,
+actors, function values and erased payloads report E9001. This is a frontend
+boundary for both execution paths, not missing positive native support.
+`native_global_constants_match_interpreter_without_source_in_both_profiles`
+executes the admitted values and suites after Source removal, while driver
+constant tests pin aggregate and hidden-pending rejection before publication.
+Revalidate those gates at the final revision. The
+[broader constant ownership note](../open_design/global_constant_execution.md)
+records a possible extension and does not authorize runtime globals.
+
+Current task/actor execution is sequential: eager `run`, one-level `join`,
+no-op `cancel`, and synchronous actor dispatch. Existing run/join/cancel,
+actor/message ownership and scalar actor-comptime Source gates remain parity
+obligations. `docs/architecture.md` explicitly marks asynchronous scheduling
+and capability cancellation checkpoints unimplemented; the reference path also
+rejects Resource task/message transport and has no corresponding production
+provider APIs. Introducing those absent APIs or a scheduler is separate feature
+work, not a prerequisite for parity with the existing interpreter. Implemented
+portions of partial features, including occupied Resource custody, still require
+the complete original-Source evidence specified by the accepted plan.
+
+The current private Resource checkpoint is 138 shared scenarios /276 native runs
+in debug and release on MSVC, with Source absent at launch and zero obligations
+before teardown. The nested-view packet passes all 276 independent reference runs
+and all 276 native executions, including branch joins, scoped bodies, loops and
+Break/Continue. The approximate feature estimate advances from 85% to 86%; it is
+not measured code coverage or a changed inventory denominator. See the
+[nested lifetime contract](native_resource_nested_sums.md). Archive provenance,
+GNU private Source execution, and the final four supported-host workflow jobs
+remain separate gates.
 
 [Direct collection and sum equality](../completed/direct_collection_equality.md)
 is settled: both operators now report E0376 before comptime evaluation or native
@@ -2396,3 +2426,23 @@ one-value counts. This separately fixes the sole failure observed on both hosts
 at 17d6c841. Rust and all twelve new Jett Source format checks pass, and the
 2,188 frozen source/config inputs revalidate. The final MIR-only formatting change
 is exactly one error-return line wrap and passes all 254 MIR tests again.
+
+
+### Verified nested Resource lexical lifetimes (2026-10-07)
+
+Sources57..95 extend the original shared corpus to 138 scenarios. The Source-only
+baseline passed all 276 reference executions but refused native Source57 at exact
+constructor-scope admission. Private declaration/exit records and ordered native
+loan retirement now pass all 276 Source-deleted MSVC executions in both profiles,
+including owned backing reuse, sibling identities, borrow failures, Break and
+Continue. All 2,234 frozen inputs revalidate; runtime bytes and the measured
+37-leaf ABI1/wire2 archives remain unchanged.
+
+All 261 MIR, 103 codegen library, 63 object, 521 reference-evaluator and 93 driver
+library tests pass. Six public object baselines and eighteen forged-exit refusals
+bind codegen admission to exact private records. The rough feature estimate now
+tracks about 86%, with unchanged fixed 207/182 inventory denominators. The whole
+100% objective stays active. Ordinary borrowed list sums have a separate genuine
+12-Source reference baseline and 24 native unsupported-handler refusals; their
+implementation is not included here. Updated coherent-revision workspace/platform
+and private GNU execution remain independent gates.
