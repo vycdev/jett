@@ -74,11 +74,11 @@ The following semantic and implementation gaps prevent a full parity claim:
   current checks admit some refinement/base requests with matching carriers and
   secrecy. Preserving the actual owner on an admitted interface read does not
   select the broader requested-type contract or authorize arbitrary nominal casts.
-- [Inferred uninhabited JSON parser slots](native_json_uninhabited_parse_slots.md):
-  public policy and actual reference execution admit empty/absent carriers and
-  return handled errors for occupied Never slots. The serializer repair is
-  accepted at `05494ed4`; the separate parser source-selector repair requires
-  its own full-stdlib, linked/compiler and release acceptance.
+
+The [inferred uninhabited JSON parser repair](native_json_uninhabited_parse_slots.md)
+is accepted at predecessor `08f9f7e7`: its 19 Source tests, frozen full workspace
+and all four supported-host jobs passed. Each later revision still requires its
+own coherent release gates.
 
 The [interface audit](native_interface_values.md) also retains the remaining
 facade, refinement-composition, and comptime combinations that need scrutiny.
