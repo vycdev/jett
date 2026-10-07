@@ -10,6 +10,7 @@ pub use resource_ownership::{
     ResourceCallActual, ResourceCallFormal, ResourceCallNode, ResourceCallOperand,
     ResourceCallRegion, ResourceCallRegionId, ResourceCallResult, ResourceCompanionPlan,
     ResourceCompletion, ResourceFrame, ResourceFrameId, ResourceFrameRole, ResourceFunctionPlan,
+    ResourceLexicalExit, ResourceLexicalExitId, ResourceLexicalExitKind, ResourceLexicalExitPlan,
     ResourceLoan, ResourceLoanId, ResourceLoanSource, ResourceNamedCallableProof,
     ResourceOccupancy, ResourceOperation, ResourceOperationId, ResourceOperationRole,
     ResourceOwnerSlot, ResourceOwnerSlotId, ResourceOwnershipPlan, ResourcePath, ResourcePosition,
@@ -190,6 +191,8 @@ impl SequenceSource {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StatementKind {
+    /// Private constructor-owned lexical loan retirement; copied IDs grant nothing.
+    ResourceLexicalExit(ResourceLexicalExitId),
     /// Constructor-authenticated Resource operation whose actuals span CFG blocks.
     ResourceCall(ResourceCallNode),
     /// Empty, internal generation escrow; this is not an initialized Jett value.
@@ -678,6 +681,7 @@ impl FunctionValidator<'_, '_> {
 
     fn statement(&mut self, statement: &Statement) {
         match &statement.kind {
+            StatementKind::ResourceLexicalExit(_) => {}
             StatementKind::ResourceCall(node) => match node {
                 ResourceCallNode::Stage {
                     value, ordinary, ..
@@ -1426,7 +1430,8 @@ struct Builder<'a> {
     function_param_modes: &'a std::collections::HashMap<FunctionId, Vec<ParamMode>>,
     blocks: Vec<BasicBlock>,
     current: BlockId,
-    loops: Vec<(BlockId, BlockId, usize)>,
+    loops: Vec<(BlockId, BlockId, usize, usize)>,
+    lexical_scopes: Vec<resource_ownership::LexicalScope>,
     call_view_scopes: Vec<Vec<LocalId>>,
     resource_call_scopes: Vec<ResourceCallRegionId>,
     locals: Vec<Local>,
@@ -1446,6 +1451,7 @@ impl<'a> Builder<'a> {
         Self {
             types,
             function_param_modes,
+            lexical_scopes: Vec::new(),
             blocks: vec![BasicBlock {
                 id: BlockId(0),
                 statements: Vec::new(),
@@ -1526,18 +1532,88 @@ impl<'a> Builder<'a> {
     }
 
     fn lower_block(&mut self, block: &hir::Block) {
+        let lexical = match self.resource_capture.lexical_scope(block) {
+            Ok(scope) => scope,
+            Err(message) => {
+                self.resource_error = Some(LowerError {
+                    span: block.span,
+                    message,
+                });
+                None
+            }
+        };
+        let entered = lexical.is_some();
+        if let Some(scope) = lexical {
+            self.lexical_scopes.push(scope);
+        }
         for statement in &block.statements {
             if !self.open() {
                 break;
             }
             self.lower_statement(statement);
         }
+        if entered {
+            if self.open() {
+                self.lower_lexical_exit(
+                    ResourceLexicalExitKind::Fallthrough,
+                    self.lexical_scopes.len() - 1,
+                    None,
+                    None,
+                    block.span,
+                );
+            }
+            self.lexical_scopes.pop();
+        }
+    }
+
+    fn lower_lexical_exit(
+        &mut self,
+        kind: ResourceLexicalExitKind,
+        floor: usize,
+        original: Option<&hir::Statement>,
+        target: Option<BlockId>,
+        span: Span,
+    ) {
+        let position = if kind == ResourceLexicalExitKind::Return {
+            ResourcePosition::Terminator
+        } else {
+            ResourcePosition::Statement(self.blocks[self.current.index() as usize].statements.len())
+        };
+        if let Some(id) = self.resource_capture.lexical_exit(
+            kind,
+            self.current,
+            position,
+            &self.lexical_scopes[floor..],
+            original,
+            target,
+        ) && kind != ResourceLexicalExitKind::Return
+        {
+            self.push(StatementKind::ResourceLexicalExit(id), span);
+        }
     }
 
     fn lower_statement(&mut self, statement: &hir::Statement) {
         match &statement.kind {
             hir::StatementKind::Let { local, value } => {
-                let value = if let Some(metadata) = self.locals.get(local.index() as usize)
+                let seed = match self
+                    .resource_capture
+                    .borrowed_sum_seed(*local, value, self.types)
+                {
+                    Ok(seed) => seed,
+                    Err(message) => {
+                        self.resource_error = Some(LowerError {
+                            span: statement.span,
+                            message,
+                        });
+                        None
+                    }
+                };
+                let value = if let Some(seed) = seed {
+                    if let Some(scope) = self.lexical_scopes.last_mut() {
+                        scope.active.push(*local);
+                    }
+                    self.lower_borrowed_sum_handle(seed)
+                } else if let Some(metadata) = self.locals.get(local.index() as usize)
                     && let Some(source) = metadata.view_source
                     && let Some(origin) = self
                         .locals
@@ -1647,22 +1723,45 @@ impl<'a> Builder<'a> {
                 self.call_view_scopes = abandoned;
                 self.generation_capture.restore(generations);
                 self.resource_call_scopes = resource_scopes;
+                self.lower_lexical_exit(
+                    ResourceLexicalExitKind::Return,
+                    0,
+                    Some(statement),
+                    None,
+                    statement.span,
+                );
                 self.terminate(TerminatorKind::Return(value), statement.span);
             }
             hir::StatementKind::Break => {
                 if !self.resource_call_scopes.is_empty() {
                     self.resource_error = Some(LowerError { span: statement.span, message: "pending Resource call region: Break needs its exact operation-depth exit proof".into() });
                 }
-                let (_, target, depth) = *self.loops.last().expect("validated break has a loop");
+                let (_, target, depth, lexical_depth) =
+                    *self.loops.last().expect("validated break has a loop");
                 self.end_call_views_since(depth, statement.span);
+                self.lower_lexical_exit(
+                    ResourceLexicalExitKind::Break,
+                    lexical_depth,
+                    Some(statement),
+                    Some(target),
+                    statement.span,
+                );
                 self.terminate(TerminatorKind::Goto(target), statement.span);
             }
             hir::StatementKind::Continue => {
                 if !self.resource_call_scopes.is_empty() {
                     self.resource_error = Some(LowerError { span: statement.span, message: "pending Resource call region: Continue needs its exact operation-depth exit proof".into() });
                 }
-                let (target, _, depth) = *self.loops.last().expect("validated continue has a loop");
+                let (target, _, depth, lexical_depth) =
+                    *self.loops.last().expect("validated continue has a loop");
                 self.end_call_views_since(depth, statement.span);
+                self.lower_lexical_exit(
+                    ResourceLexicalExitKind::Continue,
+                    lexical_depth,
+                    Some(statement),
+                    Some(target),
+                    statement.span,
+                );
                 self.terminate(TerminatorKind::Goto(target), statement.span);
             }
             hir::StatementKind::If {
@@ -1779,8 +1878,12 @@ impl<'a> Builder<'a> {
         let body_block = self.new_block(body.span);
         let exit = self.new_block(statement_span);
         self.terminate(TerminatorKind::Goto(condition_block), statement_span);
-        self.loops
-            .push((condition_block, exit, self.call_view_scopes.len()));
+        self.loops.push((
+            condition_block,
+            exit,
+            self.call_view_scopes.len(),
+            self.lexical_scopes.len(),
+        ));
         self.current = condition_block;
         let condition = self.lower_value(condition);
         self.terminate(
@@ -1824,7 +1927,12 @@ impl<'a> Builder<'a> {
             },
             statement_span,
         );
-        self.loops.push((header, exit, self.call_view_scopes.len()));
+        self.loops.push((
+            header,
+            exit,
+            self.call_view_scopes.len(),
+            self.lexical_scopes.len(),
+        ));
         self.current = body_block;
         self.lower_block(body);
         self.close_to(header, body.span);

@@ -229,6 +229,14 @@ impl CopyValuePlan {
                         }
                         None
                     }
+                    StatementKind::ResourceLexicalExit(_) => {
+                        if program.is_none() {
+                            return Err(
+                                "Resource lexical exit requires its fresh companion plan".into()
+                            );
+                        }
+                        None
+                    }
                     StatementKind::EndCallView { local } => {
                         reads.insert(local.index() as usize);
                         killed = Some(local.index() as usize);

@@ -577,6 +577,16 @@ impl Flow<'_> {
                     self.aliases.insert(id);
                     self.state.insert(id);
                 }
+                StatementKind::ResourceLexicalExit(_) => {
+                    let exit = self
+                        .function
+                        .resource_lexical_exit(block.id, crate::ResourcePosition::Statement(index))?
+                        .ok_or("Resource lexical marker lost its private constructor proof")?;
+                    for local in exit.current_locals(self.function)? {
+                        self.aliases.remove(&(local.index() as usize));
+                        self.state.remove(&(local.index() as usize));
+                    }
+                }
                 StatementKind::EndCallView { local } => {
                     let id = local.index() as usize;
                     if !self.call_views.contains_key(&id)

@@ -225,6 +225,7 @@ fn visit_block_locals(
 ) {
     for statement in &mut block.statements {
         match &mut statement.kind {
+            StatementKind::ResourceLexicalExit(_) => {}
             StatementKind::ResourceCall(node) => match node {
                 ResourceCallNode::Stage {
                     value, ordinary, ..

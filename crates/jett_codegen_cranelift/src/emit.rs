@@ -1385,9 +1385,9 @@ impl Translator<'_, '_> {
             return Ok(());
         }
         match &statement.kind {
-            StatementKind::ResourceCall(_) => Err(resource_layout::pending(
-                "staged Resource node has no constructor-owned native family",
-            )),
+            StatementKind::ResourceCall(_) | StatementKind::ResourceLexicalExit(_) => Err(
+                resource_layout::pending("Resource node has no constructor-owned native family"),
+            ),
             StatementKind::ReflectedContainerReady { source, kind } => {
                 let ty = self.local_types[source.index() as usize].ty;
                 let expression = Expression {

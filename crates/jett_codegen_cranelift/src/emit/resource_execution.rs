@@ -6,6 +6,7 @@ use jett_mir::{
     ResourceFrameRole as FrameRole, ResourceOperationRole as Role, ResourceSlotStorage as Storage,
 };
 mod leaves;
+mod lexical_borrows;
 mod named_indirect;
 mod returned_hooks;
 mod sum_views;
@@ -515,6 +516,33 @@ impl Translator<'_, '_> {
         self.clear_slot(resource.owners[source.index()]);
         Ok(())
     }
+    fn resource_end_borrow(
+        &mut self,
+        operation: &jett_mir::ResourceOperation,
+    ) -> Result<(), CodegenError> {
+        let resource = self
+            .resource
+            .ok_or_else(|| pending("loan retirement has no selected family"))?;
+        let (loan, leaf) = match operation.role() {
+            Role::EndBorrow { loan } => (*loan, Leaf::BorrowEnd),
+            Role::EndSumBorrow { loan } => (*loan, Leaf::SumBorrowEnd),
+            _ => {
+                return Err(pending(
+                    "loan retirement selected a different operation role",
+                ));
+            }
+        };
+        let value = self.resource_loan(loan)?;
+        let (context, frame, ordinal) = self.resource_operation(operation)?;
+        leaf.checked(
+            self.module,
+            self.builder,
+            &[context, frame, ordinal, value],
+            resource.failure,
+        )?;
+        self.clear_slot(resource.loans[loan.index()]);
+        Ok(())
+    }
     fn resource_finish_operation(
         &mut self,
         operations: &[&jett_mir::ResourceOperation],
@@ -529,21 +557,8 @@ impl Translator<'_, '_> {
             .filter(|operation| operation.frame() == frame)
         {
             match operation.role() {
-                Role::EndBorrow { loan } | Role::EndSumBorrow { loan } => {
-                    let value = self.resource_loan(*loan)?;
-                    let (context, frame, ordinal) = self.resource_operation(operation)?;
-                    let leaf = if matches!(operation.role(), Role::EndSumBorrow { .. }) {
-                        Leaf::SumBorrowEnd
-                    } else {
-                        Leaf::BorrowEnd
-                    };
-                    leaf.checked(
-                        self.module,
-                        self.builder,
-                        &[context, frame, ordinal, value],
-                        resource.failure,
-                    )?;
-                    self.clear_slot(resource.loans[loan.index()]);
+                Role::EndBorrow { .. } | Role::EndSumBorrow { .. } => {
+                    self.resource_end_borrow(operation)?;
                 }
                 Role::Drop { .. } => self.resource_drop(operation)?,
                 Role::Complete { .. } => {
@@ -1453,6 +1468,14 @@ impl Translator<'_, '_> {
             .copied()
             .filter(|operation| !operation.is_expression_operation())
             .collect::<Vec<_>>();
+        if matches!(statement.kind, StatementKind::ResourceLexicalExit(_)) {
+            if !self.resource_lexical_retirement(statement.span)? {
+                return Err(pending(
+                    "lexical exit node has no exact constructor retirement",
+                ));
+            }
+            return Ok(true);
+        }
         if self.resource_borrowed_sum_statement(statement, &site_only)? {
             return Ok(true);
         }
@@ -1732,6 +1755,9 @@ impl Translator<'_, '_> {
         } else {
             self.nothing()
         };
+        // The original operand may observe a nested alias. Its evaluation
+        // precedes certified lexical retirement and provisional publication.
+        self.resource_lexical_retirement(span)?;
         let completion = operations
             .iter()
             .copied()

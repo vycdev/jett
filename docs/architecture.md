@@ -4381,12 +4381,14 @@ observe, project, failure-read and end operations. Five selected status/out C le
 extend the Resource leaf inventory from 32 to 37 without changing public record ABI.
 Absent shells receive live-loan guards despite having no occupied Resource token.
 
-The expanded 73-scenario corpus passes 146 reference and 146 Source-deleted native
-runs in Debug/Release against fresh measured MSVC private runtime archives. All
-305 checker, 203 HIR, 254 MIR, 215 runtime, 102 codegen library and 63 object tests
-pass. Fresh Resource custody validation runs before local-view queries consume its
-proof; independent guarded projection records do not authorize ordinary graph
-mutations. The constructor inventory currently admits root-body Resource aliases.
-Nested/scoped aliases, ordinary borrowed data sums and alternate Default lifetimes
-remain pending, alongside broader language and platform acceptance. See the
-[borrowed-sum contract](active/native_resource_borrowed_sums.md).
+The expanded 138-scenario corpus passes 276 reference and 276 Source-deleted
+native runs in Debug/Release against the unchanged measured MSVC private runtime
+archives. Original declaration keys include exact lexical paths; current headers,
+backings, guards and constructor graphs retain independent seals. Certified
+Fallthrough/Return/Break/Continue records end child loans before parent loans and
+clear nonowning aliases before joins/backedges. Return operands run first; lexical
+retirement does not complete RootScope or consume its backing. Recursive declaration
+inventory alone does not admit For/Match/reflected bodies or unemitted declarations.
+Ordinary borrowed data sums and alternate Default lifetimes remain pending. See
+[the borrowed-sum contract](active/native_resource_borrowed_sums.md) and
+[the verified nested contract](active/native_resource_nested_sums.md).

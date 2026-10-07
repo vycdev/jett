@@ -487,6 +487,75 @@ impl<'p> Analysis<'p> {
         }
         self.operation(frame, ResourceOperationRole::Complete { outcome });
     }
+    fn lexical_exit(&mut self, state: &mut State) -> Result<(), String> {
+        let Some(exit) = self
+            .function
+            .resource_lexical_exit(self.site.block, self.site.position)?
+        else {
+            return Err("Resource lexical retirement has no exact constructor exit".into());
+        };
+        let witness = self
+            .function
+            .resource_lowering
+            .as_ref()
+            .ok_or("Resource lexical retirement has no Source witness")?;
+        let mut clear_locals = Vec::new();
+        let mut loans = BTreeSet::new();
+        for original in exit.declarations() {
+            let row = witness
+                .borrowed_sums
+                .iter()
+                .find(|row| row.original_local() == original)
+                .ok_or("Resource lexical retirement lost an exact original alias")?;
+            for local in row.retirement_locals() {
+                if !clear_locals.contains(&local) {
+                    clear_locals.push(local);
+                }
+                if let Some(value) = &state.values[local.index() as usize]
+                    && let Some(loan) = value.loan
+                    && state.leases.contains(&loan)
+                {
+                    // A forwarded incoming/outer lease is never adopted by this declaration.
+                    let same_site = |site: Key, current: ResourceSite| {
+                        let expected = key(current, 0);
+                        (site.0, site.1, site.2) == (expected.0, expected.1, expected.2)
+                    };
+                    let created_here = self.loan_sites.iter().any(|((site, _, _), id)| {
+                        *id == loan
+                            && (same_site(*site, row.initialize_site())
+                                || same_site(*site, row.success_site()))
+                    });
+                    if created_here {
+                        loans.insert(loan);
+                    }
+                }
+            }
+        }
+        let start = self.plan.operations.len();
+        for loan in loans.into_iter().rev() {
+            if state.leases.iter().any(|child| matches!(self.plan.loans[child.index()].source, ResourceLoanSource::ProjectedSumPayload { parent, .. } if parent == loan)) {
+                return Err("Resource lexical parent retirement has a live child outside its exact exit".into());
+            }
+            self.end_borrow(self.active_frame, loan);
+            state.leases.remove(&loan);
+        }
+        for local in &clear_locals {
+            state.values[local.index() as usize] = None;
+            state.moved[local.index() as usize] = false;
+            self.clear(state, *local);
+        }
+        if self.emit {
+            self.plan.lexical_exits.push(ResourceLexicalExitPlan::new(
+                self.site,
+                exit.kind(),
+                (start..self.plan.operations.len())
+                    .map(ResourceOperationId)
+                    .collect(),
+                clear_locals,
+            ));
+        }
+        Ok(())
+    }
     fn expression(
         &mut self,
         state: &mut State,
@@ -954,6 +1023,7 @@ impl<'p> Analysis<'p> {
             }
             self.record_execution_frame()?;
             match &statement.kind {
+                StatementKind::ResourceLexicalExit(_) => self.lexical_exit(&mut state)?,
                 StatementKind::ResourceCall(node) => self.normalized_node(&mut state, node)?,
                 StatementKind::Let { local, value } => {
                     let named = self.named_binding(&state, *local, value);
@@ -1092,6 +1162,7 @@ impl<'p> Analysis<'p> {
                         if returned.loan.is_some() { return Err("Resource resident lease cannot escape as an owning return".into()); }
                         let expected = shape(&self.program.resource_manifest, self.types, self.function.return_type)?.ok_or("Resource return has an ordinary declared result")?;
                         if returned.shape != expected { return Err("Resource return changes its exact shape or kind".into()); }
+                        if self.function.resource_lexical_exit(self.site.block, self.site.position)?.is_some() { self.lexical_exit(&mut state)?; }
                         let frame = self.return_frame.ok_or("Resource return lacks its initially selected provisional frame")?;
                         let destination = self.result_slot(usize::MAX, expected, frame);
                         self.plan.slots[destination.0].storage = ResourceSlotStorage::Return { site: self.site };
@@ -1099,6 +1170,7 @@ impl<'p> Analysis<'p> {
                         outgoing = Some(destination);
                     } else if !state.aborted && shape(&self.program.resource_manifest, self.types, self.function.return_type)?.is_some() { return Err("Resource return has no exact owned output".into()); }
                 }
+                if outgoing.is_none() && !state.aborted && self.function.resource_lexical_exit(self.site.block, self.site.position)?.is_some() { self.lexical_exit(&mut state)?; }
                 let completion = if state.aborted { ResourceCompletion::Abort } else { ResourceCompletion::Return };
                 self.finish(&mut state, ResourceFrameId(0), completion);
                 if let Some(source) = outgoing { self.operation(self.return_frame.ok_or("Resource return frame disappeared")?, ResourceOperationRole::CompleteReturnAfterCleanup { source }); }
@@ -1170,7 +1242,15 @@ pub(super) fn analyze(
         .as_ref()
         .ok_or("Resource plan lacks its authenticated Source")?
         .original;
-    if walk::nested_resource_declaration(&original.body, original, types, false) {
+    let admitted = function
+        .resource_lowering
+        .as_ref()
+        .ok_or("Resource plan has no constructor witness")?
+        .borrowed_sums
+        .iter()
+        .map(|row| row.original_local())
+        .collect::<Vec<_>>();
+    if walk::nested_resource_declaration(&original.body, original, types, false, &admitted) {
         return Err("pending ResourceOwnershipPlan: nested Resource declarations need exact constructor Scope records".into());
     }
     if function.capture_count != 0 {
@@ -1213,6 +1293,7 @@ pub(super) fn analyze(
         loans: Vec::new(),
         operations: Vec::new(),
         execution_frames: Vec::new(),
+        lexical_exits: Vec::new(),
         descriptor_return: function
             .resource_lowering
             .as_ref()

@@ -4,10 +4,17 @@ use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod borrowed_sums;
+mod lexical_borrows;
+pub(crate) use lexical_borrows::LexicalScope;
+pub use lexical_borrows::{
+    ResourceLexicalExit, ResourceLexicalExitId, ResourceLexicalExitKind, ResourceLexicalExitPlan,
+};
 #[cfg(test)]
 mod borrowed_sums_tests;
 #[cfg(test)]
 mod execution_frames_tests;
+#[cfg(test)]
+mod lexical_borrows_tests;
 mod normalized_calls;
 pub(crate) use borrowed_sums::BorrowedSumSeed;
 pub use borrowed_sums::{ResourceBorrowedSumProjection, ResourceSumPayloadPath};
@@ -545,6 +552,7 @@ pub struct ResourceFunctionPlan {
     loans: Vec<ResourceLoan>,
     operations: Vec<ResourceOperation>,
     execution_frames: Vec<(ResourceSite, ResourceFrameId)>,
+    lexical_exits: Vec<ResourceLexicalExitPlan>,
     named_callable_producers: Vec<(usize, ResourceNamedCallableProof)>,
     named_callable_values: Vec<(usize, ResourceNamedCallableProof)>,
     descriptor_return: Option<hir::ResourceHookRef>,
@@ -716,6 +724,9 @@ pub(super) struct ResourceLoweringWitness {
     calls: Vec<OriginalCallAssociation>,
     regions: Vec<ResourceCallRegion>,
     borrowed_sums: Vec<ResourceBorrowedSumProjection>,
+    borrowed_seal: Vec<ResourceBorrowedSumProjection>,
+    lexical_exits: Vec<ResourceLexicalExit>,
+    lexical_seal: Vec<ResourceLexicalExit>,
     named_callables: Vec<named_callables::NamedCallableBinding>,
     descriptors: returned_descriptors::DescriptorWitness,
     source: hir::ResourceSourceArchive,
@@ -762,6 +773,9 @@ impl Capture {
                 calls: Vec::new(),
                 regions: Vec::new(),
                 borrowed_sums: Vec::new(),
+                borrowed_seal: Vec::new(),
+                lexical_exits: Vec::new(),
+                lexical_seal: Vec::new(),
                 named_callables: named_callables::capture(function, source, types, execution),
                 descriptors: returned_descriptors::capture(function, source),
                 source: source.clone(),
@@ -921,6 +935,10 @@ impl Capture {
         mut self,
         function: &Function,
     ) -> Result<Option<ResourceLoweringWitness>, String> {
+        if let Some(witness) = &mut self.witness {
+            lexical_borrows::seal(witness);
+            borrowed_sums::seal(witness);
+        }
         if let Some(witness) = &mut self.witness
             && !witness.borrowed_sums.is_empty()
         {
@@ -971,6 +989,7 @@ impl ResourceLoweringWitness {
             );
         }
         borrowed_sums::current(self, function)?;
+        lexical_borrows::current(self, function)?;
         for region in &self.regions {
             region.current(function)?;
             let mut original_count = 0;
@@ -1040,6 +1059,9 @@ impl ResourceLoweringWitness {
                 .all(|(left, right)| left.same(right))
             && self.regions.len() == other.regions.len()
             && self.borrowed_sums == other.borrowed_sums
+            && self.borrowed_seal == other.borrowed_seal
+            && self.lexical_exits == other.lexical_exits
+            && self.lexical_seal == other.lexical_seal
             && self
                 .regions
                 .iter()
@@ -1452,6 +1474,8 @@ pub(super) fn remap_blocks(
         region.remap_blocks(map)?;
     }
     borrowed_sums::remap_blocks(&mut witness.borrowed_sums, map)?;
+    borrowed_sums::seal(witness);
+    lexical_borrows::remap_blocks(witness, map)?;
     returned_descriptors::remap_blocks(&mut witness.descriptors, map)?;
     remap(&mut witness.entry);
     for block in &mut witness.blocks {
@@ -1512,6 +1536,7 @@ pub(super) fn remap_locals(
         region.remap_locals(&mut remap);
     }
     borrowed_sums::remap_locals(&mut witness.borrowed_sums, &mut remap);
+    borrowed_sums::seal(witness);
     named_callables::remap_locals(&mut witness.named_callables, &mut remap);
     returned_descriptors::remap_locals(&mut witness.descriptors, map, &mut remap);
     for record in &mut witness.calls {

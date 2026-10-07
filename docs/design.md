@@ -8515,17 +8515,27 @@ invocation remains
 indirect. The backend verifies the selected code address and empty environment,
 then supplies the selected body's internal Scope through the checked Source
 bridge. Descriptor storage remains ordinary; the Resource argument retains its
-independent custody and cleanup. Returned hook descriptors, captured/scoped/
-generic callables, handled indirect calls, statically pruned acquisition regions
-and conditional/aggregate replacement still require their dedicated successors.
+independent custody and cleanup. Exact returned compiler-hook descriptors and
+required pure comptime hook materialization now retain their checked authority
+through aliases, root Return relays and immediate invocation. Their independent
+original-body proofs survive canonical pruning and reject altered or missing
+occurrences. Captured/scoped/generic runtime callables, handled indirect calls,
+nested descriptor returns and conditional/aggregate replacement still require
+separate implementations and Source evidence.
 Compiler-test Resource providers are confined to a single runtime archive built
 with both `test` and `jett_resource_native_test_archive`; production providers
 remain disabled. Archive compilation and object emission alone do not establish
-linked Source execution. Thirty-two shared original Source scenarios now pass in
-both native profiles against their real reference outcomes, with Source files
-absent at launch and zero live obligations before teardown. This local test
-slice does not enable production Resource providers or complete broader native
-Resource semantics.
+linked Source execution. The shared original Source corpus now contains 138
+scenarios passing in both MSVC native profiles against their real reference
+outcomes: 276 native runs with Source files absent at launch and zero live
+obligations before teardown. Nested handled-view aliases now support terminating
+and joining branches, scoped type bodies, and While/Break/Continue boundaries.
+Exact declaration identity and certified child-before-parent lexical loan ends
+preserve backing ownership; Return operands run before retirement. For/Match and
+reflected bodies, ordinary borrowed data sums, alternate Default lifetimes and
+broader native Resource semantics remain separate work. This local test slice
+keeps production Resource providers disabled. See the
+[nested borrowed-sum contract](active/native_resource_nested_sums.md).
 
 Native plain Resource replacement validates both exact live owners, active runtime holders, loans, nominal kinds, generation capacity and acquisition storage before retiring the old value. An invalid replacement leaves both owners intact. The native compiler consumes this check for exact plain-owner replacement.
 

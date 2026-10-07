@@ -248,6 +248,7 @@ fn collect_function_references(function: &Function, references: &mut References<
                 | StatementKind::ReplaceCallOwnerGeneration { .. }
                 | StatementKind::CloseCallOwnerGeneration { .. }
                 | StatementKind::EndCallView { .. }
+                | StatementKind::ResourceLexicalExit(_)
                 | StatementKind::ReflectedContainerReady { .. }
                 | StatementKind::IterationBorrow { .. }
                 | StatementKind::SequenceLength { .. }

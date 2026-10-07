@@ -400,7 +400,14 @@ fn resource_required_absence_plans_exact_tag_arms_and_refuses_disconnected_custo
             .clone();
         assert!(walk::mir_block_has_custody(&disconnected, main, types));
         disconnected.id = BlockId(main.blocks.len() as u32);
+        let disconnected_id = disconnected.id;
         main.blocks.push(disconnected);
+        assert!(
+            !ControlFlowGraph::analyze(main)
+                .unwrap()
+                .reverse_postorder()
+                .contains(&disconnected_id)
+        );
         let error = match crate::resource_ownership::flow::analyze(
             &changed,
             named(&changed, "main"),
@@ -409,11 +416,11 @@ fn resource_required_absence_plans_exact_tag_arms_and_refuses_disconnected_custo
             Err(error) => error,
             Ok(_) => panic!("disconnected Resource close admitted; release={release}"),
         };
-        assert!(
-            error.contains(
-                "Resource custody operation is disconnected from its authenticated entry CFG"
-            ),
-            "{error}"
+        // The Return's lexical-exit query authenticates the entire current graph
+        // before flow reaches its final disconnected-custody walk.
+        assert_eq!(
+            error,
+            "Resource ownership differs from its initially authenticated Source or constructor-emitted graph"
         );
         assert!(validate_resource_ownership(&changed, types).is_err());
     }
@@ -438,8 +445,16 @@ fn resource_required_absence_refuses_disconnected_sum_take_header() {
             })
             .unwrap()
             .clone();
+        assert!(walk::mir_block_has_custody(&disconnected, main, types));
         disconnected.id = BlockId(main.blocks.len() as u32);
+        let disconnected_id = disconnected.id;
         main.blocks.push(disconnected);
+        assert!(
+            !ControlFlowGraph::analyze(main)
+                .unwrap()
+                .reverse_postorder()
+                .contains(&disconnected_id)
+        );
         let error = match crate::resource_ownership::flow::analyze(
             &changed,
             named(&changed, "main"),
@@ -448,11 +463,11 @@ fn resource_required_absence_refuses_disconnected_sum_take_header() {
             Err(error) => error,
             Ok(_) => panic!("disconnected Resource SumTake header admitted; release={release}"),
         };
-        assert!(
-            error.contains(
-                "Resource custody operation is disconnected from its authenticated entry CFG"
-            ),
-            "{error}"
+        // The whole-body authentication refuses this disconnected typed header
+        // before flow reaches its final disconnected-custody walk.
+        assert_eq!(
+            error,
+            "Resource ownership differs from its initially authenticated Source or constructor-emitted graph"
         );
         assert!(validate_resource_ownership(&changed, types).is_err());
     }

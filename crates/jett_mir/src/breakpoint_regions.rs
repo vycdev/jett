@@ -1075,6 +1075,7 @@ fn float_block(block: &mut BasicBlock, bits: &mut Vec<u64>) {
                 | ResourceCallNode::Invoke { .. }
                 | ResourceCallNode::End { .. },
             )
+            | StatementKind::ResourceLexicalExit(_)
             | StatementKind::OpenCallOwnerGeneration { .. }
             | StatementKind::ReplaceCallOwnerGeneration { .. }
             | StatementKind::CloseCallOwnerGeneration { .. }

@@ -200,6 +200,7 @@ pub(super) fn mir_block(block: &BasicBlock, visit: &mut impl FnMut(&Expression))
                 | ResourceCallNode::Invoke { .. }
                 | ResourceCallNode::End { .. },
             )
+            | StatementKind::ResourceLexicalExit(_)
             | StatementKind::OpenCallOwnerGeneration { .. }
             | StatementKind::ReplaceCallOwnerGeneration { .. }
             | StatementKind::CloseCallOwnerGeneration { .. }
@@ -282,10 +283,12 @@ pub(super) fn nested_resource_declaration(
     function: &hir::Function,
     types: &TypeInterner,
     nested: bool,
+    admitted: &[LocalId],
 ) -> bool {
     for statement in &block.statements {
         if let H::Let { local, .. } = &statement.kind
             && nested
+            && !admitted.contains(local)
             && function
                 .locals
                 .get(local.index() as usize)
@@ -299,20 +302,20 @@ pub(super) fn nested_resource_declaration(
                 else_block,
                 ..
             } => {
-                nested_resource_declaration(then_block, function, types, true)
+                nested_resource_declaration(then_block, function, types, true, admitted)
                     || else_block.as_ref().is_some_and(|block| {
-                        nested_resource_declaration(block, function, types, true)
+                        nested_resource_declaration(block, function, types, true, admitted)
                     })
             }
             H::While { body, .. } | H::For { body, .. } | H::Scope(body) => {
-                nested_resource_declaration(body, function, types, true)
+                nested_resource_declaration(body, function, types, true, admitted)
             }
             H::Match { arms, .. } => arms
                 .iter()
-                .any(|arm| nested_resource_declaration(&arm.body, function, types, true)),
+                .any(|arm| nested_resource_declaration(&arm.body, function, types, true, admitted)),
             H::ReflectedTypeDispatch { arms, .. } => arms
                 .iter()
-                .any(|arm| nested_resource_declaration(&arm.body, function, types, true)),
+                .any(|arm| nested_resource_declaration(&arm.body, function, types, true, admitted)),
             _ => false,
         };
         if found {
@@ -325,7 +328,7 @@ pub(super) fn nested_resource_declaration(
         };
         hir_block(&single, &mut |value| {
             if let E::Handle { failure, .. } = &value.kind {
-                inside |= nested_resource_declaration(failure, function, types, true);
+                inside |= nested_resource_declaration(failure, function, types, true, admitted);
             }
         });
         if inside {
@@ -365,6 +368,7 @@ pub(super) fn mir_site(block: &BasicBlock, position: usize, visit: &mut impl FnM
                 | ResourceCallNode::Invoke { .. }
                 | ResourceCallNode::End { .. },
             )
+            | StatementKind::ResourceLexicalExit(_)
             | StatementKind::OpenCallOwnerGeneration { .. }
             | StatementKind::ReplaceCallOwnerGeneration { .. }
             | StatementKind::CloseCallOwnerGeneration { .. }

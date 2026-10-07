@@ -10,6 +10,7 @@ pub enum ResourceSumPayloadPath {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResourceBorrowedSumProjection {
+    original_path: Vec<usize>,
     original: Expression,
     original_alias: Local,
     original_backing: Local,
@@ -60,6 +61,15 @@ impl ResourceBorrowedSumProjection {
     }
     pub fn failure_site(&self) -> Option<ResourceSite> {
         self.failure
+    }
+    pub(super) fn original_local(&self) -> LocalId {
+        self.original_alias.id
+    }
+    pub(super) fn initialize_site(&self) -> ResourceSite {
+        self.initialize
+    }
+    pub(super) fn retirement_locals(&self) -> [LocalId; 3] {
+        [self.alias.id, self.output.id, self.source.id]
     }
 
     fn current(&self, function: &Function) -> Result<(), String> {
@@ -197,6 +207,7 @@ impl ResourceBorrowedSumProjection {
 }
 
 pub(crate) struct BorrowedSumSeed {
+    pub(crate) original_path: Vec<usize>,
     pub(crate) original: Expression,
     pub(crate) alias: Local,
     pub(crate) backing: Local,
@@ -205,6 +216,7 @@ pub(crate) struct BorrowedSumSeed {
 impl Capture {
     pub(crate) fn borrowed_sum_seed(
         &self,
+        local: LocalId,
         expression: &Expression,
         types: &TypeInterner,
     ) -> Result<Option<BorrowedSumSeed>, String> {
@@ -215,18 +227,21 @@ impl Capture {
             return Ok(None);
         }
         let mut found = None;
-        for statement in &witness.original.body.statements {
-            let hir::StatementKind::Let { local, value } = &statement.kind else {
+        for declaration in lexical_borrows::declarations(witness) {
+            if declaration.local != local {
                 continue;
-            };
+            }
+            let value = &declaration.value;
             if !crate::breakpoint_regions::expressions_equal(value, expression) {
-                continue;
+                return Err(
+                    "borrowed Resource declaration changed its exact archived initializer".into(),
+                );
             }
             let alias = witness
                 .original
                 .locals
                 .get(local.index() as usize)
-                .filter(|header| header.id == *local)
+                .filter(|header| header.id == local)
                 .ok_or("borrowed Resource Handle original alias is absent")?;
             let Some(source) = alias.view_source else {
                 continue;
@@ -256,6 +271,7 @@ impl Capture {
                 );
             }
             found = Some(BorrowedSumSeed {
+                original_path: declaration.path,
                 original: value.clone(),
                 alias: alias.clone(),
                 backing: backing.clone(),
@@ -281,6 +297,7 @@ impl Capture {
     ) {
         if let Some(witness) = &mut self.witness {
             witness.borrowed_sums.push(ResourceBorrowedSumProjection {
+                original_path: seed.original_path,
                 original: seed.original,
                 original_alias: seed.alias.clone(),
                 original_backing: seed.backing.clone(),
@@ -305,12 +322,14 @@ pub(super) fn current(
     witness: &ResourceLoweringWitness,
     function: &Function,
 ) -> Result<(), String> {
-    let expected = witness.original.body.statements.iter().filter(|statement| {
-        matches!(&statement.kind, hir::StatementKind::Let { value, .. }
-            if witness.manifest.kind_for_type(value.ty).is_some()
-                && matches!(&value.kind, E::View(handle) if matches!(handle.kind, E::Handle { .. })))
-    }).count();
-    if expected != witness.borrowed_sums.len() {
+    if witness.borrowed_sums != witness.borrowed_seal {
+        return Err(
+            "borrowed Resource Handle changed its independent original/current association seal"
+                .into(),
+        );
+    }
+    let expected = lexical_borrows::declarations(witness);
+    if expected.len() != witness.borrowed_sums.len() {
         return Err(
             "borrowed Resource Handle lost its complete archived projection inventory".into(),
         );
@@ -323,10 +342,23 @@ pub(super) fn current(
         {
             return Err("borrowed Resource Handle original binding is duplicated".into());
         }
-        let count = witness.original.body.statements.iter().filter(|statement| {
-            matches!(&statement.kind, hir::StatementKind::Let { local, value } if *local == row.original_alias.id && crate::breakpoint_regions::expressions_equal(value, &row.original))
-        }).count();
+        let count = expected
+            .iter()
+            .filter(|declaration| {
+                declaration.local == row.original_alias.id
+                    && declaration.path == row.original_path
+                    && crate::breakpoint_regions::expressions_equal(
+                        &declaration.value,
+                        &row.original,
+                    )
+            })
+            .count();
         if count != 1
+            || row.original_alias.mutable
+            || row.original_alias.view_source != Some(row.original_backing.id)
+            || row.original_alias.ty != row.original.ty
+            || row.original_alias.ty != row.alias.ty
+            || row.original_backing.ty != row.backing.ty
             || witness
                 .original
                 .locals
@@ -342,6 +374,9 @@ pub(super) fn current(
         }
     }
     Ok(())
+}
+pub(super) fn seal(witness: &mut ResourceLoweringWitness) {
+    witness.borrowed_seal = witness.borrowed_sums.clone();
 }
 pub(super) fn remap_blocks(
     rows: &mut [ResourceBorrowedSumProjection],

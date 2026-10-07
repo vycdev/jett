@@ -903,8 +903,8 @@ impl Verifier<'_> {
             }
         }
         for block in &function.blocks {
-            for statement in &block.statements {
-                self.statement(function, statement)?;
+            for (index, statement) in block.statements.iter().enumerate() {
+                self.statement(function, block.id, index, statement)?;
             }
             self.terminator(function, &block.terminator)?;
         }
@@ -985,8 +985,54 @@ impl Verifier<'_> {
         Ok(())
     }
 
-    fn statement(&self, function: &Function, statement: &Statement) -> Result<(), CodegenError> {
+    fn statement(
+        &self,
+        function: &Function,
+        block: jett_mir::BlockId,
+        index: usize,
+        statement: &Statement,
+    ) -> Result<(), CodegenError> {
         match &statement.kind {
+            StatementKind::ResourceLexicalExit(_) => {
+                let position = jett_mir::ResourcePosition::Statement(index);
+                let ownership = self.resource.ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "lexical Resource node has no ownership proof",
+                    )
+                })?;
+                let plan = ownership
+                    .function(function.id)
+                    .and_then(|function| function.lexical_exit(block, position))
+                    .ok_or_else(|| {
+                        self.contract_error(
+                            function,
+                            statement.span,
+                            "lexical Resource node lost its exact planned site",
+                        )
+                    })?;
+                let original = function
+                    .resource_lexical_exit(block, position)
+                    .map_err(|message| self.contract_error(function, statement.span, message))?
+                    .ok_or_else(|| {
+                        self.contract_error(
+                            function,
+                            statement.span,
+                            "lexical Resource node lost its private constructor",
+                        )
+                    })?;
+                if original.kind() != plan.kind()
+                    || plan.kind() == jett_mir::ResourceLexicalExitKind::Return
+                {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "lexical Resource node changed its exact exit kind",
+                    ));
+                }
+                Ok(())
+            }
             StatementKind::ResourceCall(node) => {
                 use jett_mir::ResourceCallNode as Node;
                 let ownership = self.resource.ok_or_else(|| {

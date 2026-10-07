@@ -1167,20 +1167,6 @@ impl Builder<'_> {
     }
 
     pub(super) fn lower_value(&mut self, expression: &Expression) -> Expression {
-        match self
-            .resource_capture
-            .borrowed_sum_seed(expression, self.types)
-        {
-            Ok(Some(seed)) => return self.lower_borrowed_sum_handle(seed),
-            Err(message) => {
-                self.resource_error = Some(LowerError {
-                    span: expression.span,
-                    message,
-                });
-                return expression.clone();
-            }
-            Ok(None) => {}
-        }
         if self
             .resource_capture
             .normalized_call_needed(expression, self.types)
@@ -1977,7 +1963,7 @@ impl Builder<'_> {
     }
 
     #[inline(never)]
-    fn lower_borrowed_sum_handle(
+    pub(super) fn lower_borrowed_sum_handle(
         &mut self,
         seed: resource_ownership::BorrowedSumSeed,
     ) -> Expression {
