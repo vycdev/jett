@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
 import json
@@ -17,7 +18,7 @@ import re
 import shlex
 import shutil
 import subprocess
-from typing import TypeAlias
+from typing import TypeAlias, TypeGuard
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,12 +63,20 @@ def write_json(path: Path, value: Json) -> None:
         output.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+def json_array(value: object) -> TypeGuard[Sequence[object]]:
+    return isinstance(value, list)
+
+
+def json_object(value: object) -> TypeGuard[Mapping[object, object]]:
+    return isinstance(value, dict)
+
+
 def normalize_json(value: object) -> Json:
     if value is None or isinstance(value, (str, bool, int)):
         return value
-    if isinstance(value, list):
+    if json_array(value):
         return [normalize_json(item) for item in value]
-    if isinstance(value, dict):
+    if json_object(value):
         output: dict[str, Json] = {}
         for key, item in value.items():
             require(isinstance(key, str), "JSON object keys must be strings")

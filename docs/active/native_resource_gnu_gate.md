@@ -68,7 +68,15 @@ definitions, and observe dynamic CRT linking through `readelf`; their evidence i
 retained under `target/gnu-private-resource-host-tools-real/` in the main workspace.
 Those C controls are not Rust Resource archive or Source acceptance.
 
-No accessible GNU Rust toolchain or installed strict Python checker was available
-for this local verification. **Full GNU Rust Source execution and strict Python
-type checking remain unverified.** Broader language, provider, concurrency, and
-coherent-revision platform requirements remain in the native parity plan.
+A later narrow typing repair gives JSON list/dict reads precise readonly types
+while preserving their exact runtime predicates and diagnostics, and replaces one
+untyped test mock with a typed function. Strict Pyright 1.1.405 in Python 3.12
+mode independently selects both helper/test files and reports zero errors,
+warnings, or information messages (`3b711f`); all fifteen helper groups also pass
+after the repair (`0696a3`). The installed benchmark checker requires an explicit
+typeshed path and relative include paths to select those two files.
+
+No accessible GNU Rust toolchain was available for local archive verification.
+**Local full GNU Rust Source execution remains unverified.** Broader language,
+provider, concurrency, and coherent-revision platform requirements remain in the
+native parity plan.

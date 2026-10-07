@@ -254,8 +254,10 @@ class ReceiptAndGateTests(unittest.TestCase):
                         "profiles=debug,release\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n")
                 log.write_text(text, encoding="utf-8")
                 return text
+            def executable_for_test(name: str) -> Path:
+                return root / name
             with patch.object(measure, "sources", return_value=inputs), \
-                 patch.object(measure, "executable", side_effect=lambda name: root / name), \
+                 patch.object(measure, "executable", side_effect=executable_for_test), \
                  patch.object(measure.subprocess, "run", side_effect=compile_test), \
                  patch.object(measure, "logged", side_effect=execute_test), \
                  patch.dict(os.environ, {}, clear=True):
