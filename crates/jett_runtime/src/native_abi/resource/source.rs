@@ -133,7 +133,7 @@ impl NativeResourceState {
             .get(parameter as usize)
             .and_then(Option::as_ref)
             .ok_or(NativeResourceError::WrongOperation)?;
-        if resident.parent_loan != loan || resident.callee_parameter != parameter {
+        if resident.sum || resident.parent_loan != loan || resident.callee_parameter != parameter {
             return Err(NativeResourceError::WrongOperation);
         }
         self.frame(resident.caller_frame)?;
@@ -153,6 +153,43 @@ impl NativeResourceState {
             _ => Err(NativeResourceError::WrongFamily),
         }
     }
+    pub(super) fn resident_sum_at(
+        &self,
+        scope: ResourceHandleId,
+        loan: ResourceHandleId,
+        parameter: u32,
+    ) -> ResourceResult<()> {
+        let header = self.frame(scope)?;
+        let resident = header
+            .incoming
+            .get(parameter as usize)
+            .and_then(Option::as_ref)
+            .ok_or(NativeResourceError::WrongOperation)?;
+        if !resident.sum || resident.parent_loan != loan || resident.callee_parameter != parameter {
+            return Err(NativeResourceError::WrongOperation);
+        }
+        self.frame(resident.caller_frame)?;
+        let call = self.source_call(self.call_for_scope(scope)?)?;
+        if call.operation != resident.invoke_operation
+            || call.frame != resident.caller_frame
+            || call.phase != SourcePhase::Entered
+        {
+            return Err(NativeResourceError::WrongFrame);
+        }
+        let (_, _, _, row) = self.source_row(call.operation)?;
+        if !matches!(
+            row.formals
+                .get(parameter as usize)
+                .map(|formal| formal.value),
+            Some(NativeSourceValue::ResidentSumView { .. })
+        ) || !matches!(
+            self.handles.get(&loan),
+            Some(NativeResourceEntry::SumLoan(_))
+        ) {
+            return Err(NativeResourceError::WrongFamily);
+        }
+        Ok(())
+    }
     fn source_loan(
         &self,
         frame: ResourceHandleId,
@@ -161,6 +198,19 @@ impl NativeResourceState {
         registry: &ResourceRegistry,
     ) -> ResourceResult<()> {
         match source {
+            NativeLoanSource::ProjectedSumPayload { .. } => {
+                let loan = self.exact_loan(handle, source)?;
+                self.custody.validate_borrowed(&loan.token, registry)?;
+                let parent = loan.parent_sum.ok_or(NativeResourceError::WrongFamily)?;
+                self.validate_sum_parent(parent, registry)?;
+                let mut ancestor = frame;
+                while ancestor != loan.frame {
+                    ancestor = self
+                        .frame(ancestor)?
+                        .parent
+                        .ok_or(NativeResourceError::WrongFrame)?;
+                }
+            }
             NativeLoanSource::ExistingBorrow { operation } => {
                 let loan = self.exact_loan(handle, source)?;
                 let mut ancestor = frame;
@@ -216,7 +266,7 @@ impl NativeResourceState {
             .validate_resource_ordinary(value, &self.layout, shape)
             .map_err(ordinary_error)
     }
-    fn carrier(
+    pub(super) fn carrier(
         &self,
         handle: ResourceHandleId,
         slot: u32,
@@ -304,6 +354,7 @@ impl NativeResourceState {
         output: ResourceHandleId,
     ) -> ResourceResult<ResourceHandleId> {
         self.carrier(handle, source, registry)?;
+        self.sum_unborrowed(handle)?;
         self.slot_empty(frame, destination)?;
         let source_row = &self.layout.slots()[source as usize];
         let destination_row = &self.layout.slots()[destination as usize];
@@ -499,6 +550,15 @@ impl NativeResourceState {
             NativeSourceValue::ResidentView { source } => {
                 self.source_loan(call.frame, ResourceHandleId::new(value)?, source, registry)?
             }
+            NativeSourceValue::ResidentSumView { source } => {
+                self.source_sum_loan(
+                    call.frame,
+                    ResourceHandleId::new(value)?,
+                    source,
+                    Some(formal.actual_shape),
+                    registry,
+                )?;
+            }
         }
         let Some(NativeResourceEntry::SourceCall(call)) = self.handles.get_mut(&handle) else {
             return Err(NativeResourceError::WrongFamily);
@@ -591,8 +651,13 @@ impl NativeResourceState {
         for formal in &row.formals {
             outputs.push(next_handle(&mut ids)?);
             incoming.push(
-                if let NativeSourceValue::ResidentView { .. } = formal.value {
+                if matches!(
+                    formal.value,
+                    NativeSourceValue::ResidentView { .. }
+                        | NativeSourceValue::ResidentSumView { .. }
+                ) {
                     Some(NativeResidentLoan {
+                        sum: matches!(formal.value, NativeSourceValue::ResidentSumView { .. }),
                         parent_loan: ResourceHandleId::new(actuals[formal.parameter as usize])?,
                         caller_frame: frame,
                         invoke_operation: operation,
@@ -619,6 +684,15 @@ impl NativeResourceState {
                 )?,
                 NativeSourceValue::ResidentView { source } => {
                     self.source_loan(frame, ResourceHandleId::new(actual)?, source, registry)?
+                }
+                NativeSourceValue::ResidentSumView { source } => {
+                    self.source_sum_loan(
+                        frame,
+                        ResourceHandleId::new(actual)?,
+                        source,
+                        Some(formal.actual_shape),
+                        registry,
+                    )?;
                 }
                 NativeSourceValue::Ordinary => {
                     self.ordinary_actual(ordinary, actual, formal.actual_shape)?
@@ -678,6 +752,7 @@ impl NativeResourceState {
                 {
                     self.slot_empty(scope, callee_parameter_slot)?;
                     let actual = ResourceHandleId::new(actuals[formal.parameter as usize])?;
+                    self.sum_unborrowed(actual)?;
                     match self.handles.get(&actual) {
                         Some(NativeResourceEntry::Owner(_))
                         | Some(NativeResourceEntry::Sum(NativeResourceSum {
@@ -733,7 +808,8 @@ impl NativeResourceState {
                         outputs[formal.parameter as usize],
                     )
                     .map(ResourceHandleId::raw),
-                NativeSourceValue::ResidentView { .. } => Ok(actual),
+                NativeSourceValue::ResidentView { .. }
+                | NativeSourceValue::ResidentSumView { .. } => Ok(actual),
                 NativeSourceValue::Ordinary => Ok(actual),
             };
             match acquired {
@@ -807,6 +883,9 @@ impl NativeResourceState {
             },
             NativeSourceValue::ResidentView { .. } => {
                 self.resident_at(scope, ResourceHandleId::new(value)?, parameter)?
+            }
+            NativeSourceValue::ResidentSumView { .. } => {
+                self.resident_sum_at(scope, ResourceHandleId::new(value)?, parameter)?;
             }
             NativeSourceValue::Ordinary => {
                 self.ordinary_actual(ordinary, value, formal.callee_shape)?
@@ -1147,6 +1226,7 @@ impl NativeResourceState {
             return Err(NativeResourceError::WrongOperation);
         }
         self.carrier_frame_at(frame, handle, source)?;
+        self.sum_unborrowed(handle)?;
         let NativeSumPayload::Fail {
             shape: actual,
             string,

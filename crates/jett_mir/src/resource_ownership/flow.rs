@@ -160,14 +160,40 @@ impl<'p> Analysis<'p> {
             return *id;
         }
         let id = ResourceLoanId(self.plan.loans.len());
+        let shape = match source {
+            ResourceLoanSource::Owner(owner) => self.plan.slots[owner.index()].shape.clone(),
+            ResourceLoanSource::ProjectedSumPayload { parent, .. } => ResourceShape::Plain {
+                kind: self.plan.loans[parent.index()].shape.kind().clone(),
+            },
+            ResourceLoanSource::IncomingViewFormal { .. } => {
+                unreachable!("incoming formal loans are initialized from their exact typed header")
+            }
+        };
         self.plan.loans.push(ResourceLoan {
             id,
             frame,
             source,
+            shape,
             parameter: (parameter != usize::MAX).then_some(parameter),
         });
         self.loan_sites.insert(entry, id);
         id
+    }
+    fn borrow(&mut self, frame: ResourceFrameId, loan: ResourceLoanId) {
+        let role = if self.plan.loans[loan.index()].shape.conditional() {
+            ResourceOperationRole::BorrowSum { loan }
+        } else {
+            ResourceOperationRole::Borrow { loan }
+        };
+        self.operation(frame, role);
+    }
+    fn end_borrow(&mut self, frame: ResourceFrameId, loan: ResourceLoanId) {
+        let role = if self.plan.loans[loan.index()].shape.conditional() {
+            ResourceOperationRole::EndSumBorrow { loan }
+        } else {
+            ResourceOperationRole::EndBorrow { loan }
+        };
+        self.operation(frame, role);
     }
     fn clear(&self, state: &mut State, local: LocalId) {
         state
@@ -348,7 +374,7 @@ impl<'p> Analysis<'p> {
                     "Resource view alias replacement requires its separate lease transport".into(),
                 );
             }
-            if value.occupancy != ResourceOccupancy::Occupied {
+            if !value.shape.conditional() && value.occupancy != ResourceOccupancy::Occupied {
                 return Err("pending ResourceOwnershipPlan: conditional sum borrowing needs exact occupied-arm lease transport".into());
             }
             if value.loan.is_none() {
@@ -362,7 +388,7 @@ impl<'p> Analysis<'p> {
                     ResourceLoanSource::Owner(source),
                 );
                 state.leases.insert(loan);
-                self.operation(ResourceFrameId(0), ResourceOperationRole::Borrow { loan });
+                self.borrow(ResourceFrameId(0), loan);
                 value.loan = Some(loan);
             }
             state.values[index] = Some(value);
@@ -441,7 +467,7 @@ impl<'p> Analysis<'p> {
         // Incoming formal records denote resident caller leases, not child-owned tokens.
         let loans = state.leases.iter().copied().collect::<Vec<_>>();
         for loan in loans.into_iter().rev() {
-            self.operation(frame, ResourceOperationRole::EndBorrow { loan });
+            self.end_borrow(frame, loan);
             state.leases.remove(&loan);
         }
         for value in state.values.iter_mut().rev() {
@@ -695,7 +721,8 @@ impl<'p> Analysis<'p> {
                     );
                     loan
                 } else {
-                    if value.occupancy != ResourceOccupancy::Occupied {
+                    if !value.shape.conditional() && value.occupancy != ResourceOccupancy::Occupied
+                    {
                         return Err("pending ResourceOwnershipPlan: sum View actual needs its occupied-arm loan transport".into());
                     }
                     let owner = value
@@ -705,7 +732,7 @@ impl<'p> Analysis<'p> {
                         self.loan(ordinal, parameter, frame, ResourceLoanSource::Owner(owner));
                     state.leases.insert(loan);
                     loans.push(loan);
-                    self.operation(frame, ResourceOperationRole::Borrow { loan });
+                    self.borrow(frame, loan);
                     loan
                 };
                 operands.push(ResourceCallOperand::Borrowed { parameter, loan });
@@ -725,7 +752,8 @@ impl<'p> Analysis<'p> {
                 }
                 value.owner = Some(temporary);
                 if fact.callee_access == Access::View {
-                    if value.occupancy != ResourceOccupancy::Occupied {
+                    if !value.shape.conditional() && value.occupancy != ResourceOccupancy::Occupied
+                    {
                         return Err("pending ResourceOwnershipPlan: bare sum to View needs its dedicated occupied transport".into());
                     }
                     let loan = self.loan(
@@ -735,7 +763,7 @@ impl<'p> Analysis<'p> {
                         ResourceLoanSource::Owner(temporary),
                     );
                     loans.push(loan);
-                    self.operation(frame, ResourceOperationRole::Borrow { loan });
+                    self.borrow(frame, loan);
                     operands.push(ResourceCallOperand::Borrowed { parameter, loan });
                     temporary_owners.push((temporary, value.occupancy));
                 } else {
@@ -874,7 +902,7 @@ impl<'p> Analysis<'p> {
         }
         for loan in loans.into_iter().rev() {
             state.leases.remove(&loan);
-            self.operation(frame, ResourceOperationRole::EndBorrow { loan });
+            self.end_borrow(frame, loan);
         }
         for (source, occupancy) in temporary_owners.into_iter().rev() {
             self.operation(frame, ResourceOperationRole::Drop { source, occupancy });
@@ -966,8 +994,13 @@ impl<'p> Analysis<'p> {
                 }
                 StatementKind::SumTag { source, target } => {
                     if let Some(value) = self.read(&mut state, *source, false)? {
-                        if !value.shape.conditional() || value.loan.is_some() { return Err("Resource tag needs an exact owned supported sum".into()); }
+                        if !value.shape.conditional() { return Err("Resource tag needs an exact supported sum".into()); }
                         if self.function.local(*target).map(|local| local.ty) != Some(TypeInterner::BOOL) { return Err("Resource sum tag is not its exact Bool destination".into()); }
+                        if let Some(loan) = value.loan {
+                            let row = self.function.resource_borrowed_sum_projection(self.site.block, self.site.position)?.ok_or("borrowed Resource sum tag lacks its original Handle constructor relation")?;
+                            if row.source() != *source || row.tag() != *target { return Err("borrowed Resource sum tag changed its exact source/output headers".into()); }
+                            self.operation(self.active_frame, ResourceOperationRole::ObserveSumView { source: loan, target: *target });
+                        }
                         state.tags.insert(target.index(), *source);
                     }
                 }
@@ -975,6 +1008,24 @@ impl<'p> Analysis<'p> {
                     if let Some(value) = self.read(&mut state, *source, false)? {
                         let (tag, selected) = state.guards.get(&source.index()).copied().ok_or("Resource SumTake has no exact selecting typed tag edge")?;
                         if selected != *success || (selected && value.occupancy != ResourceOccupancy::Occupied) || (!selected && value.occupancy != ResourceOccupancy::Empty) { return Err("Resource SumTake differs from its selected occupied arm".into()); }
+                        if let Some(parent) = value.loan {
+                            let row = self.function.resource_borrowed_sum_projection(self.site.block, self.site.position)?.ok_or("borrowed Resource sum extraction lacks its exact constructor relation")?;
+                            if row.source() != *source || row.tag() != tag { return Err("borrowed Resource sum extraction changed its exact tag/header relation".into()); }
+                            if selected {
+                                if row.output() != *target || row.success_site() != self.site || !self.function.is_view_local(*target) || self.local_slots[target.index() as usize].is_some() { return Err("borrowed Resource payload gained an owning or foreign output".into()); }
+                                let path = row.path();
+                                let loan = self.loan(self.ordinal, usize::MAX, ResourceFrameId(0), ResourceLoanSource::ProjectedSumPayload { parent, tag, path });
+                                state.leases.insert(loan);
+                                self.store(&mut state, *target, Some(Value { shape: ResourceShape::Plain { kind: value.shape.kind().clone() }, occupancy: ResourceOccupancy::Occupied, owner: None, loan: Some(loan) }), false, false)?;
+                                self.operation(self.active_frame, ResourceOperationRole::ProjectSumView { source: parent, destination: loan, tag, path });
+                            } else {
+                                let ResourceShape::Result { failure, .. } = value.shape else { return Err("borrowed Optional has no failure companion".into()); };
+                                let header = self.function.local(*target).ok_or("borrowed Resource failure read has no header")?.clone();
+                                if failure != TypeInterner::STRING || header.ty != failure || header.view_source.is_some() || row.failure_site() != Some(self.site) { return Err("borrowed Resource failure read lacks its exact String companion".into()); }
+                                self.operation(self.active_frame, ResourceOperationRole::ReadFailureCompanion { source: parent, target: header, failure, tag });
+                            }
+                            continue;
+                        }
                         if selected {
                             let owner = value.owner.ok_or("Resource sum payload lacks its holder")?;
                             let mut payload = self.read(&mut state, *source, true)?.ok_or("Resource sum source was consumed before its exact take")?;
@@ -1061,7 +1112,7 @@ impl<'p> Analysis<'p> {
                 let mut yes = state.clone(); let mut no = state;
                 if let E::Local(tag) = condition.kind && let Some(source) = yes.tags.get(&tag.index()).copied() {
                     let value = yes.values[source.index() as usize].as_ref().ok_or("Resource tag source was consumed before its selecting edge")?;
-                    if !value.shape.conditional() || value.loan.is_some() { return Err("Resource selecting edge lost its exact owned sum tag source".into()); }
+                    if !value.shape.conditional() { return Err("Resource selecting edge lost its exact sum tag source".into()); }
                     // Plan both authenticated CFG edges. A known empty/occupied
                     // producer does not remove either runtime SumTag edge;
                     // the exact selecting guard still gates each SumTake.
@@ -1250,13 +1301,11 @@ pub(super) fn analyze(
                 loan: None,
             };
             if param.mode == ParamMode::View {
-                if value.shape.conditional() {
-                    return Err("pending ResourceOwnershipPlan: resident sum formal needs its occupied-path loan representation".into());
-                }
                 let loan = ResourceLoanId(analysis.plan.loans.len());
                 analysis.plan.loans.push(ResourceLoan {
                     id: loan,
                     frame: ResourceFrameId(0),
+                    shape: value.shape.clone(),
                     parameter: None,
                     source: ResourceLoanSource::IncomingViewFormal {
                         scope: ResourceFrameId(0),

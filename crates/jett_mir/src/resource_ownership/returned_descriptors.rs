@@ -498,11 +498,12 @@ pub(super) fn validate(
     let expected = capture(&witness.original, &witness.source);
     let current = &witness.descriptors;
     current.current(function)?;
-    if witness
-        .source
-        .required_materializations()
-        .iter()
-        .any(|row| row.function() == function.id)
+    if (!witness.borrowed_sums.is_empty()
+        || witness
+            .source
+            .required_materializations()
+            .iter()
+            .any(|row| row.function() == function.id))
         && current.graph.is_none()
     {
         return Err(
@@ -657,6 +658,9 @@ pub(super) fn current_values(
     Ok(values.into_iter().collect())
 }
 impl DescriptorWitness {
+    pub(super) fn has_body(&self) -> bool {
+        self.graph.is_some()
+    }
     pub(super) fn current(&self, function: &Function) -> Result<(), String> {
         if let Some(graph) = &self.graph
             && (graph.parameters != function.params

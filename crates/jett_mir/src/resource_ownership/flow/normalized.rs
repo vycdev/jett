@@ -59,9 +59,6 @@ impl Analysis<'_> {
                 });
                 continue;
             };
-            if !matches!(shape, ResourceShape::Plain { .. }) {
-                return Err("pending Resource call region: conditional Resource actual staging needs its occupied-arm proof".into());
-            }
             if actual.ordinary().is_some() || fact.staging != hir::ArgumentStaging::Original {
                 return Err(
                     "Resource normalized actual gained ordinary storage or staging authority"
@@ -211,10 +208,12 @@ impl Analysis<'_> {
                     let parameter = self.plan.loans[loan.index()]
                         .parameter
                         .ok_or("Resource prepared Source loan lost its parameter")?;
-                    self.operation(
-                        prepared.frame,
-                        ResourceOperationRole::PrepareSourceBorrow { loan, parameter },
-                    );
+                    let role = if self.plan.loans[loan.index()].shape.conditional() {
+                        ResourceOperationRole::PrepareSourceSumBorrow { loan, parameter }
+                    } else {
+                        ResourceOperationRole::PrepareSourceBorrow { loan, parameter }
+                    };
+                    self.operation(prepared.frame, role);
                 }
                 state.calls.push(ActiveCall {
                     region: region.id(),
@@ -290,7 +289,10 @@ impl Analysis<'_> {
                     {
                         let value = evaluated
                             .ok_or("Resource normalized Stage has no live owning producer")?;
-                        if value.loan.is_some() || value.occupancy != ResourceOccupancy::Occupied {
+                        if value.loan.is_some()
+                            || (!value.shape.conditional()
+                                && value.occupancy != ResourceOccupancy::Occupied)
+                        {
                             return Err(
                                 "Resource normalized owned Stage is not its exact occupied owner"
                                     .into(),
@@ -301,7 +303,8 @@ impl Analysis<'_> {
                             ResourceCallOperand::Borrowed { loan, .. } => {
                                 match self.plan.loans[loan.index()].source {
                                     ResourceLoanSource::Owner(slot) => slot,
-                                    ResourceLoanSource::IncomingViewFormal { .. } => return Err(
+                                    ResourceLoanSource::IncomingViewFormal { .. }
+                                    | ResourceLoanSource::ProjectedSumPayload { .. } => return Err(
                                         "Resource owned Stage changed into a resident formal loan"
                                             .into(),
                                     ),
@@ -311,6 +314,11 @@ impl Analysis<'_> {
                                 return Err("Resource owned Stage lost its custody operand".into());
                             }
                         };
+                        if value.shape != self.plan.slots[slot.index()].shape {
+                            return Err(
+                                "Resource normalized Stage changes its sealed owner shape".into()
+                            );
+                        }
                         self.operation(
                             active.frame,
                             ResourceOperationRole::Transfer {
@@ -324,12 +332,18 @@ impl Analysis<'_> {
                         if let ResourceCallOperand::Borrowed { loan, .. } = operand {
                             state.leases.insert(loan);
                             active.loans.push(loan);
-                            self.operation(active.frame, ResourceOperationRole::Borrow { loan });
+                            self.borrow(active.frame, loan);
                         }
                     }
                     ResourceCallOperand::Borrowed { loan, .. } => {
                         let value = evaluated
                             .ok_or("Resource normalized retained Stage lost its holder")?;
+                        if value.shape != self.plan.loans[loan.index()].shape {
+                            return Err(
+                                "Resource normalized retained Stage changes its sealed loan shape"
+                                    .into(),
+                            );
+                        }
                         if let Some(resident) = value.loan {
                             if resident != *loan {
                                 return Err(
@@ -352,10 +366,7 @@ impl Analysis<'_> {
                             }
                             state.leases.insert(*loan);
                             active.loans.push(*loan);
-                            self.operation(
-                                active.frame,
-                                ResourceOperationRole::Borrow { loan: *loan },
-                            );
+                            self.borrow(active.frame, *loan);
                         }
                     }
                     ResourceCallOperand::Owned { .. } => {
@@ -450,10 +461,7 @@ impl Analysis<'_> {
                 }
                 for loan in active.loans.iter().rev() {
                     state.leases.remove(loan);
-                    self.operation(
-                        active.frame,
-                        ResourceOperationRole::EndBorrow { loan: *loan },
-                    );
+                    self.end_borrow(active.frame, *loan);
                 }
                 let prepared = self
                     .normalized_calls

@@ -39,6 +39,12 @@ fn source_kind(
     function: u32,
 ) -> Result<u32, ResourceLayoutError> {
     match source {
+        NativeLoanSource::ProjectedSumPayload { operation } => {
+            if get(&layout.operations, operation)?.site.function != function {
+                return Err(ResourceLayoutError::FrameMismatch);
+            }
+            projected_kind(layout, operation)
+        }
         NativeLoanSource::ExistingBorrow { operation } => {
             let record = get(&layout.operations, operation)?;
             if record.site.function != function {
@@ -62,6 +68,70 @@ fn source_kind(
             }
         }
     }
+}
+
+pub(super) fn sum_source_shape(
+    layout: &WireLayout,
+    source: NativeSumLoanSource,
+    function: u32,
+) -> Result<u32, ResourceLayoutError> {
+    let shape = match source {
+        NativeSumLoanSource::ExistingBorrow { operation } => {
+            let row = get(&layout.operations, operation)?;
+            if row.site.function != function {
+                return Err(ResourceLayoutError::FrameMismatch);
+            }
+            let NativeOperation::BorrowSum {
+                source_sum_slot, ..
+            } = row.operation
+            else {
+                return Err(ResourceLayoutError::OperationMismatch);
+            };
+            get(&layout.slots, source_sum_slot)?.shape
+        }
+        NativeSumLoanSource::IncomingViewFormal { scope, parameter } => {
+            let scope = frame(layout, scope, function, NativeFrameRole::Scope)?;
+            let formal = get(
+                &get(&layout.signatures, scope.signature)?.parameters,
+                parameter,
+            )?;
+            if formal.access != NativeAccess::View {
+                return Err(ResourceLayoutError::OperationMismatch);
+            }
+            formal.shape
+        }
+    };
+    conditional_kind(layout, shape)?;
+    Ok(shape)
+}
+pub(super) fn conditional_kind(
+    layout: &WireLayout,
+    shape: u32,
+) -> Result<(u32, NativePayloadStep), ResourceLayoutError> {
+    let (child, path) = match *get(&layout.shapes, shape)? {
+        NativeShape::Optional { child } => (child, NativePayloadStep::Some),
+        NativeShape::Result { ok, .. } => (ok, NativePayloadStep::Ok),
+        _ => return Err(ResourceLayoutError::ShapeMismatch),
+    };
+    let NativeShape::Resource { kind } = *get(&layout.shapes, child)? else {
+        return Err(ResourceLayoutError::ShapeMismatch);
+    };
+    Ok((kind, path))
+}
+pub(super) fn projected_kind(
+    layout: &WireLayout,
+    operation: u32,
+) -> Result<u32, ResourceLayoutError> {
+    let row = get(&layout.operations, operation)?;
+    let NativeOperation::ProjectSumView { source, path, .. } = row.operation else {
+        return Err(ResourceLayoutError::OperationMismatch);
+    };
+    let shape = sum_source_shape(layout, source, row.site.function)?;
+    let (kind, expected) = conditional_kind(layout, shape)?;
+    if path != expected {
+        return Err(ResourceLayoutError::PayloadPath);
+    }
+    Ok(kind)
 }
 
 pub(super) fn invocation(
@@ -143,6 +213,45 @@ pub(super) fn invocation(
                 }
                 if slot_kind(layout, caller)? != slot_kind(layout, target)? {
                     return Err(ResourceLayoutError::ShapeMismatch);
+                }
+            }
+            NativeSourceValue::ResidentSumView { source } => {
+                let tuple = matches!(
+                    (formal.syntax, formal.effect),
+                    (
+                        NativeSourceSyntax::Bare,
+                        NativeSourceEffect::RelinquishOwned
+                    ) | (
+                        NativeSourceSyntax::WrittenView,
+                        NativeSourceEffect::RetainBorrow
+                    )
+                );
+                if !tuple
+                    || formal.access != NativeAccess::View
+                    || formal.actual_shape != formal.callee_shape
+                    || sum_source_shape(layout, source, record.site.function)?
+                        != formal.callee_shape
+                {
+                    return Err(ResourceLayoutError::OperationMismatch);
+                }
+                if formal.effect == NativeSourceEffect::RelinquishOwned {
+                    let NativeSumLoanSource::ExistingBorrow { operation } = source else {
+                        return Err(ResourceLayoutError::OperationMismatch);
+                    };
+                    let NativeOperation::BorrowSum {
+                        frame,
+                        source_sum_slot,
+                        lease_frame,
+                    } = get(&layout.operations, operation)?.operation
+                    else {
+                        return Err(ResourceLayoutError::OperationMismatch);
+                    };
+                    if frame != caller_frame
+                        || lease_frame != caller_frame
+                        || get(&layout.slots, source_sum_slot)?.frame != caller_frame
+                    {
+                        return Err(ResourceLayoutError::FrameMismatch);
+                    }
                 }
             }
             NativeSourceValue::ResidentView { source } => {
@@ -309,6 +418,58 @@ pub(super) fn operation(
                 || occupied(layout, fail)?
             {
                 return Err(ResourceLayoutError::ShapeMismatch);
+            }
+        }
+        NativeOperation::BorrowSum {
+            frame,
+            source_sum_slot,
+            lease_frame,
+        } => {
+            get_frame(frame)?;
+            if lease_frame != frame {
+                return Err(ResourceLayoutError::FrameMismatch);
+            }
+            let slot = get(&layout.slots, source_sum_slot)?;
+            if get_frame(slot.frame)?.site.function != record.site.function
+                || slot.path != [conditional_kind(layout, slot.shape)?.1]
+            {
+                return Err(ResourceLayoutError::ShapeMismatch);
+            }
+        }
+        NativeOperation::ObserveSumView { frame, source } => {
+            get_frame(frame)?;
+            sum_source_shape(layout, source, record.site.function)?;
+        }
+        NativeOperation::ProjectSumView {
+            frame, lease_frame, ..
+        } => {
+            get_frame(frame)?;
+            if lease_frame != frame {
+                return Err(ResourceLayoutError::FrameMismatch);
+            }
+            projected_kind(layout, record.ordinal)?;
+        }
+        NativeOperation::ReadFailureCompanion {
+            frame,
+            source,
+            failure_shape,
+        } => {
+            get_frame(frame)?;
+            let shape = sum_source_shape(layout, source, record.site.function)?;
+            let NativeShape::Result { fail, .. } = *get(&layout.shapes, shape)? else {
+                return Err(ResourceLayoutError::ShapeMismatch);
+            };
+            if fail != failure_shape || !matches!(get(&layout.shapes, fail)?, NativeShape::String) {
+                return Err(ResourceLayoutError::ShapeMismatch);
+            }
+        }
+        NativeOperation::EndSumBorrow { frame, borrow } => {
+            get_frame(frame)?;
+            let row = get(&layout.operations, borrow)?;
+            if row.site.function != record.site.function
+                || !matches!(row.operation, NativeOperation::BorrowSum { frame: f, .. } if f == frame)
+            {
+                return Err(ResourceLayoutError::OperationMismatch);
             }
         }
         _ => return Err(ResourceLayoutError::OperationMismatch),

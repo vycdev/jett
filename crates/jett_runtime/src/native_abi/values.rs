@@ -5016,6 +5016,23 @@ impl NativeValues {
         }
     }
 
+    /// Copy only the exact ordinary String failure arm; never clone Resource data.
+    pub(super) fn clone_resource_string_companion(
+        &mut self,
+        layout: &crate::resource_custody::RegisteredNativeLayout,
+        shape: u32,
+        value: u64,
+    ) -> LeafResult<u64> {
+        if !matches!(
+            layout.shapes().get(shape as usize),
+            Some(crate::resource_custody::NativeShape::String)
+        ) {
+            return Err(INVALID_HANDLE);
+        }
+        self.validate_resource_ordinary(value, layout, shape)?;
+        self.clone_value(value)
+    }
+
     pub(super) fn drop_resource_typed_companion(
         &mut self,
         layout: &crate::resource_custody::RegisteredNativeLayout,

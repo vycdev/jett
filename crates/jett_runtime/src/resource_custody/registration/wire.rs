@@ -58,12 +58,27 @@ impl<'a> Reader<'a> {
             position,
         })
     }
-    fn loan(&mut self) -> Result<NativeLoanSource, ResourceLayoutError> {
+    fn loan(&mut self, version: u32) -> Result<NativeLoanSource, ResourceLayoutError> {
         Ok(match self.word()? {
             1 => NativeLoanSource::ExistingBorrow {
                 operation: self.word()?,
             },
             2 => NativeLoanSource::IncomingViewFormal {
+                scope: self.word()?,
+                parameter: self.word()?,
+            },
+            3 if version == 2 => NativeLoanSource::ProjectedSumPayload {
+                operation: self.word()?,
+            },
+            _ => return Err(ResourceLayoutError::UnknownTag),
+        })
+    }
+    fn sum_loan(&mut self) -> Result<NativeSumLoanSource, ResourceLayoutError> {
+        Ok(match self.word()? {
+            1 => NativeSumLoanSource::ExistingBorrow {
+                operation: self.word()?,
+            },
+            2 => NativeSumLoanSource::IncomingViewFormal {
                 scope: self.word()?,
                 parameter: self.word()?,
             },
@@ -117,7 +132,7 @@ impl<'a> Reader<'a> {
             },
             4 => NativeOperation::BoundedBorrowUse {
                 frame: self.word()?,
-                source: self.loan()?,
+                source: self.loan(version)?,
                 callee_frame: self.word()?,
             },
             5 => NativeOperation::EndBorrow {
@@ -127,7 +142,7 @@ impl<'a> Reader<'a> {
             6 => NativeOperation::InvokeBorrow {
                 frame: self.word()?,
                 hook: self.word()?,
-                source: self.loan()?,
+                source: self.loan(version)?,
             },
             7 => NativeOperation::Close {
                 frame: self.word()?,
@@ -195,6 +210,34 @@ impl<'a> Reader<'a> {
                 destination_slot: self.word()?,
                 failure_shape: self.word()?,
             },
+            21 if version == 2 => NativeOperation::BorrowSum {
+                frame: self.word()?,
+                source_sum_slot: self.word()?,
+                lease_frame: self.word()?,
+            },
+            22 if version == 2 => NativeOperation::ObserveSumView {
+                frame: self.word()?,
+                source: self.sum_loan()?,
+            },
+            23 if version == 2 => NativeOperation::ProjectSumView {
+                frame: self.word()?,
+                source: self.sum_loan()?,
+                path: match self.word()? {
+                    1 => NativePayloadStep::Some,
+                    2 => NativePayloadStep::Ok,
+                    _ => return Err(ResourceLayoutError::UnknownTag),
+                },
+                lease_frame: self.word()?,
+            },
+            24 if version == 2 => NativeOperation::ReadFailureCompanion {
+                frame: self.word()?,
+                source: self.sum_loan()?,
+                failure_shape: self.word()?,
+            },
+            25 if version == 2 => NativeOperation::EndSumBorrow {
+                frame: self.word()?,
+                borrow: self.word()?,
+            },
             _ => return Err(ResourceLayoutError::UnknownTag),
         })
     }
@@ -241,7 +284,10 @@ impl<'a> Reader<'a> {
                     callee_parameter_slot: self.word()?,
                 },
                 3 => NativeSourceValue::ResidentView {
-                    source: self.loan()?,
+                    source: self.loan(2)?,
+                },
+                4 => NativeSourceValue::ResidentSumView {
+                    source: self.sum_loan()?,
                 },
                 _ => return Err(ResourceLayoutError::UnknownTag),
             };
@@ -481,11 +527,28 @@ pub(super) fn encode_records(layout: &WireLayout) -> Vec<u8> {
         }
         fn loan(&mut self, source: NativeLoanSource) {
             match source {
+                NativeLoanSource::ProjectedSumPayload { operation } => {
+                    self.word(3);
+                    self.word(operation);
+                }
                 NativeLoanSource::ExistingBorrow { operation } => {
                     self.word(1);
                     self.word(operation);
                 }
                 NativeLoanSource::IncomingViewFormal { scope, parameter } => {
+                    self.word(2);
+                    self.word(scope);
+                    self.word(parameter);
+                }
+            }
+        }
+        fn sum_loan(&mut self, source: NativeSumLoanSource) {
+            match source {
+                NativeSumLoanSource::ExistingBorrow { operation } => {
+                    self.word(1);
+                    self.word(operation);
+                }
+                NativeSumLoanSource::IncomingViewFormal { scope, parameter } => {
                     self.word(2);
                     self.word(scope);
                     self.word(parameter);
@@ -670,6 +733,52 @@ pub(super) fn encode_records(layout: &WireLayout) -> Vec<u8> {
                     self.word(destination_slot);
                     self.word(failure_shape);
                 }
+                BorrowSum {
+                    frame,
+                    source_sum_slot,
+                    lease_frame,
+                } => {
+                    self.word(21);
+                    self.word(frame);
+                    self.word(source_sum_slot);
+                    self.word(lease_frame);
+                }
+                ObserveSumView { frame, source } => {
+                    self.word(22);
+                    self.word(frame);
+                    self.sum_loan(source);
+                }
+                ProjectSumView {
+                    frame,
+                    source,
+                    path,
+                    lease_frame,
+                } => {
+                    self.word(23);
+                    self.word(frame);
+                    self.sum_loan(source);
+                    self.word(match path {
+                        NativePayloadStep::Some => 1,
+                        NativePayloadStep::Ok => 2,
+                        NativePayloadStep::Fail => 3,
+                    });
+                    self.word(lease_frame);
+                }
+                ReadFailureCompanion {
+                    frame,
+                    source,
+                    failure_shape,
+                } => {
+                    self.word(24);
+                    self.word(frame);
+                    self.sum_loan(source);
+                    self.word(failure_shape);
+                }
+                EndSumBorrow { frame, borrow } => {
+                    self.word(25);
+                    self.word(frame);
+                    self.word(borrow);
+                }
             }
         }
         fn source_invocation(&mut self, source: &NativeSourceInvocation) {
@@ -718,6 +827,10 @@ pub(super) fn encode_records(layout: &WireLayout) -> Vec<u8> {
                     NativeSourceValue::ResidentView { source } => {
                         self.word(3);
                         self.loan(source);
+                    }
+                    NativeSourceValue::ResidentSumView { source } => {
+                        self.word(4);
+                        self.sum_loan(source);
                     }
                 }
             }

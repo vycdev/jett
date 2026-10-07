@@ -187,6 +187,9 @@ pub(super) fn slot_kind(
 
 fn source_kind(layout: &WireLayout, source: NativeLoanSource) -> Result<u32, ResourceLayoutError> {
     match source {
+        NativeLoanSource::ProjectedSumPayload { operation } => {
+            super::source_validation::projected_kind(layout, operation)
+        }
         NativeLoanSource::ExistingBorrow { operation } => {
             let record = get(&layout.operations, operation)?;
             let NativeOperation::Borrow { source, .. } = record.operation else {
@@ -243,6 +246,19 @@ fn validate_operation(
         Ok(())
     };
     use NativeOperation::*;
+    if let InvokeBorrow {
+        source: NativeLoanSource::ProjectedSumPayload { operation },
+        ..
+    }
+    | BoundedBorrowUse {
+        source: NativeLoanSource::ProjectedSumPayload { operation },
+        ..
+    } = record.operation
+    {
+        if get(&layout.operations, operation)?.site.function != record.site.function {
+            return Err(ResourceLayoutError::FrameMismatch);
+        }
+    }
     match record.operation {
         Acquire {
             frame: f,
@@ -290,7 +306,12 @@ fn validate_operation(
         }
         EndBorrow { frame: f, borrow } => {
             frame(f)?;
-            if !matches!(get(&layout.operations, borrow)?.operation, Borrow { .. }) {
+            if get(&layout.operations, borrow)?.site.function != record.site.function
+                || !matches!(
+                    get(&layout.operations, borrow)?.operation,
+                    Borrow { .. } | ProjectSumView { .. }
+                )
+            {
                 return Err(ResourceLayoutError::OperationMismatch);
             }
         }
@@ -412,7 +433,12 @@ fn validate_operation(
                 return Err(ResourceLayoutError::FrameMismatch);
             }
         }
-        TakeFailureCompanion { .. }
+        BorrowSum { .. }
+        | ObserveSumView { .. }
+        | ProjectSumView { .. }
+        | ReadFailureCompanion { .. }
+        | EndSumBorrow { .. }
+        | TakeFailureCompanion { .. }
         | PublishReturn { .. }
         | CreateAbsentSum { .. }
         | CreateFailureSum { .. } => {

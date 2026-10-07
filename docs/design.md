@@ -6021,6 +6021,15 @@ box; its runtime implementation may copy the payload. These bounded paths make
 no zero-runtime-copy claim; see the
 [call-view implementation](active/native_scoped_call_view_staging.md).
 
+An explicitly viewed handled optional/result payload follows the same borrowing
+rule when it retains a stable immutable sum binding. Its Some/Ok payload remains
+nonowning; a None/Fail path creates no Resource owner. A failure continuation that
+yields another payload must prove that payload's own backing lifetime. Native
+support is verified for root-body Resource aliases with exact checked origin,
+selected-arm proof and conditional runtime loans. Nested/scoped aliases, ordinary
+data sums and alternate Default lifetimes remain pending; current acceptance and
+limits are recorded in [the borrowed-sum contract](active/native_resource_borrowed_sums.md).
+
 **Rule 2: A view cannot be sent to another thread.**
 
 ```

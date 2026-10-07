@@ -704,3 +704,83 @@ pub unsafe extern "C" fn jett_rt_v1_resource_entry_outcome(
         }
     }
 }
+
+/// # Safety
+/// Context and output satisfy the stationary-context and exclusive output contracts.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_resource_sum_borrow(
+    context: *const JettRuntimeContextV1,
+    frame: u64,
+    operation: u32,
+    sum: u64,
+    out_loan: *mut u64,
+) -> JettRuntimeStatusV1 {
+    unsafe {
+        output(context, out_loan, |s, v, r| {
+            s.sum_borrow(v, r, operation, id(frame)?, id(sum)?)
+                .map(ResourceHandleId::raw)
+        })
+    }
+}
+/// # Safety
+/// Context and output satisfy the stationary-context and exclusive output contracts.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_resource_sum_view_tag(
+    context: *const JettRuntimeContextV1,
+    frame: u64,
+    operation: u32,
+    loan: u64,
+    out_tag: *mut u32,
+) -> JettRuntimeStatusV1 {
+    unsafe {
+        output(context, out_tag, |s, v, r| {
+            s.sum_view_tag(v, r, operation, id(frame)?, id(loan)?)
+        })
+    }
+}
+/// # Safety
+/// Context and output satisfy the stationary-context and exclusive output contracts.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_resource_sum_view_project(
+    context: *const JettRuntimeContextV1,
+    frame: u64,
+    operation: u32,
+    loan: u64,
+    out_child: *mut u64,
+) -> JettRuntimeStatusV1 {
+    unsafe {
+        output(context, out_child, |s, v, r| {
+            s.sum_view_project(v, r, operation, id(frame)?, id(loan)?)
+                .map(ResourceHandleId::raw)
+        })
+    }
+}
+/// # Safety
+/// Context and output satisfy the stationary-context and exclusive output contracts.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_resource_sum_failure_read(
+    context: *const JettRuntimeContextV1,
+    frame: u64,
+    operation: u32,
+    loan: u64,
+    out_companion: *mut u64,
+) -> JettRuntimeStatusV1 {
+    unsafe {
+        output(context, out_companion, |s, v, r| {
+            s.sum_failure_read(v, r, operation, id(frame)?, id(loan)?)
+        })
+    }
+}
+/// # Safety
+/// Context satisfies the stationary-context contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_resource_sum_borrow_end(
+    context: *const JettRuntimeContextV1,
+    frame: u64,
+    operation: u32,
+    loan: u64,
+) -> JettRuntimeStatusV1 {
+    status(context, |s, _v, r| {
+        s.sum_borrow_end(r, operation, id(frame)?, id(loan)?)
+    })
+}

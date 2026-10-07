@@ -1001,3 +1001,6 @@ fn native_resource_replacement_preflight_stale_rhs_handle_has_no_finalizer_effec
         assert_eq!(events(auth), vec![(51, 1), (52, 1), (51, 5), (52, 5)]);
     });
 }
+
+#[path = "borrowed_sum_tests.rs"]
+mod borrowed_sum_tests;

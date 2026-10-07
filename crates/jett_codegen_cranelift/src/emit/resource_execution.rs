@@ -8,6 +8,7 @@ use jett_mir::{
 mod leaves;
 mod named_indirect;
 mod returned_hooks;
+mod sum_views;
 #[cfg(test)]
 mod tests;
 use leaves::Leaf;
@@ -141,13 +142,13 @@ pub(super) fn emit(
         pending("Resource executable requires the exact driver-selected entry FunctionId")
     })?;
     jett_mir::validate(program).map_err(CodegenError::InvalidMir)?;
+    let original_plan =
+        jett_mir::validate_resource_ownership(program, types).map_err(CodegenError::InvalidMir)?;
     for function in &program.functions {
         jett_mir::move_values::validate_local_view_initializers(function, types).map_err(
             |message| contract_error(&function.identity.declaration.name, function.span, message),
         )?;
     }
-    let original_plan =
-        jett_mir::validate_resource_ownership(program, types).map_err(CodegenError::InvalidMir)?;
     crate::verify::verify_resource_descriptor_bodies(&original_plan)?;
     let mut prepared = program.clone();
     jett_mir::prepare_native_sequences(&mut prepared, types);
@@ -398,12 +399,11 @@ impl Translator<'_, '_> {
             .resource
             .ok_or_else(|| pending("loan lookup has no fresh native family"))?;
         match resource.function_plan()?.loans()[id.index()].source() {
-            jett_mir::ResourceLoanSource::Owner(_) => {
-                Ok(self
-                    .builder
-                    .ins()
-                    .stack_load(ir::types::I64, resource.loans[id.index()], 0))
-            }
+            jett_mir::ResourceLoanSource::Owner(_)
+            | jett_mir::ResourceLoanSource::ProjectedSumPayload { .. } => Ok(self
+                .builder
+                .ins()
+                .stack_load(ir::types::I64, resource.loans[id.index()], 0)),
             jett_mir::ResourceLoanSource::IncomingViewFormal { parameter, .. } => {
                 let header = &resource.function_plan()?.parameters()[parameter];
                 let variable = self.variables[header.local.index() as usize]
@@ -419,8 +419,10 @@ impl Translator<'_, '_> {
         let resource = self
             .resource
             .ok_or_else(|| pending("borrow has no fresh native family"))?;
-        let Role::Borrow { loan } = operation.role() else {
-            return Err(pending("borrow selected another role"));
+        let (loan, leaf) = match operation.role() {
+            Role::Borrow { loan } => (loan, Leaf::BorrowBegin),
+            Role::BorrowSum { loan } => (loan, Leaf::SumBorrow),
+            _ => return Err(pending("borrow selected another role")),
         };
         let jett_mir::ResourceLoanSource::Owner(source) =
             resource.function_plan()?.loans()[loan.index()].source()
@@ -431,7 +433,7 @@ impl Translator<'_, '_> {
         };
         let owner = self.resource_owner(source)?;
         let (context, frame, ordinal) = self.resource_operation(operation)?;
-        let value = Leaf::BorrowBegin.output(
+        let value = leaf.output(
             self.module,
             self.builder,
             &[context, frame, ordinal, owner],
@@ -527,10 +529,15 @@ impl Translator<'_, '_> {
             .filter(|operation| operation.frame() == frame)
         {
             match operation.role() {
-                Role::EndBorrow { loan } => {
+                Role::EndBorrow { loan } | Role::EndSumBorrow { loan } => {
                     let value = self.resource_loan(*loan)?;
                     let (context, frame, ordinal) = self.resource_operation(operation)?;
-                    Leaf::BorrowEnd.checked(
+                    let leaf = if matches!(operation.role(), Role::EndSumBorrow { .. }) {
+                        Leaf::SumBorrowEnd
+                    } else {
+                        Leaf::BorrowEnd
+                    };
+                    leaf.checked(
                         self.module,
                         self.builder,
                         &[context, frame, ordinal, value],
@@ -578,7 +585,7 @@ impl Translator<'_, '_> {
                 {
                     self.resource_transfer(operation)?;
                 }
-                Role::Borrow { loan } => {
+                Role::Borrow { loan } | Role::BorrowSum { loan } => {
                     let for_parameter = resource
                         .function_plan()?
                         .loans()
@@ -1446,6 +1453,9 @@ impl Translator<'_, '_> {
             .copied()
             .filter(|operation| !operation.is_expression_operation())
             .collect::<Vec<_>>();
+        if self.resource_borrowed_sum_statement(statement, &site_only)? {
+            return Ok(true);
+        }
         match &statement.kind {
             StatementKind::ResourceCall(node) => {
                 self.resource_staged_call(node, statement.span, &site_only)?;
@@ -1464,11 +1474,12 @@ impl Translator<'_, '_> {
                         self.scalar(evaluated, value.span)?
                     }
                 } else {
-                    if let Some(operation) = site_only
-                        .iter()
-                        .copied()
-                        .find(|operation| matches!(operation.role(), Role::Borrow { .. }))
-                    {
+                    if let Some(operation) = site_only.iter().copied().find(|operation| {
+                        matches!(
+                            operation.role(),
+                            Role::Borrow { .. } | Role::BorrowSum { .. }
+                        )
+                    }) {
                         self.resource_begin_borrow(operation)?
                     } else {
                         self.scalar(evaluated, value.span)?

@@ -21,8 +21,8 @@ pub(crate) use registration::{
     NativeOperation, NativeOperationRecord, NativeParent, NativePayloadStep, NativePosition,
     NativeRecipe, NativeShape, NativeSignature, NativeSite, NativeSlot, NativeSourceEffect,
     NativeSourceFormal, NativeSourceInvocation, NativeSourceResult, NativeSourceSyntax,
-    NativeSourceValue, RESOURCE_DOMAIN_ERROR, RESOURCE_DOMAIN_OK, RegisteredNativeLayout,
-    ResourceLayoutError,
+    NativeSourceValue, NativeSumLoanSource, RESOURCE_DOMAIN_ERROR, RESOURCE_DOMAIN_OK,
+    RegisteredNativeLayout, ResourceLayoutError,
 };
 
 #[derive(Debug)]

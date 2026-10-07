@@ -37,6 +37,8 @@ pub use resource_source::{RequiredMaterialization, ResourceSourceArchive};
 mod iteration_bindings;
 pub use iteration_bindings::{IterationPart, ViewIterationBinding, checked_view_iteration_binding};
 #[cfg(test)]
+mod borrowed_sum_view_tests;
+#[cfg(test)]
 mod call_ownership_tests;
 mod inline_functions;
 mod interface_values;
@@ -59,7 +61,8 @@ pub use call_ownership::{
 };
 pub use interface_values::complete_value_conversions;
 pub use local_views::{
-    is_borrowed_local, local_view_root, validate_local_view_initializer, validate_local_views,
+    borrowed_sum_view_initializer, is_borrowed_local, local_view_root,
+    validate_local_view_initializer, validate_local_views,
 };
 pub use reflected_fields::{
     ReflectedFieldAction, ReflectedFieldPlan, ReflectedFieldRequirement,

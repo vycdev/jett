@@ -3,9 +3,14 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod borrowed_sums;
+#[cfg(test)]
+mod borrowed_sums_tests;
 #[cfg(test)]
 mod execution_frames_tests;
 mod normalized_calls;
+pub(crate) use borrowed_sums::BorrowedSumSeed;
+pub use borrowed_sums::{ResourceBorrowedSumProjection, ResourceSumPayloadPath};
 #[cfg(test)]
 mod normalized_calls_tests;
 pub use normalized_calls::{
@@ -176,22 +181,61 @@ impl ResourceOwnerSlot {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceLoanSource {
     Owner(ResourceOwnerSlotId),
     IncomingViewFormal {
         scope: ResourceFrameId,
         parameter: usize,
     },
+    ProjectedSumPayload {
+        parent: ResourceLoanId,
+        tag: LocalId,
+        path: ResourceSumPayloadPath,
+    },
+}
+impl ResourceLoanSource {
+    // Preserve every typed identity in the private loan-site map. LocalId does
+    // not need a global ordering contract to distinguish selecting tag sites.
+    fn ordering_key(self) -> (u8, usize, usize, u32, u8) {
+        match self {
+            Self::Owner(owner) => (0, owner.index(), 0, 0, 0),
+            Self::IncomingViewFormal { scope, parameter } => (1, scope.index(), parameter, 0, 0),
+            Self::ProjectedSumPayload { parent, tag, path } => (
+                2,
+                parent.index(),
+                0,
+                tag.index(),
+                match path {
+                    ResourceSumPayloadPath::OptionalSome => 0,
+                    ResourceSumPayloadPath::ResultOk => 1,
+                },
+            ),
+        }
+    }
+}
+impl PartialOrd for ResourceLoanSource {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for ResourceLoanSource {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.ordering_key().cmp(&other.ordering_key())
+    }
 }
 #[derive(Debug, Clone)]
 pub struct ResourceLoan {
     id: ResourceLoanId,
     frame: ResourceFrameId,
     source: ResourceLoanSource,
+    shape: ResourceShape,
     parameter: Option<usize>,
 }
 impl ResourceLoan {
+    pub fn shape(&self) -> &ResourceShape {
+        &self.shape
+    }
     pub fn id(&self) -> ResourceLoanId {
         self.id
     }
@@ -331,6 +375,10 @@ pub enum ResourceOperationRole {
         loan: ResourceLoanId,
         parameter: usize,
     },
+    PrepareSourceSumBorrow {
+        loan: ResourceLoanId,
+        parameter: usize,
+    },
     StageSourceActual {
         region: ResourceCallRegionId,
         source_index: usize,
@@ -348,6 +396,28 @@ pub enum ResourceOperationRole {
     },
     Borrow {
         loan: ResourceLoanId,
+    },
+    BorrowSum {
+        loan: ResourceLoanId,
+    },
+    EndSumBorrow {
+        loan: ResourceLoanId,
+    },
+    ObserveSumView {
+        source: ResourceLoanId,
+        target: LocalId,
+    },
+    ProjectSumView {
+        source: ResourceLoanId,
+        destination: ResourceLoanId,
+        tag: LocalId,
+        path: ResourceSumPayloadPath,
+    },
+    ReadFailureCompanion {
+        source: ResourceLoanId,
+        target: Local,
+        failure: TypeId,
+        tag: LocalId,
     },
     BoundedBorrowUse {
         loan: ResourceLoanId,
@@ -645,6 +715,7 @@ pub(super) struct ResourceLoweringWitness {
     original: hir::Function,
     calls: Vec<OriginalCallAssociation>,
     regions: Vec<ResourceCallRegion>,
+    borrowed_sums: Vec<ResourceBorrowedSumProjection>,
     named_callables: Vec<named_callables::NamedCallableBinding>,
     descriptors: returned_descriptors::DescriptorWitness,
     source: hir::ResourceSourceArchive,
@@ -690,6 +761,7 @@ impl Capture {
                 original: function.clone(),
                 calls: Vec::new(),
                 regions: Vec::new(),
+                borrowed_sums: Vec::new(),
                 named_callables: named_callables::capture(function, source, types, execution),
                 descriptors: returned_descriptors::capture(function, source),
                 source: source.clone(),
@@ -849,6 +921,11 @@ impl Capture {
         mut self,
         function: &Function,
     ) -> Result<Option<ResourceLoweringWitness>, String> {
+        if let Some(witness) = &mut self.witness
+            && !witness.borrowed_sums.is_empty()
+        {
+            witness.descriptors.seal_body(function);
+        }
         if let Some(witness) = &self.witness {
             witness.current(function)?;
         }
@@ -857,6 +934,7 @@ impl Capture {
                 .source
                 .required_only_function_ids()
                 .contains(&function.id)
+                || !witness.borrowed_sums.is_empty()
                 || witness
                     .source
                     .required_materializations()
@@ -887,6 +965,12 @@ impl ResourceLoweringWitness {
             return Err("Resource ownership differs from its initially authenticated Source or constructor-emitted graph".into());
         }
         self.descriptors.current(function)?;
+        if !self.borrowed_sums.is_empty() && !self.descriptors.has_body() {
+            return Err(
+                "borrowed Resource Handle lost its independent constructor body seal".into(),
+            );
+        }
+        borrowed_sums::current(self, function)?;
         for region in &self.regions {
             region.current(function)?;
             let mut original_count = 0;
@@ -955,6 +1039,7 @@ impl ResourceLoweringWitness {
                 .zip(&other.calls)
                 .all(|(left, right)| left.same(right))
             && self.regions.len() == other.regions.len()
+            && self.borrowed_sums == other.borrowed_sums
             && self
                 .regions
                 .iter()
@@ -1366,6 +1451,7 @@ pub(super) fn remap_blocks(
     for region in &mut witness.regions {
         region.remap_blocks(map)?;
     }
+    borrowed_sums::remap_blocks(&mut witness.borrowed_sums, map)?;
     returned_descriptors::remap_blocks(&mut witness.descriptors, map)?;
     remap(&mut witness.entry);
     for block in &mut witness.blocks {
@@ -1425,6 +1511,7 @@ pub(super) fn remap_locals(
     for region in &mut witness.regions {
         region.remap_locals(&mut remap);
     }
+    borrowed_sums::remap_locals(&mut witness.borrowed_sums, &mut remap);
     named_callables::remap_locals(&mut witness.named_callables, &mut remap);
     returned_descriptors::remap_locals(&mut witness.descriptors, map, &mut remap);
     for record in &mut witness.calls {

@@ -75,6 +75,10 @@ fn script(input: cases::Script) -> ScriptOperation {
             label,
             outcome: Ok(value),
         },
+        cases::Script::BorrowFail(label, error) => ScriptOperation::Borrow {
+            label,
+            outcome: Err(error.into()),
+        },
     }
 }
 fn event(input: &cases::Event) -> ProviderEvent {
@@ -82,6 +86,7 @@ fn event(input: &cases::Event) -> ProviderEvent {
         cases::Event::Constructed(label) => ProviderEvent::Constructed(label),
         cases::Event::ConstructionFailed(label) => ProviderEvent::ConstructionFailed(label),
         cases::Event::Borrowed(label) => ProviderEvent::Borrowed(label),
+        cases::Event::BorrowFailed(label) => ProviderEvent::BorrowFailed(label),
         cases::Event::Finalized(label) => ProviderEvent::Finalized(label),
     }
 }

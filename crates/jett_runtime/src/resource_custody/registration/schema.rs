@@ -90,6 +90,12 @@ pub(crate) struct NativeSlot {
 pub(crate) enum NativeLoanSource {
     ExistingBorrow { operation: u32 },
     IncomingViewFormal { scope: u32, parameter: u32 },
+    ProjectedSumPayload { operation: u32 },
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeSumLoanSource {
+    ExistingBorrow { operation: u32 },
+    IncomingViewFormal { scope: u32, parameter: u32 },
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeSourceSyntax {
@@ -113,6 +119,9 @@ pub(crate) enum NativeSourceValue {
     },
     ResidentView {
         source: NativeLoanSource,
+    },
+    ResidentSumView {
+        source: NativeSumLoanSource,
     },
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -242,6 +251,30 @@ pub(crate) enum NativeOperation {
         frame: u32,
         destination_slot: u32,
         failure_shape: u32,
+    },
+    BorrowSum {
+        frame: u32,
+        source_sum_slot: u32,
+        lease_frame: u32,
+    },
+    ObserveSumView {
+        frame: u32,
+        source: NativeSumLoanSource,
+    },
+    ProjectSumView {
+        frame: u32,
+        source: NativeSumLoanSource,
+        path: NativePayloadStep,
+        lease_frame: u32,
+    },
+    ReadFailureCompanion {
+        frame: u32,
+        source: NativeSumLoanSource,
+        failure_shape: u32,
+    },
+    EndSumBorrow {
+        frame: u32,
+        borrow: u32,
     },
 }
 #[derive(Debug, Clone, PartialEq, Eq)]

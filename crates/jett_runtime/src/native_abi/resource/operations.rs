@@ -88,6 +88,11 @@ impl NativeResourceState {
         if self.active_frames.last() != Some(&frame) {
             return Err(NativeResourceError::WrongFrame);
         }
+        let Some(NativeResourceEntry::Frame(_)) = self.handles.get(&frame) else {
+            return Err(NativeResourceError::WrongFrame);
+        };
+        self.frame_shells_unborrowed(frame)?;
+        let view_retirement = self.retire_sum_views(frame);
         let Some(NativeResourceEntry::Frame(header)) = self.handles.get(&frame) else {
             return Err(NativeResourceError::WrongFrame);
         };
@@ -101,6 +106,7 @@ impl NativeResourceState {
             NativeResourceEntry::Frame(_) => true,
             NativeResourceEntry::Owner(owner) => owner.frame != frame,
             NativeResourceEntry::Loan(loan) => loan.frame != frame,
+            NativeResourceEntry::SumLoan(loan) => loan.frame != frame,
             NativeResourceEntry::Prepared(prepared) => prepared.frame != frame,
             NativeResourceEntry::Call(call) => call.frame != frame,
             NativeResourceEntry::SourceCall(call) => call.frame != frame,
@@ -119,7 +125,8 @@ impl NativeResourceState {
         if ordinary_failed {
             ordinary.cleanup_failed = true;
         }
-        self.cleanup(cleanup)
+        self.cleanup(cleanup)?;
+        view_retirement
     }
     pub(super) fn runtime_purpose(&self) -> ResourceResult<()> {
         if self.attempt.as_ref().map(|attempt| attempt.purpose) != Some(ResourcePurpose::Runtime) {
@@ -669,6 +676,7 @@ impl NativeResourceState {
             return Err(NativeResourceError::WrongOperation);
         }
         self.carrier_frame_at(frame, sum_handle, source)?;
+        self.sum_unborrowed(sum_handle)?;
         let token = match &sum.payload {
             NativeSumPayload::Some(token) | NativeSumPayload::Ok(token) => token,
             _ => return Err(NativeResourceError::WrongOperation),
@@ -782,6 +790,7 @@ impl NativeResourceState {
                 source_slot: source,
                 source_frame,
                 token,
+                parent_sum: None,
             }),
         );
         Ok(handle)
@@ -796,7 +805,9 @@ impl NativeResourceState {
         };
         match source {
             NativeLoanSource::ExistingBorrow { operation }
-                if operation == loan.borrow_operation =>
+                if operation == loan.borrow_operation
+                    && loan.parent_sum.is_none()
+                    && matches!(self.operation(operation)?, NativeOperation::Borrow { .. }) =>
             {
                 let current = *self
                     .active_frames
@@ -805,6 +816,24 @@ impl NativeResourceState {
                 if self.activation_frame(current, self.frame(loan.frame)?.template)? != loan.frame {
                     return Err(NativeResourceError::WrongFrame);
                 }
+            }
+            NativeLoanSource::ProjectedSumPayload { operation }
+                if operation == loan.borrow_operation && loan.parent_sum.is_some() =>
+            {
+                let NativeOperation::ProjectSumView { source, .. } = self.operation(operation)?
+                else {
+                    return Err(NativeResourceError::WrongOperation);
+                };
+                let current = *self
+                    .active_frames
+                    .last()
+                    .ok_or(NativeResourceError::WrongFrame)?;
+                if self.activation_frame(current, self.frame(loan.frame)?.template)? != loan.frame {
+                    return Err(NativeResourceError::WrongFrame);
+                }
+                let parent = loan.parent_sum.ok_or(NativeResourceError::WrongFamily)?;
+                // The issuer's own incoming/formal association remains required.
+                self.projected_sum_parent(loan.frame, parent, *source)?;
             }
             NativeLoanSource::IncomingViewFormal { scope, parameter } => {
                 self.validate_resident(handle, scope, parameter)?;
@@ -889,10 +918,16 @@ impl NativeResourceState {
             NativeOperation::EndBorrow { borrow, .. } => *borrow,
             _ => return Err(NativeResourceError::WrongOperation),
         };
-        self.exact_loan(
-            handle,
-            NativeLoanSource::ExistingBorrow { operation: borrow },
-        )?;
+        let source = match self.operation(borrow)? {
+            NativeOperation::Borrow { .. } => {
+                NativeLoanSource::ExistingBorrow { operation: borrow }
+            }
+            NativeOperation::ProjectSumView { .. } => {
+                NativeLoanSource::ProjectedSumPayload { operation: borrow }
+            }
+            _ => return Err(NativeResourceError::WrongOperation),
+        };
+        self.exact_loan(handle, source)?;
         let Some(NativeResourceEntry::Loan(mut loan)) = self.handles.remove(&handle) else {
             return Err(NativeResourceError::WrongFamily);
         };
@@ -953,6 +988,7 @@ impl NativeResourceState {
             _ => return Err(NativeResourceError::WrongOperation),
         }
         self.carrier_frame_at(frame, handle, source)?;
+        self.sum_unborrowed(handle)?;
         let Some(NativeResourceEntry::Sum(mut sum)) = self.handles.remove(&handle) else {
             return Err(NativeResourceError::WrongFamily);
         };

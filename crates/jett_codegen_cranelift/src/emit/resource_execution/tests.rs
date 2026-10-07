@@ -7,6 +7,7 @@ use jett_types::ResourceKernelRecipe;
 use std::{collections::HashMap, sync::Arc};
 mod named_indirect;
 mod returned_hooks;
+mod sum_views;
 const SUPPORT: &str =
     include_str!("../../../../jett_driver/tests/native_conformance/resource/resource_probe.jett");
 fn checked(source: &str, release: bool) -> Arc<CheckedResourceProgram> {

@@ -23,6 +23,11 @@ pub(super) enum Leaf {
     DestinationFrame,
     SumAdopt,
     SumTag,
+    SumBorrow,
+    SumViewTag,
+    SumViewProject,
+    SumFailureRead,
+    SumBorrowEnd,
     SumTake,
     SumDrop,
     FailureCompanionTake,
@@ -88,6 +93,20 @@ impl Leaf {
                 &[I64, I64, I32, I64, I64, I64],
             ),
             SumTag => ("jett_rt_v1_resource_sum_tag", &[I64, I64, I64, I64]),
+            SumBorrow => ("jett_rt_v1_resource_sum_borrow", &[I64, I64, I32, I64, I64]),
+            SumViewTag => (
+                "jett_rt_v1_resource_sum_view_tag",
+                &[I64, I64, I32, I64, I64],
+            ),
+            SumViewProject => (
+                "jett_rt_v1_resource_sum_view_project",
+                &[I64, I64, I32, I64, I64],
+            ),
+            SumFailureRead => (
+                "jett_rt_v1_resource_sum_failure_read",
+                &[I64, I64, I32, I64, I64],
+            ),
+            SumBorrowEnd => ("jett_rt_v1_resource_sum_borrow_end", &[I64, I64, I32, I64]),
             SumTake => (
                 "jett_rt_v1_resource_sum_take",
                 &[I64, I64, I32, I64, I64, I64],
@@ -195,17 +214,23 @@ impl Leaf {
         failure: ir::Block,
         result_bytes: u32,
     ) -> Result<Value, CodegenError> {
-        if !matches!(result_bytes, 8 | 16) {
+        if !matches!(result_bytes, 4 | 8 | 16) || (result_bytes == 4) != (self == Leaf::SumViewTag)
+        {
             return Err(pending(
-                "Resource out-storage has no selected8/16-byte layout",
+                "Resource out-storage differs from its exact selected leaf layout",
             ));
         }
+        let output_type = if result_bytes == 4 {
+            ir::types::I32
+        } else {
+            ir::types::I64
+        };
         let slot = builder.create_sized_stack_slot(ir::StackSlotData::new(
             ir::StackSlotKind::ExplicitSlot,
             result_bytes,
             3,
         ));
-        let zero = builder.ins().iconst(ir::types::I64, 0);
+        let zero = builder.ins().iconst(output_type, 0);
         builder.ins().stack_store(zero, slot, 0);
         if result_bytes == 16 {
             builder.ins().stack_store(zero, slot, 8);
@@ -216,6 +241,6 @@ impl Leaf {
         self.checked(module, builder, &arguments, failure)?;
         Ok(builder
             .ins()
-            .stack_load(ir::types::I64, slot, if result_bytes == 16 { 8 } else { 0 }))
+            .stack_load(output_type, slot, if result_bytes == 16 { 8 } else { 0 }))
     }
 }

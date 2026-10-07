@@ -6,13 +6,14 @@ mod call_owner_generations;
 mod call_ownership;
 mod resource_ownership;
 pub use resource_ownership::{
-    ResourceArgumentEffect, ResourceArgumentSyntax, ResourceCallActual, ResourceCallFormal,
-    ResourceCallNode, ResourceCallOperand, ResourceCallRegion, ResourceCallRegionId,
-    ResourceCallResult, ResourceCompanionPlan, ResourceCompletion, ResourceFrame, ResourceFrameId,
-    ResourceFrameRole, ResourceFunctionPlan, ResourceLoan, ResourceLoanId, ResourceLoanSource,
-    ResourceNamedCallableProof, ResourceOccupancy, ResourceOperation, ResourceOperationId,
-    ResourceOperationRole, ResourceOwnerSlot, ResourceOwnerSlotId, ResourceOwnershipPlan,
-    ResourcePath, ResourcePosition, ResourceShape, ResourceSite, ResourceSlotStorage,
+    ResourceArgumentEffect, ResourceArgumentSyntax, ResourceBorrowedSumProjection,
+    ResourceCallActual, ResourceCallFormal, ResourceCallNode, ResourceCallOperand,
+    ResourceCallRegion, ResourceCallRegionId, ResourceCallResult, ResourceCompanionPlan,
+    ResourceCompletion, ResourceFrame, ResourceFrameId, ResourceFrameRole, ResourceFunctionPlan,
+    ResourceLoan, ResourceLoanId, ResourceLoanSource, ResourceNamedCallableProof,
+    ResourceOccupancy, ResourceOperation, ResourceOperationId, ResourceOperationRole,
+    ResourceOwnerSlot, ResourceOwnerSlotId, ResourceOwnershipPlan, ResourcePath, ResourcePosition,
+    ResourceShape, ResourceSite, ResourceSlotStorage, ResourceSumPayloadPath,
     validate_resource_ownership,
 };
 #[cfg(test)]
@@ -1550,6 +1551,15 @@ impl<'a> Builder<'a> {
                         self.types,
                     )
                     .is_ok()
+                    && (!resource_type_pending(self.types, metadata.ty)
+                        || hir::borrowed_sum_view_initializer(
+                            value,
+                            source,
+                            origin.ty,
+                            metadata.ty,
+                            self.types,
+                        )
+                        .is_ok_and(|handle| handle.is_none()))
                 {
                     // Stable aliases contain only transparent reads. Taking an
                     // owned snapshot would replace their checked backing local.

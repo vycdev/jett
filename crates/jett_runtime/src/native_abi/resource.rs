@@ -5,13 +5,14 @@ use crate::resource_custody::{
     BorrowedResourceToken, CustodyError, JettResourceCallResultV1, NativeFrameRole,
     NativeLayoutInstallation, NativeLoanSource, NativeOperation, NativeParent, NativePayloadStep,
     NativeRecipe, NativeShape, NativeSourceInvocation, NativeSourceResult, NativeSourceValue,
-    OwnedResourceToken, PreparedResourceAcquisition, RESOURCE_DOMAIN_ERROR, RESOURCE_DOMAIN_OK,
-    RegisteredNativeLayout, ResourceCleanupFailure, ResourceCleanupOutcome, ResourceCustody,
-    ResourceFrameKind, ResourceFrameToken, ResourceLayoutError, ResourcePurpose,
+    NativeSumLoanSource, OwnedResourceToken, PreparedResourceAcquisition, RESOURCE_DOMAIN_ERROR,
+    RESOURCE_DOMAIN_OK, RegisteredNativeLayout, ResourceCleanupFailure, ResourceCleanupOutcome,
+    ResourceCustody, ResourceFrameKind, ResourceFrameToken, ResourceLayoutError, ResourcePurpose,
     ResourceTransitionFailure,
 };
 use crate::{AuthorityProvenance, RegistryError};
 
+mod borrowed_sums;
 mod leaves;
 mod operations;
 mod provider;
@@ -175,6 +176,7 @@ struct NativeFrameEntry {
     incoming: Vec<Option<NativeResidentLoan>>,
 }
 struct NativeResidentLoan {
+    sum: bool,
     parent_loan: ResourceHandleId,
     caller_frame: ResourceHandleId,
     invoke_operation: u32,
@@ -191,6 +193,16 @@ struct NativeLoanEntry {
     source_slot: u32,
     source_frame: ResourceHandleId,
     token: BorrowedResourceToken,
+    parent_sum: Option<ResourceHandleId>,
+}
+struct NativeSumLoan {
+    frame: ResourceHandleId,
+    borrow_operation: u32,
+    shell: ResourceHandleId,
+    source_frame: ResourceHandleId,
+    source_slot: u32,
+    shape: u32,
+    token: Option<BorrowedResourceToken>,
 }
 struct NativePreparedCall {
     operation: u32,
@@ -222,6 +234,7 @@ enum NativeResourceEntry {
     Frame(NativeFrameEntry),
     Owner(NativeOwnerEntry),
     Loan(NativeLoanEntry),
+    SumLoan(NativeSumLoan),
     Prepared(NativePreparedEntry),
     Call(NativePreparedCall),
     Descriptor { hook: u32, signature: u32 },
@@ -399,7 +412,12 @@ impl NativeResourceState {
             | NativeOperation::TakeFailureCompanion { frame, .. }
             | NativeOperation::PublishReturn { frame, .. }
             | NativeOperation::CreateAbsentSum { frame, .. }
-            | NativeOperation::CreateFailureSum { frame, .. } => *frame,
+            | NativeOperation::CreateFailureSum { frame, .. }
+            | NativeOperation::BorrowSum { frame, .. }
+            | NativeOperation::ObserveSumView { frame, .. }
+            | NativeOperation::ProjectSumView { frame, .. }
+            | NativeOperation::ReadFailureCompanion { frame, .. }
+            | NativeOperation::EndSumBorrow { frame, .. } => *frame,
             NativeOperation::Descriptor { .. } | NativeOperation::InvokeDescriptor { .. } => {
                 return Err(NativeResourceError::WrongOperation);
             }
@@ -764,7 +782,9 @@ impl NativeResourceState {
                     payload: NativeSumPayload::Some(_) | NativeSumPayload::Ok(_),
                     ..
                 }) => counts.owner_handles += 1,
-                NativeResourceEntry::Loan(_) => counts.loan_handles += 1,
+                NativeResourceEntry::Loan(_) | NativeResourceEntry::SumLoan(_) => {
+                    counts.loan_handles += 1
+                }
                 NativeResourceEntry::Frame(frame) => {
                     counts.frame_handles += 1;
                     if self.layout.frames()[frame.template as usize].role()

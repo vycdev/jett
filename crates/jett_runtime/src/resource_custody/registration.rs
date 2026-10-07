@@ -21,7 +21,7 @@ pub(crate) use schema::{
     NativeOperation, NativeOperationRecord, NativeParent, NativePayloadStep, NativePosition,
     NativeRecipe, NativeShape, NativeSignature, NativeSite, NativeSlot, NativeSourceEffect,
     NativeSourceFormal, NativeSourceInvocation, NativeSourceResult, NativeSourceSyntax,
-    NativeSourceValue,
+    NativeSourceValue, NativeSumLoanSource,
 };
 
 pub(crate) const NATIVE_RESOURCE_LAYOUT_WIRE_VERSION: u32 = 2;

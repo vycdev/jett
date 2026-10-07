@@ -2507,3 +2507,33 @@ acceptance are still required. The rough tracking estimate remains about 85%.
 The complete affected codegen suite passes 100 library and 63 object tests;
 all 93 driver-library tests also pass. Final Rust/Jett formatting and whitespace
 checks pass, and all 2,168 frozen source/config inputs revalidate unchanged.
+
+### Verified borrowed optional/result Resource payloads (2026-10-07)
+
+Sources 45..56 add twelve scenarios covering written/bare None/Some/Fail/Ok,
+named-argument prefix abort, and handled borrow-domain failure. The unchanged
+baseline passed all 73 shared scenarios / 146 reference executions but refused
+Source45 at HIR stable-origin admission. The complete corpus now passes 146
+Source-deleted native executions against freshly measured Debug/Release MSVC
+private runtime archives, with exact events and zero obligations before teardown.
+
+All 305 checker, 203 HIR, 254 MIR and 215 runtime library tests pass. Three focused
+MIR groups and six runtime groups cover original-body custody, guarded projections,
+conditional shell lifetimes, failure companions, argument aborts and forgery.
+The full codegen suite passes 102 library and 63 object tests, including unchanged
+prior invalid-MIR controls. Archives contain 37 Resource leaves, eight private
+exports and one main; independent source/symbol/CRT receipts remain mandatory.
+
+Admission is limited to root-body Resource aliases. Nested/scoped aliases,
+ordinary non-Resource borrowed sums and alternate Default payload lifetimes remain
+pending. The rough full-language estimate stays about 85%, and the full 100%
+native-codegen goal, GNU Resource gate and broader language/platform requirements
+remain open. See [the integration contract](native_resource_borrowed_sums.md).
+
+All 521 reference-evaluator and 93 driver-library tests pass. The existing
+Source33 required-value assertion now verifies its exact two original proofs,
+including scalar 761 and the unique checked hook; other fixtures retain exact
+one-value counts. This separately fixes the sole failure observed on both hosts
+at 17d6c841. Rust and all twelve new Jett Source format checks pass, and the
+2,188 frozen source/config inputs revalidate. The final MIR-only formatting change
+is exactly one error-return line wrap and passes all 254 MIR tests again.

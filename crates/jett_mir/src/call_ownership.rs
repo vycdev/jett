@@ -390,15 +390,25 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                         source,
                         target,
                         success,
-                    } => define(
-                        *target,
-                        site,
-                        statement.span,
-                        Definition::SumTake {
-                            source: *source,
-                            success: *success,
-                        },
-                    ),
+                    } => {
+                        let borrowed = function.resource_borrowed_sum_projection(
+                            block.id,
+                            crate::ResourcePosition::Statement(index),
+                        )?;
+                        let definition = if let Some(row) = borrowed {
+                            if row.source() != *source || (*success && row.output() != *target) {
+                                return Err("call ownership borrowed Handle changed its current extraction headers".into());
+                            }
+                            // A guarded view projection is never an owning producer.
+                            Definition::Other
+                        } else {
+                            Definition::SumTake {
+                                source: *source,
+                                success: *success,
+                            }
+                        };
+                        define(*target, site, statement.span, definition);
+                    }
                     S::ResourceCall(ResourceCallNode::Invoke { output: local, .. })
                     | S::CheckRefinement { local, .. }
                     | S::SequenceLength { target: local, .. }

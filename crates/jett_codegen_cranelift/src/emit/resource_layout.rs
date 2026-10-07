@@ -468,6 +468,15 @@ impl<'a, 'p> Rows<'a, 'p> {
                 self.frame(function.function(), scope)?,
                 count(parameter)?,
             ],
+            custody::ResourceLoanSource::ProjectedSumPayload { .. } => vec![
+                3,
+                *self
+                    .borrow_ids
+                    .get(&(function.function().index(), loan.index()))
+                    .ok_or_else(|| {
+                        pending("projected payload has no unique constructor projection operation")
+                    })?,
+            ],
         })
     }
     fn populate(&mut self) -> Result<(), CodegenError> {
@@ -602,8 +611,13 @@ impl<'a, 'p> Rows<'a, 'p> {
                 let id = ordinal(self.operations.len())?;
                 self.operation_ids
                     .insert((function.function().index(), operation.id().index()), id);
-                if let Role::Borrow { loan } | Role::PrepareSourceBorrow { loan, .. } =
-                    operation.role()
+                if let Role::Borrow { loan }
+                | Role::PrepareSourceBorrow { loan, .. }
+                | Role::BorrowSum { loan }
+                | Role::PrepareSourceSumBorrow { loan, .. }
+                | Role::ProjectSumView {
+                    destination: loan, ..
+                } = operation.role()
                 {
                     if self
                         .borrow_ids
@@ -786,12 +800,76 @@ impl<'a, 'p> Rows<'a, 'p> {
             }
             Role::EndBorrow { loan } => {
                 let source = self.loan(function, *loan)?;
-                if source[0] != 1 {
+                if !matches!(source[0], 1 | 3) {
                     return Err(pending(
                         "resident formal cannot retire the caller's core loan",
                     ));
                 }
                 vec![5, frame, source[1]]
+            }
+            Role::BorrowSum { loan } | Role::PrepareSourceSumBorrow { loan, .. } => {
+                let record = function
+                    .loans()
+                    .get(loan.index())
+                    .ok_or_else(|| pending("sum borrow has no exact loan"))?;
+                let custody::ResourceLoanSource::Owner(source) = record.source() else {
+                    return Err(pending(
+                        "sum borrow cannot mint authority from an incoming formal",
+                    ));
+                };
+                if matches!(record.shape(), custody::ResourceShape::Plain { .. }) {
+                    return Err(pending("sum borrow requires an exact conditional shape"));
+                }
+                vec![
+                    21,
+                    frame,
+                    self.slot(f, source)?,
+                    self.frame(f, record.frame())?,
+                ]
+            }
+            Role::ObserveSumView { source, .. } => {
+                let mut row = vec![22, frame];
+                row.extend(self.loan(function, *source)?);
+                row
+            }
+            Role::ProjectSumView {
+                source,
+                destination,
+                path,
+                ..
+            } => {
+                let record = function
+                    .loans()
+                    .get(destination.index())
+                    .ok_or_else(|| pending("sum projection has no exact child loan"))?;
+                if !matches!(record.shape(), custody::ResourceShape::Plain { .. }) {
+                    return Err(pending("sum projection child is not a plain Resource loan"));
+                }
+                let mut row = vec![23, frame];
+                row.extend(self.loan(function, *source)?);
+                row.push(match path {
+                    custody::ResourceSumPayloadPath::OptionalSome => 1,
+                    custody::ResourceSumPayloadPath::ResultOk => 2,
+                });
+                row.push(self.frame(f, record.frame())?);
+                row
+            }
+            Role::ReadFailureCompanion {
+                source, failure, ..
+            } => {
+                let mut row = vec![24, frame];
+                row.extend(self.loan(function, *source)?);
+                row.push(self.shape(*failure)?);
+                row
+            }
+            Role::EndSumBorrow { loan } => {
+                let source = self.loan(function, *loan)?;
+                if source[0] != 1 {
+                    return Err(pending(
+                        "incoming sum formal cannot end its caller's shell lease",
+                    ));
+                }
+                vec![25, frame, source[1]]
             }
             Role::InvokeHook { hook, .. } => {
                 if hook.recipe() != jett_types::ResourceKernelRecipe::NetworkBorrow {
@@ -1071,7 +1149,17 @@ impl<'a, 'p> Rows<'a, 'p> {
                     ]);
                 }
                 Operand::Borrowed { loan, .. } => {
-                    row.push(3);
+                    let record = caller
+                        .loans()
+                        .get(loan.index())
+                        .ok_or_else(|| pending("Source formal has no exact borrowed shape"))?;
+                    row.push(
+                        if matches!(record.shape(), custody::ResourceShape::Plain { .. }) {
+                            3
+                        } else {
+                            4
+                        },
+                    );
                     row.extend(self.loan(caller, *loan)?);
                 }
             }
@@ -1200,7 +1288,8 @@ fn staged_alias<'a>(
 ) -> Result<Option<&'a custody::ResourceOperation>, CodegenError> {
     let mut prepared = function.operations().iter().filter(|candidate| {
         match (operation.role(), candidate.role()) {
-            (Role::Borrow { loan }, Role::PrepareSourceBorrow { loan: expected, .. }) => {
+            (Role::Borrow { loan }, Role::PrepareSourceBorrow { loan: expected, .. })
+            | (Role::BorrowSum { loan }, Role::PrepareSourceSumBorrow { loan: expected, .. }) => {
                 loan == expected
             }
             (Role::InvokeSourceFunction { .. }, Role::BeginSourceFunction { .. }) => {
@@ -1218,7 +1307,8 @@ fn staged_alias<'a>(
         ));
     }
     match (operation.role(), selected.role()) {
-        (Role::Borrow { loan }, Role::PrepareSourceBorrow { parameter, .. }) => {
+        (Role::Borrow { loan }, Role::PrepareSourceBorrow { parameter, .. })
+        | (Role::BorrowSum { loan }, Role::PrepareSourceSumBorrow { parameter, .. }) => {
             let record = function
                 .loans()
                 .get(loan.index())

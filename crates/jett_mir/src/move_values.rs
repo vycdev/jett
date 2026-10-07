@@ -349,7 +349,31 @@ pub fn validate_local_view_initializers(
 ) -> Result<(), String> {
     let stages = crate::call_views::validate(function, types)?;
     let mut initialized = Set::new();
-    for statement in function.blocks.iter().flat_map(|block| &block.statements) {
+    for (block, index, statement) in function.blocks.iter().flat_map(|block| {
+        block
+            .statements
+            .iter()
+            .enumerate()
+            .map(move |(index, statement)| (block.id, index, statement))
+    }) {
+        if let StatementKind::SumTake {
+            source,
+            target,
+            success: true,
+        } = statement.kind
+            && let Some(row) = function.resource_borrowed_sum_projection(
+                block,
+                crate::ResourcePosition::Statement(index),
+            )?
+        {
+            if row.source() != source || row.output() != target {
+                return Err(
+                    "borrowed Resource initializer changed its constructor projection".into(),
+                );
+            }
+            initialized.insert(target.index() as usize);
+            continue;
+        }
         let (local, value) = match &statement.kind {
             StatementKind::Let { local, value } => {
                 if stages.contains_key(&(local.index() as usize)) {
@@ -369,7 +393,15 @@ pub fn validate_local_view_initializers(
         let origin = function
             .local(source)
             .ok_or("borrowed local initializer source is outside its function")?;
-        jett_hir::validate_local_view_initializer(value, source, origin.ty, definition.ty, types)?;
+        if !function.resource_borrowed_sum_alias(*local, value)? {
+            jett_hir::validate_local_view_initializer(
+                value,
+                source,
+                origin.ty,
+                definition.ty,
+                types,
+            )?;
+        }
         initialized.insert(local.index() as usize);
     }
     for local in &function.locals {
@@ -401,7 +433,7 @@ struct Flow<'a> {
 impl Flow<'_> {
     fn block(mut self, id: crate::BlockId) -> Result<(Set, Set, Set), String> {
         let block = &self.function.blocks[id.index() as usize];
-        for statement in &block.statements {
+        for (index, statement) in block.statements.iter().enumerate() {
             match &statement.kind {
                 StatementKind::OpenCallOwnerGeneration { root, .. } => {
                     self.read(*root, "generation owner")?;
@@ -500,7 +532,35 @@ impl Flow<'_> {
                     let root = self.read(*source, "sum source")?;
                     if matches!(statement.kind, StatementKind::SumTake { .. }) {
                         if self.function.is_view_local(*source) {
-                            return Err("cannot take payload from borrowed sum".into());
+                            let row = self
+                                .function
+                                .resource_borrowed_sum_projection(
+                                    block.id,
+                                    crate::ResourcePosition::Statement(index),
+                                )?
+                                .ok_or("cannot take payload from borrowed sum")?;
+                            if row.source() != *source {
+                                return Err(
+                                    "borrowed Resource extraction changed its current source"
+                                        .into(),
+                                );
+                            }
+                            if matches!(
+                                statement.kind,
+                                StatementKind::SumTake { success: true, .. }
+                            ) {
+                                if row.output() != *target || !self.function.is_view_local(*target)
+                                {
+                                    return Err(
+                                        "borrowed Resource projection gained owning output".into(),
+                                    );
+                                }
+                                self.aliases.insert(target.index() as usize);
+                            } else {
+                                self.require_owned_definition(*target)?;
+                            }
+                            self.state.insert(target.index() as usize);
+                            continue;
                         }
                         self.reject_aliased_owner_change(root)?;
                         self.state.remove(&source_id);
@@ -543,13 +603,15 @@ impl Flow<'_> {
                             .function
                             .local(source)
                             .ok_or("borrowed local initializer source is outside its function")?;
-                        jett_hir::validate_local_view_initializer(
-                            value,
-                            source,
-                            origin.ty,
-                            definition.ty,
-                            self.types,
-                        )?;
+                        if !self.function.resource_borrowed_sum_alias(*local, value)? {
+                            jett_hir::validate_local_view_initializer(
+                                value,
+                                source,
+                                origin.ty,
+                                definition.ty,
+                                self.types,
+                            )?;
+                        }
                         self.expr(value, true)?;
                         self.aliases.insert(local.index() as usize);
                     } else {

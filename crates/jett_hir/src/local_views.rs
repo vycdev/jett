@@ -4,8 +4,8 @@
 use jett_types::{Type, TypeId, TypeInterner};
 
 use crate::{
-    Expression, ExpressionKind, Function, Local, LocalId, Param, ParamMode, Program,
-    ValidationError,
+    Block, Expression, ExpressionKind, Function, HandleKind, Local, LocalId, Param, ParamMode,
+    Program, StatementKind, ValidationError,
 };
 
 /// Resolve an alias to its backing local. Invalid IDs and cycles have no root.
@@ -267,6 +267,9 @@ pub fn validate_local_view_initializer(
     target: TypeId,
     types: &TypeInterner,
 ) -> Result<(), &'static str> {
+    if borrowed_sum_view_initializer(value, source, source_type, target, types)?.is_some() {
+        return Ok(());
+    }
     if !same_backing_type(types, value.ty, target) {
         return Err("native borrowed alias cannot change its backing representation");
     }
@@ -340,4 +343,99 @@ pub fn validate_local_view_initializer(
             }
         }
     }
+}
+
+/// Read the exact typed borrowed Handle projection. This structural check does
+/// not grant custody authority: Resource consumers must additionally join the
+/// privately archived original occurrence and their constructor-owned CFG.
+pub fn borrowed_sum_view_initializer<'a>(
+    value: &'a Expression,
+    source: LocalId,
+    source_type: TypeId,
+    endpoint: TypeId,
+    types: &TypeInterner,
+) -> Result<Option<&'a Expression>, &'static str> {
+    let ExpressionKind::View(handle) = &value.kind else {
+        return Ok(None);
+    };
+    let ExpressionKind::Handle {
+        target,
+        kind,
+        error_local,
+        failure,
+    } = &handle.kind
+    else {
+        return Ok(None);
+    };
+    if source_type.index() as usize >= types.len()
+        || endpoint.index() as usize >= types.len()
+        || value.ty != endpoint
+        || handle.ty != endpoint
+    {
+        return Err("native borrowed Handle changed its exact payload endpoint");
+    }
+    let payload = match (types.resolve(source_type), kind, error_local) {
+        (Type::Optional(payload), HandleKind::Optional, None)
+        | (Type::Result(payload, _), HandleKind::Result, Some(_)) => *payload,
+        _ => return Err("native borrowed Handle kind differs from its backing sum"),
+    };
+    if payload != endpoint {
+        return Err("native borrowed Handle changed its exact payload endpoint");
+    }
+    let ExpressionKind::View(backing) = &target.kind else {
+        return Err("native borrowed Handle requires its original written target view");
+    };
+    if target.ty != source_type
+        || backing.ty != source_type
+        || !matches!(backing.kind, ExpressionKind::Local(id) if id == source)
+    {
+        return Err("native borrowed Handle lost its exact stable backing local");
+    }
+    if handle_body_has_default(failure) {
+        return Err("native borrowed Handle cannot yield an alternate default payload");
+    }
+    if !matches!(
+        failure.statements.last().map(|statement| &statement.kind),
+        Some(StatementKind::Return(_))
+    ) {
+        return Err("native borrowed Handle failure must exit without yielding a payload");
+    }
+    Ok(Some(handle))
+}
+
+/// Only lexical blocks share this Handle's continuation. Expression-level
+/// nested Handles and inline function bodies have their own nearest handler.
+fn handle_body_has_default(body: &Block) -> bool {
+    body.statements
+        .iter()
+        .any(|statement| match &statement.kind {
+            StatementKind::HandleDefault(_) => true,
+            StatementKind::If {
+                then_block,
+                else_block,
+                ..
+            } => {
+                handle_body_has_default(then_block)
+                    || else_block.as_ref().is_some_and(handle_body_has_default)
+            }
+            StatementKind::While { body, .. }
+            | StatementKind::For { body, .. }
+            | StatementKind::Scope(body) => handle_body_has_default(body),
+            StatementKind::Match { arms, .. } => {
+                arms.iter().any(|arm| handle_body_has_default(&arm.body))
+            }
+            StatementKind::ReflectedTypeDispatch { arms, .. } => {
+                arms.iter().any(|arm| handle_body_has_default(&arm.body))
+            }
+            StatementKind::Let { .. }
+            | StatementKind::Assign { .. }
+            | StatementKind::Return(_)
+            | StatementKind::Expression(_)
+            | StatementKind::Respond(_)
+            | StatementKind::Break
+            | StatementKind::Continue
+            | StatementKind::Assert { .. }
+            | StatementKind::Trace(_)
+            | StatementKind::Breakpoint { .. } => false,
+        })
 }

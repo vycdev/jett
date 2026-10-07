@@ -17,7 +17,7 @@ use std::{
 };
 
 const RECEIPT_ENV: &str = "JETT_RESOURCE_NATIVE_TEST_ARCHIVE_RECEIPT_V1";
-const RECEIPT_SHA256: &str = "bf0c7805fa72dbd15250d0b07a03426a99a580de4d744e602fa75a5cc4ae5438";
+const RECEIPT_SHA256: &str = "984f1f05f3ff09b66358cf5e213482c0e4d4b9ebfab8b0988f9a555246177753";
 struct Archive {
     path: PathBuf,
     target: String,
@@ -375,11 +375,12 @@ fn script(case: &cases::Case) -> String {
             cases::Script::ConstructFail(label, _) => (2, label),
             cases::Script::FinalizerPanic(label) => (3, label),
             cases::Script::Borrow(label, _) => (4, label),
+            cases::Script::BorrowFail(label, _) => (5, label),
         };
         output.extend(tag.to_le_bytes());
         output.extend(label.to_le_bytes());
         match *row {
-            cases::Script::ConstructFail(_, error) => {
+            cases::Script::ConstructFail(_, error) | cases::Script::BorrowFail(_, error) => {
                 output.extend((error.len() as u32).to_le_bytes());
                 output.extend(error.as_bytes());
             }
@@ -396,6 +397,7 @@ fn event(expected: cases::Event) -> (i64, report::EventKind) {
         cases::Event::Constructed(label) => (label, report::EventKind::Constructed),
         cases::Event::ConstructionFailed(label) => (label, report::EventKind::ConstructionFailed),
         cases::Event::Borrowed(label) => (label, report::EventKind::Borrowed),
+        cases::Event::BorrowFailed(label) => (label, report::EventKind::BorrowFailed),
         cases::Event::Finalized(label) => (label, report::EventKind::Finalized),
     }
 }

@@ -4369,3 +4369,24 @@ branch and extraction checks retain actual absence/occupancy. Typed sum headers
 and normalized operation nodes remain visible to disconnected-custody checks.
 The current shared checkpoint passes 61 scenarios in both reference and Source-
 absent native profiles (122 runs each) against the unchanged matched MSVC archives.
+
+### Borrowed Resource sum integration
+
+The next Resource family retains the checked concrete body's exact handled-view
+binding origin through HIR and a private MIR projection region. Generated sum and
+payload locals are nonowning. Fresh typed tag edges distinguish Some/Ok projections
+from None/Fail observations; ordinary consuming SumTake remains a separate role.
+Wire-v2 registration adds conditional source formals and explicit sum borrow,
+observe, project, failure-read and end operations. Five selected status/out C leaves
+extend the Resource leaf inventory from 32 to 37 without changing public record ABI.
+Absent shells receive live-loan guards despite having no occupied Resource token.
+
+The expanded 73-scenario corpus passes 146 reference and 146 Source-deleted native
+runs in Debug/Release against fresh measured MSVC private runtime archives. All
+305 checker, 203 HIR, 254 MIR, 215 runtime, 102 codegen library and 63 object tests
+pass. Fresh Resource custody validation runs before local-view queries consume its
+proof; independent guarded projection records do not authorize ordinary graph
+mutations. The constructor inventory currently admits root-body Resource aliases.
+Nested/scoped aliases, ordinary borrowed data sums and alternate Default lifetimes
+remain pending, alongside broader language and platform acceptance. See the
+[borrowed-sum contract](active/native_resource_borrowed_sums.md).
