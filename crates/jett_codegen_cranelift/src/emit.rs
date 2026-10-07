@@ -1,5 +1,6 @@
 pub(crate) mod debug;
 mod graphics;
+pub(super) mod ordinary_borrowed_sums;
 mod resource_execution;
 mod resource_layout;
 mod values;
@@ -221,6 +222,7 @@ fn emit_for_triple(
         return resource_execution::emit(program, types, target, entry, options);
     }
     jett_mir::validate(program).map_err(CodegenError::InvalidMir)?;
+    ordinary_borrowed_sums::validate_public_program(program, types)?;
     for function in &program.functions {
         jett_mir::move_values::validate_local_view_initializers(function, types).map_err(
             |message| CodegenError::InvalidMirContract {
@@ -1056,6 +1058,7 @@ fn translate_function_inner(
             types,
             equality_methods: &program.equality_methods,
             symbol,
+            function,
             local_types: &function.locals,
             caller_acquisitions,
             taking_binding: None,
@@ -1255,7 +1258,7 @@ fn translate_function_inner(
             if let Some(resource) = &mut translator.resource {
                 resource.position = jett_mir::ResourcePosition::Statement(index);
             }
-            translator.statement(statement)?;
+            translator.statement(block.id, index, statement)?;
             translator.drop_temporaries()?;
             translator.drop_dead_locals(&ownership.live_after_statement[block_index][index])?;
         }
@@ -1285,6 +1288,7 @@ fn translate_function_inner(
         types,
         equality_methods: &program.equality_methods,
         symbol,
+        function,
         local_types: &function.locals,
         caller_acquisitions,
         taking_binding: None,
@@ -1367,6 +1371,7 @@ struct Translator<'a, 'builder> {
     actor_state_range: Option<(usize, usize)>,
     types: &'a TypeInterner,
     symbol: &'a str,
+    function: &'a Function,
     local_types: &'a [jett_mir::Local],
     caller_acquisitions: &'a jett_mir::CallerAcquisitions<'a>,
     taking_binding: Option<jett_hir::LocalId>,
@@ -1380,7 +1385,15 @@ struct Translator<'a, 'builder> {
 }
 
 impl Translator<'_, '_> {
-    fn statement(&mut self, statement: &Statement) -> Result<(), CodegenError> {
+    fn statement(
+        &mut self,
+        block: jett_mir::BlockId,
+        index: usize,
+        statement: &Statement,
+    ) -> Result<(), CodegenError> {
+        if self.ordinary_borrowed_sum_statement(block, index, statement)? {
+            return Ok(());
+        }
         if self.resource_statement(statement)? {
             return Ok(());
         }

@@ -339,6 +339,7 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
             manifest.validate_type(types, local.ty)?;
             manifest.validate_type(types, local.debug_ty)?;
         }
+        crate::ordinary_borrowed_sums::validate(function, types)?;
         let iteration_scopes = crate::iteration_views::scopes(function, types)?;
         let locals = function
             .locals
@@ -391,11 +392,21 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                         target,
                         success,
                     } => {
+                        let ordinary =
+                            function.ordinary_borrowed_sum_projection(block.id, index)?;
                         let borrowed = function.resource_borrowed_sum_projection(
                             block.id,
                             crate::ResourcePosition::Statement(index),
                         )?;
-                        let definition = if let Some(row) = borrowed {
+                        let definition = if let Some(row) = ordinary {
+                            if row.source() != *source
+                                || (*success && row.output() != *target)
+                                || (!*success && row.error() != Some(*target))
+                            {
+                                return Err("call ownership ordinary borrowed Handle changed its extraction headers".into());
+                            }
+                            Definition::Other
+                        } else if let Some(row) = borrowed {
                             if row.source() != *source || (*success && row.output() != *target) {
                                 return Err("call ownership borrowed Handle changed its current extraction headers".into());
                             }

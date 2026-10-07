@@ -88,6 +88,7 @@ impl CopyValuePlan {
         types: &TypeInterner,
         program: PlanningContext<'_>,
     ) -> Result<Self, String> {
+        crate::ordinary_borrowed_sums::validate(function, types)?;
         if program.companion.is_none()
             && (crate::resource_type_pending(types, function.return_type)
                 || function
@@ -114,7 +115,7 @@ impl CopyValuePlan {
         let mut max_temporaries = 0;
         for block in &function.blocks {
             let mut statements = Vec::new();
-            for statement in &block.statements {
+            for (index, statement) in block.statements.iter().enumerate() {
                 let mut reads = Set::new();
                 let mut temporaries = 0;
                 let mut killed = None;
@@ -161,10 +162,18 @@ impl CopyValuePlan {
                         reads.insert(source.index() as usize);
                         if matches!(statement.kind, StatementKind::SumTake { .. }) {
                             let ty = function.locals[target.index() as usize].ty;
-                            temporaries += usize::from(
-                                crate::move_values::is_copy_owned(types, ty)
-                                    || crate::move_values::is_linear(types, ty),
-                            );
+                            let borrowed = matches!(
+                                statement.kind,
+                                StatementKind::SumTake { success: true, .. }
+                            ) && function
+                                .ordinary_borrowed_sum_projection(block.id, index)?
+                                .is_some();
+                            if !borrowed {
+                                temporaries += usize::from(
+                                    crate::move_values::is_copy_owned(types, ty)
+                                        || crate::move_values::is_linear(types, ty),
+                                );
+                            }
                         }
                         Some(target.index() as usize)
                     }

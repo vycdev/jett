@@ -6021,14 +6021,35 @@ box; its runtime implementation may copy the payload. These bounded paths make
 no zero-runtime-copy claim; see the
 [call-view implementation](active/native_scoped_call_view_staging.md).
 
-An explicitly viewed handled optional/result payload follows the same borrowing
-rule when it retains a stable immutable sum binding. Its Some/Ok payload remains
-nonowning; a None/Fail path creates no Resource owner. A failure continuation that
-yields another payload must prove that payload's own backing lifetime. Native
-support is verified for root-body Resource aliases with exact checked origin,
-selected-arm proof and conditional runtime loans. Nested/scoped aliases, ordinary
-data sums and alternate Default lifetimes remain pending; current acceptance and
-limits are recorded in [the borrowed-sum contract](active/native_resource_borrowed_sums.md).
+An explicitly viewed handled optional/result payload follows the same
+borrowing rule when it retains one stable immutable sum local or view
+parameter. The canonical initializer has an explicit outer `view` around a
+Handle whose target is an explicit `view` of that binding. A Some/Ok move-only
+payload is a read-only, nonowning alias with the exact checked payload type;
+it is not an implicit clone or transfer out of the sum. Forwarded aliases
+retain the same backing dependency. An explicit `clone` acquires independent
+ownership.
+
+A final implicitly copyable value keeps its ordinary copy semantics instead
+of becoming a persistent borrow. Primitive values are copied; a `string`
+destination owns its retained copy. A copied destination may be declared
+`mutable` and rebound. Once that destination is initialized, the generated
+projection views no longer prevent a later ordinary owned transfer or unwrap
+of the original sum. This does not end a live move-only payload alias or
+permit changing its backing owner.
+
+The bounded native ordinary-sum proof requires a terminal Return on the
+None/Fail continuation. In `result[T, string]`, the Fail companion owns one
+String copy for that handler. Outer pending sums fail before extraction or
+continuation execution; ready sums retain their payload's pending metadata for
+later observers. Nested expression-level Handles can retain their own scalar
+Default, but an alternate outer Default payload needs its own backing-lifetime
+contract. Mutable backing origins, temporary-backed aliases, loan expiry and
+erased Resource-bearing payload identity are not established by this proof.
+The [ordinary borrowed-sum implementation](active/native_ordinary_borrowed_sum_codegen.md)
+is separate from the
+[Resource borrowed-sum contract](active/native_resource_borrowed_sums.md) and
+[verified nested Resource contract](active/native_resource_nested_sums.md).
 
 **Rule 2: A view cannot be sent to another thread.**
 
@@ -8532,9 +8553,10 @@ obligations before teardown. Nested handled-view aliases now support terminating
 and joining branches, scoped type bodies, and While/Break/Continue boundaries.
 Exact declaration identity and certified child-before-parent lexical loan ends
 preserve backing ownership; Return operands run before retirement. For/Match and
-reflected bodies, ordinary borrowed data sums, alternate Default lifetimes and
-broader native Resource semantics remain separate work. This local test slice
-keeps production Resource providers disabled. See the
+reflected bodies, alternate Default lifetimes and broader native Resource
+semantics remain separate work. Ordinary borrowed data sums have their
+[separate implementation](active/native_ordinary_borrowed_sum_codegen.md).
+This local test slice keeps production Resource providers disabled. See the
 [nested borrowed-sum contract](active/native_resource_nested_sums.md).
 
 Native plain Resource replacement validates both exact live owners, active runtime holders, loans, nominal kinds, generation capacity and acquisition storage before retiring the old value. An invalid replacement leaves both owners intact. The native compiler consumes this check for exact plain-owner replacement.

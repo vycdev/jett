@@ -2096,6 +2096,125 @@ impl Builder<'_> {
     }
 
     #[inline(never)]
+    pub(super) fn lower_ordinary_borrowed_sum_handle(
+        &mut self,
+        seed: ordinary_borrowed_sums::Seed,
+    ) -> Expression {
+        let original = seed.original.clone();
+        let ExpressionKind::View(handle) = &original.kind else {
+            unreachable!()
+        };
+        let ExpressionKind::Handle {
+            target,
+            error_local,
+            failure,
+            ..
+        } = &handle.kind
+        else {
+            unreachable!()
+        };
+        let span = handle.span;
+        let source = self.call_view_temporary(target.ty, seed.backing.id, span);
+        let output = self.call_view_temporary(handle.ty, seed.backing.id, span);
+        let tag = self.temporary(TypeInterner::BOOL, span);
+        let site = |builder: &Self| {
+            ordinary_borrowed_sums::OrdinarySumProjectionSite::new(
+                builder.current,
+                builder.blocks[builder.current.index() as usize]
+                    .statements
+                    .len(),
+            )
+        };
+        let initialize = site(self);
+        self.push(
+            StatementKind::Let {
+                local: source,
+                value: target.as_ref().clone(),
+            },
+            span,
+        );
+        let observe = site(self);
+        self.push(
+            StatementKind::SumTag {
+                source,
+                target: tag,
+            },
+            span,
+        );
+        let success = self.new_block(span);
+        let failed = self.new_block(span);
+        let continuation = self.new_block(span);
+        self.terminate(
+            TerminatorKind::Branch {
+                condition: Expression {
+                    kind: ExpressionKind::Local(tag),
+                    ty: TypeInterner::BOOL,
+                    span,
+                },
+                then_block: success,
+                else_block: failed,
+            },
+            span,
+        );
+        self.current = success;
+        let project = site(self);
+        self.push(
+            StatementKind::SumTake {
+                source,
+                target: output,
+                success: true,
+            },
+            span,
+        );
+        self.close_to(continuation, span);
+        self.current = failed;
+        let failure_site = error_local.map(|error| {
+            let at = site(self);
+            self.push(
+                StatementKind::SumTake {
+                    source,
+                    target: error,
+                    success: false,
+                },
+                span,
+            );
+            at
+        });
+        self.lower_block(failure);
+        if self.open() {
+            self.terminate(TerminatorKind::Unreachable, span);
+        }
+        self.current = continuation;
+        let alias_site = site(self);
+        let error = error_local
+            .and_then(|local| self.locals.get(local.index() as usize))
+            .cloned();
+        self.ordinary_sum_capture.record(
+            seed,
+            self.locals[source.index() as usize].clone(),
+            self.locals[output.index() as usize].clone(),
+            self.locals[tag.index() as usize].clone(),
+            error,
+            initialize,
+            observe,
+            project,
+            failure_site,
+            alias_site,
+            failed,
+            continuation,
+        );
+        Expression {
+            kind: ExpressionKind::View(Box::new(Expression {
+                kind: ExpressionKind::Local(output),
+                ty: handle.ty,
+                span: handle.span,
+            })),
+            ty: original.ty,
+            span: original.span,
+        }
+    }
+
+    #[inline(never)]
     fn lower_sum_handle(&mut self, expression: &Expression) -> Expression {
         let ExpressionKind::Handle {
             target,

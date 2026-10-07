@@ -4,6 +4,10 @@ mod analysis;
 mod breakpoint_regions;
 mod call_owner_generations;
 mod call_ownership;
+mod ordinary_borrowed_sums;
+pub use ordinary_borrowed_sums::{
+    OrdinaryBorrowedSumProjection, OrdinarySumPayloadPath, OrdinarySumProjectionSite,
+};
 mod resource_ownership;
 pub use resource_ownership::{
     ResourceArgumentEffect, ResourceArgumentSyntax, ResourceBorrowedSumProjection,
@@ -78,6 +82,7 @@ pub struct Function {
     breakpoint_regions: Vec<breakpoint_regions::BreakpointRegion>,
     call_owner_generations: Vec<call_owner_generations::CallOwnerGeneration>,
     resource_lowering: Option<resource_ownership::ResourceLoweringWitness>,
+    ordinary_borrowed_sums: Option<ordinary_borrowed_sums::Witness>,
 }
 
 impl Function {
@@ -457,6 +462,13 @@ pub fn validate_call_ownership(
     }
     let validation = call_ownership::ProgramValidation::new(program);
     for function in &program.functions {
+        if let Err(message) = ordinary_borrowed_sums::validate(function, types) {
+            errors.push(ValidationError {
+                span: function.span,
+                message,
+            });
+            continue;
+        }
         if let Err(message) = validation.validate_function(function, types) {
             errors.push(ValidationError {
                 span: function.span,
@@ -1349,6 +1361,11 @@ fn lower_function(
 ) -> Result<Function, LowerError> {
     let mut builder = Builder::new(function.body.span, types, function_param_modes);
     builder.locals = function.locals.clone();
+    builder.ordinary_sum_capture = ordinary_borrowed_sums::Capture::authenticated(function, types)
+        .map_err(|message| LowerError {
+            span: function.span,
+            message,
+        })?;
     builder.resource_capture = resource_ownership::Capture::authenticated(
         function,
         resource_manifest,
@@ -1379,6 +1396,7 @@ fn lower_function(
     let breakpoint_capture = std::mem::take(&mut builder.breakpoint_capture);
     let generation_capture = std::mem::take(&mut builder.generation_capture);
     let resource_capture = std::mem::take(&mut builder.resource_capture);
+    let ordinary_sum_capture = std::mem::take(&mut builder.ordinary_sum_capture);
     let mut lowered = Function {
         id: function.id,
         identity: function.identity.clone(),
@@ -1397,6 +1415,7 @@ fn lower_function(
         breakpoint_regions: Vec::new(),
         call_owner_generations: Vec::new(),
         resource_lowering: None,
+        ordinary_borrowed_sums: None,
     };
     lowered.breakpoint_regions =
         breakpoint_capture
@@ -1414,6 +1433,13 @@ fn lower_function(
             })?;
     lowered.resource_lowering =
         resource_capture
+            .finish(&lowered)
+            .map_err(|message| LowerError {
+                span: function.span,
+                message,
+            })?;
+    lowered.ordinary_borrowed_sums =
+        ordinary_sum_capture
             .finish(&lowered)
             .map_err(|message| LowerError {
                 span: function.span,
@@ -1440,6 +1466,7 @@ struct Builder<'a> {
     breakpoint_capture: breakpoint_regions::Capture,
     generation_capture: call_owner_generations::Capture,
     resource_capture: resource_ownership::Capture,
+    ordinary_sum_capture: ordinary_borrowed_sums::Capture,
 }
 
 impl<'a> Builder<'a> {
@@ -1471,6 +1498,7 @@ impl<'a> Builder<'a> {
             breakpoint_capture: breakpoint_regions::Capture::default(),
             generation_capture: call_owner_generations::Capture::default(),
             resource_capture: resource_ownership::Capture::default(),
+            ordinary_sum_capture: ordinary_borrowed_sums::Capture::default(),
         }
     }
 
@@ -1608,7 +1636,19 @@ impl<'a> Builder<'a> {
                         None
                     }
                 };
-                let value = if let Some(seed) = seed {
+                let ordinary_seed = match self.ordinary_sum_capture.seed(*local, value) {
+                    Ok(seed) => seed,
+                    Err(message) => {
+                        self.resource_error = Some(LowerError {
+                            span: statement.span,
+                            message,
+                        });
+                        None
+                    }
+                };
+                let value = if let Some(seed) = ordinary_seed {
+                    self.lower_ordinary_borrowed_sum_handle(seed)
+                } else if let Some(seed) = seed {
                     if let Some(scope) = self.lexical_scopes.last_mut() {
                         scope.active.push(*local);
                     }

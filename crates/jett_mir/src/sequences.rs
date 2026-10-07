@@ -72,6 +72,7 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
     }
     for function in &mut program.functions {
         let before_pass = (crate::resource_ownership::has_records(function)
+            || crate::ordinary_borrowed_sums::has_records(function)
             || !function.breakpoint_regions.is_empty()
             || crate::call_owner_generations::has_records(function))
         .then(|| function.clone());
@@ -148,7 +149,8 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                 continue;
             }
             let before_iteration = (!function.breakpoint_regions.is_empty()
-                || crate::call_owner_generations::has_records(function))
+                || crate::call_owner_generations::has_records(function)
+                || crate::ordinary_borrowed_sums::has_records(function))
             .then(|| function.clone());
             let mut region_edit = crate::breakpoint_regions::SequenceEdit {
                 header,
@@ -411,13 +413,20 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                 region_edit.after = old.clone();
             }
             if let Some(before_iteration) = &before_iteration
-                && (crate::call_owner_generations::sequence_transition(
+                && (crate::ordinary_borrowed_sums::sequence_transition(
                     function,
                     before_iteration,
                     &region_edit,
                     types,
                 )
                 .is_err()
+                    || crate::call_owner_generations::sequence_transition(
+                        function,
+                        before_iteration,
+                        &region_edit,
+                        types,
+                    )
+                    .is_err()
                     || crate::breakpoint_regions::sequence_transition(
                         function,
                         before_iteration,
@@ -442,6 +451,7 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             }
         }
         if !valid_regions
+            || crate::ordinary_borrowed_sums::validate_current(function).is_err()
             || crate::resource_ownership::validate_current(function).is_err()
             || (removed_uninhabited_body && !prune::unreachable(function))
         {

@@ -828,9 +828,36 @@ Copy-owned alias expressions acquire retained string or cloned descriptor
 temporaries before entering containers; borrowed argument lowering reads their
 existing handles. Plain string view expressions retain ordinary copy behavior.
 
+Ordinary handled optional/result projections authenticate the explicit outer
+View, inner View of an exact stable immutable sum local or View parameter,
+concrete endpoint type and terminal Return continuation. HIR retains the
+checked binding identity. MIR seals the original declaration, current local
+headers, tag observation, selecting branch, success projection, absent path
+and final initializer before pruning or ownership planning. Generated sum and
+success-payload locals remain nonowning; a move-only final alias has the same
+backing dependency and no cleanup slot.
+
+The checked final ownership mode distinguishes a borrowed payload from an
+implicitly copyable primitive or String destination. The copy destination may
+be mutable, and String receives an owning retained copy. After it is
+initialized, constructor-only projection intermediates leave the borrow
+inventory, permitting a later ordinary shell transfer or unwrap. The Result
+Fail companion likewise owns one String copy. A nonconsuming runtime payload
+read preserves the shell and selected payload identity; pending scalar depth
+and opaque container metadata remain intact. Outer pending sums fail at Handle
+observation before either extraction or failure continuation.
+
+This bounded ordinary proof does not grant Resource custody or prove the
+payload identity hidden by erased interfaces, callables, actors or capability
+carriers. Alternate outer Default payload lifetimes, mutable backing origins,
+temporary-backed aliases and general loan expiry remain outside it. See the
+[ordinary borrowed-sum implementation](active/native_ordinary_borrowed_sum_codegen.md).
+
 Native ownership planning conservatively refuses owner consumption or rebinding
-after a source local alias may have been created on a reachable path. It does
-not select a source lifetime-expiry rule. Mutable source alias chains,
+after a persistent move-only source alias may have been created on a reachable
+path. Final copied primitive/String bindings retain the ordinary ownership
+behavior described above. This does not select a source lifetime-expiry rule.
+Mutable source alias chains,
 temporary-backed source aliases, projected mutation, allocating conversions,
 flow-narrowed bare-machine origins, and field paths without the checked
 declared-owner proof remain explicit native limitations. Owner transitions
@@ -1437,8 +1464,10 @@ returns retain ordinary assignment checks before any native arm is removed.
 Contextual sum handling keeps the producer's original local or call signature.
 Inhabited nested containers receive an explicit conversion before extraction;
 empty collections are rebuilt with the target ownership flags, and nested
-function values retain their checked adapters. Handler snapshots clone the
+function values retain their checked adapters. Owning Handle snapshots clone the
 underlying local before conversion so owned and borrowed sources stay readable.
+A certified ordinary borrowed-payload initializer instead preserves the exact
+backing and nonowning success projection described above.
 Inferred generic reflection peels transparent aliases only at each argument's
 root and preserves nested alias witnesses. Repeated compatible witnesses fill
 only missing `never` slots; concrete alias identity follows declaration parameter
@@ -4383,13 +4412,15 @@ extend the Resource leaf inventory from 32 to 37 without changing public record 
 Absent shells receive live-loan guards despite having no occupied Resource token.
 
 The expanded 138-scenario corpus passes 276 reference and 276 Source-deleted
-native runs in Debug/Release against the unchanged measured MSVC private runtime
+native runs in Debug/Release against matched measured MSVC private runtime
 archives. Original declaration keys include exact lexical paths; current headers,
 backings, guards and constructor graphs retain independent seals. Certified
 Fallthrough/Return/Break/Continue records end child loans before parent loans and
 clear nonowning aliases before joins/backedges. Return operands run first; lexical
 retirement does not complete RootScope or consume its backing. Recursive declaration
 inventory alone does not admit For/Match/reflected bodies or unemitted declarations.
-Ordinary borrowed data sums and alternate Default lifetimes remain pending. See
+Alternate outer Default lifetimes remain pending. Ordinary borrowed data sums
+follow their [separate implementation](active/native_ordinary_borrowed_sum_codegen.md);
+this does not extend Resource For/Match/reflected-body admission. See
 [the borrowed-sum contract](active/native_resource_borrowed_sums.md) and
 [the verified nested contract](active/native_resource_nested_sums.md).

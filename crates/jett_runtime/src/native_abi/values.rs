@@ -1271,6 +1271,15 @@ impl NativeValues {
         text.push_str(&value);
         Ok(0)
     }
+    /// Observe the selected ordinary payload without acquiring ownership.
+    /// Its exact type and stable backing belong to the checked MIR projection.
+    fn sum_payload_borrow(&self, value: u64, tag: u32) -> LeafResult<u64> {
+        let sum = self.sums.get(&value).ok_or(INVALID_SUM)?;
+        if tag > SUM_SUCCESS || sum.tag != tag || sum.pending_depth != 0 {
+            return Err(INVALID_SUM);
+        }
+        Ok(sum.bits)
+    }
     fn sum_handle_tag(&mut self, value: u64, layout: &[u8]) -> LeafResult<u32> {
         let sum = self.sums.get(&value).ok_or(INVALID_SUM)?;
         let tag = sum.tag;
@@ -5355,7 +5364,7 @@ macro_rules! leaves {
             pub fn result(self) -> AbiScalar { match self { $( Self::$variant => AbiScalar::$retabi, )* } }
         }
         $(
-            /// Typed leaf operation; borrowed inputs, owned handle results.
+            /// Typed leaf operation; result ownership follows its operation contract.
             /// # Safety
             /// Context must be readable, stationary and live for the call.
             /// Pointer/length inputs must describe one readable allocation.
@@ -5856,6 +5865,9 @@ leaves! {
             s.sum_handle_tag(value, layout) };
     SumPayloadPendingDepth, jett_rt_v1_sum_payload_pending_depth, false, (value: u64 => I64), u64 => I64,
         |s| s.sums.get(&value).map(|v| v.payload_pending_depth).ok_or(INVALID_SUM);
+    // The selected payload remains borrowed from the unchanged owning sum.
+    SumPayloadBorrow, jett_rt_v1_sum_payload_borrow, false, (value: u64 => I64, tag: u32 => I32), u64 => I64,
+        |s| s.sum_payload_borrow(value, tag);
     SumTake, jett_rt_v1_sum_take, false, (value: u64 => I64, tag: u32 => I32), u64 => I64,
         |s| { if s.sums.get(&value).is_none_or(|v| v.tag != tag) { return Err(INVALID_SUM); }
             let sum = s.sums.remove(&value).ok_or(INVALID_SUM)?;
@@ -10968,3 +10980,6 @@ mod reflected_container_tests;
 
 #[cfg(test)]
 mod resource_companion_tests;
+
+#[cfg(test)]
+mod ordinary_borrowed_sum_tests;

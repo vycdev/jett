@@ -119,6 +119,15 @@ not measured code coverage or a changed inventory denominator. See the
 GNU private Source execution, and the final four supported-host workflow jobs
 remain separate gates.
 
+The [ordinary borrowed-sum implementation](native_ordinary_borrowed_sum_codegen.md)
+now passes 15 reference Sources and 30 Source-deleted native debug/release
+executions, including later handled-argument failures and mutable copied
+primitive/String destinations. The fresh runtime also re-passes all 138 Resource
+scenarios /276 native executions. Full affected MIR/codegen/object/CFG, runtime
+and driver-library checks pass; coherent full workspace and current platform
+acceptance remain required. The current rough feature estimate is about 87%,
+with the fixed inventory denominators unchanged and the full 100% objective open.
+
 [Direct collection and sum equality](../completed/direct_collection_equality.md)
 is settled: both operators now report E0376 before comptime evaluation or native
 lowering, including wrapped and concretely instantiated types. Frontend fixture

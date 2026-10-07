@@ -117,6 +117,12 @@ mod uninhabited_callbacks;
 #[path = "native_conformance/latent_callbacks.rs"]
 mod latent_callbacks;
 
+#[path = "native_conformance/ordinary_borrowed_sums.rs"]
+mod ordinary_borrowed_sums;
+
+#[path = "native_conformance/ordinary_borrowed_sums_additional.rs"]
+mod ordinary_borrowed_sums_additional;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

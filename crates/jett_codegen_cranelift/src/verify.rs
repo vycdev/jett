@@ -992,6 +992,10 @@ impl Verifier<'_> {
         index: usize,
         statement: &Statement,
     ) -> Result<(), CodegenError> {
+        super::emit::ordinary_borrowed_sums::validate_statement(
+            function, self.types, block, index, statement,
+        )
+        .map_err(|message| self.contract_error(function, statement.span, message))?;
         match &statement.kind {
             StatementKind::ResourceLexicalExit(_) => {
                 let position = jett_mir::ResourcePosition::Statement(index);

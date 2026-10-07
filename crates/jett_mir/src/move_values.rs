@@ -347,6 +347,7 @@ pub fn validate_local_view_initializers(
     function: &Function,
     types: &TypeInterner,
 ) -> Result<(), String> {
+    crate::ordinary_borrowed_sums::validate(function, types)?;
     let stages = crate::call_views::validate(function, types)?;
     let mut initialized = Set::new();
     for (block, index, statement) in function.blocks.iter().flat_map(|block| {
@@ -356,6 +357,21 @@ pub fn validate_local_view_initializers(
             .enumerate()
             .map(move |(index, statement)| (block.id, index, statement))
     }) {
+        if let StatementKind::SumTake {
+            source,
+            target,
+            success: true,
+        } = statement.kind
+            && let Some(row) = function.ordinary_borrowed_sum_projection(block, index)?
+        {
+            if row.source() != source || row.output() != target {
+                return Err(
+                    "ordinary borrowed initializer changed its constructor projection".into(),
+                );
+            }
+            initialized.insert(target.index() as usize);
+            continue;
+        }
         if let StatementKind::SumTake {
             source,
             target,
@@ -393,7 +409,9 @@ pub fn validate_local_view_initializers(
         let origin = function
             .local(source)
             .ok_or("borrowed local initializer source is outside its function")?;
-        if !function.resource_borrowed_sum_alias(*local, value)? {
+        if !function.ordinary_borrowed_sum_alias(*local, value)?
+            && !function.resource_borrowed_sum_alias(*local, value)?
+        {
             jett_hir::validate_local_view_initializer(
                 value,
                 source,
@@ -532,6 +550,38 @@ impl Flow<'_> {
                     let root = self.read(*source, "sum source")?;
                     if matches!(statement.kind, StatementKind::SumTake { .. }) {
                         if self.function.is_view_local(*source) {
+                            if let Some(row) = self
+                                .function
+                                .ordinary_borrowed_sum_projection(block.id, index)?
+                            {
+                                if row.source() != *source {
+                                    return Err(
+                                        "ordinary borrowed extraction changed its exact source"
+                                            .into(),
+                                    );
+                                }
+                                if matches!(
+                                    statement.kind,
+                                    StatementKind::SumTake { success: true, .. }
+                                ) {
+                                    if row.output() != *target
+                                        || !self.function.is_view_local(*target)
+                                    {
+                                        return Err(
+                                            "ordinary borrowed projection gained owning output"
+                                                .into(),
+                                        );
+                                    }
+                                    self.aliases.insert(target.index() as usize);
+                                } else {
+                                    if row.error() != Some(*target) {
+                                        return Err("ordinary borrowed extraction changed its failure local".into());
+                                    }
+                                    self.require_owned_definition(*target)?;
+                                }
+                                self.state.insert(target.index() as usize);
+                                continue;
+                            }
                             let row = self
                                 .function
                                 .resource_borrowed_sum_projection(
@@ -613,7 +663,9 @@ impl Flow<'_> {
                             .function
                             .local(source)
                             .ok_or("borrowed local initializer source is outside its function")?;
-                        if !self.function.resource_borrowed_sum_alias(*local, value)? {
+                        if !self.function.ordinary_borrowed_sum_alias(*local, value)?
+                            && !self.function.resource_borrowed_sum_alias(*local, value)?
+                        {
                             jett_hir::validate_local_view_initializer(
                                 value,
                                 source,
@@ -636,6 +688,17 @@ impl Flow<'_> {
                         result?;
                     }
                     self.state.insert(local.index() as usize);
+                    // A copied primitive/String final binding owns its value. Its
+                    // constructor-only read intermediates cannot keep the shell borrowed.
+                    if let Some(intermediates) = self
+                        .function
+                        .ordinary_copied_sum_intermediates(*local, value)?
+                    {
+                        for intermediate in intermediates {
+                            self.aliases.remove(&(intermediate.index() as usize));
+                            self.state.remove(&(intermediate.index() as usize));
+                        }
+                    }
                 }
                 StatementKind::CheckRefinement { local, call, .. } => {
                     self.require_owned_definition(*local)?;
