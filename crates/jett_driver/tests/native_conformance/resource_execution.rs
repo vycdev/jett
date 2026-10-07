@@ -17,12 +17,20 @@ use std::{
 };
 
 const RECEIPT_ENV: &str = "JETT_RESOURCE_NATIVE_TEST_ARCHIVE_RECEIPT_V1";
-const RECEIPT_SHA256: &str = "984f1f05f3ff09b66358cf5e213482c0e4d4b9ebfab8b0988f9a555246177753";
+// CI supplies an independently measured digest while compiling this test binary.
+// Runtime environment selects only the receipt path and cannot replace this pin.
+const RECEIPT_SHA256: &str =
+    match option_env!("JETT_RESOURCE_NATIVE_TEST_ARCHIVE_EXPECTED_SHA256_V1") {
+        Some(measured) => measured,
+        None => "984f1f05f3ff09b66358cf5e213482c0e4d4b9ebfab8b0988f9a555246177753",
+    };
 struct Archive {
     path: PathBuf,
+    archive_sha256: String,
     target: String,
     profile: String,
     linker: PathBuf,
+    linker_sha256: Option<String>,
     libraries: Vec<OsString>,
     sdk_lib: Option<OsString>,
 }
@@ -66,7 +74,7 @@ fn archive(release: bool) -> Archive {
     assert_eq!(
         digest(&bytes),
         RECEIPT_SHA256,
-        "exact Root-measured archive receipt"
+        "exact independently measured archive receipt"
     );
     let receipt: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(
@@ -145,15 +153,30 @@ fn archive(release: bool) -> Archive {
     let crt: serde_json::Value = serde_json::from_slice(&fs::read(crt_receipt).unwrap()).unwrap();
     assert_eq!(field(row, "crt_mode"), field(&crt, "mode"));
     assert_eq!(field(row, "linker_path"), field(&crt, "linker_path"));
+    let linker_sha256 = crt.get("linker_executable").map(|measurement| {
+        let measured = measured_file(measurement, "path", "sha256");
+        assert_eq!(
+            fs::canonicalize(&measured).unwrap(),
+            fs::canonicalize(&linker).unwrap(),
+            "measured linker executable"
+        );
+        field(measurement, "sha256").to_ascii_lowercase()
+    });
+    if target == jett_driver::native::LINUX_GNU_NATIVE_TARGET {
+        assert_eq!(field(row, "crt_mode"), "dynamic");
+        assert!(linker_sha256.is_some(), "GNU linker bytes must be measured");
+    }
     let sdk_lib = crt
         .get("sdk_LIB")
         .and_then(serde_json::Value::as_str)
         .map(OsString::from);
     Archive {
         path,
+        archive_sha256: field(row, "archive_sha256").to_ascii_lowercase(),
         target: target.into(),
         profile: profile.into(),
         linker,
+        linker_sha256,
         libraries,
         sdk_lib,
     }
@@ -275,6 +298,18 @@ fn prefix(prefix: &str, path: &Path) -> OsString {
     argument
 }
 fn command(archive: &Archive, object: &Path, binary: &Path) -> Command {
+    assert_eq!(
+        digest(&fs::read(&archive.path).unwrap()),
+        archive.archive_sha256,
+        "measured runtime archive before each link"
+    );
+    if let Some(expected) = &archive.linker_sha256 {
+        assert_eq!(
+            &digest(&fs::read(&archive.linker).unwrap()),
+            expected,
+            "measured linker bytes before each link"
+        );
+    }
     #[cfg(windows)]
     let mut command = {
         let tool = find_msvc_tools::find_tool(&archive.target, "link.exe")
@@ -313,7 +348,7 @@ fn command(archive: &Archive, object: &Path, binary: &Path) -> Command {
     #[cfg(not(windows))]
     let mut command = {
         let mut command = Command::new(&archive.linker);
-        command.arg("-o").arg(binary);
+        command.arg("-no-pie").arg("-o").arg(binary);
         command
     };
     command
@@ -468,6 +503,36 @@ fn assert_report(case: &cases::Case, report: &report::Report) {
     );
 }
 #[test]
+fn native_resource_receipt_pin_runtime_env_cannot_replace_compiled_pin() {
+    let directory = tempfile::tempdir().unwrap();
+    let receipt = directory.path().join("unmeasured-receipt.json");
+    let bytes = br#"{"version":1,"archives":[]}"#;
+    fs::write(&receipt, bytes).unwrap();
+    let forged = digest(bytes);
+    assert_ne!(forged, RECEIPT_SHA256);
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "resource_execution::native_resource_original_source_lifecycle_matches_reference_and_retires_before_teardown",
+            "--ignored",
+            "--exact",
+            "--test-threads=1",
+        ])
+        .env(RECEIPT_ENV, &receipt)
+        .env("JETT_RESOURCE_NATIVE_TEST_ARCHIVE_EXPECTED_SHA256_V1", forged)
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("exact independently measured archive receipt")
+            || stderr.contains("exact independently measured archive receipt"),
+        "{output:?}"
+    );
+}
+
+#[test]
 #[ignore = "requires exact Root-measured double-cfg Debug/Release single-runtime archive receipt"]
 fn native_resource_original_source_lifecycle_matches_reference_and_retires_before_teardown() {
     for release in [false, true] {
@@ -531,4 +596,9 @@ fn native_resource_original_source_lifecycle_matches_reference_and_retires_befor
             assert_report(case, &report);
         }
     }
+    eprintln!(
+        "Resource native acceptance: {} cases; {} Source-deleted executions; profiles=debug,release",
+        cases::CASES.len(),
+        2 * cases::CASES.len()
+    );
 }
