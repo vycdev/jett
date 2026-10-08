@@ -2455,3 +2455,58 @@ tracks about 86%, with unchanged fixed 207/182 inventory denominators. The whole
 12-Source reference baseline and 24 native unsupported-handler refusals; their
 implementation is not included here. Updated coherent-revision workspace/platform
 and private GNU execution remain independent gates.
+
+
+### Accepted ordinary borrowed-sum checkpoint (2026-10-08)
+
+The ordinary borrowed-sum implementation is accepted at clean committed HEAD
+`2c9f9aa8f2cd481c1d99ce6340ddf63688b2657a`. Its coherent locked workspace passes
+**3,446 tests across 92 result groups**, with **0 failed and 1 ignored**,
+including **491 default native-conformance tests** and the **182-object inventory
+gate**. All **3,637 tracked inputs remain unchanged** after execution, and the
+worktree remains clean. The receipt is
+`target/native-ordinary-2c9-workspace-evidence/after-evidence.json`, SHA-256
+`07fb0df1d059420c2705111a00da6d56b820e5e168eb37fc757c3fdadbe2dd1a`; its workspace
+log SHA-256 is
+`42657fc3b9ca894ee3a3a2d9b4997c1af044e15520f5b2031e6aeb01bf7b2e4f`.
+
+The exact-revision [CI run 37673804359](https://github.com/vycdev/jett/actions/runs/37673804359)
+passes all four jobs: Windows MSVC and Linux GNU build/conformance, plus both
+relocated installed-package jobs. This closes the coherent-workspace and
+supported-host workflow requirements for this accepted ordinary-sum revision.
+It does not establish the later expanded Resource pipeline test packet or a
+complete language/distribution gate.
+
+The [ordinary borrowed-sum family](native_ordinary_borrowed_sum_codegen.md)
+advances the broad planning estimate to **about 87%**. That judgment remains
+separate from the fixed **207-fixture / 182-run-pass inventory**; neither
+denominator changes. Other ordinary-carrier, Resource, reflection and semantic
+obligations remain open.
+
+### Source-only Resource pipeline checkpoint (2026-10-08)
+
+The [pipeline packet](native_resource_pipelines.md) has measured **23 cases / 46
+Debug-and-Release attempts** through each distinct local gate: checked Source
+reference execution, Cranelift object emission, and linked native execution with
+Project and synthetic Stdlib Source files absent at launch. The reference focus
+is included in the accepted **161-case / 322-profile-execution reference
+corpus**, with **522 reference tests passing**. The reference observation tuple
+proves exact events and zero outstanding owners/registry entries; it does not
+measure script consumption. Native reports additionally require zero remaining
+scripted inputs and zero obligations before teardown.
+
+`target/native-resource-pipeline-source-evidence/acceptance-v2.json` records all
+**3,648 frozen repository inputs unchanged**; both matched local MSVC archives
+and six nested receipts separately revalidate. Provider-panic retirement and cleanup-error precedence now
+pass through genuine Source pipeline fixture 20: body/cleanup/channel and exit
+are respectively **1/0/2, 73** and **1/255/3, 71**, with exact runtime-operation
+and cleanup-error messages. These are tests of existing behavior, with no
+language or ABI change.
+
+The preserved full **161-case / 322-execution linked native corpus passes**
+(1256.05 seconds), with all frozen inputs and measured archives unchanged.
+Its separate receipt is `full-acceptance-v2.json` in the same evidence directory.
+Object emission is not execution, and these matched local MSVC runs do not prove
+GNU or other platform acceptance of the expanded packet. Broader Resource
+`For`/`Match`, reflected bodies and ordinary families remain separate work. This
+checkpoint leaves the **207/182** inventory and **about 87%** estimate unchanged.

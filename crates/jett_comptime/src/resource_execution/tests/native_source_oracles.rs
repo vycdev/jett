@@ -71,6 +71,7 @@ fn script(input: cases::Script) -> ScriptOperation {
             outcome: Err(error.into()),
         },
         cases::Script::FinalizerPanic(label) => ScriptOperation::ConstructFinalizerPanic { label },
+        cases::Script::BorrowPanic(label) => ScriptOperation::BorrowPanic { label },
         cases::Script::Borrow(label, value) => ScriptOperation::Borrow {
             label,
             outcome: Ok(value),
@@ -173,10 +174,9 @@ fn reference_with_required_values(
     interpreter
 }
 
-#[test]
-fn native_resource_source_cases_match_real_reference_events_and_cleanup_before_teardown() {
+fn run_reference_cases(selected: &[cases::Case]) {
     for release in [false, true] {
-        for case in cases::CASES {
+        for case in selected {
             let checked = checked_case(case, release);
             let definition = entry(&checked, "main");
             let mut interpreter = reference_with_required_values(&checked, case, release);
@@ -201,6 +201,15 @@ fn native_resource_source_cases_match_real_reference_events_and_cleanup_before_t
                     "{} release={release}",
                     case.name
                 ),
+                cases::ReferenceOutcome::ProviderPanic(expected) => {
+                    let panic = outcome.expect_err("actual Source borrow provider panic");
+                    let text = panic
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| panic.downcast_ref::<&str>().copied())
+                        .unwrap();
+                    assert_eq!(text, expected, "{} release={release}", case.name);
+                }
                 cases::ReferenceOutcome::CleanupPanic(expected) => {
                     let panic = outcome.expect_err("actual Source finalizer panic");
                     let text = panic
@@ -224,4 +233,14 @@ fn native_resource_source_cases_match_real_reference_events_and_cleanup_before_t
             );
         }
     }
+}
+
+#[test]
+fn native_resource_source_cases_match_real_reference_events_and_cleanup_before_teardown() {
+    run_reference_cases(cases::CASES);
+}
+
+#[test]
+fn native_resource_pipeline_source_cases_match_real_reference_events_and_cleanup_before_teardown() {
+    run_reference_cases(cases::pipeline_cases());
 }

@@ -1,0 +1,12 @@
+namespace app
+function move_owned(token: resource_probe.TestHandle) returns resource_probe.TestHandle:
+    return token
+export function scenario(view net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle token = net into view resource_probe.create(1801) handle error:
+        return nothing
+    token into move_owned() into resource_probe.close()
+    return nothing
+export function main(net: Network) returns nothing:
+    scenario(view net)
+    return nothing

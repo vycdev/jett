@@ -252,7 +252,11 @@ fn checked(
     });
     (Arc::new(checked), *entry)
 }
-fn object(project: &Path, stdlib: &Path, release: bool) -> jett_codegen_cranelift::ObjectArtifact {
+fn try_object(
+    project: &Path,
+    stdlib: &Path,
+    release: bool,
+) -> Result<jett_codegen_cranelift::ObjectArtifact, jett_codegen_cranelift::CodegenError> {
     let (checked, span) = checked(project, stdlib, release);
     let required = jett_driver::evaluate_checked_resource_required_values(&checked);
     assert!(
@@ -290,8 +294,11 @@ fn object(project: &Path, stdlib: &Path, release: bool) -> jett_codegen_cranelif
         *entry,
         jett_codegen_cranelift::CodegenOptions { optimize: release },
     )
-    .unwrap()
 }
+fn object(project: &Path, stdlib: &Path, release: bool) -> jett_codegen_cranelift::ObjectArtifact {
+    try_object(project, stdlib, release).unwrap()
+}
+
 fn prefix(prefix: &str, path: &Path) -> OsString {
     let mut argument = OsString::from(prefix);
     argument.push(path.as_os_str());
@@ -411,6 +418,7 @@ fn script(case: &cases::Case) -> String {
             cases::Script::FinalizerPanic(label) => (3, label),
             cases::Script::Borrow(label, _) => (4, label),
             cases::Script::BorrowFail(label, _) => (5, label),
+            cases::Script::BorrowPanic(label) => (6, label),
         };
         output.extend(tag.to_le_bytes());
         output.extend(label.to_le_bytes());
@@ -532,12 +540,10 @@ fn native_resource_receipt_pin_runtime_env_cannot_replace_compiled_pin() {
     );
 }
 
-#[test]
-#[ignore = "requires exact Root-measured double-cfg Debug/Release single-runtime archive receipt"]
-fn native_resource_original_source_lifecycle_matches_reference_and_retires_before_teardown() {
+fn run_native_cases(selected: &[cases::Case]) {
     for release in [false, true] {
         let archive = archive(release);
-        for case in cases::CASES {
+        for case in selected {
             let directory = tempfile::tempdir().unwrap();
             let root = directory.path();
             let project = root.join("project");
@@ -596,9 +602,85 @@ fn native_resource_original_source_lifecycle_matches_reference_and_retires_befor
             assert_report(case, &report);
         }
     }
+}
+
+#[test]
+#[ignore = "requires exact Root-measured double-cfg Debug/Release single-runtime archive receipt"]
+fn native_resource_original_source_lifecycle_matches_reference_and_retires_before_teardown() {
+    run_native_cases(cases::CASES);
     eprintln!(
         "Resource native acceptance: {} cases; {} Source-deleted executions; profiles=debug,release",
         cases::CASES.len(),
         2 * cases::CASES.len()
+    );
+}
+
+#[test]
+#[ignore = "requires exact Root-measured double-cfg Debug/Release single-runtime archive receipt"]
+fn native_resource_pipeline_original_source_lifecycle_matches_reference_and_retires_before_teardown()
+ {
+    let selected = cases::pipeline_cases();
+    run_native_cases(selected);
+    eprintln!(
+        "Resource pipeline native acceptance: {} cases; {} Source-deleted executions; profiles=debug,release",
+        selected.len(),
+        2 * selected.len()
+    );
+}
+
+#[test]
+fn native_resource_pipeline_object_preflight_checks_all_sources_in_both_profiles() {
+    let selected = cases::pipeline_cases();
+    let expected = 2 * selected.len();
+    let mut emitted = 0usize;
+    let mut refusals = Vec::new();
+    for release in [false, true] {
+        for case in selected {
+            let directory = tempfile::tempdir().unwrap();
+            let entry = directory.path().join("main.jett");
+            let support = directory.path().join("resource_probe.jett");
+            fs::write(&entry, case.source).unwrap();
+            fs::write(&support, cases::SUPPORT).unwrap();
+            // Source/HIR/MIR assertions remain fatal; only final CodegenError is collected.
+            let outcome = try_object(&entry, &support, release);
+            fs::remove_file(&entry).unwrap();
+            fs::remove_file(&support).unwrap();
+            assert!(!entry.exists() && !support.exists());
+            match outcome {
+                Ok(artifact) => {
+                    assert_eq!(artifact.target, jett_driver::native::host_target());
+                    assert!(
+                        artifact.symbols.iter().any(
+                            |symbol| symbol == jett_codegen_cranelift::JETT_AOT_ENTRY_SYMBOL_V1
+                        )
+                    );
+                    assert!(
+                        artifact
+                            .symbols
+                            .iter()
+                            .any(|symbol| symbol == "jett_aot_resource_v1_manifest")
+                    );
+                    emitted += 1;
+                }
+                Err(error) => {
+                    let refusal = format!("case={} release={release}: {error:?}", case.name);
+                    eprintln!("Resource pipeline native object refusal: {refusal}");
+                    refusals.push(refusal);
+                }
+            }
+        }
+    }
+    assert_eq!(emitted + refusals.len(), expected);
+    assert!(
+        refusals.is_empty(),
+        "Resource pipeline native object preflight: {}/{} attempts refused\n{}",
+        refusals.len(),
+        expected,
+        refusals.join("\n")
+    );
+    assert_eq!(emitted, expected);
+    eprintln!(
+        "Resource pipeline native object preflight: {} cases; {emitted} emitted objects; profiles=debug,release; no linked execution",
+        selected.len()
     );
 }

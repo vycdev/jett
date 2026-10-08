@@ -100,8 +100,11 @@ and the [Resource runner](../../crates/jett_driver/tests/native_conformance/reso
 The estimate advances from about 86% to about 87% as this concrete family gains
 linked native coverage. It is a planning estimate, not measured code coverage;
 the fixed 207-fixture/182-object inventory denominators do not change.
-A coherent current full workspace and all four supported-host workflow jobs,
-including GNU private Source execution, remain required. Earlier green revisions
-do not prove this runtime/compiler revision. The complete 100% objective and
+The clean committed `2c9f9aa8` workspace passes 3,446 tests across 92 result
+groups, with every one of 3,637 tracked inputs unchanged. Its [exact-revision
+workflow](https://github.com/vycdev/jett/actions/runs/37673804359) passes all four
+supported-host jobs, including private GNU Source execution. These gates are
+accepted for this compiler/runtime revision. Later Source packets retain their
+own complete-corpus and platform requirements. The complete 100% objective and
 all other semantic, ordinary-carrier, Resource and reflection obligations remain
 open in the [acceptance audit](native_acceptance_audit.md).
