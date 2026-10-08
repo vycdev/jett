@@ -227,6 +227,26 @@ impl ResourceCallRegion {
         }
         Ok(())
     }
+    pub(super) fn shift_prefix(&mut self, block: BlockId, count: usize) {
+        let shift = |site: &mut ResourceSite| {
+            if site.block == block
+                && let ResourcePosition::Statement(index) = &mut site.position
+            {
+                *index += count;
+            }
+        };
+        shift(&mut self.begin);
+        for actual in &mut self.actuals {
+            shift(&mut actual.start);
+            shift(&mut actual.stage);
+        }
+        if let Some((site, _)) = &mut self.invocation {
+            shift(site);
+        }
+        for (site, _) in &mut self.exits {
+            shift(site);
+        }
+    }
     pub(super) fn remap_blocks(&mut self, map: &[Option<BlockId>]) -> Result<(), String> {
         let remap = |site: &mut ResourceSite| -> Result<(), String> {
             site.block = map.get(site.block.index() as usize).copied().flatten()

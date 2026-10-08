@@ -4421,9 +4421,24 @@ retirement does not complete RootScope or consume its backing. Recursive declara
 inventory alone does not admit For/Match/reflected bodies or unemitted declarations.
 Alternate outer Default lifetimes remain pending. Ordinary borrowed data sums
 follow their [separate implementation](active/native_ordinary_borrowed_sum_codegen.md);
-this does not extend Resource For/Match/reflected-body admission. See
+this borrowed-sum slice does not itself extend Resource For/Match/reflected-body
+admission. See
 [the borrowed-sum contract](active/native_resource_borrowed_sums.md) and
 [the verified nested contract](active/native_resource_nested_sums.md).
+
+A separate [Resource control-flow proof](active/native_resource_control_flow.md)
+authenticates consuming Resource-free list ForEach and ordinary Resource-free enum
+Switch. Sequence preparation reconstructs the exact three temporary headers,
+source/cursor/length initialization, get/increment prefix and original CFG before
+transporting current borrowed, lexical, call and descriptor proofs. Strict joins
+and final raw ForEach refusal remain unchanged. The focused local MSVC packet
+passes 30 cases / 60 Source-deleted executions across seven Sources, including
+consecutive and nested loops. Full 191/382 reference and Source-deleted MSVC native
+execution pass; coherent-workspace and exact-revision CI gates remain pending. Excluded erased carriers
+and other iterator forms need separate compiler transport proofs under existing
+Source semantics. Source06's separate reference repair passes strict Resource execution, including
+exceptional exits and same-grant reentry. Its native HIR/MIR/codegen ordinal bridge
+remains pending.
 
 The [checked reflected-field reference bridge](active/native_resource_reflected_fields.md)
 retains the original For/body, parent attempt, resolver binder and ordered owner

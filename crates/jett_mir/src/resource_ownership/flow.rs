@@ -1130,7 +1130,15 @@ impl<'p> Analysis<'p> {
                 }
                 StatementKind::EndCallView { .. } | StatementKind::OpenCallOwnerGeneration { .. } | StatementKind::ReplaceCallOwnerGeneration { .. } | StatementKind::CloseCallOwnerGeneration { .. } => {}
                 StatementKind::CheckRefinement { call, .. } => { self.expression(&mut state, call, false)?; }
-                StatementKind::ReflectedContainerReady { .. } | StatementKind::SequenceLength { .. } | StatementKind::SequenceGet { .. } | StatementKind::IterationBorrow { .. } => return Err("pending ResourceOwnershipPlan: sequence or aggregate custody needs its dedicated normalization".into()),
+                StatementKind::SequenceLength { source, target } => {
+                    control_flow::sequence_length(self.function, self.types, source, *target)?;
+                    self.clear(&mut state, *target);
+                }
+                StatementKind::SequenceGet { consume, source, index, target, part } => {
+                    control_flow::sequence_get(self.function, self.types, *consume, source, *index, *target, *part)?;
+                    self.clear(&mut state, *target);
+                }
+                StatementKind::ReflectedContainerReady { .. } | StatementKind::IterationBorrow { .. } => return Err("pending ResourceOwnershipPlan: sequence or aggregate custody needs its dedicated normalization".into()),
             }
         }
         self.site = ResourceSite {
@@ -1194,7 +1202,31 @@ impl<'p> Analysis<'p> {
                 }
                 Ok(vec![(*then_block, yes), (*else_block, no)])
             }
-            TerminatorKind::Respond(_) | TerminatorKind::Switch { .. } | TerminatorKind::ForEach { .. } | TerminatorKind::ReflectedTypeDispatch { .. } => Err("pending ResourceOwnershipPlan: selected control-flow custody normalization is unproved".into()),
+            TerminatorKind::ForEach { key, value, by_view, iterable, body, exit } => {
+                control_flow::consuming_list(self.function, self.types, *key, *value, *by_view, iterable)?;
+                if self.expression(&mut state, iterable, true)?.is_some() {
+                    return Err("Resource sequence cannot acquire or transport element custody".into());
+                }
+                if state.aborted { self.finish(&mut state, ResourceFrameId(0), ResourceCompletion::Abort); return Ok(Vec::new()); }
+                self.clear(&mut state, *key);
+                Ok(vec![(*body, state.clone()), (*exit, state)])
+            }
+            TerminatorKind::Switch { scrutinee, variants, otherwise } => {
+                control_flow::ordinary_switch(self.function, self.types, scrutinee, variants, *otherwise)?;
+                if self.expression(&mut state, scrutinee, true)?.is_some() {
+                    return Err("Resource switch cannot acquire or transport discriminant custody".into());
+                }
+                if state.aborted { self.finish(&mut state, ResourceFrameId(0), ResourceCompletion::Abort); return Ok(Vec::new()); }
+                let mut successors = Vec::new();
+                for (_, target, bindings) in variants {
+                    let mut branch = state.clone();
+                    for local in bindings { self.clear(&mut branch, *local); }
+                    successors.push((*target, branch));
+                }
+                if let Some(target) = otherwise { successors.push((*target, state)); }
+                Ok(successors)
+            }
+            TerminatorKind::Respond(_) | TerminatorKind::ReflectedTypeDispatch { .. } => Err("pending ResourceOwnershipPlan: selected control-flow custody normalization is unproved".into()),
         }
     }
 }

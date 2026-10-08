@@ -628,9 +628,7 @@ fn native_resource_pipeline_original_source_lifecycle_matches_reference_and_reti
     );
 }
 
-#[test]
-fn native_resource_pipeline_object_preflight_checks_all_sources_in_both_profiles() {
-    let selected = cases::pipeline_cases();
+fn run_object_preflight(selected: &[cases::Case], family: &str) {
     let expected = 2 * selected.len();
     let mut emitted = 0usize;
     let mut refusals = Vec::new();
@@ -664,7 +662,7 @@ fn native_resource_pipeline_object_preflight_checks_all_sources_in_both_profiles
                 }
                 Err(error) => {
                     let refusal = format!("case={} release={release}: {error:?}", case.name);
-                    eprintln!("Resource pipeline native object refusal: {refusal}");
+                    eprintln!("Resource {family} native object refusal: {refusal}");
                     refusals.push(refusal);
                 }
             }
@@ -673,14 +671,37 @@ fn native_resource_pipeline_object_preflight_checks_all_sources_in_both_profiles
     assert_eq!(emitted + refusals.len(), expected);
     assert!(
         refusals.is_empty(),
-        "Resource pipeline native object preflight: {}/{} attempts refused\n{}",
+        "Resource {family} native object preflight: {}/{} attempts refused\n{}",
         refusals.len(),
         expected,
         refusals.join("\n")
     );
     assert_eq!(emitted, expected);
     eprintln!(
-        "Resource pipeline native object preflight: {} cases; {emitted} emitted objects; profiles=debug,release; no linked execution",
+        "Resource {family} native object preflight: {} cases; {emitted} emitted objects; profiles=debug,release; no linked execution",
         selected.len()
+    );
+}
+
+#[test]
+fn native_resource_pipeline_object_preflight_checks_all_sources_in_both_profiles() {
+    run_object_preflight(cases::pipeline_cases(), "pipeline");
+}
+
+#[test]
+fn native_resource_control_flow_object_preflight_checks_all_sources_in_both_profiles() {
+    run_object_preflight(cases::control_flow_cases(), "control-flow");
+}
+
+#[test]
+#[ignore = "requires exact Root-measured double-cfg Debug/Release single-runtime archive receipt"]
+fn native_resource_control_flow_original_source_lifecycle_matches_reference_and_retires_before_teardown()
+ {
+    let selected = cases::control_flow_cases();
+    run_native_cases(selected);
+    eprintln!(
+        "Resource control-flow native acceptance: {} cases; {} Source-deleted executions; profiles=debug,release",
+        selected.len(),
+        2 * selected.len()
     );
 }

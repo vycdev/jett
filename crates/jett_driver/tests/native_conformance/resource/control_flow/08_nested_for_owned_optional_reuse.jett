@@ -1,0 +1,29 @@
+namespace app
+export function main(net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle owner = resource_probe.create(view net, 871) handle error:
+        return nothing
+    optional[resource_probe.TestHandle] held = some(owner)
+    mutable int64 total = 0
+    list[int64] outer_phases = list(1, 2)
+    for outer_phase in outer_phases:
+        resource_probe.TestHandle outer_token = view((view held) handle:
+            return nothing
+        )
+        int64 outer_observed = resource_probe.borrow(view net, view outer_token) handle error:
+            return nothing
+        total = total + outer_observed
+        list[int64] inner_phases = list(3, 4)
+        for inner_phase in inner_phases:
+            resource_probe.TestHandle inner_token = view((view held) handle:
+                return nothing
+            )
+            int64 inner_observed = resource_probe.borrow(view net, view inner_token) handle error:
+                return nothing
+            total = total + inner_observed
+    if total != 102:
+        int64 ignored = resource_probe.terminal_label()
+    resource_probe.TestHandle final_token = held handle:
+        return nothing
+    resource_probe.close(final_token)
+    return nothing

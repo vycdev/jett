@@ -8552,12 +8552,22 @@ outcomes: 276 native runs with Source files absent at launch and zero live
 obligations before teardown. Nested handled-view aliases now support terminating
 and joining branches, scoped type bodies, and While/Break/Continue boundaries.
 Exact declaration identity and certified child-before-parent lexical loan ends
-preserve backing ownership; Return operands run before retirement. For/Match and
-reflected bodies, alternate Default lifetimes and broader native Resource
+preserve backing ownership; Return operands run before retirement. Broader
+For/Match forms, reflected bodies, alternate Default lifetimes and native Resource
 semantics remain separate work. Ordinary borrowed data sums have their
 [separate implementation](active/native_ordinary_borrowed_sum_codegen.md).
 This local test slice keeps production Resource providers disabled. See the
 [nested borrowed-sum contract](active/native_resource_nested_sums.md).
+
+The separate [Resource control-flow transport](active/native_resource_control_flow.md)
+now preserves checked custody through consuming Resource-free list iteration and
+ordinary Resource-free enum selection. Exact constructor-owned normalization and
+independent original/current proofs keep backing ownership and strict joins intact.
+Its seven-Source, 30-case / 60-execution local MSVC Source-deleted gate passes,
+including consecutive and nested loops. The full 191-case / 382-execution MSVC native successor also passes.
+Its coherent-workspace and exact-revision CI gates remain pending. Erased carriers, other iterator forms
+and reflected bodies retain their compiler proof obligations under existing Source
+semantics; the separate Source06 reference repair establishes no native admission.
 
 Native plain Resource replacement validates both exact live owners, active runtime holders, loans, nominal kinds, generation capacity and acquisition storage before retiring the old value. An invalid replacement leaves both owners intact. The native compiler consumes this check for exact plain-owner replacement.
 
