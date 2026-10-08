@@ -2633,7 +2633,8 @@ test executable SHA-256 remains
 `76fe2a90106ee8ede00eb86758cefbaa4cefb42d6b818e90a06337b029aba39d`.
 These receipts establish the bounded direct nominal-field native bridge and clean
 reentry. Original Source06's separate exceptional acceptance is recorded below;
-derived native controls and broader aggregate custody remain separate obligations.
+derived native control acceptance is recorded below; broader aggregate custody
+remains a separate obligation.
 
 #### Independent ordinary reflection positive control
 
@@ -2662,7 +2663,7 @@ session **2180**, terminal **aa0907**, three command exits **0**, and all **3,72
 frozen inputs / nine runtime files unchanged** at `2be038c7`; its SHA-256 is
 `38662e59e4dfebfbbde4236ee0a8d6b2cc647b6a9554ea8afb9f2b1119bf3085`.
 Original Source06 exceptional same-grant reentry is accepted separately below.
-Explicit derived Return/Break/Continue/Default native controls remain required.
+The bounded derived native control matrix is accepted separately below.
 This single-entry evidence adds no aggregate transport acceptance and leaves the
 full goal, rough **87%** estimate and fixed **207/182** inventory intact.
 
@@ -2705,7 +2706,55 @@ gates supply this acceptance.
 
 The exact 929-byte original Source06 and prior single-entry/four READY/191-case
 evidence remain unchanged. This is bounded local MSVC original-script reentry
-acceptance; derived Return/Break/Continue/Default native combinations, fresh-archive
-predecessor compatibility, coherent-workspace/exact-revision CI gates and broader
+acceptance; the bounded derived matrix is accepted below. Dedicated Resource
+Return/broader Default lifetimes, fresh-archive predecessor compatibility,
+coherent-workspace/exact-revision CI gates and broader
 aggregate Resource transport remain required. The full goal stays active at the
 rough **87%** estimate and fixed **207/182** inventory denominators.
+
+#### Derived reflected control single-entry and same-grant native acceptance
+
+The exact existing Sources7/8/9 and historical ten scripts pass both profiles.
+Actual control paths are **three handled Returns, two Break paths, two Continue
+paths and three scalar Handle Default paths**. The failure handlers return before
+the named Break/Continue statements. A separate eleventh Source9 READY baseline
+was checked before use as that same Source's reentry tail; the original ten rows
+and all three Source byte sequences are unchanged.
+
+Break preserves total17 and selected-body retirement; Continue preserves total34
+and skips the statement after its scoped-type body; scalar Default substitutes
+17, resumes the selected body and preserves both field visits and total34.
+The outer optional Resource owner is retained
+until the existing close or handled Return. These are exact selected-body/scalar
+Default lifetimes, not general Resource-valued Default or arbitrary lifetime
+composition evidence.
+
+The accepted gates are **22 single-entry reference calls + 40 same-grant reference
+calls = 62**, **22 object attempts**, **22 Source-deleted single-entry executables /
+22 entries**, and **20 same-grant reentry executables / 40 entries**, totaling
+**42 native executables / 62 entries**. Each historical first script uses its own
+Source's READY on one retained Session/provider/paired Network grant. Exact
+completion tuples/messages, continuous events and entry boundaries, zero all
+eight Resource counts and empty ordinary storage before teardown, script
+exhaustion and one clean destruction all pass. The three explicit-close cleanup
+cases preserve body255 / cleanup255 / Cleanup channel / exit71 and exact
+`native Resource cleanup failed`, including the immutable original completion
+and first nonzero process exit after READY. Existing entry-begin checks remain
+authoritative; no reset, latch clearing or provider/grant reinstallation occurs.
+
+`target/native-reflected-derived-control-native-evidence/after-v1.json` records
+actual session **18249**, terminal **e1bcf6**, all five command exits **0**, and
+**one real test selected by each filter**; its SHA-256 is
+`f9cfe12b7a2013fd63ac0e73672a1c4fbee617e01a366e5747a1ab17a1e6da24`.
+All **3,725 frozen inputs / nine runtime files** remain unchanged in the tested
+candidate based on parent `f4c63a0f`. The measured MSVC Debug/Release archives use
+the unchanged compiled receipt pin
+`96721717326f7d6f96dd2bb98dc1d6e919f7119235e33e103e5ac89bd6f29d0a`.
+Original Source06's nine-script matrix and earlier single-entry/four READY/
+ordinary-control/191-case evidence retain their original counts, receipts and
+archive pins. This is local MSVC derived-control acceptance; GNU carrier/fresh-v3
+native execution is separate. Dedicated Resource Return cases and broader
+body/Default lifetimes, aggregate transport, fresh-archive predecessor,
+coherent-workspace and exact-revision CI acceptance remain required. No Source
+policy ban is added. The full goal stays active at the rough **87%** estimate
+and fixed **207/182** inventory denominators.

@@ -59,3 +59,9 @@ fn reflected_field_source06_exceptional_native_inputs_match_real_reference() {
 
 #[path = "reflected_field_positive/reentry.rs"]
 mod source06_native_reentry;
+
+#[path = "../../../../../jett_driver/tests/native_conformance/resource_reflected_derived_cases.rs"]
+mod reflected_derived_cases;
+
+#[path = "reflected_field_positive/derived_controls.rs"]
+mod derived_controls;

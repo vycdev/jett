@@ -4464,8 +4464,8 @@ Source semantics. Source06's separate reference repair passes strict Resource ex
 exceptional exits and same-grant reentry. A separate direct-field HIR/MIR ordinal
 bridge now retains the exact checked scopes and passes its bounded native gate,
 including clean same-grant reentry. Original Source06 exceptional native
-single-entry and same-grant reentry acceptance are recorded below; derived native
-control paths remain separate obligations.
+single-entry and same-grant reentry acceptance, plus the bounded derived control
+matrix, are recorded below. Broader lifetime combinations remain obligations.
 
 The [checked reflected-field reference bridge](active/native_resource_reflected_fields.md)
 retains the original For/body, parent attempt, resolver binder and ordered owner
@@ -4552,7 +4552,35 @@ unchanged in the tested candidate based on parent `b5c55ac7`, recorded in
 The earlier zero-test filter attempt remains explicitly unaccepted in `after-v2.json`;
 each corrected manifest filter executed one real test. Runtime ABI 1, Source wire 2
 and private script/report protocol 1 remain unchanged. This is local MSVC original
-Source06 acceptance. Explicit derived Return/Break/Continue/Default native controls,
-broader aggregate custody and coherent-revision successor gates remain separate
-obligations; the bounded producer adds no policy ban. The full goal remains active
-at the rough 87% estimate.
+Source06 acceptance; the separate derived control acceptance follows.
+
+The unchanged derived Sources7/8/9 now additionally pass the historical ten-script
+matrix: three handled Returns, two Break paths, two Continue paths and three
+scalar Handle Default paths. Borrow-failure handlers in Sources7/8 return before
+Break/Continue; the executed signal, rather than the fixture family name, defines
+these counts. A separate Source9 READY baseline was verified without changing
+Source bytes. Break keeps total17 and retires its selected scoped-type body;
+Continue keeps total34 and skips the statement after that body; scalar Default
+supplies primitive17, resumes the selected body and preserves both field visits
+and total34. The outer optional owner is retained until the existing consuming
+close or handled Return.
+
+Actual session 18249, terminal `e1bcf6`, passes all five one-test gates with exit
+zero: 22 single-entry reference calls, 40 same-grant reference calls, 22 objects,
+22 Source-deleted single-entry executables / 22 entries and 20 same-grant reentry
+executables / 40 entries, for **42 native executables / 62 entries**. Each original
+script is followed by its own Source's READY on the same Session/provider/paired
+Network grant. Strict completion/diagnostic/event records, all eight zero
+Resource counts and empty ordinary storage before teardown, combined-script
+exhaustion and one destruction remain exact. Explicit-close cleanup failures
+retain body255 / cleanup255 / Cleanup channel / first exit71 after READY; existing
+entry-begin checks and immutable first observations are unchanged, with no reset.
+`target/native-reflected-derived-control-native-evidence/after-v1.json`
+(SHA-256 `f9cfe12b7a2013fd63ac0e73672a1c4fbee617e01a366e5747a1ab17a1e6da24`)
+retains all 3,725 frozen inputs and nine measured v2 runtime files unchanged in
+the tested candidate based on parent `f4c63a0f`, using the MSVC receipt pin above.
+Prior original Source06 and 191/382 receipts remain separate. This gate adds no
+GNU carrier/fresh-v3 native execution acceptance. Dedicated Resource Return cases,
+broader body/Default lifetimes, aggregate custody and coherent-revision successor
+gates remain separate obligations under existing Source semantics. The full goal
+stays active at the rough 87% estimate and fixed 207/182 inventory denominators.

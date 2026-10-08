@@ -45,7 +45,7 @@ fn empty_before_teardown(interpreter: &mut Interpreter, expected: &[ProviderEven
     assert!(interpreter.take_debug_events().is_empty());
 }
 
-fn original_then_ready(first: &cases::Case, ready: &cases::Case, release: bool) {
+pub(super) fn original_then_ready(first: &cases::Case, ready: &cases::Case, release: bool) {
     assert_eq!(first.source.as_bytes(), ready.source.as_bytes());
     let checked = checked_case(first, release);
     let definition = entry(&checked, "main");

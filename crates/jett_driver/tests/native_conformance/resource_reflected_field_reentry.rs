@@ -122,7 +122,7 @@ fn assert_original_then_ready(first: &cases::Case, ready: &cases::Case, observed
     );
 }
 
-fn run_original_then_ready(first: &cases::Case, ready: &cases::Case, release: bool) {
+pub(super) fn run_original_then_ready(first: &cases::Case, ready: &cases::Case, release: bool) {
     let archive = archive(release);
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

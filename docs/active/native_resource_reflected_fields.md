@@ -8,7 +8,8 @@ The checked Resource lowering path now retains a direct nominal-struct field
 ordinal bridge through HIR and MIR. Four focused Source cases pass 16 linked
 native executions and 24 entry attempts; the unchanged 191-case corpus also
 passes all 382 Source-deleted Debug/Release executions. Original Source06 also
-passes 18 exceptional same-grant executables / 36 entry attempts, recorded below.
+passes 18 exceptional same-grant executables / 36 entry attempts. Derived
+Sources7/8/9 separately pass 42 native executables / 62 entries, recorded below.
 
 ## Retained selection proof
 
@@ -245,6 +246,53 @@ archive pins. This gate establishes the original exceptional same-grant matrix;
 fresh-archive predecessor, coherent-workspace and exact-revision CI gates remain
 separate obligations.
 
+## Derived reflected control native acceptance
+
+The unchanged derived Sources7/8/9 now pass their historical ten-script matrix
+in both checking profiles. The executed signals are **three handled Returns,
+two Break paths, two Continue paths and three scalar Handle Default paths**.
+The first-borrow failure in Source7 and first/later-borrow failures in Source8
+return from their handlers before Break or Continue; they are counted as Return.
+A separate eleventh Source9 READY baseline was added and verified, without
+changing Source bytes or the original ten scripts.
+
+Break preserves the total17 guard and retires the selected scoped-type body
+before the consuming close. Continue preserves both field visits and total34,
+and skips the statement after its scoped-type body. Scalar Default substitutes
+17 for the failed primitive borrow, resumes the selected body and preserves both
+field visits and total34. These exact controls exercise selected body retirement
+with the outer optional owner retained until its existing close or handled Return.
+They do not
+establish arbitrary Resource-valued Default or other body/Default lifetime
+compositions.
+
+The five actual gates pass **22 single-entry reference calls, 40 same-grant
+reference calls and 22 emitted objects**, followed by **22 Source-deleted
+single-entry executables / 22 entries** and **20 same-grant reentry executables /
+40 entries**: **42 native executables / 62 entries** and **62 reference calls**.
+Every historical first script is followed by its own unchanged Source's READY
+on the same Session/provider/paired Network grant; the separately verified
+Source9 READY supplies its two-borrow tail. Exact completion tuples, diagnostic
+bytes, continuous events and per-entry boundaries, zero ordinary/all eight
+Resource obligations before teardown, combined-script exhaustion and one clean
+Session destruction all pass. The three explicit-close cleanup cases retain
+body 255 / cleanup 255 / Cleanup channel / exit 71 and exact
+`native Resource cleanup failed`; their original completion and first nonzero
+process exit remain unchanged after clean READY. Existing `entry_begin` checks
+remain authoritative; no reset, failure-latch clearing or provider/grant
+reinstallation is introduced.
+
+`target/native-reflected-derived-control-native-evidence/after-v1.json`
+(SHA-256 `f9cfe12b7a2013fd63ac0e73672a1c4fbee617e01a366e5747a1ab17a1e6da24`)
+records actual session **18249**, terminal **e1bcf6**, all five commands exiting
+zero with **one real test each**, and all **3,725 frozen inputs / nine runtime
+files unchanged** in the tested candidate based on parent `f4c63a0f`. It uses
+the unchanged measured MSVC Debug/Release receipt pin
+`96721717326f7d6f96dd2bb98dc1d6e919f7119235e33e103e5ac89bd6f29d0a`.
+The earlier original Source06 nine-script, four READY, ordinary-control and
+191/382 receipts remain separate evidence. No GNU carrier/fresh-v3 native
+execution acceptance follows from this local MSVC gate.
+
 ## Remaining native and reflection work
 
 The producer breadth is deliberately limited to the exact direct nominal-struct
@@ -254,8 +302,9 @@ producers and broader function compositions remain compiler implementation and
 Source-evidence obligations in the checked Resource path. The ordinary controls
 above establish their own bounded parity and leave ordinary `lower_program`
 unchanged. Original Source06 exceptional same-grant reentry is accepted above.
-Explicit derived Return/Break/Continue/Default native controls and broad aggregate
-Resource custody remain separate acceptance obligations. This boundary adds no
+The derived historical control matrix is accepted above. Dedicated Resource
+Return cases, broader body/Default lifetimes and broad aggregate Resource custody
+remain separate acceptance obligations. This boundary adds no
 compiler-policy ban on existing Source semantics.
 
 The full native-codegen goal remains active at the rough 87% planning estimate.

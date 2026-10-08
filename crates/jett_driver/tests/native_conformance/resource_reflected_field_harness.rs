@@ -197,3 +197,9 @@ fn native_resource_reflected_field_source06_exceptional_scripts_retire_before_te
 
 #[path = "resource_reflected_field_reentry.rs"]
 mod source06_reentry;
+
+#[path = "resource_reflected_derived_cases.rs"]
+mod reflected_derived_cases;
+
+#[path = "resource_reflected_derived_harness.rs"]
+mod derived_controls;
