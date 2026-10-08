@@ -2561,8 +2561,10 @@ fixed 207/182 inventory denominators remain unchanged.
 Resource tests. Strict original Source06/derived controls pass 74 entry attempts
 in both checking profiles, including same-provider/grant reentry after every
 selected failure. `after-v5.json` records all 3,664 inputs unchanged at the
-complete crate gate. This proves checked reference behavior; native reflected
-Resource emission, Source-deleted execution and the full goal remain pending.
+complete crate gate. This checkpoint proves checked reference behavior; its
+receipt alone establishes no native reflected Resource emission or Source-deleted
+execution. Accepted native successor gates are recorded below; the full goal
+remains active.
 
 ### Checked Resource reflected-field native ordinal bridge (2026-10-08)
 
@@ -2612,8 +2614,9 @@ distinct field-index bodies, distinct field-name bodies and a proof-only ordinar
 helper. They pass **16 Source-deleted native executions / 24 entries** in
 Debug/Release: eight single-entry executables and eight clean two-entry
 executables, with the same Session/provider/grant retained across both entries.
-Each entry checks exact outcomes, ordered events, exhausted script and zero
-ordinary/Resource obligations before teardown, and the Session is destroyed once.
+Each entry checks exact outcomes, ordered events and zero ordinary/Resource
+obligations before teardown. The combined script is exhausted before one Session
+destruction.
 `target/native-resource-reflected-field-native-bridge-evidence/native-acceptance-v5.json`
 records actual session **29429**, terminal **9cfc8d**, exit **0**; its SHA-256 is
 `0b05489e3b97201ba0aee4642c2f157e81d5f9684e818f347eb403f775cda10a`.
@@ -2628,9 +2631,9 @@ records actual session **49641**, terminal **1d2132**, exit **0**; its SHA-256 i
 measured MSVC archives and their build/CRT/native-static-libs receipts. The frozen
 test executable SHA-256 remains
 `76fe2a90106ee8ede00eb86758cefbaa4cefb42d6b818e90a06337b029aba39d`.
-This establishes the bounded direct nominal-field native bridge and clean reentry;
-exceptional reflected native exits/reentry and broader aggregate custody remain
-separate acceptance obligations.
+These receipts establish the bounded direct nominal-field native bridge and clean
+reentry. Original Source06's separate exceptional acceptance is recorded below;
+derived native controls and broader aggregate custody remain separate obligations.
 
 #### Independent ordinary reflection positive control
 
@@ -2658,6 +2661,51 @@ all pass. The existing four READY cases and 191-case catalog are retained unchan
 session **2180**, terminal **aa0907**, three command exits **0**, and all **3,720
 frozen inputs / nine runtime files unchanged** at `2be038c7`; its SHA-256 is
 `38662e59e4dfebfbbde4236ee0a8d6b2cc647b6a9554ea8afb9f2b1119bf3085`.
-Exceptional same-grant reentry and derived Return/Break/Continue/Default native
-controls remain required. This evidence adds no aggregate transport acceptance
-and leaves the full goal, rough **87%** estimate and fixed **207/182** inventory intact.
+Original Source06 exceptional same-grant reentry is accepted separately below.
+Explicit derived Return/Break/Continue/Default native controls remain required.
+This single-entry evidence adds no aggregate transport acceptance and leaves the
+full goal, rough **87%** estimate and fixed **207/182** inventory intact.
+
+#### Original reflected Source06 exceptional same-grant reentry acceptance
+
+All **nine original scripts followed by READY** pass in both profiles on the same
+Session/provider/paired Network grant: **18 Source-deleted native executables /
+36 entries**, plus **36 actual shared reference calls**. Both per-entry completion
+tuples, exact diagnostic bytes, event boundaries and continuous ordered events are
+retained. Each entry observes zero owners/loans/frames/registry entries,
+owner/loan/frame handles and provisional returns, plus empty ordinary storage,
+before teardown. The combined script is exhausted and the Session is destroyed
+once. Exceptional first completions keep their original nonzero process exit
+after clean READY, including cleanup-wins handled Return body 0 / cleanup 255 /
+Cleanup channel / exit 71.
+
+The private launcher completes and copies real observations before continuing
+after retired Resource cleanup failure with current ordinary status zero. The
+existing next `entry_begin` independently enforces installed-entry/budget,
+ordinary first-error/cleanup and active/live-custody checks. No failure latch is
+cleared, no provider/grant is reinstalled and no reset/failure-taking API is added.
+The immutable first failure remains observable after the clean second entry.
+
+Fresh MSVC Debug/Release archives were built in actual session **23542**, terminal
+**e09148**, exit **0**, and independently measured at
+`target/native-reflected-exceptional-reentry-archives/measurements-01/receipt.json`;
+the compiled receipt pin is
+`96721717326f7d6f96dd2bb98dc1d6e919f7119235e33e103e5ac89bd6f29d0a`.
+Runtime ABI 1, Source wire 2 and script/report protocol 1 remain unchanged.
+
+`target/native-reflected-exceptional-reentry-evidence/after-v3.json` records actual
+session **30992**, terminal **22c716**, both Rust harness exits **0**, and all
+**3,722 frozen inputs / nine runtime files unchanged** in the tested candidate
+based on parent `b5c55ac7`; its SHA-256 is
+`f3dc34c6a13079c6e0be04716d37af9a69580a7b99b859a4ebd5301376e3aa8b`.
+The corrected exact manifest filters each executed **one real test**. Earlier
+session **52970**, terminal **e8c3b4**, selected zero tests; preserved `after-v2.json`
+explicitly records zero executions and **nonacceptance**. Only the corrected real
+gates supply this acceptance.
+
+The exact 929-byte original Source06 and prior single-entry/four READY/191-case
+evidence remain unchanged. This is bounded local MSVC original-script reentry
+acceptance; derived Return/Break/Continue/Default native combinations, fresh-archive
+predecessor compatibility, coherent-workspace/exact-revision CI gates and broader
+aggregate Resource transport remain required. The full goal stays active at the
+rough **87%** estimate and fixed **207/182** inventory denominators.

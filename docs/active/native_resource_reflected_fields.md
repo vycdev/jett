@@ -7,7 +7,8 @@ Source execution; it adds no language syntax, provider or runtime capability.
 The checked Resource lowering path now retains a direct nominal-struct field
 ordinal bridge through HIR and MIR. Four focused Source cases pass 16 linked
 native executions and 24 entry attempts; the unchanged 191-case corpus also
-passes all 382 Source-deleted Debug/Release executions.
+passes all 382 Source-deleted Debug/Release executions. Original Source06 also
+passes 18 exceptional same-grant executables / 36 entry attempts, recorded below.
 
 ## Retained selection proof
 
@@ -145,8 +146,8 @@ field-index bodies, distinct field-name bodies and a proof-only ordinary helper.
 Both checking profiles pass eight single-entry executables and eight clean
 two-entry executables: **16 Source-deleted native executions / 24 entry attempts**.
 The clean two-entry cases retain the same Session, provider and grant. Each entry
-has the exact outcome, ordered events, exhausted script and zero ordinary and
-Resource obligations before teardown; the Session is destroyed exactly once.
+has the exact outcome, ordered events and zero ordinary/Resource obligations
+before teardown. The combined script is exhausted before one Session destruction.
 The focused receipt is
 `target/native-resource-reflected-field-native-bridge-evidence/native-acceptance-v5.json`
 (SHA-256 `0b05489e3b97201ba0aee4642c2f157e81d5f9684e818f347eb403f775cda10a`), actual session 29429,
@@ -195,6 +196,55 @@ and all 3,720 frozen inputs plus nine measured runtime files unchanged at
 compiler/runtime code, four READY controls and the 191-case catalog are unchanged.
 These single entries do not establish exceptional same-grant reentry.
 
+## Original reflected exceptional same-grant reentry
+
+All nine original Source06 scripts now execute followed by exact READY on the
+same Session, provider and paired Network grant in both checking profiles:
+**18 Source-deleted native executables / 36 entry attempts**. The shared checked
+reference matrix separately passes 36 real calls. This includes all three
+cleanup-failure cases as well as the original handled Return and provider-panic
+paths. The exact 929-byte Source06 and original scripts remain unchanged.
+
+The private launcher first completes the actual attempt and copies its original
+body status, cleanup status, selected channel, exact ordinary/Resource message
+bytes, event boundary and live counts. Every entry has zero owners, loans, frames,
+registry entries, owner/loan/frame handles and provisional returns, plus empty
+ordinary value storage, before teardown. After these checks, completed Resource
+cleanup failure permits the declared next entry when current ordinary status is
+zero. Existing `entry_begin` independently validates the installed entry, attempt
+budget, ordinary first-error/cleanup state and absence of active or residual custody.
+It creates fresh attempt/root identities on the retained Session/provider/grant.
+No failure latch is cleared and no reset or failure-taking API is invoked.
+
+Each original completion and diagnostic remains immutable in the report. Events
+retain one continuous sequence with exact per-entry boundaries; the combined
+script is exhausted and the Session is destroyed once. The first nonzero process
+exit remains 71 or 73 after clean READY. Handled-domain Return with failed cleanup
+retains original body 0, cleanup 255, Cleanup channel and exit 71. These are exact
+observed exceptional outcomes; the second entry does not replace the first record.
+
+Fresh independently measured MSVC Debug/Release archives were built in actual
+session 23542, terminal `e09148`, exit zero. Their receipt is
+`target/native-reflected-exceptional-reentry-archives/measurements-01/receipt.json`
+with compiled pin
+`96721717326f7d6f96dd2bb98dc1d6e919f7119235e33e103e5ac89bd6f29d0a`.
+The private launcher continuation changed; runtime ABI 1, Source wire 2 and
+script/report protocol 1 remain unchanged. The archive build alone is separate
+from the subsequent actual Source execution.
+
+`target/native-reflected-exceptional-reentry-evidence/after-v3.json`
+(SHA-256 `f3dc34c6a13079c6e0be04716d37af9a69580a7b99b859a4ebd5301376e3aa8b`)
+records actual session 30992, terminal `22c716`, both Rust harnesses exiting zero,
+and all **3,722 frozen inputs / nine runtime files unchanged** in the tested
+candidate based on parent `b5c55ac7ed9ec559fbae6616de74fff507bff042`. The exact
+manifest filters each ran one real test. Earlier session 52970 selected zero
+tests; preserved `after-v2.json`
+explicitly records zero executions and nonacceptance. The earlier single-entry,
+four READY and 191/382 receipts remain separate evidence with their original
+archive pins. This gate establishes the original exceptional same-grant matrix;
+fresh-archive predecessor, coherent-workspace and exact-revision CI gates remain
+separate obligations.
+
 ## Remaining native and reflection work
 
 The producer breadth is deliberately limited to the exact direct nominal-struct
@@ -203,9 +253,10 @@ families, reflected variants, machines, `TypeInfo.args`, nested reflected
 producers and broader function compositions remain compiler implementation and
 Source-evidence obligations in the checked Resource path. The ordinary controls
 above establish their own bounded parity and leave ordinary `lower_program`
-unchanged. Exceptional same-grant reentry, derived Return/Break/Continue/Default
-native controls and broad aggregate Resource custody remain separate acceptance
-obligations. This boundary adds no compiler-policy ban on existing Source semantics.
+unchanged. Original Source06 exceptional same-grant reentry is accepted above.
+Explicit derived Return/Break/Continue/Default native controls and broad aggregate
+Resource custody remain separate acceptance obligations. This boundary adds no
+compiler-policy ban on existing Source semantics.
 
 The full native-codegen goal remains active at the rough 87% planning estimate.
 The fixed 207-fixture / 182-run-pass inventory denominators do not change.

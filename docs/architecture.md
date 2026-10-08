@@ -4463,8 +4463,9 @@ carriers and other iterator forms need separate compiler transport proofs under 
 Source semantics. Source06's separate reference repair passes strict Resource execution, including
 exceptional exits and same-grant reentry. A separate direct-field HIR/MIR ordinal
 bridge now retains the exact checked scopes and passes its bounded native gate,
-including clean same-grant reentry; exceptional reflected native reentry remains
-pending.
+including clean same-grant reentry. Original Source06 exceptional native
+single-entry and same-grant reentry acceptance are recorded below; derived native
+control paths remain separate obligations.
 
 The [checked reflected-field reference bridge](active/native_resource_reflected_fields.md)
 retains the original For/body, parent attempt, resolver binder and ordered owner
@@ -4527,6 +4528,31 @@ producers still require checked Resource compiler transport proofs and Source
 evidence. The original Source06 additionally passes all eight exceptional scripts
 through 16 reference observations, 16 objects and 16 Source-deleted native single
 entries in both checking profiles, with exact completion and pre-teardown retirement.
-Exceptional same-grant reentry, derived Return/Break/Continue/Default native controls
-and broader aggregate custody remain separate acceptance obligations; the bounded
-producer adds no policy ban. The full goal remains active at the rough 87% estimate.
+
+The original nine-script matrix also passes 18 Source-deleted same-grant native
+executables / 36 entries in Debug/Release: every original script followed by READY
+on one retained Session/provider/paired Network grant. The private launcher
+completes and observes the first attempt before requesting the next existing
+`entry_begin`. All eight Resource counts and ordinary value storage are zero
+before teardown; the runtime independently validates current ordinary
+first-error/cleanup state, installed entry, attempt budget and absence of active
+or residual custody. Completed Resource cleanup failure is retained historical
+evidence and permits the declared next entry after these checks. No error reset
+or failure-taking API is introduced. Both immutable completion/diagnostic records,
+continuous ordered events and original first nonzero process exit remain exact;
+the combined script is exhausted before one Session destruction.
+
+Fresh measured MSVC Debug/Release archives use compiled receipt pin
+`96721717326f7d6f96dd2bb98dc1d6e919f7119235e33e103e5ac89bd6f29d0a`.
+Actual reference/native session 30992, terminal `22c716`, passes both Rust
+harnesses with exit zero and retains all 3,722 inputs and nine runtime files
+unchanged in the tested candidate based on parent `b5c55ac7`, recorded in
+`target/native-reflected-exceptional-reentry-evidence/after-v3.json`
+(SHA-256 `f3dc34c6a13079c6e0be04716d37af9a69580a7b99b859a4ebd5301376e3aa8b`).
+The earlier zero-test filter attempt remains explicitly unaccepted in `after-v2.json`;
+each corrected manifest filter executed one real test. Runtime ABI 1, Source wire 2
+and private script/report protocol 1 remain unchanged. This is local MSVC original
+Source06 acceptance. Explicit derived Return/Break/Continue/Default native controls,
+broader aggregate custody and coherent-revision successor gates remain separate
+obligations; the bounded producer adds no policy ban. The full goal remains active
+at the rough 87% estimate.

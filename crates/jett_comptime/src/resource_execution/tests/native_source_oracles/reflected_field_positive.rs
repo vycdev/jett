@@ -56,3 +56,6 @@ fn reflected_field_source06_exceptional_native_inputs_match_real_reference() {
     assert_eq!(reflected_field_cases::SOURCE06_EXCEPTIONAL_CASES.len(), 8);
     run_reference_cases(reflected_field_cases::SOURCE06_EXCEPTIONAL_CASES);
 }
+
+#[path = "reflected_field_positive/reentry.rs"]
+mod source06_native_reentry;

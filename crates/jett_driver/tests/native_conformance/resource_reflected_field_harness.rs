@@ -194,3 +194,6 @@ fn native_resource_reflected_field_source06_exceptional_scripts_retire_before_te
         "Resource reflected-field exceptional single-entry acceptance: 8 cases; 16 Source-deleted executions; profiles=debug,release; exceptional same-grant reentry remains separate"
     );
 }
+
+#[path = "resource_reflected_field_reentry.rs"]
+mod source06_reentry;

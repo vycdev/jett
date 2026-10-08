@@ -641,12 +641,13 @@ fn run_attempt(session: &mut Session, report: &mut Report) -> Result<AttemptOutc
         2 => EXIT_PANIC,
         _ => return Err(()),
     };
-    // Resource-only completed channels may reenter after clean retirement.
-    // A retained ordinary failure or cleanup failure is a hard stop. No reset
-    // or failure-taking API is invoked by the launcher.
+    // A completed Resource cleanup failure remains an immutable observation.
+    // Clean retirement permits the declared next entry; entry_begin independently
+    // rejects ordinary failures, ordinary cleanup failure and residual custody.
+    // No reset or failure-taking API is invoked by the launcher.
     Ok(AttemptOutcome {
         exit,
-        reenter: ordinary == 0 && completion.cleanup_status == 0,
+        reenter: ordinary == 0,
     })
 }
 fn run(session: &mut Session, report: &mut Report) -> c_int {
