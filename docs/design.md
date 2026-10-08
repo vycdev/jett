@@ -8583,6 +8583,29 @@ rule; no runtime capability or provider enters the required worker.
 Checked reference execution now preserves exact field ordinals and original
 scope bodies in direct `type.fields` loops, including equal-type fields, aliases,
 recursive calls and Resource cleanup through early exits. Closed pure required
-evaluation uses the same boundary without runtime authority. This adds no Source
-rule; native reflected Resource transport remains pending. See the
+evaluation uses the same boundary without runtime authority.
+
+The checked Resource native lowering path now retains distinct field ordinals
+for direct nominal-struct `type.fields` loops and their direct `field.type_info`
+type bindings. An immutable original Source archive joins each ordinal to its
+exact checker-selected body and lexical Scope path. MIR selects that body with
+the original field binder's index guard followed by a one-arm TypeInfo dispatch,
+so equal-type fields keep distinct bodies without weakening TypeInfo identity
+checks. Runtime metadata alone cannot select an executable body.
+
+Ordinary helpers in the same checked Resource program may retain this proof
+without gaining Resource custody, provider authority or a hidden Scope ABI.
+Their ordinary map, string, view and uninhabited sequence preparation stays
+available. This bridge adds no Source rule, runtime leaf, ABI or wire-v2 change.
+The affected compiler phase gate passes 1,202 checks. Four focused cases pass
+16 Source-deleted native executions / 24 entries, including clean same-grant
+reentry; the unchanged 191-case corpus passes all 382 Debug/Release executions.
+All 3,686 frozen inputs and nine matched runtime files remain unchanged.
+Ordinary `lower_program` coalescing stays unchanged: independent positive controls
+pass 30 Source-deleted main/verify/property executions without a production change,
+and establish no ordinary coalescing defect. Generic and alias owners, bitfields,
+variants, machines, type arguments and nested producers remain implementation
+obligations in the checked Resource path. Exceptional reflected native reentry
+and broader aggregate custody remain separate acceptance obligations under
+existing Source semantics. See the
 [reflected-field execution contract](active/native_resource_reflected_fields.md).

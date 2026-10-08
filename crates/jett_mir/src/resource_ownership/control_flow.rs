@@ -410,6 +410,9 @@ pub(crate) fn sequence_transition(
     {
         return Err("Resource sequence transition changed its exact before-witness".into());
     }
+    if !has_execution_records(before, types) && !original.reflected_fields.is_empty() {
+        return reflected_fields::ordinary_sequence_transition(function, before, edit, types);
+    }
     let (expected, body) = canonical_sequence(before, edit, types)?;
     if function.id != expected.id
         || function.identity != expected.identity

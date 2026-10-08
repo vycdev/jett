@@ -26,9 +26,11 @@ use jett_types::{
 };
 
 mod call_ownership;
+mod reflected_field_sources;
 mod resource_manifest;
 mod resource_materialization;
 mod resource_source;
+pub use reflected_field_sources::ReflectedFieldDispatchProof;
 pub use resource_manifest::{
     ResourceHookRef, ResourceKind, ResourceKindId, ResourceKindRef, ResourceManifest,
 };
@@ -1281,6 +1283,7 @@ fn lower_resource_program(
         tests,
     );
     lowerer.resource_manifest = manifest;
+    lowerer.authenticated_resource_lowering = true;
     let mut program = lowerer.lower()?;
     program.resource_source =
         ResourceSourceArchive::checked(&program, original, &original.checked().interner);
@@ -1335,6 +1338,7 @@ enum FunctionKey {
 
 struct Lowerer<'a> {
     resource_manifest: ResourceManifest,
+    authenticated_resource_lowering: bool,
     module: &'a Module,
     resolve: &'a ResolveResult,
     check: &'a CheckResult,
@@ -1380,6 +1384,7 @@ impl<'a> Lowerer<'a> {
             .collect();
         Self {
             resource_manifest: ResourceManifest::empty(),
+            authenticated_resource_lowering: false,
             module,
             resolve,
             check,
@@ -1992,6 +1997,21 @@ impl<'a> Lowerer<'a> {
             static_selections,
             comptime_type_bindings,
         );
+        if body_lowerer.parent.authenticated_resource_lowering
+            && source.instantiation.is_none()
+            && source.method.is_none()
+            && source.function.type_params.is_empty()
+            && source.definition.is_some_and(|definition| {
+                reflected_field_sources::original_root_function(
+                    body_lowerer.parent.module,
+                    body_lowerer.parent.resolve,
+                    source.function,
+                    definition,
+                )
+            })
+        {
+            body_lowerer.reflected_field_root = Some(&source.function.body);
+        }
         body_lowerer.return_type = Some(return_type);
         let mut params = Vec::with_capacity(source.function.params.len());
         for (param, ty) in source.function.params.iter().zip(parameter_types) {
@@ -2700,6 +2720,8 @@ struct BodyLowerer<'lowerer, 'program> {
     visible_bindings: Vec<HashMap<String, LocalId>>,
     scoped_type_bindings: Vec<ScopedTypeBinding>,
     required_scopes: Vec<RequiredScopeIdentity>,
+    reflected_field_root: Option<&'program ast::Block>,
+    retained_reflected_bindings: HashSet<Span>,
     return_type: Option<TypeId>,
     ownership_context: jett_typecheck::CheckedOwnershipContext,
     view_parameter_locals: HashSet<LocalId>,
@@ -2760,6 +2782,8 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             visible_bindings: vec![HashMap::new()],
             scoped_type_bindings: Vec::new(),
             required_scopes: Vec::new(),
+            reflected_field_root: None,
+            retained_reflected_bindings: HashSet::new(),
             return_type: None,
             ownership_context: jett_typecheck::CheckedOwnershipContext::Ordinary,
             view_parameter_locals: HashSet::new(),
@@ -3208,6 +3232,20 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     }
                 }
             }
+            let saved_reflected_bindings = std::mem::take(&mut self.retained_reflected_bindings);
+            if self.required_scopes.is_empty()
+                && self.reflected_field_root.is_some_and(|root| {
+                    root.stmts.iter().any(|statement| {
+                        matches!(statement, Stmt::For(original) if std::ptr::eq(original, loop_stmt))
+                    })
+                })
+            {
+                self.retained_reflected_bindings = reflected_field_sources::original_loop_bindings(
+                    self.parent.resolve,
+                    self.parent.check,
+                    loop_stmt,
+                ).into_iter().collect();
+            }
             let body = if matches!(
                 self.parent.check.interner.resolve(iterable.ty),
                 Type::List(element) if *element == TypeInterner::NEVER
@@ -3227,6 +3265,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             } else {
                 self.lower_block(&loop_stmt.body)
             };
+            self.retained_reflected_bindings = saved_reflected_bindings;
             self.view_iteration_bindings = saved_iteration_bindings;
             self.visible_bindings.pop();
             (
@@ -3415,6 +3454,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             );
             return None;
         }
+        let retain_ordinals = self.retained_reflected_bindings.contains(&binding.span);
         let mut arms = Vec::with_capacity(bindings.len());
         let mut bound_types = HashSet::new();
         for (index, checked) in bindings.into_iter().enumerate() {
@@ -3427,14 +3467,31 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             // Share an arm only when both canonical type and source-visible
             // reflection agree; aliases can specialize the body differently.
             let reflection_identity = checked.reflection.reflection_identity();
-            if !bound_types.insert((checked.bound_type, reflection_identity.clone())) {
+            if !retain_ordinals
+                && !bound_types.insert((checked.bound_type, reflection_identity.clone()))
+            {
                 continue;
             }
+            let bound_type = checked.bound_type;
+            let body = self.lower_bound_type_body(binding, index, checked);
+            let body = if retain_ordinals {
+                // An ordinal owns an exact lexical Source body even when another
+                // field has the same canonical type and reflection identity.
+                Block {
+                    statements: vec![Statement {
+                        kind: StatementKind::Scope(body),
+                        span: binding.span,
+                    }],
+                    span: binding.body.span,
+                }
+            } else {
+                body
+            };
             arms.push(ReflectedTypeArm {
                 iteration_index,
-                bound_type: checked.bound_type,
+                bound_type,
                 reflection_identity,
-                body: self.lower_bound_type_body(binding, index, checked),
+                body,
             });
         }
         Some(StatementKind::ReflectedTypeDispatch { type_info, arms })

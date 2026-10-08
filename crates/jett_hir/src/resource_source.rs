@@ -1,6 +1,7 @@
 //! Original checked HIR and type meanings; raw lowering cannot mint this archive.
 use crate::{
-    Expression, Function, FunctionId, FunctionIdentity, Program, ResourceHookRef, ResourceManifest,
+    Expression, Function, FunctionId, FunctionIdentity, Program, ReflectedFieldDispatchProof,
+    ReflectedTypeArm, ResourceHookRef, ResourceManifest,
 };
 use jett_comptime::CheckedRequiredValue;
 use jett_typecheck::CheckedResourceProgram;
@@ -56,6 +57,7 @@ struct Original {
     equality_methods: HashMap<TypeId, FunctionId>,
     types: Vec<TypeRow>,
     exported: Vec<FunctionId>,
+    reflected_fields: Vec<ReflectedFieldDispatchProof>,
 }
 
 /// A checked required occurrence and the expression derived from its opaque value.
@@ -157,6 +159,7 @@ impl ResourceSourceArchive {
                 equality_methods: program.equality_methods.clone(),
                 types: rows,
                 exported: super::resource_materialization::exported_functions(program, checked),
+                reflected_fields: super::reflected_field_sources::capture(program, checked),
             })),
             execution: None,
         }
@@ -220,6 +223,62 @@ impl ResourceSourceArchive {
     pub fn equality_methods(&self) -> Option<&HashMap<TypeId, FunctionId>> {
         self.data.as_ref().map(|data| &data.equality_methods)
     }
+    /// Readonly eligibility for an original reflected-field proof-only witness.
+    /// This does not admit operands or grant a Resource execution family or scope.
+    pub fn has_reflected_field_dispatch(&self, function: FunctionId) -> bool {
+        self.data.as_ref().is_some_and(|data| {
+            data.reflected_fields.iter().any(|proof| {
+                proof.function() == function
+                    && proof.belongs_to(&data.checked)
+                    && proof.validate_original()
+            })
+        })
+    }
+
+    /// Exact original dispatch operands select a constructor-only Source proof.
+    /// Runtime TypeInfo values, field names, and caller-made arms grant no authority.
+    pub fn get_reflected_field_dispatch(
+        &self,
+        function: FunctionId,
+        type_info: &Expression,
+        arms: &[ReflectedTypeArm],
+    ) -> Option<&ReflectedFieldDispatchProof> {
+        let data = self.data.as_ref()?;
+        let mut matches = data.reflected_fields.iter().filter(|proof| {
+            proof.function() == function
+                && proof.belongs_to(&data.checked)
+                && proof.matches(data.functions.as_slice(), type_info, arms)
+        });
+        let proof = matches.next()?;
+        matches.next().is_none().then_some(proof)
+    }
+
+    /// Native normalization starts only from the unchanged checked HIR view.
+    pub fn validate_current(&self, program: &Program, types: &TypeInterner) -> Result<(), String> {
+        self.validate_types(types)?;
+        let data = self
+            .data
+            .as_ref()
+            .ok_or("Resource ownership has no original checked HIR archive")?;
+        if self != &program.resource_source
+            || self.manifest() != Some(&program.resource_manifest)
+            || self.equality_methods() != Some(&program.equality_methods)
+            || !super::resource_materialization::functions_equal(
+                self.execution_functions(),
+                &program.functions,
+            )
+            || data
+                .reflected_fields
+                .iter()
+                .any(|proof| !proof.belongs_to(&data.checked) || !proof.validate_original())
+        {
+            return Err(
+                "Resource original checked HIR or reflected-field Source proof changed".into(),
+            );
+        }
+        Ok(())
+    }
+
     /// Additional canonical IDs cannot alter any original type's meaning.
     /// Structural/backend type validation remains mandatory before this check.
     pub fn validate_types(&self, types: &TypeInterner) -> Result<(), String> {

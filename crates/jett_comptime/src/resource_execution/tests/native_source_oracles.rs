@@ -253,3 +253,6 @@ fn native_resource_control_flow_source_cases_match_real_reference_events_and_cle
 
 #[path = "native_source_oracles/source06_exceptional.rs"]
 mod source06_exceptional;
+
+#[path = "native_source_oracles/reflected_field_positive.rs"]
+mod reflected_field_positive;

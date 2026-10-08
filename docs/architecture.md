@@ -4434,11 +4434,22 @@ transporting current borrowed, lexical, call and descriptor proofs. Strict joins
 and final raw ForEach refusal remain unchanged. The focused local MSVC packet
 passes 30 cases / 60 Source-deleted executions across seven Sources, including
 consecutive and nested loops. Full 191/382 reference and Source-deleted MSVC native
-execution pass; coherent-workspace and exact-revision CI gates remain pending. Excluded erased carriers
-and other iterator forms need separate compiler transport proofs under existing
+execution pass. At committed control-flow revision
+`f4fa59da6656b1424e7689b78f7035975b14cc14`, the coherent workspace passes 3,454
+tests with zero failures and three ignored tests across 92 result groups; all
+3,659 frozen inputs remain unchanged. The receipt is
+`target/native-control-flow-f4fa-workspace-evidence/after-evidence.json`.
+[Exact-revision CI run 37744039455](https://github.com/vycdev/jett/actions/runs/37744039455)
+also completes all four Windows/Linux compiler and installed-toolchain jobs
+successfully, recorded in the adjacent `ci-final.json`. These accepted gates
+belong to that control-flow revision. The latest reflected-field bridge still
+requires its own coherent-workspace and exact-revision CI gates. Excluded erased
+carriers and other iterator forms need separate compiler transport proofs under existing
 Source semantics. Source06's separate reference repair passes strict Resource execution, including
-exceptional exits and same-grant reentry. Its native HIR/MIR/codegen ordinal bridge
-remains pending.
+exceptional exits and same-grant reentry. A separate direct-field HIR/MIR ordinal
+bridge now retains the exact checked scopes and passes its bounded native gate,
+including clean same-grant reentry; exceptional reflected native reentry remains
+pending.
 
 The [checked reflected-field reference bridge](active/native_resource_reflected_fields.md)
 retains the original For/body, parent attempt, resolver binder and ordered owner
@@ -4446,4 +4457,58 @@ metadata. Each field ordinal selects its exact checker-owned scope and full
 reflection; runtime metadata alone grants no body authority. Calls isolate and
 restore item selectors, and normal/control/failure exits restore the entry frame.
 Retained `type.fields` facts also support pure required evaluation without a
-provider. Native ordinal/body transport and broader reflected loops remain pending.
+provider. Direct nominal-field native acceptance is recorded below; broader
+checked Resource reflected loops remain pending.
+
+### Checked Resource reflected-field ordinal transport
+
+`ResourceSourceArchive` now captures constructor-only correspondence for direct
+nominal-struct `TypeFields` loops in the root body of exact non-generic,
+noncapturing functions in its `CheckedResourceProgram`. HIR preserves
+every checked `ReflectedIteration(ordinal)` expansion instead of coalescing equal
+type/reflection arms in this path. The archive retains exact original For and
+binding objects, unique resolver declarations, owner TypeId and full source-aware
+reflection, ordered field snapshots, checked body facts, HIR headers and original
+loop/dispatch/arm Scope paths. Its opaque proof cannot be created from public HIR
+or caller-supplied metadata. The ordinary `lower_program` entry lacks this archive
+and retains its current coalescing behavior. Checking specializes type-level
+reflection facts while field-index/name branches inspect the current runtime
+binder. Independent ordinary positive controls pass 30 Source-deleted native
+main/verify/property executions across five forms without a production change.
+Those bounded controls establish no ordinary coalescing defect and do not prove
+broader checked Resource reflection transport.
+
+MIR consumes the exact archived dispatch occurrence. For each ordinal it derives
+the original immutable `TypeField` binder's index-equality guard and a one-arm
+`ReflectedTypeDispatch` with the full source-aware TypeInfo identity. Equal-TypeId
+fields consequently retain separate guards and body targets while the existing
+native dispatch uniqueness checks remain intact. Private original/current seals
+revalidate guard order, dispatches, body and refusing targets, field headers,
+archive membership and original lexical paths. Canonical sequence normalization,
+pruning and local remaps update only current sites and headers. Arm-specific
+subtree lookup preserves the exact nested handler paths; independent borrowed
+projection and lexical retirement validation keep local membership and custody
+joins unchanged.
+
+An ordinary function inside this checked Resource program can receive a proof-only
+MIR witness for its own archived loop. Execution-family classification remains
+ordinary: the witness adds no Resource plan, runtime Scope, provider permission or
+custody. Its ordinary map, string, view and uninhabited sequence lowering uses the
+existing finite `SequenceEdit` validator, retaining original headers and function
+identity and refreshing only the current graph and independent body seal.
+Resource execution functions retain their separate consuming-list reconstruction.
+No runtime leaf, ABI or wire-v2 row is added.
+
+The integrated affected-phase gate passes 1,202 checks with all 3,679 frozen inputs
+unchanged. The subsequent focused native gate passes 16 Source-deleted executables
+and 24 entries across four cases, including clean same-provider/grant reentry.
+The unchanged predecessor corpus separately passes all 191 cases / 382
+Source-deleted Debug/Release executions. Both native gates retain all 3,686 frozen
+inputs, nine matched MSVC runtime files and the frozen test executable unchanged.
+Exact receipts and the independent 30-execution ordinary positive control are in
+the [field-loop note](active/native_resource_reflected_fields.md).
+Generic/alias owners, bitfields, variants, machines, `TypeInfo.args` and nested
+producers still require checked Resource compiler transport proofs and Source
+evidence. Exceptional reflected native exits/reentry and broader aggregate
+custody remain separate acceptance obligations; the bounded producer adds no
+policy ban. The full goal remains active at the rough 87% planning estimate.

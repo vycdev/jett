@@ -254,13 +254,20 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                 function.blocks[index].terminator.kind = TerminatorKind::Goto(exit);
                 region_edit.after = function.blocks[index].terminator.clone();
                 if let Some(before_iteration) = &before_iteration
-                    && (crate::call_owner_generations::sequence_transition(
+                    && (crate::resource_ownership::sequence_transition(
                         function,
                         before_iteration,
                         &region_edit,
                         types,
                     )
                     .is_err()
+                        || crate::call_owner_generations::sequence_transition(
+                            function,
+                            before_iteration,
+                            &region_edit,
+                            types,
+                        )
+                        .is_err()
                         || crate::breakpoint_regions::sequence_transition(
                             function,
                             before_iteration,

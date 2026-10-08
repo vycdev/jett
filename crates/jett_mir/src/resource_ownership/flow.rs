@@ -1226,7 +1226,22 @@ impl<'p> Analysis<'p> {
                 if let Some(target) = otherwise { successors.push((*target, state)); }
                 Ok(successors)
             }
-            TerminatorKind::Respond(_) | TerminatorKind::ReflectedTypeDispatch { .. } => Err("pending ResourceOwnershipPlan: selected control-flow custody normalization is unproved".into()),
+            TerminatorKind::ReflectedTypeDispatch { type_info, arms, otherwise } => {
+                let witness = self.function.resource_lowering.as_ref()
+                    .ok_or("Resource reflected body lacks its original Source witness")?;
+                if !reflected_fields::admits(witness, block.id) || arms.len() != 1 {
+                    return Err("pending ResourceOwnershipPlan: selected control-flow custody normalization is unproved".into());
+                }
+                if self.expression(&mut state, type_info, false)?.is_some() {
+                    return Err("Resource reflected selector cannot carry Resource custody".into());
+                }
+                if state.aborted {
+                    self.finish(&mut state, ResourceFrameId(0), ResourceCompletion::Abort);
+                    return Ok(Vec::new());
+                }
+                Ok(vec![(arms[0].target, state.clone()), (*otherwise, state)])
+            }
+            TerminatorKind::Respond(_) => Err("pending ResourceOwnershipPlan: selected control-flow custody normalization is unproved".into()),
         }
     }
 }

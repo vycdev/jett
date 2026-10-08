@@ -1458,6 +1458,7 @@ struct Builder<'a> {
     current: BlockId,
     loops: Vec<(BlockId, BlockId, usize, usize)>,
     lexical_scopes: Vec<resource_ownership::LexicalScope>,
+    reflected_original_prefix: Option<Vec<usize>>,
     call_view_scopes: Vec<Vec<LocalId>>,
     resource_call_scopes: Vec<ResourceCallRegionId>,
     locals: Vec<Local>,
@@ -1479,6 +1480,7 @@ impl<'a> Builder<'a> {
             types,
             function_param_modes,
             lexical_scopes: Vec::new(),
+            reflected_original_prefix: None,
             blocks: vec![BasicBlock {
                 id: BlockId(0),
                 statements: Vec::new(),
@@ -1560,7 +1562,10 @@ impl<'a> Builder<'a> {
     }
 
     fn lower_block(&mut self, block: &hir::Block) {
-        let lexical = match self.resource_capture.lexical_scope(block) {
+        let lexical = match self
+            .resource_capture
+            .lexical_scope_under(block, self.reflected_original_prefix.as_deref())
+        {
             Ok(scope) => scope,
             Err(message) => {
                 self.resource_error = Some(LowerError {
@@ -2046,6 +2051,13 @@ impl<'a> Builder<'a> {
         arms: &[hir::ReflectedTypeArm],
         statement_span: Span,
     ) {
+        if let Some(proof) = self
+            .resource_capture
+            .reflected_field_dispatch(type_info, arms)
+        {
+            self.lower_reflected_field_dispatch(proof, statement_span);
+            return;
+        }
         let arm_blocks = arms
             .iter()
             .map(|arm| self.new_block(arm.body.span))
@@ -2084,6 +2096,103 @@ impl<'a> Builder<'a> {
                 self.close_to(join, span);
             }
             self.current = join;
+        }
+    }
+    fn lower_reflected_field_dispatch(
+        &mut self,
+        proof: hir::ReflectedFieldDispatchProof,
+        statement_span: Span,
+    ) {
+        let Some(key) = self.locals.get(proof.key().index() as usize).cloned() else {
+            self.resource_error = Some(LowerError {
+                span: statement_span,
+                message: "Resource reflected binder lost its dense header".into(),
+            });
+            return;
+        };
+        let arms = proof.arms();
+        let mut guards = vec![self.current];
+        for _ in 1..arms.len() {
+            guards.push(self.new_block(statement_span));
+        }
+        let dispatches = arms
+            .iter()
+            .map(|_| self.new_block(statement_span))
+            .collect::<Vec<_>>();
+        let targets = arms
+            .iter()
+            .map(|arm| self.new_block(arm.body.span))
+            .collect::<Vec<_>>();
+        let otherwise = self.new_block(statement_span);
+        let mut exits = Vec::new();
+        for (index, arm) in arms.iter().enumerate() {
+            let condition = match resource_ownership::reflected_fields::ordinal_guard(
+                &proof,
+                proof.type_info(),
+                index,
+            ) {
+                Ok(condition) => condition,
+                Err(message) => {
+                    self.resource_error = Some(LowerError {
+                        span: statement_span,
+                        message,
+                    });
+                    return;
+                }
+            };
+            self.current = guards[index];
+            self.terminate(
+                TerminatorKind::Branch {
+                    condition,
+                    then_block: dispatches[index],
+                    else_block: guards.get(index + 1).copied().unwrap_or(otherwise),
+                },
+                statement_span,
+            );
+            self.current = dispatches[index];
+            self.terminate(
+                TerminatorKind::ReflectedTypeDispatch {
+                    type_info: proof.type_info().clone(),
+                    arms: vec![ReflectedTypeDispatchArm {
+                        iteration_index: index,
+                        bound_type: arm.bound_type,
+                        reflection_identity: arm.reflection_identity.clone(),
+                        target: targets[index],
+                    }],
+                    otherwise,
+                },
+                proof.type_info().span,
+            );
+            self.current = targets[index];
+            let prefix = proof.arm_container_path(index).map(<[_]>::to_vec);
+            if prefix.is_none() {
+                self.resource_error = Some(LowerError {
+                    span: statement_span,
+                    message: "Resource reflected body lost its exact original Scope path".into(),
+                });
+                return;
+            }
+            let previous = std::mem::replace(&mut self.reflected_original_prefix, prefix);
+            self.lower_block(&arm.body);
+            self.reflected_original_prefix = previous;
+            exits.push((self.current, self.open(), arm.body.span));
+        }
+        if exits.iter().any(|(_, open, _)| *open) {
+            let join = self.new_block(statement_span);
+            for (exit, _, span) in exits {
+                self.current = exit;
+                self.close_to(join, span);
+            }
+            self.current = join;
+        }
+        if let Err(message) = self
+            .resource_capture
+            .capture_reflected_field_dispatch(proof, key, guards, dispatches, targets, otherwise)
+        {
+            self.resource_error = Some(LowerError {
+                span: statement_span,
+                message,
+            });
         }
     }
 }

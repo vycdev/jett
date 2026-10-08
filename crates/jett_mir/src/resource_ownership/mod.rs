@@ -36,6 +36,7 @@ pub use named_callables::ResourceNamedCallableProof;
 #[cfg(test)]
 mod execution_closure_tests;
 mod flow;
+pub(crate) mod reflected_fields;
 pub(super) use execution_closure::ResourceExecutionClosure;
 #[cfg(test)]
 mod original_calls_tests;
@@ -726,6 +727,8 @@ pub(super) struct ResourceLoweringWitness {
     original: hir::Function,
     calls: Vec<OriginalCallAssociation>,
     regions: Vec<ResourceCallRegion>,
+    reflected_fields: Vec<reflected_fields::FieldDispatch>,
+    reflected_seal: Vec<reflected_fields::FieldDispatch>,
     borrowed_sums: Vec<ResourceBorrowedSumProjection>,
     borrowed_seal: Vec<ResourceBorrowedSumProjection>,
     lexical_exits: Vec<ResourceLexicalExit>,
@@ -764,7 +767,8 @@ impl Capture {
         types: &TypeInterner,
         execution: &ResourceExecutionClosure,
     ) -> Self {
-        let needed = runtime_custody_needed(function, types, execution)
+        let needed = source.has_reflected_field_dispatch(function.id)
+            || runtime_custody_needed(function, types, execution)
             || source.required_only_function_ids().contains(&function.id)
             || source
                 .required_materializations()
@@ -775,6 +779,8 @@ impl Capture {
                 original: function.clone(),
                 calls: Vec::new(),
                 regions: Vec::new(),
+                reflected_fields: Vec::new(),
+                reflected_seal: Vec::new(),
                 borrowed_sums: Vec::new(),
                 borrowed_seal: Vec::new(),
                 lexical_exits: Vec::new(),
@@ -941,6 +947,7 @@ impl Capture {
         if let Some(witness) = &mut self.witness {
             lexical_borrows::seal(witness);
             borrowed_sums::seal(witness);
+            reflected_fields::seal(witness);
         }
         if let Some(witness) = &mut self.witness
             && !witness.borrowed_sums.is_empty()
@@ -993,6 +1000,7 @@ impl ResourceLoweringWitness {
         }
         borrowed_sums::current(self, function)?;
         lexical_borrows::current(self, function)?;
+        reflected_fields::current(self, function)?;
         for region in &self.regions {
             region.current(function)?;
             let mut original_count = 0;
@@ -1060,6 +1068,8 @@ impl ResourceLoweringWitness {
                 .iter()
                 .zip(&other.calls)
                 .all(|(left, right)| left.same(right))
+            && self.reflected_fields == other.reflected_fields
+            && self.reflected_seal == other.reflected_seal
             && self.regions.len() == other.regions.len()
             && self.borrowed_sums == other.borrowed_sums
             && self.borrowed_seal == other.borrowed_seal
@@ -1481,6 +1491,7 @@ pub(super) fn remap_blocks(
     borrowed_sums::remap_blocks(&mut witness.borrowed_sums, map)?;
     borrowed_sums::seal(witness);
     lexical_borrows::remap_blocks(witness, map)?;
+    reflected_fields::remap_blocks(witness, map)?;
     returned_descriptors::remap_blocks(&mut witness.descriptors, map)?;
     remap(&mut witness.entry);
     for block in &mut witness.blocks {
@@ -1543,6 +1554,7 @@ pub(super) fn remap_locals(
     borrowed_sums::remap_locals(&mut witness.borrowed_sums, &mut remap);
     borrowed_sums::seal(witness);
     named_callables::remap_locals(&mut witness.named_callables, &mut remap);
+    reflected_fields::remap_locals(witness, &mut remap);
     returned_descriptors::remap_locals(&mut witness.descriptors, map, &mut remap);
     for record in &mut witness.calls {
         let mut block = BasicBlock {

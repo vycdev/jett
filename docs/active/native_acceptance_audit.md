@@ -2563,3 +2563,87 @@ in both checking profiles, including same-provider/grant reentry after every
 selected failure. `after-v5.json` records all 3,664 inputs unchanged at the
 complete crate gate. This proves checked reference behavior; native reflected
 Resource emission, Source-deleted execution and the full goal remain pending.
+
+### Checked Resource reflected-field native ordinal bridge (2026-10-08)
+
+The [direct-field bridge](native_resource_reflected_fields.md) now carries exact
+nominal-struct TypeFields ordinal/body correspondence through checked Resource
+HIR and MIR. An immutable original archive retains the checked program, original
+For/binding and resolver identity, concrete owner and ordered full metadata,
+checker-selected body and original lexical path. Every ordinal receives its own
+original-field-index guard and one-arm TypeInfo dispatch, preserving distinct
+bodies for fields with equal type and reflection while retaining native dispatch
+uniqueness. Independent original/current seals reject changed metadata, guards,
+targets, paths and public HIR before runtime effects. No runtime leaf, ABI or
+wire-v2 row changes.
+
+Ordinary helpers inside the checked Resource program receive proof-only witnesses
+and keep ordinary execution classification and sequence preparation. They gain
+no Resource plan, hidden Scope parameter, provider permission or custody. The
+ordinary `lower_program` entry retains its existing equal type/reflection
+coalescing. Checking specializes type-level facts while field-index/name branches
+use the current runtime binder; existing native fixtures already distinguish
+same-type fields. Independent ordinary positive controls now pass 30
+Source-deleted native executions without a production change. Their bounded
+parity establishes no ordinary coalescing defect or required production repair;
+broader checked Resource reflection transport remains a separate obligation.
+
+The complete affected-phase run passes **1,202 checks**: **542 comptime, 203 HIR,
+286 MIR, 107 Cranelift codegen, 63 object and one CFG check**, with zero failed or
+ignored tests across ten result groups. Integrated controls include canonical view
+iteration and an inferred empty list, exact ordinal guard/body validation and
+full ownership rejection of redirected or stale selections. The receipt
+`target/native-resource-reflected-field-native-bridge-evidence/after-v4.json`
+records actual session **4116**, terminal **1335da**, exit **0**, and all **3,679
+frozen inputs unchanged** at parent HEAD
+`f9fa84a6f05b2886a83e09fad4ae3b6dcb22c74a`. Its SHA-256 is
+`a043e2b9b4b1b1e908f4037941c0e6ca5113309e08fe167979a046fbdea963ad` and it explicitly records `native_execution_accepted: false`.
+
+This earlier compiler phase gate is distinct from the native execution acceptance
+recorded below. Generic/alias owners, bitfields, variants, machines, TypeInfo.args,
+nested producers and broader reflected combinations retain their compiler proof
+and Source-evidence obligations. This boundary adds no policy ban. The full goal
+remains active at the rough **87%** estimate with fixed **207/182** denominators.
+
+#### Native execution acceptance
+
+Four focused Sources retain the original Source06 bytes and separately test
+distinct field-index bodies, distinct field-name bodies and a proof-only ordinary
+helper. They pass **16 Source-deleted native executions / 24 entries** in
+Debug/Release: eight single-entry executables and eight clean two-entry
+executables, with the same Session/provider/grant retained across both entries.
+Each entry checks exact outcomes, ordered events, exhausted script and zero
+ordinary/Resource obligations before teardown, and the Session is destroyed once.
+`target/native-resource-reflected-field-native-bridge-evidence/native-acceptance-v5.json`
+records actual session **29429**, terminal **9cfc8d**, exit **0**; its SHA-256 is
+`0b05489e3b97201ba0aee4642c2f157e81d5f9684e818f347eb403f775cda10a`.
+
+The unchanged predecessor corpus independently passes **191 cases / 382
+Source-deleted native executions** in Debug/Release in **1,273.64 seconds**, with
+all strict reports accepted.
+`target/native-resource-reflected-field-native-bridge-evidence/full-native-acceptance-v5.json`
+records actual session **49641**, terminal **1d2132**, exit **0**; its SHA-256 is
+`31d6b59bebc1e11c18b9dfb6102b5f5486f28dfd69d1439fce15498aa4050db9`. Both gates retain all
+**3,686 frozen inputs** and **nine runtime files** unchanged, including the matched
+measured MSVC archives and their build/CRT/native-static-libs receipts. The frozen
+test executable SHA-256 remains
+`76fe2a90106ee8ede00eb86758cefbaa4cefb42d6b818e90a06337b029aba39d`.
+This establishes the bounded direct nominal-field native bridge and clean reentry;
+exceptional reflected native exits/reentry and broader aggregate custody remain
+separate acceptance obligations.
+
+#### Independent ordinary reflection positive control
+
+Three Source families produce five forms covering nominal/generic and alias
+fields, bitfields, variant/state fields, type arguments, nested fields and getter
+pipelines. Main, verify and property suites in both checking profiles pass
+**30 Source-deleted native executions**, matching reference stdout/empty debug
+events and explicit-comptime stdout.
+`target/native-ordinary-reflected-ordinal-control-evidence/after-v1.json` records
+actual session **21527**, terminal **6befe6**, exit **0**, and all **3,703 frozen
+inputs unchanged**; its SHA-256 is
+`4a282285082fc411b4d8714a890b13c7146d81970533522469eb5848d4a0177e`. The receipt explicitly records
+`production_changed: false` and no established ordinary equal-type coalescing
+defect. These ordinary controls do not establish Resource transport for their
+broader reflection families. The full goal remains active at the rough **87%**
+estimate; fixed **207/182** inventory denominators remain unchanged.

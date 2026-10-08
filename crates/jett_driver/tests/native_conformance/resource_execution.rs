@@ -705,3 +705,6 @@ fn native_resource_control_flow_original_source_lifecycle_matches_reference_and_
         2 * selected.len()
     );
 }
+
+#[path = "resource_reflected_field_harness.rs"]
+mod reflected_field_harness;

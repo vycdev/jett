@@ -299,6 +299,13 @@ pub(super) fn declarations(witness: &ResourceLoweringWitness) -> Vec<Declaration
 }
 impl Capture {
     pub(crate) fn lexical_scope(&self, block: &hir::Block) -> Result<Option<LexicalScope>, String> {
+        self.lexical_scope_under(block, None)
+    }
+    pub(crate) fn lexical_scope_under(
+        &self,
+        block: &hir::Block,
+        original_prefix: Option<&[usize]>,
+    ) -> Result<Option<LexicalScope>, String> {
         let Some(witness) = &self.witness else {
             return Ok(None);
         };
@@ -306,10 +313,10 @@ impl Capture {
         if inventory.declarations.is_empty() {
             return Ok(None);
         }
-        let mut scopes = inventory
-            .scopes
-            .iter()
-            .filter(|scope| crate::breakpoint_regions::hir_blocks_equal(&scope.body, block));
+        let mut scopes = inventory.scopes.iter().filter(|scope| {
+            original_prefix.is_none_or(|prefix| scope.path.starts_with(prefix))
+                && crate::breakpoint_regions::hir_blocks_equal(&scope.body, block)
+        });
         let scope = scopes
             .next()
             .ok_or("Resource lexical block is absent from its exact original archive")?;
