@@ -9,6 +9,10 @@ use jett_parser::ast::{
 use super::*;
 use crate::checked_types::{CheckedScopedBindings, CheckedScopedTypes};
 
+#[path = "body_reference/absent_generated.rs"]
+mod absent_generated;
+pub(crate) use absent_generated::PreparedAbsentBindings;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ExecutableOrigin {
     Function { definition: DefId, item: usize },

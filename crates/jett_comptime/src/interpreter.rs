@@ -4396,7 +4396,7 @@ impl Interpreter {
                 let reflected_type_info_bindings =
                     self.reflected_type_info_arg_loop_bindings(&for_stmt.iterable)?;
                 let item_types = self.debug_expression_args(&for_stmt.iterable);
-                let iterable = match self.eval_expr_flow(&for_stmt.iterable)? {
+                let iterable = match self.eval_checked_absent_for_iterable(for_stmt)? {
                     ExprFlow::Value(value) => value,
                     ExprFlow::Resource(_) => return Err(
                         "Resource operand has no checked ownership transport for this operation"
@@ -4404,6 +4404,7 @@ impl Interpreter {
                     ),
                     ExprFlow::Signal(signal) => return Ok(Some(signal)),
                 };
+                let absent_bindings = self.prepare_absent_for_bindings(for_stmt, &iterable)?;
                 match iterable.into_payload() {
                     Value::List(items) => {
                         if let Some(proof) = &checked_field_loop {
@@ -4423,13 +4424,24 @@ impl Interpreter {
                                     .validate_value(&item)
                                     .map_err(|error| error.to_string())?;
                             }
+                            self.validate_absent_generated_debug_binding(
+                                absent_bindings.as_ref(),
+                                &for_stmt.variable,
+                                0,
+                                &item,
+                            )?;
                             self.push_scope();
                             let loop_item = item.clone();
-                            self.set_inferred_debug_binding(
+                            if let Err(error) = self.set_absent_generated_debug_binding(
+                                absent_bindings.as_ref(),
                                 &for_stmt.variable,
+                                0,
                                 item,
                                 item_types.first(),
-                            );
+                            ) {
+                                self.pop_scope();
+                                return Err(error);
+                            }
 
                             let pushed_field_scope = reflected_field_bindings
                                 .as_ref()
@@ -4555,17 +4567,42 @@ impl Interpreter {
                     }
                     Value::Map(entries) => {
                         for (key, val) in entries {
-                            self.push_scope();
-                            self.set_inferred_debug_binding(
+                            self.validate_absent_generated_debug_binding(
+                                absent_bindings.as_ref(),
                                 &for_stmt.variable,
-                                key,
-                                item_types.first(),
-                            );
-                            if let Some(ref val_var) = for_stmt.value_variable {
-                                self.set_inferred_debug_binding(val_var, val, item_types.get(1));
+                                0,
+                                &key,
+                            )?;
+                            if let Some(value) = &for_stmt.value_variable {
+                                self.validate_absent_generated_debug_binding(
+                                    absent_bindings.as_ref(),
+                                    value,
+                                    1,
+                                    &val,
+                                )?;
                             }
-                            let signal = self.exec_block_inner(&for_stmt.body)?;
+                            self.push_scope();
+                            let signal = (|| {
+                                self.set_absent_generated_debug_binding(
+                                    absent_bindings.as_ref(),
+                                    &for_stmt.variable,
+                                    0,
+                                    key,
+                                    item_types.first(),
+                                )?;
+                                if let Some(ref val_var) = for_stmt.value_variable {
+                                    self.set_absent_generated_debug_binding(
+                                        absent_bindings.as_ref(),
+                                        val_var,
+                                        1,
+                                        val,
+                                        item_types.get(1),
+                                    )?;
+                                }
+                                self.exec_block_inner(&for_stmt.body)
+                            })();
                             self.pop_scope();
+                            let signal = signal?;
                             match signal {
                                 Some(Signal::Break) => break,
                                 Some(Signal::Continue) => continue,
@@ -4641,15 +4678,35 @@ impl Interpreter {
                     _ => return Err(format!("match requires an enum value, got {val}")),
                 };
 
-                for arm in &match_stmt.arms {
+                for (arm_index, arm) in match_stmt.arms.iter().enumerate() {
                     match &arm.pattern {
                         Pattern::Ident(ident) => {
                             if ident.name == variant_name {
+                                self.prepare_absent_match_bindings(match_stmt, arm_index, &val)?;
                                 return self.exec_block_inner(&arm.body);
                             }
                         }
                         Pattern::Variant(name, bindings) => {
                             if name.name == variant_name {
+                                let absent_bindings = self
+                                    .prepare_absent_match_bindings(match_stmt, arm_index, &val)?;
+                                if absent_bindings
+                                    .as_ref()
+                                    .is_some_and(|proof| proof.binding_count() != fields.len())
+                                {
+                                    return Err("resource value lost its checked payload custody"
+                                        .to_string());
+                                }
+                                for (index, (binding, field)) in
+                                    bindings.iter().zip(&fields).enumerate()
+                                {
+                                    self.validate_absent_generated_debug_binding(
+                                        absent_bindings.as_ref(),
+                                        binding,
+                                        index,
+                                        field,
+                                    )?;
+                                }
                                 self.push_scope();
                                 let field_types = owner_type
                                     .as_ref()
@@ -4658,11 +4715,16 @@ impl Interpreter {
                                 for (index, (binding, field_val)) in
                                     bindings.iter().zip(fields.iter()).enumerate()
                                 {
-                                    self.set_inferred_debug_binding(
+                                    if let Err(error) = self.set_absent_generated_debug_binding(
+                                        absent_bindings.as_ref(),
                                         binding,
+                                        index,
                                         field_val.clone(),
                                         field_types.get(index).map(|(_, ty)| ty),
-                                    );
+                                    ) {
+                                        self.pop_scope();
+                                        return Err(error);
+                                    }
                                 }
                                 let result = self.exec_block_inner(&arm.body);
                                 self.pop_scope();
@@ -4670,6 +4732,7 @@ impl Interpreter {
                             }
                         }
                         Pattern::Other(_) => {
+                            self.prepare_absent_match_bindings(match_stmt, arm_index, &val)?;
                             return self.exec_block_inner(&arm.body);
                         }
                     }

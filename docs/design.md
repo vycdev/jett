@@ -2224,6 +2224,19 @@ another field is an absent Resource container. The checked boundary and current
 reference evidence are recorded in the
 [active resource-hook note](active/native_resource_hook_identity.md).
 
+Generated For element/map-value and Match payload bindings can retain a checked
+inactive Resource-bearing shape without acquiring cleanup ownership. Reference
+execution authenticates the original control, selected binder/ordinal, active
+body and exact type/mode facts, then validates the complete selected parent and
+child before installing an empty-custody binding. View iteration retains its
+original parent binding; unrelated live owners keep their existing tickets.
+This supplies no occupied aggregate custody, provider authority, refinement
+predicate shortcut or native aggregate execution. All 554 comptime tests pass,
+including the unchanged Source17 replay and 60 focused entry observations.
+The bounded contract and
+acceptance record are in the
+[generated-binding note](active/native_resource_absent_generated_bindings.md).
+
 The compiler can retain one immutable checked resource program by owning the
 parsed source and deriving its resolution and checking internally. Parse,
 resolution and checking errors prevent that handoff, including errors unrelated

@@ -253,3 +253,6 @@ fn native_resource_control_flow_source_cases_match_real_reference_events_and_cle
 
 #[path = "native_source_oracles/source06_exceptional.rs"]
 mod source06_exceptional;
+
+#[path = "native_source_oracles/absent_aggregate_baseline.rs"]
+mod absent_aggregate_baseline;

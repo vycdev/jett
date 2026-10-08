@@ -254,6 +254,7 @@ fn resource_intrinsic_packet_rejects_missing_records_counts_ids_shapes_and_unres
                 intrinsic_types: &concrete,
                 intrinsic_reflections: &reflections,
                 constructions: original.constructions,
+                selections: original.selections,
             };
             assert!(
                 intrinsic_records(&facts, &copied, 1, &program.checked().interner).is_err(),

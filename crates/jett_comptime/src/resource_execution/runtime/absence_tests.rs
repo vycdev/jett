@@ -574,3 +574,6 @@ fn resource_absent_shape_validation_keeps_occupied_aggregate_custody_refused() {
         assert_eq!(runtime.registry_live_count(), 0);
     }
 }
+
+#[path = "absence_tests/augmented_baseline.rs"]
+mod augmented_baseline;
