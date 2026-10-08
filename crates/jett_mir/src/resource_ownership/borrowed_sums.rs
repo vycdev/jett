@@ -429,3 +429,20 @@ impl Function {
             && self.blocks.iter().flat_map(|block| &block.statements).any(|statement| matches!(&statement.kind, StatementKind::Let { local: defined, value: current } if *defined == local && std::ptr::eq(current, value)))))
     }
 }
+
+// Only an authenticated finite sequence prefix moves these current sites.
+pub(super) fn shift_prefix(witness: &mut ResourceLoweringWitness, block: BlockId, count: usize) {
+    for row in &mut witness.borrowed_sums {
+        for site in [&mut row.initialize, &mut row.observe, &mut row.project]
+            .into_iter()
+            .chain(row.failure.iter_mut())
+        {
+            if site.block == block
+                && let ResourcePosition::Statement(index) = &mut site.position
+            {
+                *index += count;
+            }
+        }
+    }
+    seal(witness);
+}

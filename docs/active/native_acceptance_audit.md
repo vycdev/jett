@@ -2510,3 +2510,46 @@ Object emission is not execution, and these matched local MSVC runs do not prove
 GNU or other platform acceptance of the expanded packet. Broader Resource
 `For`/`Match`, reflected bodies and ordinary families remain separate work. This
 checkpoint leaves the **207/182** inventory and **about 87%** estimate unchanged.
+
+### Expanded Resource For/Match transport (2026-10-08)
+
+The [control-flow successor](native_resource_control_flow.md) preserves custody
+through consuming Resource-free list ForEach and ordinary Resource-free enum
+Switch, without a language or ABI change. Constructor-owned reconstruction
+authenticates the three temporary headers, source/cursor/length initialization,
+extraction/increment prefix and original CFG; independent original/current
+borrowed, lexical, call and descriptor proofs remain mandatory. Strict joins and
+final raw ForEach refusal are unchanged. Historical v2 acceptance remains
+22 cases / 44 Source-deleted MSVC executions, three focused MIR groups and
+450 affected phase checks.
+
+V3's seven accepted Source files 01..05/07/08 cover consecutive and nested loops
+as well as Fallthrough/Break/Continue and both unit-enum arms. All 30 cases /
+60 focused Source-deleted MSVC executions pass in Debug/Release (204.35 seconds),
+with exact outcomes/events/channels/messages, script exhaustion and zero ordinary/
+Resource custody before teardown. Reference zero-owner/registry observations do
+not measure that full native tuple. The receipt
+`target/native-resource-control-flow-source-evidence/focused-acceptance-v3.json`,
+SHA-256 `7f41c389daa268942afe8a645085daac18d746f553f3be32e93d14f798fc30ea`, records
+all 3,658 frozen inputs and both measured archives plus six nested receipts
+unchanged at HEAD `50ad73a0693c502d1fa05720091b80a4ab623104`. Four focused MIR
+groups pass; 89 Resource reference groups include all 191 cases / 382 profile
+executions, and final object preflight separately emits 60 objects.
+
+The clean base `50ad` workspace independently passes 3,448 tests with zero
+failures across 92 result groups. That is separate from the modified successor's
+coherent-revision gate. Full 191/382 Source-deleted MSVC native execution now
+passes in 1,288.83 seconds. `full-acceptance-v3.json` records actual exit zero,
+all 3,658 frozen inputs, both measured archives, six nested receipts and the
+executable unchanged; its SHA-256 is
+`08bcf865bfed8a9b49f262a6c611336260cd0446ba8517139c71ab10627fb806`.
+Successor workspace and exact-revision CI acceptance remain pending. Source06's
+separate GNU reference repair passes authority, recursion and pure control-flow
+tests plus 74 strict Resource entry attempts, including same-grant reentry after
+failures; `after-v3.json` records all 3,662 inputs unchanged. Its native
+HIR/MIR/codegen ordinal bridge remains pending, and no GNU native acceptance
+follows from those reference results.
+Erased carriers, borrowed/projected/Never-element or other iterators and broader
+For/Match/reflected combinations remain compiler proof obligations under existing
+Source semantics. The full goal stays active at the rough 87% planning estimate;
+fixed 207/182 inventory denominators remain unchanged.

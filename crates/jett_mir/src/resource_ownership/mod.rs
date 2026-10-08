@@ -24,6 +24,9 @@ pub use normalized_calls::{
     ResourceCallActual, ResourceCallNode, ResourceCallRegion, ResourceCallRegionId,
 };
 mod companion;
+mod control_flow;
+#[cfg(test)]
+mod control_flow_tests;
 pub(crate) use companion::CompanionContext;
 pub use companion::ResourceCompanionPlan;
 mod execution_closure;
@@ -1441,6 +1444,8 @@ pub(super) fn validate_current(function: &Function) -> Result<(), String> {
         .as_ref()
         .map_or(Ok(()), |witness| witness.current(function))
 }
+
+pub(super) use control_flow::sequence_transition;
 
 /// Only the canonical unreachable-block deletion supplies this exact map.
 pub(super) fn remap_blocks(

@@ -148,7 +148,8 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             {
                 continue;
             }
-            let before_iteration = (!function.breakpoint_regions.is_empty()
+            let before_iteration = (crate::resource_ownership::has_records(function)
+                || !function.breakpoint_regions.is_empty()
                 || crate::call_owner_generations::has_records(function)
                 || crate::ordinary_borrowed_sums::has_records(function))
             .then(|| function.clone());
@@ -413,13 +414,20 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                 region_edit.after = old.clone();
             }
             if let Some(before_iteration) = &before_iteration
-                && (crate::ordinary_borrowed_sums::sequence_transition(
+                && (crate::resource_ownership::sequence_transition(
                     function,
                     before_iteration,
                     &region_edit,
                     types,
                 )
                 .is_err()
+                    || crate::ordinary_borrowed_sums::sequence_transition(
+                        function,
+                        before_iteration,
+                        &region_edit,
+                        types,
+                    )
+                    .is_err()
                     || crate::call_owner_generations::sequence_transition(
                         function,
                         before_iteration,

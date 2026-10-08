@@ -546,3 +546,14 @@ impl Function {
         }))
     }
 }
+
+pub(super) fn shift_prefix(witness: &mut ResourceLoweringWitness, block: BlockId, count: usize) {
+    for exit in &mut witness.lexical_exits {
+        if exit.site.block == block
+            && let ResourcePosition::Statement(index) = &mut exit.site.position
+        {
+            *index += count;
+        }
+    }
+    seal(witness);
+}
