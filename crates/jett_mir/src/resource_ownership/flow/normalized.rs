@@ -80,7 +80,7 @@ impl Analysis<'_> {
                             actual.parameter(),
                             frame,
                             ResourceLoanSource::Owner(slot),
-                        );
+                        )?;
                         created_loans.push(loan);
                         operands.push(ResourceCallOperand::Borrowed {
                             parameter: actual.parameter(),
@@ -124,7 +124,7 @@ impl Analysis<'_> {
                             actual.parameter(),
                             frame,
                             ResourceLoanSource::Owner(owner),
-                        );
+                        )?;
                         created_loans.push(loan);
                         loan
                     };
@@ -274,6 +274,12 @@ impl Analysis<'_> {
                     return Err("pending Resource call region: infrastructure abort within a staged actual needs its exact prefix exit".into());
                 }
                 match &operand {
+                    ResourceCallOperand::CarrierOwned { .. }
+                    | ResourceCallOperand::CarrierBorrowed { .. } => {
+                        return Err(
+                            "carrier operand reached the legacy single-leaf normalized flow".into(),
+                        );
+                    }
                     ResourceCallOperand::Ordinary { ty, .. } => {
                         if evaluated.is_some()
                             || ordinary
@@ -299,11 +305,17 @@ impl Analysis<'_> {
                             );
                         }
                         let slot = match &operand {
+                            ResourceCallOperand::CarrierOwned { .. }
+                            | ResourceCallOperand::CarrierBorrowed { .. } => return Err(
+                                "carrier operand reached the legacy single-leaf normalized flow"
+                                    .into(),
+                            ),
                             ResourceCallOperand::Owned { slot, .. } => *slot,
                             ResourceCallOperand::Borrowed { loan, .. } => {
                                 match self.plan.loans[loan.index()].source {
                                     ResourceLoanSource::Owner(slot) => slot,
                                     ResourceLoanSource::IncomingViewFormal { .. }
+                                    | ResourceLoanSource::CarrierSumProjection { .. }
                                     | ResourceLoanSource::ProjectedSumPayload { .. } => return Err(
                                         "Resource owned Stage changed into a resident formal loan"
                                             .into(),
@@ -430,19 +442,28 @@ impl Analysis<'_> {
                     self.types,
                     region.original().ty,
                 )?
-                .map(|shape| Value {
-                    occupancy: if shape.conditional() {
-                        ResourceOccupancy::Conditional
-                    } else {
-                        ResourceOccupancy::Occupied
-                    },
-                    shape,
-                    owner: match prepared.result {
-                        ResourceCallResult::Owned { slot } => Some(slot),
-                        ResourceCallResult::Ordinary { .. } => None,
-                    },
-                    loan: None,
-                });
+                .map(|shape| -> Result<Value, String> {
+                    Ok(Value {
+                        occupancy: if shape.conditional() {
+                            ResourceOccupancy::Conditional
+                        } else {
+                            ResourceOccupancy::Occupied
+                        },
+                        shape,
+                        owner: match prepared.result {
+                            ResourceCallResult::Owned { slot } => Some(slot),
+                            ResourceCallResult::Ordinary { .. } => None,
+                            ResourceCallResult::Carrier { .. } => {
+                                return Err(
+                                    "carrier result reached the legacy single-leaf normalized flow"
+                                        .into(),
+                                );
+                            }
+                        },
+                        loan: None,
+                    })
+                })
+                .transpose()?;
                 self.store(state, *output, value, false, false)?;
             }
             ResourceCallNode::End { outcome, .. } => {

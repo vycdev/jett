@@ -1,5 +1,7 @@
 //! Exact compiler-internal Resource leaves. No provider installation or key adoption.
 use super::*;
+#[path = "leaves/carriers.rs"]
+mod carrier_leaves;
 
 /// Addresses cannot establish lifetime/exclusivity; those remain the unsafe C
 /// caller contract. Reject null/misaligned/overflow/known context overlaps before effect.

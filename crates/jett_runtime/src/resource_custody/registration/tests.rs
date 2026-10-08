@@ -141,6 +141,7 @@ fn canonical() -> WireLayout {
     })
     .collect();
     WireLayout {
+        carriers: super::carriers::NativeCarrierLayout::default(),
         version: 1,
         kinds: vec![0, 1],
         hooks: vec![
@@ -283,10 +284,7 @@ fn native_registration_source_v2_roundtrips_the_complete_boundary_without_upgrad
     let installed = installation
         .install(&registry, &encode_records(&layout))
         .unwrap();
-    assert_eq!(
-        installed.wire_version(),
-        NATIVE_RESOURCE_LAYOUT_WIRE_VERSION
-    );
+    assert_eq!(installed.wire_version(), 2);
     assert_eq!(parsed(&canonical()).unwrap().version, 1);
     let mut missing = layout.clone();
     let NativeOperation::InvokeSourceFunction { source, .. } =

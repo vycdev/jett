@@ -5,6 +5,8 @@ use jett_resolve::ResourceKernelSpec;
 use jett_typecheck::{CheckOptions, CheckedResourceProgram};
 use jett_types::ResourceKernelRecipe;
 use std::{collections::HashMap, sync::Arc};
+#[path = "carrier_tests.rs"]
+mod carrier_tests;
 #[path = "returned_hooks_tests.rs"]
 mod returned_hooks;
 #[path = "sum_views_tests.rs"]
@@ -115,14 +117,16 @@ fn resource_emitted_layout_joins_actual_driver_identity_and_unused_hooks_determi
                 function.identity.declaration.namespace == "app"
                     && function.identity.declaration.name == "pass_owner"
             })
-            .unwrap()
-            .id;
-        assert!(
-            EmittedResourceLayout::from_program(&program, types, wrong)
-                .unwrap_err()
-                .to_string()
-                .contains("original closed Network/Nothing header")
-        );
+            .unwrap();
+        let error = EmittedResourceLayout::from_program(&program, types, wrong.id).unwrap_err();
+        match error {
+            CodegenError::InvalidMir(errors) => assert!(errors.iter().any(|error| {
+                error.span == wrong.span
+                    && error.message
+                        == "native Resource entry changed its closed Network/Nothing Source header"
+            })),
+            other => panic!("wrong selected entry used an unexpected refusal boundary: {other}"),
+        }
     }
 }
 #[test]

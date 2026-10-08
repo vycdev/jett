@@ -881,6 +881,56 @@ impl Flow<'_> {
                 return Err("Resource companion move is outside its current function".into());
             }
             if context.resource_expression(value) {
+                if context.carrier_expression(value) {
+                    match &value.kind {
+                        ExpressionKind::ListConstruct { elements } => {
+                            for child in elements {
+                                self.expr(child, false)?;
+                            }
+                            return Ok(());
+                        }
+                        ExpressionKind::MapConstruct { entries } => {
+                            for entry in entries {
+                                self.expr(&entry.key, false)?;
+                                self.expr(&entry.value, false)?;
+                            }
+                            return Ok(());
+                        }
+                        ExpressionKind::StructConstruct {
+                            fields,
+                            evaluation_order,
+                            ..
+                        } => {
+                            for index in evaluation_order {
+                                self.expr(&fields[*index], false)?;
+                            }
+                            return Ok(());
+                        }
+                        ExpressionKind::EnumConstruct {
+                            payloads,
+                            evaluation_order,
+                            ..
+                        } => {
+                            for index in evaluation_order {
+                                self.expr(&payloads[*index], false)?;
+                            }
+                            return Ok(());
+                        }
+                        ExpressionKind::MachineConstruct { payloads, .. } => {
+                            for child in payloads {
+                                self.expr(child, false)?;
+                            }
+                            return Ok(());
+                        }
+                        ExpressionKind::Field { base, .. } => return self.expr(base, true),
+                        ExpressionKind::InterfaceCoerce { value, adapters }
+                            if adapters.is_empty() =>
+                        {
+                            return self.expr(value, borrowed);
+                        }
+                        _ => {}
+                    }
+                }
                 match &value.kind {
                     ExpressionKind::Local(local) => { self.read(*local, "Resource companion initialization")?; return Ok(()); }
                     ExpressionKind::View(inner) => return self.expr(inner, true),

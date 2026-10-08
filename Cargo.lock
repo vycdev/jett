@@ -933,6 +933,7 @@ dependencies = [
  "cranelift-module",
  "cranelift-object",
  "jett_common",
+ "jett_comptime",
  "jett_diagnostics",
  "jett_hir",
  "jett_mir",

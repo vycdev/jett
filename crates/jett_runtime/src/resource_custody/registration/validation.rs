@@ -59,6 +59,13 @@ fn validate_shapes(layout: &WireLayout) -> Result<(), ResourceLayoutError> {
                 }
                 occupied[ok as usize]
             }
+            NativeShape::Carrier { node } => {
+                if layout.version != 3 {
+                    return Err(ResourceLayoutError::UnsupportedLayout);
+                }
+                layout.carriers.node(node)?;
+                true
+            }
             NativeShape::HookDescriptor { hook } => {
                 get(&layout.hooks, hook)?;
                 false
@@ -246,6 +253,17 @@ fn validate_operation(
         Ok(())
     };
     use NativeOperation::*;
+    if let Carrier { record: carrier } = record.operation {
+        let row = layout
+            .carriers
+            .operations
+            .get(carrier as usize)
+            .ok_or(ResourceLayoutError::InvalidReference)?;
+        if layout.version != 3 || row.site != record.site {
+            return Err(ResourceLayoutError::OperationMismatch);
+        }
+        return Ok(());
+    }
     if let InvokeBorrow {
         source: NativeLoanSource::ProjectedSumPayload { operation },
         ..
@@ -260,6 +278,7 @@ fn validate_operation(
         }
     }
     match record.operation {
+        Carrier { .. } => return Err(ResourceLayoutError::OperationMismatch),
         Acquire {
             frame: f,
             hook: h,
@@ -459,6 +478,7 @@ pub(super) fn validate(layout: &WireLayout) -> Result<Vec<usize>, ResourceLayout
         get(&layout.frames, slot.frame)?;
         slot_kinds.push(slot_kind(layout, slot)? as usize);
     }
+    super::carriers::validate(layout)?;
     for operation in &layout.operations {
         validate_operation(layout, operation)?;
     }

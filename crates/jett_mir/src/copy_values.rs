@@ -26,6 +26,10 @@ impl<'a> PlanningContext<'a> {
     fn and_then<T>(self, f: impl FnOnce(&'a crate::Program) -> Option<T>) -> Option<T> {
         self.program.and_then(f)
     }
+    fn carrier_type(self, ty: TypeId) -> bool {
+        self.companion
+            .is_some_and(|context| context.carrier_type(ty))
+    }
     fn resource_type(self, ty: TypeId) -> bool {
         self.companion
             .is_some_and(|context| context.resource_type(ty))
@@ -1030,6 +1034,39 @@ fn plan_type_inner(
         return Err("invalid native type".into());
     }
     if !seen.insert(ty.index()) {
+        return Ok(());
+    }
+    if program.carrier_type(ty) {
+        // The exact carrier graph owns these endpoints. Ordinary payload type
+        // checks remain recursive; no ordinary move/copy/drop permission is issued.
+        let mut children = Vec::new();
+        match types.resolve(ty) {
+            Type::List(inner) | Type::Refinement { base: inner, .. } | Type::Optional(inner) => {
+                children.push(*inner)
+            }
+            Type::Map(key, value) | Type::Result(key, value) => children.extend([*key, *value]),
+            Type::Struct(id) => {
+                children.extend(types.resolve_struct(*id).fields.iter().map(|(_, ty)| *ty))
+            }
+            Type::Enum(id) => children.extend(
+                types
+                    .resolve_enum(*id)
+                    .variants
+                    .iter()
+                    .flat_map(|variant| variant.fields.iter().map(|(_, ty)| *ty)),
+            ),
+            Type::Machine(id) | Type::MachineState { machine: id, .. } => children.extend(
+                types
+                    .resolve_machine(*id)
+                    .states
+                    .iter()
+                    .flat_map(|state| state.fields.iter().map(|(_, ty)| *ty)),
+            ),
+            _ => return Err("carrier companion type has no exact admitted graph family".into()),
+        }
+        for child in children {
+            plan_type_inner(types, child, program, seen)?;
+        }
         return Ok(());
     }
     if program.resource_type(ty) {

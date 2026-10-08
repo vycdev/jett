@@ -246,7 +246,8 @@ pub(super) fn mir_block_has_custody(
         found |= resource_type_pending(types, value.ty)
             && !matches!(types.resolve(value.ty), Type::Function { .. });
     });
-    // SumTag/SumTake hold typed local headers rather than expression nodes.
+    // Sums, sequence operations and Switch binders hold typed local headers
+    // rather than expression nodes.
     // Normalized calls also own an exact operation prefix at header-only sites.
     let occupied = |id| {
         function
@@ -262,9 +263,20 @@ pub(super) fn mir_block_has_custody(
                 | StatementKind::SumTake { source, target, .. } => {
                     occupied(*source) || occupied(*target)
                 }
+                StatementKind::SequenceLength { source, target }
+                | StatementKind::SequenceGet { source, target, .. } => {
+                    occupied(source.root()) || occupied(*target)
+                }
+                StatementKind::IterationBorrow { source, .. } => occupied(source.root()),
                 StatementKind::ResourceCall(_) => true,
                 _ => false,
             })
+        || match &block.terminator.kind {
+            TerminatorKind::Switch { variants, .. } => variants
+                .iter()
+                .any(|(_, _, bindings)| bindings.iter().any(|local| occupied(*local))),
+            _ => false,
+        }
 }
 pub(super) fn mir_block_has_resource(block: &BasicBlock) -> bool {
     let mut found = false;

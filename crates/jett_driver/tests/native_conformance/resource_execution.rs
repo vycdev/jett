@@ -101,7 +101,7 @@ fn archive(release: bool) -> Archive {
     );
     assert_eq!(
         row.get("layout_wire").and_then(serde_json::Value::as_u64),
-        Some(2)
+        Some(3)
     );
     assert_eq!(
         row.get("private_cfgs"),
@@ -708,3 +708,6 @@ fn native_resource_control_flow_original_source_lifecycle_matches_reference_and_
 
 #[path = "resource_reflected_field_harness.rs"]
 mod reflected_field_harness;
+
+#[path = "resource_execution/absent_aggregate_baseline.rs"]
+mod absent_aggregate_baseline;

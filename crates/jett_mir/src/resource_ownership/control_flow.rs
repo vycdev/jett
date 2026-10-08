@@ -1,6 +1,6 @@
-//! Resource-free control-flow transport preserves the independently proven custody state.
+//! Control-flow transport preserves the independently proven custody state.
 //! Sequence preparation may only replace an exact original ForEach by its canonical
-//! consuming-list edit. It never creates a Resource owner, resident lease or join rule.
+//! consuming-list or map edit. The carrier planner owns custody and retirement.
 use super::*;
 use hir::{BinaryOp, ExpressionKind as E};
 
@@ -109,6 +109,93 @@ pub(super) fn consuming_list(
         return Err("Resource consuming iterator changed its exact ordinary element binder".into());
     }
     Ok(*element)
+}
+fn carrier_binding(
+    function: &Function,
+    types: &TypeInterner,
+    local: LocalId,
+    expected: TypeId,
+) -> Result<(), String> {
+    if expected.index() as usize >= types.len() || expected == TypeInterner::NEVER {
+        return Err("pending ResourceOwnershipPlan: uninhabited carrier iteration needs its exact sequence transport".into());
+    }
+    let binding = function
+        .local(local)
+        .ok_or("Resource carrier iterator lost its dense binder header")?;
+    if binding.ty != expected
+        || binding.debug_ty != expected
+        || binding.mutable
+        || binding.view_source.is_some()
+        || function.is_view_local(local)
+        || function.parameter_for_local(local).is_some()
+    {
+        return Err("Resource carrier iterator changed its exact owning binder declaration".into());
+    }
+    Ok(())
+}
+/// Validate only the exact typed consuming iterator. This creates no carrier,
+/// owner, lease or absence proof; the independent carrier planner supplies them.
+pub(super) fn carrier_sequence(
+    function: &Function,
+    types: &TypeInterner,
+    key: LocalId,
+    value: Option<LocalId>,
+    by_view: bool,
+    iterable: &Expression,
+) -> Result<(), String> {
+    function
+        .resource_lowering
+        .as_ref()
+        .ok_or("Resource carrier iterator has no authenticated Source witness")?
+        .current(function)?;
+    let occurrences = function
+        .blocks
+        .iter()
+        .filter(|block| {
+            matches!(&block.terminator.kind, TerminatorKind::ForEach {
+                key: current_key,
+                value: current_value,
+                by_view: current_view,
+                iterable: current_iterable,
+                ..
+            } if *current_key == key
+                && *current_value == value
+                && *current_view == by_view
+                && crate::breakpoint_regions::expressions_equal(current_iterable, iterable))
+        })
+        .count();
+    if occurrences != 1 {
+        return Err("Resource carrier iterator lost its unique exact current ForEach".into());
+    }
+    if iterable.ty.index() as usize >= types.len() {
+        return Err("Resource carrier iterator lost its exact iterable type".into());
+    }
+    if by_view
+        || matches!(&iterable.kind, E::View(_) | E::Field { .. })
+        || matches!(&iterable.kind, E::Local(local) if function.is_view_local(*local))
+    {
+        return Err("pending ResourceOwnershipPlan: borrowed carrier iteration needs its exact sequence transport".into());
+    }
+    match types.resolve(iterable.ty) {
+        Type::List(element) => {
+            if value.is_some() {
+                return Err("Resource carrier list changed its sole element binder".into());
+            }
+            carrier_binding(function, types, key, *element)
+        }
+        Type::Map(key_type, value_type) => {
+            let value = value.ok_or("pending ResourceOwnershipPlan: key-only carrier map iteration needs its exact residual-value transport")?;
+            if key == value {
+                return Err("Resource carrier map reused its key and value binder".into());
+            }
+            // Checked map keys have no Resource custody; their ordinary storage
+            // remains separate from the value carrier extracted next.
+            ordinary_type(types, *key_type)?;
+            carrier_binding(function, types, key, *key_type)?;
+            carrier_binding(function, types, value, *value_type)
+        }
+        _ => Err("pending ResourceOwnershipPlan: this carrier iterator needs its dedicated sequence normalization".into()),
+    }
 }
 pub(super) fn ordinary_switch(
     function: &Function,
@@ -223,7 +310,7 @@ fn canonical_sequence(
     before: &Function,
     edit: &crate::breakpoint_regions::SequenceEdit,
     types: &TypeInterner,
-) -> Result<(Function, BlockId), String> {
+) -> Result<(Function, BlockId, usize), String> {
     let block = before
         .blocks
         .get(edit.header.index() as usize)
@@ -231,7 +318,7 @@ fn canonical_sequence(
         .ok_or("Resource sequence transition lost its exact original header")?;
     let TerminatorKind::ForEach {
         key,
-        value,
+        value: value_binding,
         by_view,
         iterable,
         body,
@@ -240,7 +327,16 @@ fn canonical_sequence(
     else {
         return Err("Resource sequence transition has no exact original ForEach".into());
     };
-    consuming_list(before, types, *key, *value, *by_view, iterable)?;
+    if iterable.ty.index() as usize >= types.len() {
+        return Err("Resource sequence transition lost its exact iterable type".into());
+    }
+    if resource_type_pending(types, iterable.ty)
+        || matches!(types.resolve(iterable.ty), Type::Map(..))
+    {
+        carrier_sequence(before, types, *key, *value_binding, *by_view, iterable)?;
+    } else {
+        consuming_list(before, types, *key, *value_binding, *by_view, iterable)?;
+    }
     let cfg = ControlFlowGraph::analyze(before)
         .map_err(|errors| format!("Resource sequence CFG is malformed: {errors:?}"))?;
     let mut outside = vec![false; before.blocks.len()];
@@ -302,14 +398,18 @@ fn canonical_sequence(
             span,
         },
     ];
-    let prefix = vec![
+    let mut prefix = vec![
         Statement {
             kind: StatementKind::SequenceGet {
                 consume: true,
                 source: SequenceSource::Local(source),
                 index: cursor,
                 target: *key,
-                part: SequencePart::Element,
+                part: if matches!(types.resolve(iterable.ty), Type::Map(..)) {
+                    SequencePart::Key
+                } else {
+                    SequencePart::Element
+                },
             },
             span,
         },
@@ -333,6 +433,22 @@ fn canonical_sequence(
             span,
         },
     ];
+    if let Some(value) = value_binding {
+        prefix.insert(
+            1,
+            Statement {
+                kind: StatementKind::SequenceGet {
+                    consume: true,
+                    source: SequenceSource::Local(source),
+                    index: cursor,
+                    target: *value,
+                    part: SequencePart::Value,
+                },
+                span,
+            },
+        );
+    }
+    let prefix_length = prefix.len();
     let terminator = Terminator {
         kind: TerminatorKind::Branch {
             condition: Expression {
@@ -358,7 +474,8 @@ fn canonical_sequence(
         || edit.prefix.as_ref().map(|(id, _)| *id) != Some(*body)
     {
         return Err(
-            "Resource sequence transcript differs from the canonical consuming-list edit".into(),
+            "Resource sequence transcript differs from the canonical consuming iterator edit"
+                .into(),
         );
     }
     let same_statements = |left: &[Statement], right: &[Statement]| {
@@ -391,7 +508,7 @@ fn canonical_sequence(
     all.append(statements);
     *statements = all;
     expected.blocks[edit.header.index() as usize].terminator = terminator;
-    Ok((expected, *body))
+    Ok((expected, *body, prefix_length))
 }
 pub(crate) fn sequence_transition(
     function: &mut Function,
@@ -413,7 +530,7 @@ pub(crate) fn sequence_transition(
     if !has_execution_records(before, types) && !original.reflected_fields.is_empty() {
         return reflected_fields::ordinary_sequence_transition(function, before, edit, types);
     }
-    let (expected, body) = canonical_sequence(before, edit, types)?;
+    let (expected, body, prefix_length) = canonical_sequence(before, edit, types)?;
     if function.id != expected.id
         || function.identity != expected.identity
         || function.params != expected.params
@@ -433,10 +550,10 @@ pub(crate) fn sequence_transition(
     let mut witness = original.clone();
     witness.locals = expected.locals.clone();
     witness.blocks = expected.blocks.clone();
-    borrowed_sums::shift_prefix(&mut witness, body, 2);
-    lexical_borrows::shift_prefix(&mut witness, body, 2);
+    borrowed_sums::shift_prefix(&mut witness, body, prefix_length);
+    lexical_borrows::shift_prefix(&mut witness, body, prefix_length);
     for region in &mut witness.regions {
-        region.shift_prefix(body, 2);
+        region.shift_prefix(body, prefix_length);
     }
     // The independent body advances only after reconstructing the same finite edit.
     if original.descriptors.has_body() {

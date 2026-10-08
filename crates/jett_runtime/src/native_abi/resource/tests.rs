@@ -108,7 +108,7 @@ fn entry() -> NativeEntry {
         scope: 0,
     }
 }
-fn context<T>(operation: impl FnOnce(&AuthenticatedResourceContext) -> T) -> T {
+pub(super) fn context<T>(operation: impl FnOnce(&AuthenticatedResourceContext) -> T) -> T {
     let mut context = Box::new(JettRuntimeContextV1::retired());
     let mut result = JettRuntimeResultV1::ok();
     let status = unsafe {

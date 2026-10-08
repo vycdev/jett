@@ -8,6 +8,14 @@ use crate::{ResourceRegistry, ResourceTypeId};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[path = "registration/carriers.rs"]
+mod carriers;
+#[cfg(test)]
+#[path = "registration/carriers_tests.rs"]
+mod carriers_tests;
+pub(crate) use carriers::*;
+#[cfg(test)]
+pub(crate) use carriers_tests::runtime_fixture_bytes as carrier_runtime_fixture_bytes;
 #[path = "registration/schema.rs"]
 mod schema;
 #[path = "registration/source_validation.rs"]
@@ -24,7 +32,7 @@ pub(crate) use schema::{
     NativeSourceValue, NativeSumLoanSource,
 };
 
-pub(crate) const NATIVE_RESOURCE_LAYOUT_WIRE_VERSION: u32 = 2;
+pub(crate) const NATIVE_RESOURCE_LAYOUT_WIRE_VERSION: u32 = 3;
 
 static NEXT_NATIVE_KIND: AtomicU64 = AtomicU64::new(1);
 
@@ -78,6 +86,18 @@ pub(crate) struct RegisteredNativeLayout {
     wire: schema::WireLayout,
 }
 impl RegisteredNativeLayout {
+    pub(crate) fn carriers(&self) -> &NativeCarrierLayout {
+        &self.wire.carriers
+    }
+    pub(crate) fn carrier_source_node(
+        &self,
+        source: NativeCarrierSource,
+    ) -> Result<u32, ResourceLayoutError> {
+        carriers::source_node(&self.wire, source)
+    }
+    pub(crate) fn carrier_equivalent_sum(&self, node: u32, shape: u32) -> bool {
+        carriers::equivalent_sum(&self.wire, node, shape)
+    }
     pub(crate) fn wire_version(&self) -> u32 {
         self.wire.version
     }

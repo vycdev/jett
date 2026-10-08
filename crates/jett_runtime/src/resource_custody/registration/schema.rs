@@ -1,4 +1,5 @@
 //! Plain immutable wire records. None is a Source or custody authority.
+use super::carriers::{NativeCarrierLayout, NativeCarrierLoanSource};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum NativeRecipe {
@@ -52,6 +53,7 @@ pub(crate) enum NativeShape {
     Optional { child: u32 },
     Result { ok: u32, fail: u32 },
     HookDescriptor { hook: u32 },
+    Carrier { node: u32 },
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct NativeFormal {
@@ -94,6 +96,7 @@ pub(crate) enum NativeLoanSource {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeSumLoanSource {
+    CarrierProjected { operation: u32 },
     ExistingBorrow { operation: u32 },
     IncomingViewFormal { scope: u32, parameter: u32 },
 }
@@ -112,6 +115,13 @@ pub(crate) enum NativeSourceEffect {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeSourceValue {
+    CarrierOwned {
+        caller_argument_slot: u32,
+        callee_parameter_slot: u32,
+    },
+    CarrierView {
+        source: NativeCarrierLoanSource,
+    },
     Ordinary,
     Owned {
         caller_argument_slot: u32,
@@ -137,6 +147,13 @@ pub(crate) struct NativeSourceFormal {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum NativeSourceResult {
+    Carrier {
+        shape: u32,
+        caller_destination_frame: u32,
+        caller_destination_slot: u32,
+        callee_return_frame: u32,
+        permitted_return_slots: Vec<u32>,
+    },
     Ordinary {
         shape: u32,
     },
@@ -158,6 +175,9 @@ pub(crate) struct NativeSourceInvocation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum NativeOperation {
+    Carrier {
+        record: u32,
+    },
     Acquire {
         frame: u32,
         hook: u32,
@@ -285,6 +305,7 @@ pub(crate) struct NativeOperationRecord {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct WireLayout {
+    pub(super) carriers: NativeCarrierLayout,
     pub(super) version: u32,
     pub(super) kinds: Vec<u32>,
     pub(super) hooks: Vec<NativeHook>,

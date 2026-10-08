@@ -1,4 +1,5 @@
 use std::{cell::RefCell, collections::HashSet};
+mod carriers;
 
 use jett_common::{SourceOrigin, Span};
 use jett_hir::{
@@ -1802,6 +1803,9 @@ impl Verifier<'_> {
     }
 
     fn expression(&self, function: &Function, expression: &Expression) -> Result<(), CodegenError> {
+        if self.carrier_expression(function, expression)?.is_some() {
+            return Ok(());
+        }
         let named_value = self
             .resource
             .and_then(|ownership| ownership.function(function.id))

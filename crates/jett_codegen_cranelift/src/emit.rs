@@ -937,6 +937,9 @@ fn translate_function_inner(
     let mut resource_frames = Vec::new();
     let mut resource_owners = Vec::new();
     let mut resource_loans = Vec::new();
+    let mut carrier_owners = Vec::new();
+    let mut carrier_builders = Vec::new();
+    let mut carrier_loans = Vec::new();
     if let Some(layout) = resource_layout {
         let plan = layout.plan().function(function.id).ok_or_else(|| {
             resource_layout::pending("function is outside its selected Resource family")
@@ -945,12 +948,18 @@ fn translate_function_inner(
             &mut resource_frames,
             &mut resource_owners,
             &mut resource_loans,
+            &mut carrier_owners,
+            &mut carrier_builders,
+            &mut carrier_loans,
         ]
         .into_iter()
         .zip([
             (plan.frames().len(), 16),
             (plan.owner_slots().len(), 8),
             (plan.loans().len(), 8),
+            (plan.carriers().map_or(0, |plan| plan.slots().len()), 8),
+            (plan.carriers().map_or(0, |plan| plan.slots().len()), 8),
+            (plan.carriers().map_or(0, |plan| plan.loans().len()), 8),
         ]) {
             for _ in 0..storage.1.0 {
                 storage
@@ -1034,6 +1043,9 @@ fn translate_function_inner(
                     .iter()
                     .chain(&resource_owners)
                     .chain(&resource_loans)
+                    .chain(&carrier_owners)
+                    .chain(&carrier_builders)
+                    .chain(&carrier_loans)
                 {
                     builder.ins().stack_store(zero, *slot, 0);
                 }
@@ -1083,6 +1095,9 @@ fn translate_function_inner(
             frames: &resource_frames,
             owners: &resource_owners,
             loans: &resource_loans,
+            carrier_owners: &carrier_owners,
+            carrier_builders: &carrier_builders,
+            carrier_loans: &carrier_loans,
             failure: resource_failure.expect("selected Resource failure block"),
             block: block.id,
             position: jett_mir::ResourcePosition::Terminator,
@@ -1313,6 +1328,9 @@ fn translate_function_inner(
         frames: &resource_frames,
         owners: &resource_owners,
         loans: &resource_loans,
+        carrier_owners: &carrier_owners,
+        carrier_builders: &carrier_builders,
+        carrier_loans: &carrier_loans,
         failure: resource_failure.expect("selected Resource failure block"),
         block: function.entry,
         position: jett_mir::ResourcePosition::Terminator,
@@ -1958,6 +1976,7 @@ impl Translator<'_, '_> {
     }
 
     fn terminator(&mut self, terminator: &Terminator) -> Result<(), CodegenError> {
+        self.carrier_iteration_boundary(terminator.span)?;
         match &terminator.kind {
             TerminatorKind::Return(value) => self.return_value(value.as_ref(), terminator.span),
             TerminatorKind::Goto(target) => {
@@ -2002,6 +2021,9 @@ impl Translator<'_, '_> {
                 variants,
                 otherwise,
             } => {
+                if self.carrier_switch(scrutinee, variants, *otherwise, terminator.span)? {
+                    return Ok(());
+                }
                 let lowered = self.expression(scrutinee)?;
                 let handle = self.scalar(lowered, scrutinee.span)?;
                 self.check_struct_pending_access(

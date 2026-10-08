@@ -94,7 +94,8 @@ class SymbolAndFingerprintTests(unittest.TestCase):
             f"{name} T 0 10" for name in sorted(self.leaves | self.private | {"main"}))
 
     def test_complete_current_source_export_contract(self) -> None:
-        self.assertEqual((len(self.leaves), len(self.private)), (37, 8))
+        self.assertEqual((len(self.leaves), len(self.private)), (50, 8))
+        self.assertTrue(measure.CARRIER_EXPORTS <= self.leaves)
         measure.check_symbols(self.symbols, self.leaves, self.private)
 
     def test_missing_duplicate_foreign_or_nontext_exports_are_refused(self) -> None:
@@ -129,6 +130,13 @@ class SymbolAndFingerprintTests(unittest.TestCase):
 
 class ReceiptAndGateTests(unittest.TestCase):
     def fixture(self, root: Path, inputs: dict[str, measure.Json]) -> Path:
+        helper = root / "tools/measure_resource_native_archives.py"
+        helper.parent.mkdir(parents=True)
+        helper.write_bytes(Path(measure.__file__).read_bytes())
+        registration = root / "crates/jett_runtime/src/resource_custody/registration.rs"
+        registration.parent.mkdir(parents=True)
+        registration.write_text("pub(crate) const NATIVE_RESOURCE_LAYOUT_WIRE_VERSION: u32 = 3;\n",
+                                encoding="utf-8")
         linker = root / "cc"
         linker.write_bytes(b"measured C linker")
         log = root / "observation.log"
@@ -140,7 +148,8 @@ class ReceiptAndGateTests(unittest.TestCase):
             fingerprint = root / f"{profile}-fingerprint.json"
             fingerprint.write_text('{"rustflags":[]}', encoding="utf-8")
             build = root / f"{profile}-build.json"
-            measure.write_json(build, {"runtime_sources": inputs, "archive": measure.artifact(archive)})
+            measure.write_json(build, {"runtime_sources": inputs, "archive": measure.artifact(archive),
+                                      "measurement_script": measure.artifact(Path(measure.__file__))})
             libraries = root / f"{profile}-libraries.json"
             measure.write_json(libraries, {"arguments": ["-lgcc_s", "-lc"],
                                           "actual_print_log": measure.artifact(log)})
@@ -150,7 +159,7 @@ class ReceiptAndGateTests(unittest.TestCase):
                     {**measure.artifact(fingerprint), "raw_json_utf8": fingerprint.read_text(encoding="utf-8")}],
                 "native_static_libs": measure.artifact(libraries)})
             archives.append({"profile": profile, "target": measure.TARGET, "runtime_abi": 1,
-                "layout_wire": 2, "private_cfgs": list(measure.CFGS), "crt_mode": "dynamic",
+                "layout_wire": measure.CURRENT_LAYOUT_WIRE, "private_cfgs": list(measure.CFGS), "crt_mode": "dynamic",
                 "archive_path": str(archive), "archive_sha256": measure.digest(archive),
                 "linker_path": str(linker), "native_library_args": ["-lgcc_s", "-lc"],
                 "build_receipt": measure.artifact(build), "native_static_libs_receipt": measure.artifact(libraries),
@@ -270,6 +279,140 @@ class ReceiptAndGateTests(unittest.TestCase):
             accepted = measure.read_object(root / "gate-acceptance.json")
             self.assertEqual(accepted["source_deleted_executions"], 146)
             self.assertEqual(accepted["runtime_expected_pin_environment"], False)
+
+    def test_old_future_or_mixed_receipt_wire_cannot_authenticate_current_sources(self) -> None:
+        for wires in ((2, 2), (4, 4), (3, 2), (1, 3)):
+            with self.subTest(wires=wires), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                inputs: dict[str, measure.Json] = {"Cargo.lock": "frozen"}
+                receipt = self.fixture(root, inputs)
+                record = measure.read_object(receipt)
+                rows = record["archives"]
+                self.assertIsInstance(rows, list)
+                if not isinstance(rows, list):
+                    self.fail("fixture archive rows must be a list")
+                for row, wire in zip(rows, wires, strict=True):
+                    self.assertIsInstance(row, dict)
+                    if not isinstance(row, dict):
+                        self.fail("fixture archive row must be an object")
+                    row["layout_wire"] = wire
+                receipt.write_text(json.dumps(record), encoding="utf-8")
+                with patch.object(measure, "sources", return_value=inputs), \
+                     self.assertRaises(measure.MeasurementError):
+                    measure.receipt_sources(receipt, measure.digest(receipt), root)
+
+
+class CarrierContractTests(unittest.TestCase):
+    def fixture(self, root: Path) -> tuple[Path, Path]:
+        helper = root / "tools/measure_resource_native_archives.py"
+        helper.parent.mkdir(parents=True)
+        helper.write_bytes(Path(measure.__file__).read_bytes())
+        resource = root / "crates/jett_runtime/src/native_abi/resource"
+        (resource / "leaves").mkdir(parents=True)
+        for relative in ("leaves.rs", "test_archive_api.rs"):
+            original = measure.ROOT / "crates/jett_runtime/src/native_abi/resource" / relative
+            (resource / relative).write_bytes(original.read_bytes())
+        carriers = resource / "leaves/carriers.rs"
+        carriers.write_text("\n".join(f'pub unsafe extern "C" fn {name}() {{}}'
+            for name in sorted(measure.CARRIER_EXPORTS)), encoding="utf-8")
+        registration = root / "crates/jett_runtime/src/resource_custody/registration.rs"
+        registration.parent.mkdir(parents=True)
+        registration.write_text("pub(crate) const NATIVE_RESOURCE_LAYOUT_WIRE_VERSION: u32 = 3;\n",
+                                encoding="utf-8")
+        return registration, carriers
+
+    def test_exact_current_wire_and_carrier_source_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            measure.checked_layout_wire(root)
+            leaves, private = measure.export_names(root)
+            self.assertEqual((len(leaves), len(private)), (50, 8))
+            self.assertTrue(measure.CARRIER_EXPORTS <= leaves)
+
+    def test_old_future_duplicate_or_missing_runtime_wire_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            registration, _ = self.fixture(root)
+            original = registration.read_text(encoding="utf-8")
+            for invalid in (original.replace("= 3;", "= 2;"), original.replace("= 3;", "= 4;"),
+                            original + original, ""):
+                registration.write_text(invalid, encoding="utf-8")
+                with self.subTest(invalid=invalid), self.assertRaises(measure.MeasurementError):
+                    measure.checked_layout_wire(root)
+
+    def test_missing_duplicate_and_foreign_carrier_names_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, carriers = self.fixture(root)
+            original = carriers.read_text(encoding="utf-8")
+            first, *rest = original.splitlines()
+            for invalid in ("\n".join(rest), original + "\n" + first,
+                            original.replace("carrier_adapt(", "carrier_foreign(")):
+                carriers.write_text(invalid, encoding="utf-8")
+                with self.subTest(invalid=invalid), self.assertRaises(measure.MeasurementError):
+                    measure.export_names(root)
+            carriers.write_text(original, encoding="utf-8")
+            legacy = carriers.parent.parent / "leaves.rs"
+            original_legacy = legacy.read_text(encoding="utf-8")
+            first_name = sorted(measure.export_names(root)[0] - measure.CARRIER_EXPORTS)[0]
+            legacy.write_text(original_legacy.replace(first_name + "(",
+                "jett_rt_v1_resource_carrier_adapt("), encoding="utf-8")
+            with self.assertRaises(measure.MeasurementError):
+                measure.export_names(root)
+
+    def test_stale_wire_or_symbols_refused_before_tools_and_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            registration, carriers = self.fixture(root)
+            output = root / "fresh-measurement"
+            original = registration.read_text(encoding="utf-8")
+            registration.write_text(original.replace("= 3;", "= 2;"), encoding="utf-8")
+            with patch.object(measure, "executable") as executable, \
+                 self.assertRaises(measure.MeasurementError):
+                measure.prepare(root, output, "unused-cc", "unused-nm", "unused-readelf")
+            executable.assert_not_called()
+            self.assertFalse(output.exists())
+            registration.write_text(original, encoding="utf-8")
+            carriers.write_text("", encoding="utf-8")
+            with patch.object(measure, "executable") as executable, \
+                 self.assertRaises(measure.MeasurementError):
+                measure.prepare(root, output, "unused-cc", "unused-nm", "unused-readelf")
+            executable.assert_not_called()
+            self.assertFalse(output.exists())
+
+    def test_foreign_executing_helper_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            measure.checked_measurement_source(root)
+            (root / "tools/measure_resource_native_archives.py").write_bytes(b"foreign helper")
+            with self.assertRaises(measure.MeasurementError):
+                measure.checked_measurement_source(root)
+
+    def test_guards_are_bound_to_the_source_snapshot_before_output_or_build(self) -> None:
+        for changed in ("wire", "exports"):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                registration, carriers = self.fixture(root)
+                output = root / "fresh-measurement"
+                def snapshot_mutation(repo: Path, complete: bool = False) -> dict[str, measure.Json]:
+                    self.assertEqual(repo, root)
+                    self.assertFalse(complete)
+                    if changed == "wire":
+                        registration.write_text("pub(crate) const NATIVE_RESOURCE_LAYOUT_WIRE_VERSION: u32 = 2;\n",
+                                                encoding="utf-8")
+                    else:
+                        carriers.write_text("", encoding="utf-8")
+                    return {}
+                with patch.object(measure, "sources", side_effect=snapshot_mutation), \
+                     patch.object(measure, "executable", return_value=root / "unused-tool"), \
+                     patch.object(measure, "build_environment", return_value={}), \
+                     patch.object(measure, "toolchain") as toolchain, \
+                     self.assertRaises(measure.MeasurementError):
+                    measure.prepare(root, output, "unused-cc", "unused-nm", "unused-readelf")
+                toolchain.assert_not_called()
+                self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":

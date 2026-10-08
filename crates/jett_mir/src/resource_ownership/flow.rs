@@ -154,13 +154,17 @@ impl<'p> Analysis<'p> {
         parameter: usize,
         frame: ResourceFrameId,
         source: ResourceLoanSource,
-    ) -> ResourceLoanId {
+    ) -> Result<ResourceLoanId, String> {
         let entry = (key(self.site, ordinal), parameter, source);
         if let Some(id) = self.loan_sites.get(&entry) {
-            return *id;
+            return Ok(*id);
         }
         let id = ResourceLoanId(self.plan.loans.len());
         let shape = match source {
+            ResourceLoanSource::CarrierSumProjection { .. } => return Err(
+                "carrier sum adapters are issued only by the exact carrier projection constructor"
+                    .into(),
+            ),
             ResourceLoanSource::Owner(owner) => self.plan.slots[owner.index()].shape.clone(),
             ResourceLoanSource::ProjectedSumPayload { parent, .. } => ResourceShape::Plain {
                 kind: self.plan.loans[parent.index()].shape.kind().clone(),
@@ -177,7 +181,7 @@ impl<'p> Analysis<'p> {
             parameter: (parameter != usize::MAX).then_some(parameter),
         });
         self.loan_sites.insert(entry, id);
-        id
+        Ok(id)
     }
     fn borrow(&mut self, frame: ResourceFrameId, loan: ResourceLoanId) {
         let role = if self.plan.loans[loan.index()].shape.conditional() {
@@ -386,7 +390,7 @@ impl<'p> Analysis<'p> {
                     usize::MAX,
                     ResourceFrameId(0),
                     ResourceLoanSource::Owner(source),
-                );
+                )?;
                 state.leases.insert(loan);
                 self.borrow(ResourceFrameId(0), loan);
                 value.loan = Some(loan);
@@ -798,7 +802,7 @@ impl<'p> Analysis<'p> {
                         .owner
                         .ok_or("Resource retained actual has no exact holder")?;
                     let loan =
-                        self.loan(ordinal, parameter, frame, ResourceLoanSource::Owner(owner));
+                        self.loan(ordinal, parameter, frame, ResourceLoanSource::Owner(owner))?;
                     state.leases.insert(loan);
                     loans.push(loan);
                     self.borrow(frame, loan);
@@ -830,7 +834,7 @@ impl<'p> Analysis<'p> {
                         parameter,
                         frame,
                         ResourceLoanSource::Owner(temporary),
-                    );
+                    )?;
                     loans.push(loan);
                     self.borrow(frame, loan);
                     operands.push(ResourceCallOperand::Borrowed { parameter, loan });
@@ -1084,7 +1088,7 @@ impl<'p> Analysis<'p> {
                             if selected {
                                 if row.output() != *target || row.success_site() != self.site || !self.function.is_view_local(*target) || self.local_slots[target.index() as usize].is_some() { return Err("borrowed Resource payload gained an owning or foreign output".into()); }
                                 let path = row.path();
-                                let loan = self.loan(self.ordinal, usize::MAX, ResourceFrameId(0), ResourceLoanSource::ProjectedSumPayload { parent, tag, path });
+                                let loan = self.loan(self.ordinal, usize::MAX, ResourceFrameId(0), ResourceLoanSource::ProjectedSumPayload { parent, tag, path })?;
                                 state.leases.insert(loan);
                                 self.store(&mut state, *target, Some(Value { shape: ResourceShape::Plain { kind: value.shape.kind().clone() }, occupancy: ResourceOccupancy::Occupied, owner: None, loan: Some(loan) }), false, false)?;
                                 self.operation(self.active_frame, ResourceOperationRole::ProjectSumView { source: parent, destination: loan, tag, path });
@@ -1331,6 +1335,7 @@ pub(super) fn analyze(
         });
     }
     let plan = ResourceFunctionPlan {
+        carriers: None,
         function: function.id,
         identity: function.identity.clone(),
         parameters: function.params.clone(),

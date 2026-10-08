@@ -15,8 +15,14 @@ static NEXT_CUSTODY: AtomicU64 = AtomicU64::new(1);
 
 #[path = "resource_custody/registration.rs"]
 mod registration;
+#[cfg(test)]
+pub(crate) use registration::carrier_runtime_fixture_bytes;
 pub(crate) use registration::{
-    JettResourceCallResultV1, NATIVE_RESOURCE_LAYOUT_WIRE_VERSION, NativeAccess, NativeFormal,
+    JettResourceCallResultV1, NATIVE_RESOURCE_LAYOUT_WIRE_VERSION, NativeAccess,
+    NativeCarrierChild, NativeCarrierChildSource, NativeCarrierDestination, NativeCarrierField,
+    NativeCarrierLayout, NativeCarrierLoanSource, NativeCarrierMember, NativeCarrierNode,
+    NativeCarrierObservation, NativeCarrierOperation, NativeCarrierOperationRecord,
+    NativeCarrierPath, NativeCarrierSelector, NativeCarrierSlot, NativeCarrierSource, NativeFormal,
     NativeFrame, NativeFrameRole, NativeHook, NativeLayoutInstallation, NativeLoanSource,
     NativeOperation, NativeOperationRecord, NativeParent, NativePayloadStep, NativePosition,
     NativeRecipe, NativeShape, NativeSignature, NativeSite, NativeSlot, NativeSourceEffect,

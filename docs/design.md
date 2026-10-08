@@ -8620,7 +8620,34 @@ Ordinary `lower_program` coalescing stays unchanged: independent positive contro
 pass 30 Source-deleted main/verify/property executions without a production change,
 and establish no ordinary coalescing defect. Generic and alias owners, bitfields,
 variants, machines, type arguments and nested producers remain implementation
-obligations in the checked Resource path. Exceptional reflected native reentry
-and broader aggregate custody remain separate acceptance obligations under
-existing Source semantics. See the
+obligations in the checked Resource path. Original Source06 additionally passes
+16 exceptional Source-deleted single entries and 18 same-grant native executables /
+36 entries in both checking profiles. Its original completions and first nonzero
+process exits remain exact after READY on the retained Session/provider/grant.
+Explicit derived Return/Break/Continue/Default native controls and broader aggregate
+custody remain separate acceptance obligations under existing Source semantics. See the
 [reflected-field execution contract](active/native_resource_reflected_fields.md).
+
+
+Typed Resource aggregate transport is being implemented through a separate
+constructor-owned carrier plan. Actual empty collections and inactive payloads
+retain their complete nominal, generic, variant/state and qualification identity;
+absence cannot erase a type's potential Resource paths or prove a refinement.
+Dedicated carrier observations and a parent-bound borrowed-sum adapter preserve
+existing Source ownership and cleanup. Wire v3 retains strict v1/v2 compatibility.
+This prototype has no native execution acceptance; live aggregate custody and
+replacement remain explicit implementation follow-ons. See the
+[typed aggregate plan](active/native_resource_aggregate_carriers.md).
+
+### Native ordinary entries in Resource programs
+
+A program may declare Resource APIs while its selected entry and ordinary helpers
+perform no Resource custody operations. Native compilation preserves their
+ordinary calling convention. The generated program wrapper owns a separately
+validated cleanup Scope for the exact selected closed, capture-free,
+Network-only/Nothing entry, including an entry with no parameters. Initial checked
+lowering retains its own original Source provenance and full-body graph proof;
+mutable MIR cannot manufacture this authority afterward. This native metadata
+changes neither Source execution-family membership nor purity/comptime rules.
+See [the ordinary entry plan](active/native_resource_ordinary_entry.md) for the
+bounded implementation and pending acceptance gates.

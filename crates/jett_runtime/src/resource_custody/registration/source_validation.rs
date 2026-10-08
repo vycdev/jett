@@ -7,19 +7,20 @@ fn get<T>(values: &[T], id: u32) -> Result<&T, ResourceLayoutError> {
         .get(id as usize)
         .ok_or(ResourceLayoutError::InvalidReference)
 }
-fn occupied(layout: &WireLayout, shape: u32) -> Result<bool, ResourceLayoutError> {
+pub(super) fn occupied(layout: &WireLayout, shape: u32) -> Result<bool, ResourceLayoutError> {
     // Shape validation already established child-before-parent and Resource-free
     // Result failure arms. Walk iteratively so bounded foreign nesting cannot
     // turn table preflight into recursive stack growth.
     let mut current = shape;
-    loop {
+    for _ in 0..=layout.shapes.len() {
         match *get(&layout.shapes, current)? {
-            NativeShape::Resource { .. } => return Ok(true),
+            NativeShape::Resource { .. } | NativeShape::Carrier { .. } => return Ok(true),
             NativeShape::Optional { child } => current = child,
             NativeShape::Result { ok, .. } => current = ok,
             _ => return Ok(false),
         }
     }
+    Err(ResourceLayoutError::InvalidReference)
 }
 fn frame<'a>(
     layout: &'a WireLayout,
@@ -76,6 +77,24 @@ pub(super) fn sum_source_shape(
     function: u32,
 ) -> Result<u32, ResourceLayoutError> {
     let shape = match source {
+        NativeSumLoanSource::CarrierProjected { operation } => {
+            let row = get(&layout.operations, operation)?;
+            if layout.version != 3 || row.site.function != function {
+                return Err(ResourceLayoutError::OperationMismatch);
+            }
+            let NativeOperation::Carrier { record } = row.operation else {
+                return Err(ResourceLayoutError::OperationMismatch);
+            };
+            let super::carriers::NativeCarrierOperation::AdaptSum {
+                sum_slot,
+                borrowed: true,
+                ..
+            } = get(&layout.carriers.operations, record)?.operation
+            else {
+                return Err(ResourceLayoutError::OperationMismatch);
+            };
+            get(&layout.slots, sum_slot)?.shape
+        }
         NativeSumLoanSource::ExistingBorrow { operation } => {
             let row = get(&layout.operations, operation)?;
             if row.site.function != function {
@@ -143,7 +162,7 @@ pub(super) fn invocation(
     callee_scope: u32,
     source: &NativeSourceInvocation,
 ) -> Result<(), ResourceLayoutError> {
-    if layout.version != 2 {
+    if !matches!(layout.version, 2 | 3) {
         return Err(ResourceLayoutError::OperationMismatch);
     }
     frame(
@@ -185,6 +204,17 @@ pub(super) fn invocation(
         source_indices[source_index] = true;
         get(&layout.shapes, formal.actual_shape)?;
         match formal.value {
+            NativeSourceValue::CarrierOwned { .. } | NativeSourceValue::CarrierView { .. } => {
+                super::carriers::validate_formal(
+                    layout,
+                    record,
+                    caller_frame,
+                    callee_scope,
+                    formal,
+                    &mut caller_slots,
+                    &mut callee_slots,
+                )?
+            }
             NativeSourceValue::Ordinary => {
                 if occupied(layout, formal.actual_shape)? || occupied(layout, formal.callee_shape)?
                 {
@@ -280,6 +310,15 @@ pub(super) fn invocation(
         }
     }
     match &source.result {
+        NativeSourceResult::Carrier { .. } => super::carriers::validate_result(
+            layout,
+            record,
+            caller_frame,
+            callee,
+            signature_record,
+            scope,
+            source,
+        )?,
         NativeSourceResult::Ordinary { shape } => {
             if *shape != signature_record.result
                 || occupied(layout, *shape)?
@@ -343,7 +382,7 @@ pub(super) fn operation(
     layout: &WireLayout,
     record: &NativeOperationRecord,
 ) -> Result<(), ResourceLayoutError> {
-    if layout.version != 2 {
+    if !matches!(layout.version, 2 | 3) {
         return Err(ResourceLayoutError::OperationMismatch);
     }
     let get_frame = |id| -> Result<&NativeFrame, ResourceLayoutError> {
@@ -467,7 +506,8 @@ pub(super) fn operation(
             get_frame(frame)?;
             let row = get(&layout.operations, borrow)?;
             if row.site.function != record.site.function
-                || !matches!(row.operation, NativeOperation::BorrowSum { frame: f, .. } if f == frame)
+                || !(matches!(row.operation, NativeOperation::BorrowSum { frame: f, .. } if f == frame)
+                    || matches!(row.operation,NativeOperation::Carrier{record:id} if layout.version==3 && matches!(layout.carriers.operations.get(id as usize).map(|r|&r.operation),Some(super::carriers::NativeCarrierOperation::AdaptSum{frame:f,borrowed:true,..}) if *f==frame)))
             {
                 return Err(ResourceLayoutError::OperationMismatch);
             }

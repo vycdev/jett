@@ -3,6 +3,17 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+macro_rules! identity {
+    ($name:ident) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub struct $name(usize);
+        impl $name {
+            pub fn index(self) -> usize {
+                self.0
+            }
+        }
+    };
+}
 mod borrowed_sums;
 mod lexical_borrows;
 pub(crate) use lexical_borrows::LexicalScope;
@@ -23,13 +34,28 @@ mod normalized_calls_tests;
 pub use normalized_calls::{
     ResourceCallActual, ResourceCallNode, ResourceCallRegion, ResourceCallRegionId,
 };
+mod carriers;
+pub use carriers::{
+    ResourceCarrierChild, ResourceCarrierConstructor, ResourceCarrierEdge, ResourceCarrierField,
+    ResourceCarrierFunctionPlan, ResourceCarrierGeneration, ResourceCarrierIndex,
+    ResourceCarrierIteration, ResourceCarrierLoan, ResourceCarrierLoanId,
+    ResourceCarrierLoanSource, ResourceCarrierNode, ResourceCarrierObservation,
+    ResourceCarrierOperation, ResourceCarrierOperationId, ResourceCarrierOperationRole,
+    ResourceCarrierProjectionPath, ResourceCarrierShape, ResourceCarrierShapeId,
+    ResourceCarrierSlot, ResourceCarrierSlotId, ResourceCarrierState, ResourceCarrierValue,
+    ResourceCarrierVariant,
+};
+#[cfg(test)]
+mod carriers_tests;
 mod companion;
 mod control_flow;
 #[cfg(test)]
 mod control_flow_tests;
 pub(crate) use companion::CompanionContext;
 pub use companion::ResourceCompanionPlan;
+mod entry_scope;
 mod execution_closure;
+pub use entry_scope::{ResourceEntryScopePlan, validate_resource_ownership_for_entry};
 mod named_callables;
 mod returned_descriptors;
 pub use named_callables::ResourceNamedCallableProof;
@@ -44,17 +70,6 @@ mod original_calls_tests;
 mod tests;
 mod walk;
 
-macro_rules! identity {
-    ($name:ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-        pub struct $name(usize);
-        impl $name {
-            pub fn index(self) -> usize {
-                self.0
-            }
-        }
-    };
-}
 identity!(ResourceFrameId);
 identity!(ResourceOwnerSlotId);
 identity!(ResourceLoanId);
@@ -194,6 +209,9 @@ impl ResourceOwnerSlot {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceLoanSource {
+    CarrierSumProjection {
+        operation: ResourceCarrierOperationId,
+    },
     Owner(ResourceOwnerSlotId),
     IncomingViewFormal {
         scope: ResourceFrameId,
@@ -210,6 +228,7 @@ impl ResourceLoanSource {
     // not need a global ordering contract to distinguish selecting tag sites.
     fn ordering_key(self) -> (u8, usize, usize, u32, u8) {
         match self {
+            Self::CarrierSumProjection { operation } => (3, operation.index(), 0, 0, 0),
             Self::Owner(owner) => (0, owner.index(), 0, 0, 0),
             Self::IncomingViewFormal { scope, parameter } => (1, scope.index(), parameter, 0, 0),
             Self::ProjectedSumPayload { parent, tag, path } => (
@@ -276,6 +295,14 @@ pub enum ResourceCompletion {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceCallOperand {
+    CarrierOwned {
+        parameter: usize,
+        slot: ResourceCarrierSlotId,
+    },
+    CarrierBorrowed {
+        parameter: usize,
+        loan: ResourceCarrierLoanId,
+    },
     Ordinary {
         parameter: usize,
         ty: TypeId,
@@ -291,6 +318,7 @@ pub enum ResourceCallOperand {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceCallResult {
+    Carrier { slot: ResourceCarrierSlotId },
     Ordinary { ty: TypeId },
     Owned { slot: ResourceOwnerSlotId },
 }
@@ -372,6 +400,9 @@ impl ResourceCallFormal {
 /// Closed metadata roles. None is a public constructor for a validated plan.
 #[derive(Debug, Clone)]
 pub enum ResourceOperationRole {
+    Carrier {
+        operation: ResourceCarrierOperationId,
+    },
     BeginSourceFunction {
         region: ResourceCallRegionId,
         function: FunctionId,
@@ -547,6 +578,7 @@ impl ResourceOperation {
 
 #[derive(Debug)]
 pub struct ResourceFunctionPlan {
+    carriers: Option<ResourceCarrierFunctionPlan>,
     function: FunctionId,
     identity: FunctionIdentity,
     parameters: Vec<Param>,
@@ -564,6 +596,9 @@ pub struct ResourceFunctionPlan {
     descriptor_locals: Vec<(LocalId, hir::ResourceHookRef)>,
 }
 impl ResourceFunctionPlan {
+    pub fn carriers(&self) -> Option<&ResourceCarrierFunctionPlan> {
+        self.carriers.as_ref()
+    }
     pub fn function(&self) -> FunctionId {
         self.function
     }
@@ -670,6 +705,7 @@ pub struct ResourceOwnershipPlan<'p> {
     types: &'p TypeInterner,
     functions: Vec<ResourceFunctionPlan>,
     required_only_functions: Vec<FunctionId>,
+    entry_scope: Option<ResourceEntryScopePlan>,
 }
 impl<'p> ResourceOwnershipPlan<'p> {
     pub fn program(&self) -> &'p Program {
@@ -682,8 +718,18 @@ impl<'p> ResourceOwnershipPlan<'p> {
     pub fn type_requires_custody(&self, ty: TypeId) -> bool {
         resource_type_pending(self.types, ty)
     }
+    pub fn carrier_shapes(&self) -> &[ResourceCarrierShape] {
+        self.functions
+            .iter()
+            .find_map(|function| function.carriers.as_ref())
+            .map_or(&[], ResourceCarrierFunctionPlan::shapes)
+    }
     pub fn functions(&self) -> &[ResourceFunctionPlan] {
         &self.functions
+    }
+    /// Wrapper-only Scope metadata; it grants no Source execution-family membership.
+    pub fn entry_scope(&self) -> Option<&ResourceEntryScopePlan> {
+        self.entry_scope.as_ref()
     }
     /// Exact checked helpers omitted only as implicit native roots. This grants
     /// no runtime body, carrier or invocation authority for those functions.
@@ -767,13 +813,19 @@ impl Capture {
         types: &TypeInterner,
         execution: &ResourceExecutionClosure,
     ) -> Self {
-        let needed = source.has_reflected_field_dispatch(function.id)
+        // A raw ordinary predicate has no Resource archive authority.
+        // Keep custody detection independent so malformed raw Resource bodies
+        // still follow the existing mandatory refusal path.
+        let needed = (source.manifest().is_some()
+            && function.identity.declaration.kind == hir::DeclarationKind::RefinementPredicate)
+            || source.has_reflected_field_dispatch(function.id)
             || runtime_custody_needed(function, types, execution)
             || source.required_only_function_ids().contains(&function.id)
             || source
                 .required_materializations()
                 .iter()
-                .any(|row| row.function() == function.id);
+                .any(|row| row.function() == function.id)
+            || entry_scope::capture_needed(function, source);
         Self {
             witness: needed.then(|| ResourceLoweringWitness {
                 original: function.clone(),
@@ -950,7 +1002,8 @@ impl Capture {
             reflected_fields::seal(witness);
         }
         if let Some(witness) = &mut self.witness
-            && !witness.borrowed_sums.is_empty()
+            && (!witness.borrowed_sums.is_empty()
+                || entry_scope::capture_needed(&witness.original, &witness.source))
         {
             witness.descriptors.seal_body(function);
         }
@@ -963,6 +1016,7 @@ impl Capture {
                 .required_only_function_ids()
                 .contains(&function.id)
                 || !witness.borrowed_sums.is_empty()
+                || entry_scope::capture_needed(&witness.original, &witness.source)
                 || witness
                     .source
                     .required_materializations()
@@ -993,10 +1047,11 @@ impl ResourceLoweringWitness {
             return Err("Resource ownership differs from its initially authenticated Source or constructor-emitted graph".into());
         }
         self.descriptors.current(function)?;
-        if !self.borrowed_sums.is_empty() && !self.descriptors.has_body() {
-            return Err(
-                "borrowed Resource Handle lost its independent constructor body seal".into(),
-            );
+        if (!self.borrowed_sums.is_empty()
+            || entry_scope::capture_needed(&self.original, &self.source))
+            && !self.descriptors.has_body()
+        {
+            return Err("Resource Source proof lost its independent constructor body seal".into());
         }
         borrowed_sums::current(self, function)?;
         lexical_borrows::current(self, function)?;
@@ -1308,6 +1363,17 @@ pub(super) fn validate_witnesses(
         .unwrap_or_default();
     for function in &program.functions {
         let needed = execution.contains(function.id)
+            || source.is_some_and(|archive| {
+                archive
+                    .execution_functions()
+                    .iter()
+                    .find(|original| original.id == function.id)
+                    .is_some_and(|original| {
+                        original.identity.declaration.kind
+                            == hir::DeclarationKind::RefinementPredicate
+                            || entry_scope::capture_needed(original, archive)
+                    })
+            })
             || source
                 .is_some_and(|archive| archive.required_only_function_ids().contains(&function.id))
             || source.is_some_and(|archive| {
@@ -1402,7 +1468,12 @@ pub fn validate_resource_ownership<'p>(
         {
             continue;
         }
-        match flow::analyze(program, function, types) {
+        let analyzed = if carriers::required(function, types) {
+            carriers::analyze(program, function, types)
+        } else {
+            flow::analyze(program, function, types)
+        };
+        match analyzed {
             Ok(plan) => functions.push(plan),
             Err(message) => errors.push(ValidationError {
                 span: function.span,
@@ -1416,6 +1487,7 @@ pub fn validate_resource_ownership<'p>(
             types,
             functions,
             required_only_functions,
+            entry_scope: None,
         })
     } else {
         Err(errors)

@@ -54,6 +54,8 @@ pub(crate) struct CompanionContext<'p> {
     expressions: BTreeSet<usize>,
     named_values: BTreeSet<usize>,
     descriptor_values: BTreeSet<usize>,
+    carrier_expressions: BTreeSet<usize>,
+    carrier_types: HashSet<TypeId>,
     named_locals: HashSet<LocalId>,
 }
 impl<'p> CompanionContext<'p> {
@@ -115,7 +117,45 @@ impl<'p> CompanionContext<'p> {
                 _ => {}
             }
         }
+        let mut carrier_expressions = BTreeSet::new();
+        if let Some(carriers) = plan.carriers() {
+            for block in &current.blocks {
+                walk::mir_block(block, &mut |value| {
+                    let direct = carriers.operations_for_expression(value).next().is_some()
+                        || plan.operations_for_expression(value).any(|operation| {
+                            matches!(
+                                operation.role(),
+                                ResourceOperationRole::InvokeSourceFunction {
+                                    result: ResourceCallResult::Carrier { .. },
+                                    ..
+                                }
+                            )
+                        });
+                    let local = matches!(value.kind, hir::ExpressionKind::Local(id) if carriers.slots().iter().any(|slot| matches!(slot.storage(), ResourceSlotStorage::Local { header } if header.id == id)) || current.is_view_local(id) && carriers.shape_for_type(value.ty).is_some_and(ResourceCarrierShape::contains_resource));
+                    if direct
+                        || local
+                        || matches!(
+                            value.kind,
+                            hir::ExpressionKind::View(_)
+                                | hir::ExpressionKind::InterfaceCoerce { .. }
+                        )
+                    {
+                        carrier_expressions.insert(std::ptr::from_ref(value).addr());
+                    }
+                });
+            }
+        }
+        let carrier_types = plan.carriers().map_or_else(HashSet::new, |carriers| {
+            carriers
+                .shapes()
+                .iter()
+                .filter(|shape| shape.contains_resource())
+                .map(ResourceCarrierShape::ty)
+                .collect()
+        });
         Ok(Self {
+            carrier_expressions,
+            carrier_types,
             program: ownership.program,
             function: current,
             types: ownership.types,
@@ -141,6 +181,13 @@ impl<'p> CompanionContext<'p> {
                         .collect()
                 }),
         })
+    }
+    pub(crate) fn carrier_type(&self, ty: TypeId) -> bool {
+        self.carrier_types.contains(&ty) && carriers::carrier_type(self.types, ty)
+    }
+    pub(crate) fn carrier_expression(&self, value: &Expression) -> bool {
+        self.carrier_expressions
+            .contains(&std::ptr::from_ref(value).addr())
     }
     pub(crate) fn contains(&self, value: &Expression) -> bool {
         self.expressions.contains(&std::ptr::from_ref(value).addr())

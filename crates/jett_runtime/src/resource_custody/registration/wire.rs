@@ -1,7 +1,10 @@
 //! Bounded owned decoding; wire bytes contain no Source or registry-key authority.
 
 use super::ResourceLayoutError;
+use super::carriers::{NativeCarrierLayout, NativeCarrierLoanSource};
 use super::schema::*;
+#[path = "wire/carriers.rs"]
+mod carriers;
 
 pub(super) const MAX_BYTES: usize = 1024 * 1024;
 pub(super) const MAX_ROWS: usize = 4096;
@@ -67,14 +70,17 @@ impl<'a> Reader<'a> {
                 scope: self.word()?,
                 parameter: self.word()?,
             },
-            3 if version == 2 => NativeLoanSource::ProjectedSumPayload {
+            3 if matches!(version, 2 | 3) => NativeLoanSource::ProjectedSumPayload {
                 operation: self.word()?,
             },
             _ => return Err(ResourceLayoutError::UnknownTag),
         })
     }
-    fn sum_loan(&mut self) -> Result<NativeSumLoanSource, ResourceLayoutError> {
+    fn sum_loan(&mut self, version: u32) -> Result<NativeSumLoanSource, ResourceLayoutError> {
         Ok(match self.word()? {
+            3 if version == 3 => NativeSumLoanSource::CarrierProjected {
+                operation: self.word()?,
+            },
             1 => NativeSumLoanSource::ExistingBorrow {
                 operation: self.word()?,
             },
@@ -85,7 +91,7 @@ impl<'a> Reader<'a> {
             _ => return Err(ResourceLayoutError::UnknownTag),
         })
     }
-    fn shape(&mut self) -> Result<NativeShape, ResourceLayoutError> {
+    fn shape(&mut self, version: u32) -> Result<NativeShape, ResourceLayoutError> {
         Ok(match self.word()? {
             1 => {
                 let bits = self.word()?;
@@ -110,11 +116,15 @@ impl<'a> Reader<'a> {
                 fail: self.word()?,
             },
             10 => NativeShape::HookDescriptor { hook: self.word()? },
+            11 if version == 3 => NativeShape::Carrier { node: self.word()? },
             _ => return Err(ResourceLayoutError::UnknownTag),
         })
     }
     fn operation(&mut self, version: u32) -> Result<NativeOperation, ResourceLayoutError> {
         Ok(match self.word()? {
+            26 if version == 3 => NativeOperation::Carrier {
+                record: self.word()?,
+            },
             1 => NativeOperation::Acquire {
                 frame: self.word()?,
                 hook: self.word()?,
@@ -186,42 +196,42 @@ impl<'a> Reader<'a> {
                 callee: self.word()?,
                 signature: self.word()?,
                 callee_scope: self.word()?,
-                source: if version == 2 {
-                    Some(self.source_invocation()?)
+                source: if matches!(version, 2 | 3) {
+                    Some(self.source_invocation(version)?)
                 } else {
                     None
                 },
             },
-            17 if version == 2 => NativeOperation::TakeFailureCompanion {
+            17 if matches!(version, 2 | 3) => NativeOperation::TakeFailureCompanion {
                 frame: self.word()?,
                 source_sum_slot: self.word()?,
                 failure_shape: self.word()?,
             },
-            18 if version == 2 => NativeOperation::PublishReturn {
+            18 if matches!(version, 2 | 3) => NativeOperation::PublishReturn {
                 frame: self.word()?,
                 source_return_slot: self.word()?,
             },
-            19 if version == 2 => NativeOperation::CreateAbsentSum {
+            19 if matches!(version, 2 | 3) => NativeOperation::CreateAbsentSum {
                 frame: self.word()?,
                 destination_slot: self.word()?,
             },
-            20 if version == 2 => NativeOperation::CreateFailureSum {
+            20 if matches!(version, 2 | 3) => NativeOperation::CreateFailureSum {
                 frame: self.word()?,
                 destination_slot: self.word()?,
                 failure_shape: self.word()?,
             },
-            21 if version == 2 => NativeOperation::BorrowSum {
+            21 if matches!(version, 2 | 3) => NativeOperation::BorrowSum {
                 frame: self.word()?,
                 source_sum_slot: self.word()?,
                 lease_frame: self.word()?,
             },
-            22 if version == 2 => NativeOperation::ObserveSumView {
+            22 if matches!(version, 2 | 3) => NativeOperation::ObserveSumView {
                 frame: self.word()?,
-                source: self.sum_loan()?,
+                source: self.sum_loan(version)?,
             },
-            23 if version == 2 => NativeOperation::ProjectSumView {
+            23 if matches!(version, 2 | 3) => NativeOperation::ProjectSumView {
                 frame: self.word()?,
-                source: self.sum_loan()?,
+                source: self.sum_loan(version)?,
                 path: match self.word()? {
                     1 => NativePayloadStep::Some,
                     2 => NativePayloadStep::Ok,
@@ -229,19 +239,22 @@ impl<'a> Reader<'a> {
                 },
                 lease_frame: self.word()?,
             },
-            24 if version == 2 => NativeOperation::ReadFailureCompanion {
+            24 if matches!(version, 2 | 3) => NativeOperation::ReadFailureCompanion {
                 frame: self.word()?,
-                source: self.sum_loan()?,
+                source: self.sum_loan(version)?,
                 failure_shape: self.word()?,
             },
-            25 if version == 2 => NativeOperation::EndSumBorrow {
+            25 if matches!(version, 2 | 3) => NativeOperation::EndSumBorrow {
                 frame: self.word()?,
                 borrow: self.word()?,
             },
             _ => return Err(ResourceLayoutError::UnknownTag),
         })
     }
-    fn source_invocation(&mut self) -> Result<NativeSourceInvocation, ResourceLayoutError> {
+    fn source_invocation(
+        &mut self,
+        version: u32,
+    ) -> Result<NativeSourceInvocation, ResourceLayoutError> {
         let callee_return = match self.word()? {
             0 => None,
             1 => Some(self.word()?),
@@ -278,6 +291,13 @@ impl<'a> Reader<'a> {
                 _ => return Err(ResourceLayoutError::UnknownTag),
             };
             let value = match self.word()? {
+                5 if version == 3 => NativeSourceValue::CarrierOwned {
+                    caller_argument_slot: self.word()?,
+                    callee_parameter_slot: self.word()?,
+                },
+                6 if version == 3 => NativeSourceValue::CarrierView {
+                    source: carriers::loan(self)?,
+                },
                 1 => NativeSourceValue::Ordinary,
                 2 => NativeSourceValue::Owned {
                     caller_argument_slot: self.word()?,
@@ -287,7 +307,7 @@ impl<'a> Reader<'a> {
                     source: self.loan(2)?,
                 },
                 4 => NativeSourceValue::ResidentSumView {
-                    source: self.sum_loan()?,
+                    source: self.sum_loan(version)?,
                 },
                 _ => return Err(ResourceLayoutError::UnknownTag),
             };
@@ -303,6 +323,27 @@ impl<'a> Reader<'a> {
             });
         }
         let result = match self.word()? {
+            3 if version == 3 => {
+                let shape = self.word()?;
+                let caller_destination_frame = self.word()?;
+                let caller_destination_slot = self.word()?;
+                let callee_return_frame = self.word()?;
+                let permitted_return_slots = {
+                    let n = self.count()?;
+                    let mut v = storage(n)?;
+                    for _ in 0..n {
+                        v.push(self.word()?);
+                    }
+                    v
+                };
+                NativeSourceResult::Carrier {
+                    shape,
+                    caller_destination_frame,
+                    caller_destination_slot,
+                    callee_return_frame,
+                    permitted_return_slots,
+                }
+            }
             1 => NativeSourceResult::Ordinary {
                 shape: self.word()?,
             },
@@ -355,7 +396,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<WireLayout, ResourceLayoutError> {
         return Err(ResourceLayoutError::Header);
     }
     let version = input.word()?;
-    if ![1, super::NATIVE_RESOURCE_LAYOUT_WIRE_VERSION].contains(&version) {
+    if ![1, 2, 3].contains(&version) {
         return Err(ResourceLayoutError::Header);
     }
     if input.word()? != 0 {
@@ -422,7 +463,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<WireLayout, ResourceLayoutError> {
     let mut shapes = storage(counts[3])?;
     for i in 0..counts[3] {
         input.ordinal(i)?;
-        shapes.push(input.shape()?);
+        shapes.push(input.shape(version)?);
     }
     let mut frames = storage(counts[4])?;
     for i in 0..counts[4] {
@@ -487,10 +528,16 @@ pub(super) fn decode(bytes: &[u8]) -> Result<WireLayout, ResourceLayoutError> {
             operation: input.operation(version)?,
         });
     }
+    let carriers = if version == 3 {
+        carriers::decode(&mut input)?
+    } else {
+        NativeCarrierLayout::default()
+    };
     if input.position != bytes.len() {
         return Err(ResourceLayoutError::Trailing);
     }
     Ok(WireLayout {
+        carriers,
         version,
         kinds,
         hooks,
@@ -544,6 +591,10 @@ pub(super) fn encode_records(layout: &WireLayout) -> Vec<u8> {
         }
         fn sum_loan(&mut self, source: NativeSumLoanSource) {
             match source {
+                NativeSumLoanSource::CarrierProjected { operation } => {
+                    self.word(3);
+                    self.word(operation);
+                }
                 NativeSumLoanSource::ExistingBorrow { operation } => {
                     self.word(1);
                     self.word(operation);
@@ -558,6 +609,10 @@ pub(super) fn encode_records(layout: &WireLayout) -> Vec<u8> {
         fn operation(&mut self, operation: &NativeOperation) {
             use NativeOperation::*;
             match *operation {
+                NativeOperation::Carrier { record } => {
+                    self.word(26);
+                    self.word(record);
+                }
                 Acquire {
                     frame,
                     hook,
@@ -815,6 +870,18 @@ pub(super) fn encode_records(layout: &WireLayout) -> Vec<u8> {
                     NativeAccess::View => 2,
                 });
                 match formal.value {
+                    NativeSourceValue::CarrierOwned {
+                        caller_argument_slot,
+                        callee_parameter_slot,
+                    } => {
+                        self.word(5);
+                        self.word(caller_argument_slot);
+                        self.word(callee_parameter_slot);
+                    }
+                    NativeSourceValue::CarrierView { source } => {
+                        self.word(6);
+                        carriers::loan_out(&mut self.0, source);
+                    }
                     NativeSourceValue::Ordinary => self.word(1),
                     NativeSourceValue::Owned {
                         caller_argument_slot,
@@ -835,6 +902,23 @@ pub(super) fn encode_records(layout: &WireLayout) -> Vec<u8> {
                 }
             }
             match &source.result {
+                NativeSourceResult::Carrier {
+                    shape,
+                    caller_destination_frame,
+                    caller_destination_slot,
+                    callee_return_frame,
+                    permitted_return_slots,
+                } => {
+                    self.word(3);
+                    self.word(*shape);
+                    self.word(*caller_destination_frame);
+                    self.word(*caller_destination_slot);
+                    self.word(*callee_return_frame);
+                    self.word(permitted_return_slots.len() as u32);
+                    for slot in permitted_return_slots {
+                        self.word(*slot);
+                    }
+                }
                 NativeSourceResult::Ordinary { shape } => {
                     self.word(1);
                     self.word(*shape);
@@ -930,6 +1014,10 @@ pub(super) fn encode_records(layout: &WireLayout) -> Vec<u8> {
                 out.word(ok);
                 out.word(fail);
             }
+            NativeShape::Carrier { node } => {
+                out.word(11);
+                out.word(node);
+            }
             NativeShape::HookDescriptor { hook } => {
                 out.word(10);
                 out.word(hook);
@@ -976,6 +1064,9 @@ pub(super) fn encode_records(layout: &WireLayout) -> Vec<u8> {
         out.word(operation.ordinal);
         out.site(operation.site);
         out.operation(&operation.operation);
+    }
+    if layout.version == 3 {
+        out.0.extend_from_slice(&carriers::encode(&layout.carriers));
     }
     let length = out.0.len() as u64;
     out.0[16..24].copy_from_slice(&length.to_le_bytes());

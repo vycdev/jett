@@ -499,6 +499,7 @@ pub(super) fn validate(
     let current = &witness.descriptors;
     current.current(function)?;
     if (!witness.borrowed_sums.is_empty()
+        || super::entry_scope::capture_needed(&witness.original, &witness.source)
         || witness
             .source
             .required_materializations()

@@ -24,11 +24,14 @@ pub(crate) fn reachable_function_ids_with_types(
 pub(crate) fn reachable_resource_function_ids(
     plan: &jett_mir::ResourceOwnershipPlan<'_>,
 ) -> Result<Vec<FunctionId>, CodegenError> {
-    let roots = plan
+    let mut roots = plan
         .functions()
         .iter()
         .map(|function| function.function())
         .collect::<Vec<_>>();
+    if let Some(entry) = plan.entry_scope() {
+        roots.push(entry.function());
+    }
     reachable_functions(
         plan.program(),
         Some(plan.types()),

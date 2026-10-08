@@ -2,7 +2,7 @@
 use super::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum SourcePhase {
+pub(super) enum SourcePhase {
     Prepared,
     Entered,
     ScopeCompleted,
@@ -23,16 +23,19 @@ pub(super) struct NativeSourceCall {
     actuals: Vec<Option<u64>>,
     parameters: Vec<u64>,
     next_source: usize,
-    scope: Option<ResourceHandleId>,
+    pub(super) scope: Option<ResourceHandleId>,
     return_frame: Option<ResourceHandleId>,
     destination: Option<ResourceHandleId>,
     body_status: u32,
-    phase: SourcePhase,
+    pub(super) phase: SourcePhase,
     completion: Option<SourceCompletion>,
 }
 
 impl NativeResourceState {
-    fn source_call(&self, handle: ResourceHandleId) -> ResourceResult<&NativeSourceCall> {
+    pub(super) fn source_call(
+        &self,
+        handle: ResourceHandleId,
+    ) -> ResourceResult<&NativeSourceCall> {
         match self.handles.get(&handle) {
             Some(NativeResourceEntry::SourceCall(call)) => Ok(call),
             _ => Err(NativeResourceError::WrongFamily),
@@ -49,7 +52,7 @@ impl NativeResourceState {
                 callee_scope,
                 source: Some(source),
                 ..
-            } if self.layout.wire_version() == 2 => {
+            } if matches!(self.layout.wire_version(), 2 | 3) => {
                 Ok((*callee, *signature, *callee_scope, source.clone()))
             }
             _ => Err(NativeResourceError::UnsupportedSourceBoundary),
@@ -190,6 +193,109 @@ impl NativeResourceState {
         }
         Ok(())
     }
+    /// Carrier views have a private child lease. The incoming formal header
+    /// retains its caller lease, and the child is bound to this exact call.
+    pub(super) fn resident_carrier_at(
+        &self,
+        ordinary: &values::NativeValues,
+        scope: ResourceHandleId,
+        loan: ResourceHandleId,
+        parameter: u32,
+    ) -> ResourceResult<()> {
+        let header = self.frame(scope)?;
+        let resident = header
+            .incoming
+            .get(parameter as usize)
+            .and_then(Option::as_ref)
+            .ok_or(NativeResourceError::WrongOperation)?;
+        let call_handle = self.call_for_scope(scope)?;
+        let call = self.source_call(call_handle)?;
+        if resident.sum
+            || resident.callee_parameter != parameter
+            || call.operation != resident.invoke_operation
+            || call.frame != resident.caller_frame
+            || call.phase != SourcePhase::Entered
+            || call.parameters.get(parameter as usize) != Some(&loan.raw())
+            || call.actuals.get(parameter as usize).copied().flatten()
+                != Some(resident.parent_loan.raw())
+        {
+            return Err(NativeResourceError::WrongOperation);
+        }
+        self.frame(resident.caller_frame)?;
+        let (_, _, template, row) = self.source_row(call.operation)?;
+        let formal = row
+            .formals
+            .get(parameter as usize)
+            .ok_or(NativeResourceError::WrongOperation)?;
+        let NativeSourceValue::CarrierView { source } = formal.value else {
+            return Err(NativeResourceError::WrongFamily);
+        };
+        let parent = self.carrier_loan(
+            ordinary,
+            resident.caller_frame,
+            resident.parent_loan,
+            source,
+        )?;
+        let Some(NativeResourceEntry::CarrierLoan(child)) = self.handles.get(&loan) else {
+            return Err(NativeResourceError::WrongFamily);
+        };
+        if child.frame != scope
+            || child.incoming != Some((template, parameter, call_handle))
+            || child.parent != Some(resident.parent_loan)
+            || child.root != parent.root
+            || child.generation != parent.generation
+            || child.path != parent.path
+        {
+            return Err(NativeResourceError::WrongOperation);
+        }
+        self.source_carrier_view(
+            ordinary,
+            scope,
+            loan,
+            crate::resource_custody::NativeCarrierLoanSource::IncomingViewFormal {
+                scope: template,
+                parameter,
+            },
+            formal.callee_shape,
+        )
+    }
+    fn source_carrier_owned(
+        &self,
+        ordinary: &values::NativeValues,
+        frame: ResourceHandleId,
+        handle: ResourceHandleId,
+        slot: u32,
+        shape: u32,
+    ) -> ResourceResult<()> {
+        let root = self.carrier_root(ordinary, frame, handle, slot)?;
+        if root.frame != frame
+            || !matches!(self.layout.shapes().get(shape as usize),
+                Some(NativeShape::Carrier { node }) if *node == root.tree.node)
+        {
+            return Err(NativeResourceError::WrongFamily);
+        }
+        self.validate_complete_tree(ordinary, &root.tree)
+    }
+    fn source_carrier_view(
+        &self,
+        ordinary: &values::NativeValues,
+        frame: ResourceHandleId,
+        handle: ResourceHandleId,
+        source: crate::resource_custody::NativeCarrierLoanSource,
+        shape: u32,
+    ) -> ResourceResult<()> {
+        let loan = self.carrier_loan(ordinary, frame, handle, source)?;
+        let Some(NativeResourceEntry::CarrierRoot(root)) = self.handles.get(&loan.root) else {
+            return Err(NativeResourceError::InvalidHandle);
+        };
+        let tree = carriers::selected(&root.tree, &loan.path)?;
+        if !matches!(self.layout.shapes().get(shape as usize),
+            Some(NativeShape::Carrier { node }) if *node == tree.node)
+        {
+            return Err(NativeResourceError::WrongFamily);
+        }
+        self.validate_complete_tree(ordinary, tree)
+    }
     fn source_loan(
         &self,
         frame: ResourceHandleId,
@@ -272,6 +378,9 @@ impl NativeResourceState {
         slot: u32,
         registry: &ResourceRegistry,
     ) -> ResourceResult<()> {
+        if self.carrier_adapters.contains_key(&handle) {
+            return Err(NativeResourceError::WrongFamily);
+        }
         match self.handles.get(&handle) {
             Some(NativeResourceEntry::Owner(owner)) if owner.slot == slot => {
                 self.frame(owner.frame)?;
@@ -474,6 +583,15 @@ impl NativeResourceState {
                 Some(destination)
             }
             NativeSourceResult::Ordinary { .. } => None,
+            NativeSourceResult::Carrier {
+                caller_destination_frame,
+                caller_destination_slot,
+                ..
+            } => {
+                let destination = self.activation_frame(frame, caller_destination_frame)?;
+                self.carrier_slot_empty(destination, caller_destination_slot)?;
+                Some(destination)
+            }
         };
         let mut actuals = Vec::new();
         let mut parameters = Vec::new();
@@ -557,6 +675,27 @@ impl NativeResourceState {
                     source,
                     Some(formal.actual_shape),
                     registry,
+                )?;
+            }
+            NativeSourceValue::CarrierOwned {
+                caller_argument_slot,
+                ..
+            } => {
+                self.source_carrier_owned(
+                    ordinary,
+                    call.frame,
+                    ResourceHandleId::new(value)?,
+                    caller_argument_slot,
+                    formal.actual_shape,
+                )?;
+            }
+            NativeSourceValue::CarrierView { source } => {
+                self.source_carrier_view(
+                    ordinary,
+                    call.frame,
+                    ResourceHandleId::new(value)?,
+                    source,
+                    formal.actual_shape,
                 )?;
             }
         }
@@ -648,13 +787,39 @@ impl NativeResourceState {
         incoming
             .try_reserve_exact(actuals.len())
             .map_err(|_| NativeResourceError::Capacity)?;
+        let mut carrier_views = Vec::new();
+        carrier_views
+            .try_reserve_exact(actuals.len())
+            .map_err(|_| NativeResourceError::Capacity)?;
         for formal in &row.formals {
             outputs.push(next_handle(&mut ids)?);
+            let staged = if let NativeSourceValue::CarrierView { source } = formal.value {
+                let actual = ResourceHandleId::new(actuals[formal.parameter as usize])?;
+                self.source_carrier_view(ordinary, frame, actual, source, formal.actual_shape)?;
+                let parent = self.carrier_loan(ordinary, frame, actual, source)?;
+                let mut path = Vec::new();
+                path.try_reserve_exact(parent.path.len())
+                    .map_err(|_| NativeResourceError::Capacity)?;
+                path.extend_from_slice(&parent.path);
+                Some(carriers::NativeCarrierLoan {
+                    frame,
+                    operation: parent.operation,
+                    root: parent.root,
+                    generation: parent.generation,
+                    path,
+                    parent: Some(actual),
+                    incoming: Some((template, formal.parameter, handle)),
+                })
+            } else {
+                None
+            };
+            carrier_views.push(staged);
             incoming.push(
                 if matches!(
                     formal.value,
                     NativeSourceValue::ResidentView { .. }
                         | NativeSourceValue::ResidentSumView { .. }
+                        | NativeSourceValue::CarrierView { .. }
                 ) {
                     Some(NativeResidentLoan {
                         sum: matches!(formal.value, NativeSourceValue::ResidentSumView { .. }),
@@ -696,6 +861,27 @@ impl NativeResourceState {
                 }
                 NativeSourceValue::Ordinary => {
                     self.ordinary_actual(ordinary, actual, formal.actual_shape)?
+                }
+                NativeSourceValue::CarrierOwned {
+                    caller_argument_slot,
+                    ..
+                } => {
+                    self.source_carrier_owned(
+                        ordinary,
+                        frame,
+                        ResourceHandleId::new(actual)?,
+                        caller_argument_slot,
+                        formal.actual_shape,
+                    )?;
+                }
+                NativeSourceValue::CarrierView { source } => {
+                    self.source_carrier_view(
+                        ordinary,
+                        frame,
+                        ResourceHandleId::new(actual)?,
+                        source,
+                        formal.actual_shape,
+                    )?;
                 }
             }
         }
@@ -744,6 +930,10 @@ impl NativeResourceState {
             token_handles
                 .try_reserve_exact(row.formals.len())
                 .map_err(|_| NativeResourceError::Capacity)?;
+            let mut owned_handles = std::collections::HashSet::new();
+            owned_handles
+                .try_reserve(row.formals.len())
+                .map_err(|_| NativeResourceError::Capacity)?;
             for formal in &row.formals {
                 if let NativeSourceValue::Owned {
                     callee_parameter_slot,
@@ -752,6 +942,9 @@ impl NativeResourceState {
                 {
                     self.slot_empty(scope, callee_parameter_slot)?;
                     let actual = ResourceHandleId::new(actuals[formal.parameter as usize])?;
+                    if !owned_handles.insert(actual) {
+                        return Err(NativeResourceError::WrongOperation);
+                    }
                     self.sum_unborrowed(actual)?;
                     match self.handles.get(&actual) {
                         Some(NativeResourceEntry::Owner(_))
@@ -763,6 +956,35 @@ impl NativeResourceState {
                             slots.push(self.layout.slot(callee_parameter_slot)?);
                         }
                         _ => {} // None/Fail shells have no owner generation to transfer.
+                    }
+                } else if let NativeSourceValue::CarrierOwned {
+                    caller_argument_slot,
+                    callee_parameter_slot,
+                } = formal.value
+                {
+                    let actual = ResourceHandleId::new(actuals[formal.parameter as usize])?;
+                    if !owned_handles.insert(actual) {
+                        return Err(NativeResourceError::WrongOperation);
+                    }
+                    self.source_carrier_owned(
+                        ordinary,
+                        frame,
+                        actual,
+                        caller_argument_slot,
+                        formal.actual_shape,
+                    )?;
+                    self.carrier_unborrowed(actual)?;
+                    self.carrier_slot_empty(scope, callee_parameter_slot)?;
+                    let destination = self
+                        .layout
+                        .carriers()
+                        .slots
+                        .get(callee_parameter_slot as usize)
+                        .ok_or(NativeResourceError::WrongOperation)?;
+                    if !matches!(self.layout.shapes().get(formal.callee_shape as usize),
+                        Some(NativeShape::Carrier { node }) if *node == destination.node)
+                    {
+                        return Err(NativeResourceError::WrongFamily);
                     }
                 }
             }
@@ -811,6 +1033,31 @@ impl NativeResourceState {
                 NativeSourceValue::ResidentView { .. }
                 | NativeSourceValue::ResidentSumView { .. } => Ok(actual),
                 NativeSourceValue::Ordinary => Ok(actual),
+                NativeSourceValue::CarrierOwned {
+                    caller_argument_slot,
+                    callee_parameter_slot,
+                } => self
+                    .carrier_move_reserved(
+                        ordinary,
+                        ResourceHandleId::new(actual)?,
+                        caller_argument_slot,
+                        callee_parameter_slot,
+                        frame,
+                        scope,
+                        outputs[formal.parameter as usize],
+                    )
+                    .map(ResourceHandleId::raw),
+                NativeSourceValue::CarrierView { .. } => carrier_views
+                    .get_mut(formal.parameter as usize)
+                    .and_then(Option::take)
+                    .ok_or(NativeResourceError::WrongOperation)
+                    .map(|mut lease| {
+                        lease.frame = scope;
+                        let output = outputs[formal.parameter as usize];
+                        self.handles
+                            .insert(output, NativeResourceEntry::CarrierLoan(lease));
+                        output.raw()
+                    }),
             };
             match acquired {
                 Ok(value) => {
@@ -889,6 +1136,26 @@ impl NativeResourceState {
             }
             NativeSourceValue::Ordinary => {
                 self.ordinary_actual(ordinary, value, formal.callee_shape)?
+            }
+            NativeSourceValue::CarrierOwned {
+                callee_parameter_slot,
+                ..
+            } => {
+                self.source_carrier_owned(
+                    ordinary,
+                    scope,
+                    ResourceHandleId::new(value)?,
+                    callee_parameter_slot,
+                    formal.callee_shape,
+                )?;
+            }
+            NativeSourceValue::CarrierView { .. } => {
+                self.resident_carrier_at(
+                    ordinary,
+                    scope,
+                    ResourceHandleId::new(value)?,
+                    parameter,
+                )?;
             }
         }
         Ok(value)
@@ -1116,7 +1383,13 @@ impl NativeResourceState {
                     NativeResourceEntry::Owner(owner) => owner.frame == return_frame,
                     NativeResourceEntry::Sum(sum) => sum.frame == return_frame,
                     NativeResourceEntry::Loan(loan) => loan.frame == return_frame,
+                    NativeResourceEntry::SumLoan(loan) => loan.frame == return_frame,
                     NativeResourceEntry::Prepared(prepared) => prepared.frame == return_frame,
+                    NativeResourceEntry::Call(call) => call.frame == return_frame,
+                    NativeResourceEntry::SourceCall(call) => call.frame == return_frame,
+                    NativeResourceEntry::CarrierRoot(root) => root.frame == return_frame,
+                    NativeResourceEntry::CarrierLoan(loan) => loan.frame == return_frame,
+                    NativeResourceEntry::CarrierBuilder(builder) => builder.frame == return_frame,
                     _ => false,
                 }
         }) {
@@ -1128,6 +1401,119 @@ impl NativeResourceState {
             source,
             caller_destination_slot,
             destination,
+        )?;
+        self.retire_frame(ordinary, registry, return_frame)?;
+        let Some(NativeResourceEntry::SourceCall(call)) = self.handles.get_mut(&handle) else {
+            return Err(NativeResourceError::WrongFamily);
+        };
+        call.phase = SourcePhase::Completed;
+        self.record_source_completion(handle, None)?;
+        Ok(output)
+    }
+    pub(super) fn carrier_publish(
+        &mut self,
+        ordinary: &mut values::NativeValues,
+        registry: &mut ResourceRegistry,
+        scope: ResourceHandleId,
+        operation: u32,
+        provisional: ResourceHandleId,
+    ) -> ResourceResult<ResourceHandleId> {
+        self.running(ordinary)?;
+        if self.layout.wire_version() != 3 {
+            return Err(NativeResourceError::UnsupportedSourceBoundary);
+        }
+        let handle = self.call_for_scope(scope)?;
+        let call = self.source_call(handle)?;
+        if call.phase != SourcePhase::ScopeCompleted
+            || call.body_status != 0
+            || self.handles.contains_key(&scope)
+            || self.active_frames.contains(&scope)
+        {
+            return Err(NativeResourceError::WrongFrame);
+        }
+        let (callee, signature, template, row) = self.source_row(call.operation)?;
+        let NativeOperation::Carrier { record } = self.operation(operation)? else {
+            return Err(NativeResourceError::WrongOperation);
+        };
+        let carrier_record = self
+            .layout
+            .carriers()
+            .operations
+            .get(*record as usize)
+            .ok_or(NativeResourceError::WrongOperation)?;
+        let crate::resource_custody::NativeCarrierOperation::PublishReturn { frame, source } =
+            &carrier_record.operation
+        else {
+            return Err(NativeResourceError::WrongOperation);
+        };
+        let (frame, source) = (*frame, *source);
+        if frame != template
+            || carrier_record.site != self.layout.operations()[operation as usize].site()
+            || carrier_record.site.function() != callee
+        {
+            return Err(NativeResourceError::WrongOperation);
+        }
+        let NativeSourceResult::Carrier {
+            shape,
+            caller_destination_frame,
+            caller_destination_slot,
+            callee_return_frame,
+            permitted_return_slots,
+        } = row.result
+        else {
+            return Err(NativeResourceError::WrongOperation);
+        };
+        if !permitted_return_slots.contains(&source) {
+            return Err(NativeResourceError::WrongOperation);
+        }
+        let return_frame = call.return_frame.ok_or(NativeResourceError::WrongFrame)?;
+        let destination = call.destination.ok_or(NativeResourceError::WrongFrame)?;
+        let caller_frame = call.frame;
+        let return_header = self.frame(return_frame)?;
+        let return_row = &self.layout.frames()[return_header.template as usize];
+        if self.active_frames.last() != Some(&return_frame)
+            || return_header.template != callee_return_frame
+            || return_header.parent != Some(caller_frame)
+            || return_row.role() != NativeFrameRole::Return
+            || return_row.site().function() != callee
+            || return_row.signature() != signature
+            || row.callee_return != Some(callee_return_frame)
+            || self.activation_frame(caller_frame, caller_destination_frame)? != destination
+        {
+            return Err(NativeResourceError::WrongFrame);
+        }
+        self.source_carrier_owned(ordinary, return_frame, provisional, source, shape)?;
+        self.carrier_unborrowed(provisional)?;
+        self.carrier_slot_empty(destination, caller_destination_slot)?;
+        if self.handles.iter().any(|(&id, entry)| {
+            id != provisional
+                && match entry {
+                    NativeResourceEntry::Owner(value) => value.frame == return_frame,
+                    NativeResourceEntry::Sum(value) => value.frame == return_frame,
+                    NativeResourceEntry::Loan(value) => value.frame == return_frame,
+                    NativeResourceEntry::SumLoan(value) => value.frame == return_frame,
+                    NativeResourceEntry::Prepared(value) => value.frame == return_frame,
+                    NativeResourceEntry::Call(value) => value.frame == return_frame,
+                    NativeResourceEntry::SourceCall(value) => value.frame == return_frame,
+                    NativeResourceEntry::CarrierRoot(value) => value.frame == return_frame,
+                    NativeResourceEntry::CarrierLoan(value) => value.frame == return_frame,
+                    NativeResourceEntry::CarrierBuilder(value) => value.frame == return_frame,
+                    _ => false,
+                }
+        }) {
+            return Err(NativeResourceError::WrongOperation);
+        }
+        // Publication remains provisional until the exact Return frame retires.
+        let mut ids = self.reserve(1)?;
+        let output = next_handle(&mut ids)?;
+        let output = self.carrier_move_reserved(
+            ordinary,
+            provisional,
+            source,
+            caller_destination_slot,
+            return_frame,
+            destination,
+            output,
         )?;
         self.retire_frame(ordinary, registry, return_frame)?;
         let Some(NativeResourceEntry::SourceCall(call)) = self.handles.get_mut(&handle) else {

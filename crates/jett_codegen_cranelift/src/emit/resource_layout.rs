@@ -6,6 +6,10 @@ use jett_mir::{
     ResourceOperationRole as Role,
 };
 use std::collections::BTreeMap;
+#[path = "resource_layout/carrier_operations.rs"]
+pub(super) mod carrier_operations;
+#[path = "resource_layout/carriers.rs"]
+mod carriers;
 
 const LIMIT: usize = 4096;
 const BYTE_LIMIT: usize = 1024 * 1024;
@@ -20,11 +24,14 @@ pub(super) struct SelectedEntry {
 pub(super) struct EmittedResourceLayout<'p> {
     plan: custody::ResourceOwnershipPlan<'p>,
     entry: SelectedEntry,
+    entry_bridge_completion: Option<u32>,
     wire: Vec<u8>,
     functions: BTreeMap<u32, u32>,
     frames: BTreeMap<(u32, usize), u32>,
     slots: BTreeMap<(u32, usize), u32>,
     operations: BTreeMap<(u32, usize), u32>,
+    carrier_slots: BTreeMap<(u32, usize), u32>,
+    carrier_operations: BTreeMap<(u32, usize), u32>,
 }
 impl<'p> EmittedResourceLayout<'p> {
     /// The driver-selected identity is an input; no function name or block chooses entry.
@@ -33,7 +40,7 @@ impl<'p> EmittedResourceLayout<'p> {
         types: &'p TypeInterner,
         entry: FunctionId,
     ) -> Result<Self, CodegenError> {
-        let plan = custody::validate_resource_ownership(program, types)
+        let plan = custody::validate_resource_ownership_for_entry(program, types, entry)
             .map_err(CodegenError::InvalidMir)?;
         let selected = program
             .functions
@@ -73,41 +80,57 @@ impl<'p> EmittedResourceLayout<'p> {
         }
         let mut rows = Rows::new(&plan)?;
         rows.populate()?;
-        let signature = rows.function_signature(entry)?;
-        let function = plan
-            .function(entry)
-            .ok_or_else(|| pending("entry has no fresh custody function plan"))?;
-        let scope = rows.frame(entry, function.root_scope().id())?;
-        let frame = &mut rows.frames[scope as usize];
-        if function.provisional_return().is_some() || !frame.parents.is_empty() {
-            return Err(pending(
-                "entry Scope cannot also be activated as a Source callee",
-            ));
-        }
-        frame.parents.push(Parent::Root);
-        let wire = rows.encode()?;
-        let entry = SelectedEntry {
-            function: entry.index(),
-            signature,
-            scope,
+        let (entry, entry_bridge_completion) = if let Some(bridge) = plan.entry_scope() {
+            let (selected, completion) = rows.entry_bridge(bridge)?;
+            (selected, Some(completion))
+        } else {
+            let signature = rows.function_signature(entry)?;
+            let function = plan
+                .function(entry)
+                .ok_or_else(|| pending("entry has no fresh custody function plan"))?;
+            let scope = rows.frame(entry, function.root_scope().id())?;
+            let frame = &mut rows.frames[scope as usize];
+            if function.provisional_return().is_some() || !frame.parents.is_empty() {
+                return Err(pending(
+                    "entry Scope cannot also be activated as a Source callee",
+                ));
+            }
+            frame.parents.push(Parent::Root);
+            (
+                SelectedEntry {
+                    function: entry.index(),
+                    signature,
+                    scope,
+                },
+                None,
+            )
         };
+        let wire = rows.encode()?;
         let functions = rows.functions.clone();
         let frames = rows.frame_ids.clone();
         let slots = rows.slot_ids.clone();
         let operations = rows.operation_ids.clone();
+        let carrier_slots = rows.carrier_slot_ids.clone();
+        let carrier_operations = rows.carrier_operation_ids.clone();
         drop(rows);
         Ok(Self {
             plan,
             entry,
+            entry_bridge_completion,
             wire,
             functions,
             frames,
             slots,
             operations,
+            carrier_slots,
+            carrier_operations,
         })
     }
     pub(super) fn entry(&self) -> SelectedEntry {
         self.entry
+    }
+    pub(super) fn entry_bridge_completion(&self) -> Option<u32> {
+        self.entry_bridge_completion
     }
     pub(super) fn bytes(&self) -> &[u8] {
         &self.wire
@@ -138,6 +161,25 @@ impl<'p> EmittedResourceLayout<'p> {
         operation: custody::ResourceOperationId,
     ) -> Option<u32> {
         self.operations
+            .get(&(function.index(), operation.index()))
+            .copied()
+    }
+
+    pub(super) fn carrier_slot(
+        &self,
+        function: FunctionId,
+        slot: custody::ResourceCarrierSlotId,
+    ) -> Option<u32> {
+        self.carrier_slots
+            .get(&(function.index(), slot.index()))
+            .copied()
+    }
+    pub(super) fn carrier_operation(
+        &self,
+        function: FunctionId,
+        operation: custody::ResourceCarrierOperationId,
+    ) -> Option<u32> {
+        self.carrier_operations
             .get(&(function.index(), operation.index()))
             .copied()
     }
@@ -287,6 +329,13 @@ struct Rows<'a, 'p> {
     operation_ids: BTreeMap<(u32, usize), u32>,
     borrow_ids: BTreeMap<(u32, usize), u32>,
     descriptor_borrow_targets: BTreeMap<(u32, usize), u32>,
+    carrier_graph: carriers::CarrierGraphRows,
+    carrier_slots: Vec<Vec<u32>>,
+    carrier_slot_ids: BTreeMap<(u32, usize), u32>,
+    carrier_operations: Vec<Vec<u8>>,
+    carrier_operation_ids: BTreeMap<(u32, usize), u32>,
+    carrier_record_ids: BTreeMap<(u32, usize), u32>,
+    carrier_borrow_ids: BTreeMap<(u32, usize), u32>,
 }
 impl<'a, 'p> Rows<'a, 'p> {
     fn new(plan: &'a custody::ResourceOwnershipPlan<'p>) -> Result<Self, CodegenError> {
@@ -307,11 +356,25 @@ impl<'a, 'p> Rows<'a, 'p> {
             operation_ids: BTreeMap::new(),
             borrow_ids: BTreeMap::new(),
             descriptor_borrow_targets: BTreeMap::new(),
+            carrier_graph: carriers::CarrierGraphRows::default(),
+            carrier_slots: Vec::new(),
+            carrier_slot_ids: BTreeMap::new(),
+            carrier_operations: Vec::new(),
+            carrier_operation_ids: BTreeMap::new(),
+            carrier_record_ids: BTreeMap::new(),
+            carrier_borrow_ids: BTreeMap::new(),
         })
     }
     fn shape(&mut self, ty: TypeId) -> Result<u32, CodegenError> {
         if let Some(id) = self.shape_ids.get(&ty.index()) {
             return Ok(*id);
+        }
+        if carrier_operations::is_carrier_type(self.plan, ty) {
+            let node = self.carrier_node(ty)?;
+            let id = ordinal(self.shapes.len())?;
+            self.shapes.push(vec![11, node]);
+            self.shape_ids.insert(ty.index(), id);
+            return Ok(id);
         }
         let words = match self.plan.types().resolve(ty) {
             Type::Int8 => vec![1, 8, 1],
@@ -417,6 +480,50 @@ impl<'a, 'p> Rows<'a, 'p> {
             .copied()
             .ok_or_else(|| pending("callee has no fresh execution-family signature"))
     }
+    fn entry_bridge(
+        &mut self,
+        bridge: &custody::ResourceEntryScopePlan,
+    ) -> Result<(SelectedEntry, u32), CodegenError> {
+        let root = bridge.root_scope();
+        let complete = bridge.completion();
+        if self.plan.function(bridge.function()).is_some()
+            || root.role() != custody::ResourceFrameRole::Scope
+            || root.parent().is_some()
+            || root.site().function() != bridge.function()
+            || complete.frame() != root.id()
+            || complete.site() != root.site()
+            || complete.is_expression_operation()
+            || !matches!(complete.role(), Role::Complete { .. })
+        {
+            return Err(pending(
+                "ordinary entry bridge differs from its exact wrapper Scope",
+            ));
+        }
+        let params = bridge
+            .parameters()
+            .iter()
+            .map(|param| (param.ty, param.mode))
+            .collect::<Vec<_>>();
+        let signature = self.signature(&params, bridge.return_type())?;
+        let scope = ordinal(self.frames.len())?;
+        self.frames.push(Frame {
+            role: 1,
+            site: root.site(),
+            signature,
+            parents: vec![Parent::Root],
+        });
+        let completion = ordinal(self.operations.len())?;
+        self.operations.push((complete.site(), vec![13, scope]));
+        // Entry-only rows do not populate Source-family signature/frame/operation maps.
+        Ok((
+            SelectedEntry {
+                function: bridge.function().index(),
+                signature,
+                scope,
+            },
+            completion,
+        ))
+    }
     fn frame(
         &self,
         function: FunctionId,
@@ -467,6 +574,15 @@ impl<'a, 'p> Rows<'a, 'p> {
                 2,
                 self.frame(function.function(), scope)?,
                 count(parameter)?,
+            ],
+            custody::ResourceLoanSource::CarrierSumProjection { operation } => vec![
+                3,
+                *self
+                    .carrier_operation_ids
+                    .get(&(function.function().index(), operation.index()))
+                    .ok_or_else(|| {
+                        pending("carrier sum adapter has no exact installed operation")
+                    })?,
             ],
             custody::ResourceLoanSource::ProjectedSumPayload { .. } => vec![
                 3,
@@ -577,6 +693,20 @@ impl<'a, 'p> Rows<'a, 'p> {
                     self.frames[id as usize].parents.push(Parent::Frame(parent));
                 }
             }
+            if let Some(carriers) = function.carriers() {
+                for slot in carriers.slots() {
+                    let id = ordinal(self.carrier_slots.len())?;
+                    let frame = self.frame(function.function(), slot.frame())?;
+                    let ty = carriers
+                        .shape(slot.shape())
+                        .ok_or_else(|| pending("carrier slot lost its exact shape"))?
+                        .ty();
+                    let node = self.carrier_node(ty)?;
+                    self.carrier_slot_ids
+                        .insert((function.function().index(), slot.id().index()), id);
+                    self.carrier_slots.push(vec![frame, node]);
+                }
+            }
             for slot in function.owner_slots() {
                 let id = ordinal(self.slots.len())?;
                 let frame = self.frame(function.function(), slot.frame())?;
@@ -605,6 +735,7 @@ impl<'a, 'p> Rows<'a, 'p> {
             for operation in function.operations() {
                 if (!emitted(operation.role()) && operation.indirect_hook_target().is_none())
                     || staged_alias(function, operation)?.is_some()
+                    || carrier_operations::alias(function, operation)?.is_some()
                 {
                     continue;
                 }
@@ -627,6 +758,9 @@ impl<'a, 'p> Rows<'a, 'p> {
                         return Err(pending("loan has duplicate constructor Borrow operations"));
                     }
                 }
+                if let Role::Carrier { operation: carrier } = operation.role() {
+                    self.allocate_carrier_operation(function, *carrier, id)?;
+                }
                 self.operations.push((operation.site(), Vec::new()));
                 if operation.indirect_hook_target().is_some()
                     && matches!(operation.role(), Role::InvokeHook { hook, .. }
@@ -643,6 +777,31 @@ impl<'a, 'p> Rows<'a, 'p> {
         }
         for function in plan.functions() {
             for operation in function.operations() {
+                let Some(canonical) = carrier_operations::alias(function, operation)? else {
+                    continue;
+                };
+                let id = *self
+                    .operation_ids
+                    .get(&(function.function().index(), canonical.id().index()))
+                    .ok_or_else(|| pending("carrier activation lost its constructor row"))?;
+                if self
+                    .operation_ids
+                    .insert((function.function().index(), operation.id().index()), id)
+                    .is_some()
+                {
+                    return Err(pending("carrier activation already owns another wire row"));
+                }
+                if let Role::Carrier { operation: carrier } = operation.role() {
+                    self.carrier_operation_ids
+                        .insert((function.function().index(), carrier.index()), id);
+                }
+            }
+        }
+        for function in plan.functions() {
+            for operation in function.operations() {
+                if carrier_operations::alias(function, operation)?.is_some() {
+                    continue;
+                }
                 let Some(id) = self
                     .operation_ids
                     .get(&(function.function().index(), operation.id().index()))
@@ -864,7 +1023,7 @@ impl<'a, 'p> Rows<'a, 'p> {
             }
             Role::EndSumBorrow { loan } => {
                 let source = self.loan(function, *loan)?;
-                if source[0] != 1 {
+                if !matches!(source[0], 1 | 3) {
                     return Err(pending(
                         "incoming sum formal cannot end its caller's shell lease",
                     ));
@@ -1001,6 +1160,10 @@ impl<'a, 'p> Rows<'a, 'p> {
                 self.slot(f, *destination)?,
                 self.shape(*failure)?,
             ],
+            Role::Carrier { operation: carrier } => {
+                let record = self.encode_carrier_operation(function, *carrier)?;
+                vec![26, record]
+            }
             Role::StageSourceActual { .. } | Role::BoundedBorrowUse { .. } => {
                 return Err(pending(
                     "bounded use is joined by the actual invocation row",
@@ -1130,11 +1293,33 @@ impl<'a, 'p> Rows<'a, 'p> {
                 .find(|operand| match operand {
                     Operand::Ordinary { parameter: p, .. }
                     | Operand::Owned { parameter: p, .. }
-                    | Operand::Borrowed { parameter: p, .. } => *p == parameter,
+                    | Operand::Borrowed { parameter: p, .. }
+                    | Operand::CarrierOwned { parameter: p, .. }
+                    | Operand::CarrierBorrowed { parameter: p, .. } => *p == parameter,
                 })
                 .ok_or_else(|| pending("Source formal has no exact evaluated operand"))?;
             match operand {
                 Operand::Ordinary { .. } => row.push(1),
+                Operand::CarrierOwned { slot, .. } => {
+                    let carriers = callee
+                        .carriers()
+                        .ok_or_else(|| pending("carrier formal has no callee plan"))?;
+                    let destinations = carriers.slots().iter().filter(|slot| matches!(slot.storage(), custody::ResourceSlotStorage::Local { header } if header.id == param.local)).collect::<Vec<_>>();
+                    if destinations.len() != 1
+                        || destinations[0].frame() != callee.root_scope().id()
+                    {
+                        return Err(pending("carrier owned formal has no exact parameter slot"));
+                    }
+                    row.extend([
+                        5,
+                        self.carrier_slot(caller.function(), *slot)?,
+                        self.carrier_slot(target, destinations[0].id())?,
+                    ]);
+                }
+                Operand::CarrierBorrowed { loan, .. } => {
+                    row.push(6);
+                    row.extend(self.carrier_loan(caller, *loan)?);
+                }
                 Operand::Owned { slot, .. } => {
                     let destinations=callee.owner_slots().iter().filter(|slot| matches!(slot.storage(),custody::ResourceSlotStorage::Local {header} if header.id==param.local)).collect::<Vec<_>>();
                     if destinations.len() != 1
@@ -1176,6 +1361,47 @@ impl<'a, 'p> Rows<'a, 'p> {
                     self.signatures[self.function_signature(target)? as usize].result,
                 ]);
             }
+            CallResult::Carrier { slot } => {
+                let returning =
+                    returning.ok_or_else(|| pending("carrier result has no provisional Return"))?;
+                let carriers = caller
+                    .carriers()
+                    .ok_or_else(|| pending("carrier result has no caller plan"))?;
+                let destination = carriers
+                    .slots()
+                    .get(slot.index())
+                    .filter(|row| row.id() == slot)
+                    .ok_or_else(|| pending("carrier caller result slot is absent"))?;
+                let ty = carriers
+                    .shape(destination.shape())
+                    .ok_or_else(|| pending("carrier result shape is absent"))?
+                    .ty();
+                let callee_carriers = callee
+                    .carriers()
+                    .ok_or_else(|| pending("carrier result has no callee plan"))?;
+                let mut returns = callee_carriers
+                    .slots()
+                    .iter()
+                    .filter(|slot| {
+                        matches!(slot.storage(), custody::ResourceSlotStorage::Return { .. })
+                    })
+                    .map(|slot| self.carrier_slot(target, slot.id()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                returns.sort();
+                returns.dedup();
+                if returns.is_empty() {
+                    return Err(pending("carrier callee has no exact Return publication"));
+                }
+                row.extend([
+                    3,
+                    self.shape(ty)?,
+                    self.frame(caller.function(), destination.frame())?,
+                    self.carrier_slot(caller.function(), slot)?,
+                    returning,
+                    count(returns.len())?,
+                ]);
+                row.extend(returns);
+            }
             CallResult::Owned { slot } => {
                 let returning = returning.ok_or_else(|| {
                     pending("owned Source result has no callee provisional Return")
@@ -1213,7 +1439,10 @@ impl<'a, 'p> Rows<'a, 'p> {
     fn encode(&self) -> Result<Vec<u8>, CodegenError> {
         let mut output = Vec::new();
         output.extend_from_slice(b"JTRSC001");
-        word(&mut output, 2);
+        word(
+            &mut output,
+            if self.carrier_graph.is_empty() { 2 } else { 3 },
+        );
         word(&mut output, 0);
         output.extend_from_slice(&0u64.to_le_bytes());
         for size in [
@@ -1270,6 +1499,14 @@ impl<'a, 'p> Rows<'a, 'p> {
             word(&mut output, ordinal(i)?);
             site(&mut output, *at)?;
             words(&mut output, operation);
+        }
+        if !self.carrier_graph.is_empty() {
+            carriers::append_extension(
+                &mut output,
+                &self.carrier_graph,
+                &self.carrier_slots,
+                &self.carrier_operations,
+            )?;
         }
         if output.len() > BYTE_LIMIT {
             return Err(pending(
@@ -1392,6 +1629,26 @@ fn same_operand(a: &Operand, b: &Operand) -> bool {
                 loan: a,
             },
             Operand::Borrowed {
+                parameter: q,
+                loan: b,
+            },
+        ) => p == q && a == b,
+        (
+            Operand::CarrierOwned {
+                parameter: p,
+                slot: a,
+            },
+            Operand::CarrierOwned {
+                parameter: q,
+                slot: b,
+            },
+        ) => p == q && a == b,
+        (
+            Operand::CarrierBorrowed {
+                parameter: p,
+                loan: a,
+            },
+            Operand::CarrierBorrowed {
                 parameter: q,
                 loan: b,
             },

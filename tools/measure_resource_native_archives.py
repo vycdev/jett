@@ -23,6 +23,13 @@ from typing import TypeAlias, TypeGuard
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = "x86_64-unknown-linux-gnu"
+CURRENT_LAYOUT_WIRE = 3
+CARRIER_EXPORTS = frozenset(
+    "jett_rt_v1_resource_carrier_" + suffix for suffix in (
+        "construct_begin", "child", "commit", "transfer", "qualify", "borrow", "observe",
+        "extract", "adapt", "end", "retire", "reset_iteration", "publish",
+    )
+)
 CFGS = ["test", "jett_resource_native_test_archive"]
 PIN_ENV = "JETT_RESOURCE_NATIVE_TEST_ARCHIVE_EXPECTED_SHA256_V1"
 RECEIPT_ENV = "JETT_RESOURCE_NATIVE_TEST_ARCHIVE_RECEIPT_V1"
@@ -198,12 +205,31 @@ def export_names(repo: Path) -> tuple[set[str], set[str]]:
     directory = repo / "crates/jett_runtime/src/native_abi/resource"
     pattern = r'pub unsafe extern "C" fn (jett_rt_v1_resource_[a-z_]+)\('
     leaves = re.findall(pattern, (directory / "leaves.rs").read_text(encoding="utf-8"))
+    carriers: list[str] = re.findall(pattern, (directory / "leaves/carriers.rs").read_text(encoding="utf-8"))
     private = re.findall(pattern, (directory / "test_archive_api.rs").read_text(encoding="utf-8"))
     require(len(leaves) == len(set(leaves)) == 37, "frozen Resource leaf contract must contain 37 names")
+    require(not set(leaves) & CARRIER_EXPORTS, "carrier exports must occur only in their declared child module")
+    require(len(carriers) == len(set(carriers)) == 13 and set(carriers) == set(CARRIER_EXPORTS),
+            "frozen carrier leaf contract must contain the exact 13 names")
     require(len(private) == len(set(private)) == 8, "frozen private test contract must contain eight names")
     require(all(name.startswith("jett_rt_v1_resource_test_") for name in private),
             "unexpected private export name")
-    return set(leaves), set(private)
+    require(len(set(leaves) | set(carriers)) == 50, "current Resource contract must contain 50 names")
+    return set(leaves) | set(carriers), set(private)
+
+
+def checked_layout_wire(repo: Path) -> None:
+    registration = repo / "crates/jett_runtime/src/resource_custody/registration.rs"
+    versions = re.findall(r"pub\(crate\) const NATIVE_RESOURCE_LAYOUT_WIRE_VERSION: u32 = ([0-9]+);",
+                          registration.read_text(encoding="utf-8"))
+    require(versions == [str(CURRENT_LAYOUT_WIRE)],
+            "fresh carrier archives require the exact current runtime wire version 3")
+
+
+def checked_measurement_source(repo: Path) -> None:
+    retained = repo / "tools/measure_resource_native_archives.py"
+    require(retained.is_file() and digest(retained) == digest(Path(__file__)),
+            "executing measurement helper differs from the measured repository helper")
 
 
 def check_symbols(text: str, leaves: set[str], private: set[str]) -> None:
@@ -314,7 +340,8 @@ def measure_profile(tools: Tools, repo: Path, output: Path, profile: str,
     write_json(build, {"profile": profile, "target": TARGET, "toolchain": versions,
                        "runtime_sources": inputs, "workspace_lock": inputs["Cargo.lock"],
                        "cfgs_selected_package_only": list(CFGS), "actual_build_command": list(command),
-                       "cargo_build_log": artifact(build_log), "archive": artifact(archive)})
+                       "cargo_build_log": artifact(build_log), "archive": artifact(archive),
+                       "measurement_script": artifact(Path(__file__))})
     libraries = output / f"{profile}-native-static-libs.json"
     write_json(libraries, {"actual_print_log": artifact(build_log), "arguments": list(arguments),
                            "order_and_duplication_preserved": True})
@@ -324,7 +351,7 @@ def measure_profile(tools: Tools, repo: Path, output: Path, profile: str,
                      "complete_elf_archive_inventory": artifact(elf), "dynamic_crt_probe": probe,
                      "linker_path": str(tools.cc), "linker_executable": artifact(tools.cc), "mode": "dynamic"})
     return {"profile": profile, "target": TARGET, "archive_path": str(archive),
-            "archive_sha256": archive_hash, "runtime_abi": 1, "layout_wire": 2,
+            "archive_sha256": archive_hash, "runtime_abi": 1, "layout_wire": CURRENT_LAYOUT_WIRE,
             "private_cfgs": list(CFGS), "crt_mode": "dynamic", "linker_path": str(tools.cc),
             "native_library_args": list(arguments), "build_receipt": artifact(build),
             "native_static_libs_receipt": artifact(libraries), "crt_receipt": artifact(crt)}
@@ -332,20 +359,28 @@ def measure_profile(tools: Tools, repo: Path, output: Path, profile: str,
 
 def prepare(repo: Path, output: Path, cc: str, nm: str, readelf: str) -> tuple[Path, str]:
     require(not output.exists(), "preserve immutable measurements: choose a fresh output directory")
+    checked_layout_wire(repo)
+    leaves, private = export_names(repo)
+    checked_measurement_source(repo)
     environment = build_environment()
     tools = Tools(executable("cargo"), executable("rustc"), executable(nm), executable(readelf), executable(cc))
     # Pin Cargo to the measured rustup proxy and disable config-provided wrappers.
     environment["RUSTC"] = str(tools.rustc)
     environment["RUSTC_WRAPPER"] = ""
     environment["RUSTC_WORKSPACE_WRAPPER"] = ""
-    output.mkdir(parents=True)
     inputs = sources(repo)
+    checked_layout_wire(repo)
+    require(export_names(repo) == (leaves, private), "Resource export sources changed before measurement")
+    checked_measurement_source(repo)
+    require(sources(repo) == inputs, "runtime inputs changed while establishing archive guards")
+    output.mkdir(parents=True)
     versions = toolchain(tools, repo, output, environment)
-    leaves, private = export_names(repo)
     archives: list[Json] = []
     for profile in ("debug", "release"):
         archives.append(measure_profile(tools, repo, output, profile, environment, inputs,
                                         versions, leaves, private))
+    checked_measurement_source(repo)
+    require(sources(repo) == inputs, "runtime inputs changed across matched archive profiles")
     receipt = output / "receipt.json"
     write_json(receipt, {"version": 1, "scope": "Measured compiler-test GNU archives; not Source execution",
                          "archives": archives})
@@ -387,6 +422,8 @@ def receipt_sources(receipt: Path, expected: str, repo: Path) -> None:
     require(receipt.is_file() and receipt.stat().st_size <= 1024 * 1024,
             "receipt exceeds the test harness limit")
     require(digest(receipt) == expected, "receipt differs from the independently supplied compile-time pin")
+    checked_layout_wire(repo)
+    checked_measurement_source(repo)
     record = read_object(receipt)
     require(record.get("version") == 1, "unsupported archive receipt version")
     archives = record.get("archives")
@@ -403,7 +440,7 @@ def receipt_sources(receipt: Path, expected: str, repo: Path) -> None:
         if isinstance(profile, str):
             profiles.add(profile)
         require(row.get("target") == TARGET and row.get("runtime_abi") == 1
-                and row.get("layout_wire") == 2 and row.get("private_cfgs") == CFGS
+                and row.get("layout_wire") == CURRENT_LAYOUT_WIRE and row.get("private_cfgs") == CFGS
                 and row.get("crt_mode") == "dynamic", "GNU archive contract differs from measured gate")
         measured_artifact({"path": row.get("archive_path"), "sha256": row.get("archive_sha256")})
         for name in ("build_receipt", "native_static_libs_receipt", "crt_receipt"):
@@ -411,6 +448,8 @@ def receipt_sources(receipt: Path, expected: str, repo: Path) -> None:
             verify_embedded_artifacts(provenance)
         build = read_object(measured_artifact(row.get("build_receipt")))
         require(build.get("runtime_sources") == sources(repo), "measured runtime source differs from current tree")
+        require(digest(measured_artifact(build.get("measurement_script"))) == digest(Path(__file__)),
+                "measured helper differs from the executing helper")
         libraries = read_object(measured_artifact(row.get("native_static_libs_receipt")))
         require(row.get("native_library_args") == libraries.get("arguments"), "native library vector changed")
         crt = read_object(measured_artifact(row.get("crt_receipt")))
@@ -492,25 +531,27 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     preparation = commands.add_parser("prepare", help="build and independently measure both private archives")
+    preparation.add_argument("--repo", type=Path, default=ROOT)
     preparation.add_argument("--output", type=Path, required=True)
     preparation.add_argument("--cc", default=os.environ.get("JETT_NATIVE_CC", "cc"))
     preparation.add_argument("--nm", default="nm")
     preparation.add_argument("--readelf", default="readelf")
     preparation.add_argument("--github-output", type=Path)
     gate = commands.add_parser("run", help="compile the independently supplied receipt pin and run Source gate")
+    gate.add_argument("--repo", type=Path, default=ROOT)
     gate.add_argument("--receipt", type=Path, required=True)
     gate.add_argument("--expected-sha256", required=True)
     gate.add_argument("--target-dir", type=Path, required=True)
     arguments = parser.parse_args()
     if arguments.command == "prepare":
-        receipt, expected = prepare(ROOT, arguments.output.resolve(), arguments.cc, arguments.nm, arguments.readelf)
+        receipt, expected = prepare(arguments.repo.resolve(), arguments.output.resolve(), arguments.cc, arguments.nm, arguments.readelf)
         if arguments.github_output is not None:
             require("\n" not in str(receipt) and "\r" not in str(receipt), "receipt path cannot contain a newline")
             with arguments.github_output.open("a", encoding="utf-8", newline="\n") as output:
                 output.write(f"receipt={receipt}\nsha256={expected}\n")
         print(json.dumps({"receipt": str(receipt), "sha256": expected, "native_resource_source_execution": False}))
     else:
-        run_gate(ROOT, arguments.receipt.resolve(), arguments.expected_sha256, arguments.target_dir.resolve())
+        run_gate(arguments.repo.resolve(), arguments.receipt.resolve(), arguments.expected_sha256, arguments.target_dir.resolve())
 
 
 if __name__ == "__main__":

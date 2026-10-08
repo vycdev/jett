@@ -7,6 +7,7 @@ use jett_types::ResourceKernelRecipe;
 use std::{collections::HashMap, sync::Arc};
 mod lexical_borrows;
 mod named_indirect;
+mod ordinary_entry;
 mod returned_hooks;
 mod sum_views;
 const SUPPORT: &str =

@@ -185,7 +185,7 @@ pub unsafe extern "C" fn jett_rt_v1_resource_test_install(
         }
         let layout = unsafe { slice::from_raw_parts(manifest.layout, layout_length) };
         let version = layout.get(8..12).ok_or(NativeResourceError::InvalidEntry)?;
-        if version != crate::resource_custody::NATIVE_RESOURCE_LAYOUT_WIRE_VERSION.to_le_bytes() {
+        if ![2u32, 3].iter().any(|known| version == known.to_le_bytes()) {
             return Err(NativeResourceError::InvalidEntry);
         }
         let script =

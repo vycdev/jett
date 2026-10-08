@@ -93,6 +93,11 @@ impl NativeResourceState {
         };
         self.frame_shells_unborrowed(frame)?;
         let view_retirement = self.retire_sum_views(frame);
+        if self.layout.wire_version() == 3 {
+            view_retirement?;
+            // Carrier parent generations remain available until all child leases end.
+            self.retire_carrier_frame(ordinary, frame)?;
+        }
         let Some(NativeResourceEntry::Frame(header)) = self.handles.get(&frame) else {
             return Err(NativeResourceError::WrongFrame);
         };
@@ -122,6 +127,8 @@ impl NativeResourceState {
         });
         self.handles.remove(&frame);
         self.active_frames.pop();
+        self.carrier_adapters
+            .retain(|shell, _| self.handles.contains_key(shell));
         if ordinary_failed {
             ordinary.cleanup_failed = true;
         }
@@ -492,6 +499,9 @@ impl NativeResourceState {
         })
     }
     pub(super) fn sum_tag(&self, handle: ResourceHandleId) -> ResourceResult<u32> {
+        if self.carrier_adapters.contains_key(&handle) {
+            return Err(NativeResourceError::WrongOperation);
+        }
         match self.handles.get(&handle) {
             Some(NativeResourceEntry::Sum(sum)) => {
                 self.frame(sum.frame)?;
@@ -659,6 +669,9 @@ impl NativeResourceState {
         destination_frame: ResourceHandleId,
     ) -> ResourceResult<ResourceHandleId> {
         self.running(ordinary)?;
+        if self.carrier_adapters.contains_key(&sum_handle) {
+            return Err(NativeResourceError::WrongOperation);
+        }
         self.operation_frame(operation, frame)?;
         let (source, destination) = match self.operation(operation)? {
             NativeOperation::SumTake {
@@ -978,6 +991,9 @@ impl NativeResourceState {
         frame: ResourceHandleId,
         handle: ResourceHandleId,
     ) -> ResourceResult<()> {
+        if self.carrier_adapters.contains_key(&handle) {
+            return Err(NativeResourceError::WrongOperation);
+        }
         self.operation_frame(operation, frame)?;
         let source = match self.operation(operation)? {
             NativeOperation::SumDrop { source, .. } => *source,

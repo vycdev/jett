@@ -13,6 +13,8 @@ use crate::resource_custody::{
 use crate::{AuthorityProvenance, RegistryError};
 
 mod borrowed_sums;
+mod carriers;
+mod carriers_sum;
 mod leaves;
 mod operations;
 mod provider;
@@ -45,6 +47,9 @@ pub(super) enum NativeResourceError {
     BodyFailed,
     SourceBodyStatus(JettRuntimeStatusV1),
     UnsupportedSourceBoundary,
+    UnsupportedCarrierCustody,
+    UnsupportedCarrierObservation,
+    UnprovedCarrierRefinement,
     Capacity,
     Layout(ResourceLayoutError),
     Custody(CustodyError),
@@ -241,6 +246,9 @@ enum NativeResourceEntry {
     NetworkGrant(NativeNetworkGrant),
     Sum(NativeResourceSum),
     SourceCall(source::NativeSourceCall),
+    CarrierRoot(carriers::NativeCarrierRoot),
+    CarrierLoan(carriers::NativeCarrierLoan),
+    CarrierBuilder(carriers::NativeCarrierBuilder),
 }
 struct NativeResourceSum {
     frame: ResourceHandleId,
@@ -313,6 +321,7 @@ pub(super) struct NativeResourceState {
     program_handle: ResourceHandleId,
     custody: ResourceCustody,
     handles: HashMap<ResourceHandleId, NativeResourceEntry>,
+    carrier_adapters: HashMap<ResourceHandleId, carriers::NativeCarrierSumOrigin>,
     active_frames: Vec<ResourceHandleId>,
     attempt: Option<NativeAttempt>,
     completed: Vec<NativeCompletedAttempt>,
@@ -421,6 +430,14 @@ impl NativeResourceState {
             NativeOperation::Descriptor { .. } | NativeOperation::InvokeDescriptor { .. } => {
                 return Err(NativeResourceError::WrongOperation);
             }
+            NativeOperation::Carrier { record } => self
+                .layout
+                .carriers()
+                .operations
+                .get(*record as usize)
+                .ok_or(NativeResourceError::WrongOperation)?
+                .operation
+                .frame(),
         };
         if template != actual {
             return Err(NativeResourceError::WrongFrame);
@@ -520,14 +537,15 @@ impl NativeResourceState {
         Ok(id)
     }
     fn only_installation_handles(&self) -> bool {
-        self.handles.values().all(|entry| {
-            matches!(
-                entry,
-                NativeResourceEntry::Program { .. }
-                    | NativeResourceEntry::NetworkGrant(_)
-                    | NativeResourceEntry::Descriptor { .. }
-            )
-        })
+        self.carrier_adapters.is_empty()
+            && self.handles.values().all(|entry| {
+                matches!(
+                    entry,
+                    NativeResourceEntry::Program { .. }
+                        | NativeResourceEntry::NetworkGrant(_)
+                        | NativeResourceEntry::Descriptor { .. }
+                )
+            })
     }
     pub(super) fn entry_network(
         &self,
@@ -625,10 +643,43 @@ impl NativeResourceState {
         if host_panic {
             attempt.body.get_or_insert(NativeBodyFailure::HostPanic);
         }
+        if self.layout.wire_version() == 3 {
+            // Typed carrier companions and parent leases retire while their frames are live.
+            while let Some(frame) = self.active_frames.last().copied() {
+                if let Err(error) = self.retire_frame(ordinary, registry, frame) {
+                    match error {
+                        NativeResourceError::Cleanup(error) => {
+                            self.attempt
+                                .as_mut()
+                                .ok_or(NativeResourceError::InvalidEntry)?
+                                .cleanup
+                                .get_or_insert(error);
+                        }
+                        _ => {
+                            ordinary.cleanup_failed = true;
+                        }
+                    }
+                    if self.active_frames.last() == Some(&frame) {
+                        // Refused retirement retains the exact obligations; no success receipt.
+                        return Err(error);
+                    }
+                }
+            }
+            if !self.only_installation_handles() {
+                // Frame retirement must discharge every holder and staging receipt.
+                // Keep any skipped variant observable instead of erasing its obligation.
+                ordinary.cleanup_failed = true;
+                return Err(NativeResourceError::BodyFailed);
+            }
+        }
         // Unwind the real core before retiring token shells or copying diagnostics.
         let cleanup = self.custody.unwind_all(registry);
         if let Some(error) = cleanup.failure() {
-            attempt.cleanup.get_or_insert(error);
+            self.attempt
+                .as_mut()
+                .ok_or(NativeResourceError::InvalidEntry)?
+                .cleanup
+                .get_or_insert(error);
         }
         let mut companion_failed = false;
         self.handles.retain(|_, entry| {
@@ -647,6 +698,7 @@ impl NativeResourceState {
             )
         });
         self.active_frames.clear();
+        self.carrier_adapters.clear();
         if companion_failed {
             ordinary.cleanup_failed = true;
         }
@@ -782,8 +834,21 @@ impl NativeResourceState {
                     payload: NativeSumPayload::Some(_) | NativeSumPayload::Ok(_),
                     ..
                 }) => counts.owner_handles += 1,
+                NativeResourceEntry::Sum(_) if self.layout.wire_version() == 3 => {
+                    counts.owner_handles += 1;
+                }
                 NativeResourceEntry::Loan(_) | NativeResourceEntry::SumLoan(_) => {
                     counts.loan_handles += 1
+                }
+                NativeResourceEntry::CarrierRoot(_) => counts.owner_handles += 1,
+                NativeResourceEntry::CarrierLoan(_) => counts.loan_handles += 1,
+                NativeResourceEntry::CarrierBuilder(_) => counts.provisional += 1,
+                NativeResourceEntry::SourceCall(_)
+                | NativeResourceEntry::Call(_)
+                | NativeResourceEntry::Prepared(_)
+                    if self.layout.wire_version() == 3 =>
+                {
+                    counts.provisional += 1;
                 }
                 NativeResourceEntry::Frame(frame) => {
                     counts.frame_handles += 1;
@@ -796,6 +861,10 @@ impl NativeResourceState {
                 _ => {}
             }
         }
+        if self.layout.wire_version() == 3 {
+            // A sealed ended adapter still owns its shell until frame retirement.
+            counts.provisional += self.carrier_adapters.len() as u64;
+        }
         counts
     }
     pub(super) fn safety_unwind(
@@ -803,8 +872,24 @@ impl NativeResourceState {
         ordinary: &mut values::NativeValues,
         registry: &mut ResourceRegistry,
     ) -> bool {
+        let mut failed = false;
+        if self.layout.wire_version() == 3 {
+            while let Some(frame) = self.active_frames.last().copied() {
+                if self.retire_frame(ordinary, registry, frame).is_err() {
+                    failed = true;
+                    if self.active_frames.last() == Some(&frame) {
+                        break;
+                    }
+                }
+            }
+        }
         let outcome = self.custody.unwind_all(registry);
-        let mut failed = outcome.failure().is_some();
+        failed |= outcome.failure().is_some();
+        if self.layout.wire_version() == 3 {
+            // A skipped holder variant cannot turn context backstop cleanup into success.
+            failed |= !self.only_installation_handles();
+            failed |= self.safety_retire_carriers(ordinary).is_err();
+        }
         for entry in self.handles.values() {
             if let NativeResourceEntry::Sum(NativeResourceSum {
                 payload: NativeSumPayload::Fail { string, .. },
@@ -815,6 +900,7 @@ impl NativeResourceState {
             }
         }
         self.handles.clear();
+        self.carrier_adapters.clear();
         self.active_frames.clear();
         self.attempt = None;
         failed
@@ -946,6 +1032,7 @@ fn install_candidate(
         program_handle,
         custody,
         handles,
+        carrier_adapters: HashMap::new(),
         active_frames: Vec::new(),
         attempt: None,
         completed: Vec::new(),

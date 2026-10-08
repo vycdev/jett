@@ -5,6 +5,7 @@ use jett_mir::{
     ResourceCallOperand as Operand, ResourceCallResult as CallResult,
     ResourceFrameRole as FrameRole, ResourceOperationRole as Role, ResourceSlotStorage as Storage,
 };
+mod carriers;
 mod leaves;
 mod lexical_borrows;
 mod named_indirect;
@@ -25,6 +26,9 @@ pub(super) struct ResourceEmission<'a> {
     pub(super) return_companion: ir::StackSlot,
     pub(super) scope_finished: ir::StackSlot,
     pub(super) loans: &'a [ir::StackSlot],
+    pub(super) carrier_owners: &'a [ir::StackSlot],
+    pub(super) carrier_builders: &'a [ir::StackSlot],
+    pub(super) carrier_loans: &'a [ir::StackSlot],
     pub(super) failure: ir::Block,
     pub(super) block: jett_mir::BlockId,
     pub(super) position: jett_mir::ResourcePosition,
@@ -143,8 +147,8 @@ pub(super) fn emit(
         pending("Resource executable requires the exact driver-selected entry FunctionId")
     })?;
     jett_mir::validate(program).map_err(CodegenError::InvalidMir)?;
-    let original_plan =
-        jett_mir::validate_resource_ownership(program, types).map_err(CodegenError::InvalidMir)?;
+    let original_plan = jett_mir::validate_resource_ownership_for_entry(program, types, entry)
+        .map_err(CodegenError::InvalidMir)?;
     for function in &program.functions {
         jett_mir::move_values::validate_local_view_initializers(function, types).map_err(
             |message| contract_error(&function.identity.declaration.name, function.span, message),
@@ -279,6 +283,14 @@ impl Translator<'_, '_> {
             return Ok(());
         };
         for parameter in &function.params {
+            if let Some(slot) = resource.carrier_local_slot(parameter.local)? {
+                let variable = self.variables[parameter.local.index() as usize]
+                    .ok_or_else(|| pending("carrier formal has no exact native variable"))?;
+                let value = self.builder.use_var(variable);
+                self.builder
+                    .ins()
+                    .stack_store(value, resource.carrier_owners[slot.index()], 0);
+            }
             if let Some(slot) = resource.local_slot(parameter.local)? {
                 let variable = self.variables[parameter.local.index() as usize]
                     .ok_or_else(|| pending("Resource formal has no carrier variable"))?;
@@ -401,7 +413,8 @@ impl Translator<'_, '_> {
             .ok_or_else(|| pending("loan lookup has no fresh native family"))?;
         match resource.function_plan()?.loans()[id.index()].source() {
             jett_mir::ResourceLoanSource::Owner(_)
-            | jett_mir::ResourceLoanSource::ProjectedSumPayload { .. } => Ok(self
+            | jett_mir::ResourceLoanSource::ProjectedSumPayload { .. }
+            | jett_mir::ResourceLoanSource::CarrierSumProjection { .. } => Ok(self
                 .builder
                 .ins()
                 .stack_load(ir::types::I64, resource.loans[id.index()], 0)),
@@ -561,6 +574,7 @@ impl Translator<'_, '_> {
                     self.resource_end_borrow(operation)?;
                 }
                 Role::Drop { .. } => self.resource_drop(operation)?,
+                Role::Carrier { .. } => self.carrier_finish_operation(operation)?,
                 Role::Complete { .. } => {
                     let (context, active, ordinal) = self.resource_operation(operation)?;
                     // Clear compiler storage before the fallible retirement. Runtime owns any refusal.
@@ -590,6 +604,7 @@ impl Translator<'_, '_> {
         let resource = self
             .resource
             .ok_or_else(|| pending("actual staging has no selected family"))?;
+        self.carrier_stage_actual(operations, frame, parameter)?;
         for operation in operations
             .iter()
             .copied()
@@ -606,7 +621,12 @@ impl Translator<'_, '_> {
                         .loans()
                         .get(loan.index())
                         .is_some_and(|record| record.parameter() == Some(parameter));
-                    if for_parameter {
+                    if for_parameter
+                        && !matches!(
+                            resource.function_plan()?.loans()[loan.index()].source(),
+                            jett_mir::ResourceLoanSource::CarrierSumProjection { .. }
+                        )
+                    {
                         self.resource_begin_borrow(operation)?;
                     }
                 }
@@ -622,6 +642,8 @@ impl Translator<'_, '_> {
         _span: Span,
     ) -> Result<Value, CodegenError> {
         match operand {
+            Operand::CarrierOwned { slot, .. } => self.carrier_owner(*slot),
+            Operand::CarrierBorrowed { loan, .. } => self.carrier_loan(*loan),
             Operand::Owned { slot, .. } => self.resource_owner(*slot),
             Operand::Borrowed { loan, .. } => self.resource_loan(*loan),
             Operand::Ordinary { parameter, .. } => {
@@ -882,6 +904,15 @@ impl Translator<'_, '_> {
                     }
                 }
                 let lowered = match *result {
+                    CallResult::Carrier { slot } => {
+                        if resource.carrier_local_slot(*output)? != Some(slot) {
+                            return Err(pending(
+                                "staged carrier output differs from its exact Local slot",
+                            ));
+                        }
+                        self.carrier_store(slot, bits)?;
+                        LoweredValue::Scalar(bits)
+                    }
                     CallResult::Owned { slot } => {
                         if resource.local_slot(*output)? != Some(slot) {
                             return Err(pending(
@@ -1049,6 +1080,14 @@ impl Translator<'_, '_> {
                         | Operand::Borrowed {
                             parameter: selected,
                             ..
+                        }
+                        | Operand::CarrierOwned {
+                            parameter: selected,
+                            ..
+                        }
+                        | Operand::CarrierBorrowed {
+                            parameter: selected,
+                            ..
                         } => *selected == parameter,
                     })
                     .ok_or_else(|| pending("Source actual has no exact operand role"))?;
@@ -1114,6 +1153,14 @@ impl Translator<'_, '_> {
                                 ..
                             }
                             | Operand::Borrowed {
+                                parameter: selected,
+                                ..
+                            }
+                            | Operand::CarrierOwned {
+                                parameter: selected,
+                                ..
+                            }
+                            | Operand::CarrierBorrowed {
                                 parameter: selected,
                                 ..
                             } => *selected == parameter,
@@ -1261,6 +1308,10 @@ impl Translator<'_, '_> {
             _ => unreachable!(),
         };
         let lowered = match result {
+            CallResult::Carrier { slot } => {
+                self.carrier_store(slot, result_value)?;
+                LoweredValue::Scalar(result_value)
+            }
             CallResult::Owned { slot } => {
                 self.resource_store(slot, result_value)?;
                 LoweredValue::Scalar(result_value)
@@ -1323,6 +1374,9 @@ impl Translator<'_, '_> {
             return Err(pending(
                 "statically aborted Resource actual needs its exact custody CFG emitter",
             ));
+        }
+        if let Some(value) = self.carrier_expression(expression)? {
+            return Ok(Some(value));
         }
         if self.resource_is_hook_descriptor(expression)? {
             return self.resource_hook_value(expression, &operations).map(Some);
@@ -1462,6 +1516,9 @@ impl Translator<'_, '_> {
         let Some(resource) = self.resource else {
             return Ok(false);
         };
+        if self.carrier_statement(statement)? {
+            return Ok(true);
+        }
         let operations = resource.at_site()?;
         let site_only = operations
             .iter()
@@ -1771,6 +1828,31 @@ impl Translator<'_, '_> {
                     && matches!(operation.role(), Role::Complete { .. })
             })
             .ok_or_else(|| pending("return has no exact Scope completion"))?;
+        let carrier_publication = resource.function_plan()?.carriers().and_then(|plan| {
+            plan.operations().iter().find(|operation| {
+                operation.site().block() == resource.block
+                    && operation.site().position() == resource.position
+                    && operation.edge().is_none()
+                    && matches!(
+                        operation.role(),
+                        jett_mir::ResourceCarrierOperationRole::PublishReturn { .. }
+                    )
+            })
+        });
+        if let Some(publication) = carrier_publication {
+            let jett_mir::ResourceCarrierOperationRole::PublishReturn { source } =
+                publication.role()
+            else {
+                unreachable!();
+            };
+            let transfer = resource.function_plan()?.carriers().and_then(|plan| plan.operations().iter().find(|operation|
+                operation.site().block() == resource.block && operation.site().position() == resource.position
+                    && !operation.is_expression_operation() && operation.edge().is_none()
+                    && matches!(operation.role(), jett_mir::ResourceCarrierOperationRole::Transfer { destination, .. }
+                        | jett_mir::ResourceCarrierOperationRole::QualifyMachine { destination, .. } if destination == source)))
+                .ok_or_else(|| pending("carrier Return lost its exact provisional transfer"))?;
+            self.carrier_transfer(transfer)?;
+        }
         let publication = operations
             .iter()
             .copied()
@@ -1781,7 +1863,8 @@ impl Translator<'_, '_> {
             };
             let transfer = operations.iter().copied().find(|operation| matches!(operation.role(), Role::Transfer { destination, .. } if destination == source)).ok_or_else(|| pending("owned return has no exact provisional transfer"))?;
             self.resource_transfer(transfer)?;
-        } else if !opaque_return
+        } else if carrier_publication.is_none()
+            && !opaque_return
             && expression.is_some_and(|expression| is_copy_owned(self.types, expression.ty))
         {
             let value = self.scalar(result, span)?;
@@ -1808,7 +1891,33 @@ impl Translator<'_, '_> {
         self.drop_all()?;
         let body = self.builder.ins().iconst(ir::types::I32, 0);
         self.resource_scope_completion(completion, body, true)?;
-        if let Some(publication) = publication {
+        if let Some(publication) = carrier_publication {
+            let jett_mir::ResourceCarrierOperationRole::PublishReturn { source } =
+                publication.role()
+            else {
+                unreachable!();
+            };
+            let value = self.carrier_owner(*source)?;
+            let context = self.resource_context();
+            let scope = self.builder.use_var(resource.scope);
+            let ordinal = resource
+                .layout
+                .carrier_operation(resource.function, publication.id())
+                .ok_or_else(|| pending("carrier Return publication has no exact installed row"))?;
+            let ordinal = self
+                .builder
+                .ins()
+                .iconst(ir::types::I32, i64::from(ordinal));
+            let result = Leaf::CarrierPublish.output(
+                self.module,
+                self.builder,
+                &[context, scope, ordinal, value],
+                resource.failure,
+                8,
+            )?;
+            self.clear_slot(resource.carrier_owners[source.index()]);
+            self.builder.ins().return_(&[result]);
+        } else if let Some(publication) = publication {
             let Role::CompleteReturnAfterCleanup { source } = publication.role() else {
                 unreachable!();
             };
@@ -1966,7 +2075,32 @@ fn define_entry(
         refused,
     )?;
     let root = builder.ins().stack_load(ir::types::I64, scope_output, 0);
-    let mut native = vec![ctx, zero, root];
+    let bridge_completion = layout.entry_bridge_completion();
+    let mut native = vec![ctx, zero];
+    if bridge_completion.is_some() {
+        if layout.plan().function(entry.mir_id).is_some() {
+            return Err(pending(
+                "ordinary entry bridge acquired a Source-family body ABI",
+            ));
+        }
+        let function = builder
+            .ins()
+            .iconst(ir::types::I32, i64::from(selected.function));
+        let signature = builder
+            .ins()
+            .iconst(ir::types::I32, i64::from(selected.signature));
+        let template = builder
+            .ins()
+            .iconst(ir::types::I32, i64::from(selected.scope));
+        Leaf::ScopeValidate.checked(
+            module,
+            &mut builder,
+            &[ctx, root, function, signature, template],
+            refused,
+        )?;
+    } else {
+        native.push(root);
+    }
     for (parameter, ty) in entry.parameter_types.iter().enumerate() {
         if *ty != TypeInterner::NETWORK {
             return Err(pending(
@@ -1994,6 +2128,20 @@ fn define_entry(
     }
     let reference = module.declare_func_in_func(entry.native_id, builder.func);
     builder.ins().call(reference, &native);
+    if let Some(ordinal) = bridge_completion {
+        let status = crate::values::declare_leaf(module, NativeLeaf::Status)?;
+        let status = module.declare_func_in_func(status, builder.func);
+        let call = builder.ins().call(status, &[ctx]);
+        let body = builder
+            .inst_results(call)
+            .first()
+            .copied()
+            .ok_or_else(|| pending("ordinary entry has no original native body status"))?;
+        let ordinal = builder.ins().iconst(ir::types::I32, i64::from(ordinal));
+        // Completion can report body failure after actual retirement. Observe the
+        // retained root outcome next, rather than replacing the original status.
+        Leaf::ScopeComplete.call(module, &mut builder, &[ctx, root, ordinal, body])?;
+    }
     let output = builder.create_sized_stack_slot(ir::StackSlotData::new(
         ir::StackSlotKind::ExplicitSlot,
         4,

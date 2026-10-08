@@ -41,6 +41,19 @@ pub(super) enum Leaf {
     SourceStatus,
     ScopeComplete,
     ReturnPublish,
+    CarrierConstructBegin,
+    CarrierChild,
+    CarrierCommit,
+    CarrierTransfer,
+    CarrierBorrow,
+    CarrierExtract,
+    CarrierAdaptSum,
+    CarrierObserve,
+    CarrierEndBorrow,
+    CarrierRetire,
+    CarrierResetIteration,
+    CarrierQualify,
+    CarrierPublish,
 }
 impl Leaf {
     fn spec(self) -> (&'static str, &'static [ir::Type]) {
@@ -137,6 +150,46 @@ impl Leaf {
             ),
             SourceStatus => ("jett_rt_v1_resource_source_status", &[I64, I64]),
             ScopeComplete => ("jett_rt_v1_resource_scope_complete", &[I64, I64, I32, I32]),
+            CarrierConstructBegin => (
+                "jett_rt_v1_resource_carrier_construct_begin",
+                &[I64, I64, I32, I64],
+            ),
+            CarrierChild => ("jett_rt_v1_resource_carrier_child", &[I64, I64, I32, I64]),
+            CarrierCommit => ("jett_rt_v1_resource_carrier_commit", &[I64, I64, I64]),
+            CarrierTransfer => (
+                "jett_rt_v1_resource_carrier_transfer",
+                &[I64, I64, I32, I64, I64],
+            ),
+            CarrierBorrow => (
+                "jett_rt_v1_resource_carrier_borrow",
+                &[I64, I64, I32, I64, I64, I64],
+            ),
+            CarrierExtract => (
+                "jett_rt_v1_resource_carrier_extract",
+                &[I64, I64, I32, I64, I64, I64],
+            ),
+            CarrierAdaptSum => (
+                "jett_rt_v1_resource_carrier_adapt",
+                &[I64, I64, I32, I64, I64, I64],
+            ),
+            CarrierObserve => (
+                "jett_rt_v1_resource_carrier_observe",
+                &[I64, I64, I32, I64, I64, I64],
+            ),
+            CarrierEndBorrow => ("jett_rt_v1_resource_carrier_end", &[I64, I64, I32, I64]),
+            CarrierRetire => ("jett_rt_v1_resource_carrier_retire", &[I64, I64, I32, I64]),
+            CarrierResetIteration => (
+                "jett_rt_v1_resource_carrier_reset_iteration",
+                &[I64, I64, I32, I64],
+            ),
+            CarrierQualify => (
+                "jett_rt_v1_resource_carrier_qualify",
+                &[I64, I64, I32, I64, I64],
+            ),
+            CarrierPublish => (
+                "jett_rt_v1_resource_carrier_publish",
+                &[I64, I64, I32, I64, I64],
+            ),
             ReturnPublish => (
                 "jett_rt_v1_resource_return_publish",
                 &[I64, I64, I32, I64, I64],
