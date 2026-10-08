@@ -4524,6 +4524,9 @@ Exact receipts and the independent 30-execution ordinary positive control are in
 the [field-loop note](active/native_resource_reflected_fields.md).
 Generic/alias owners, bitfields, variants, machines, `TypeInfo.args` and nested
 producers still require checked Resource compiler transport proofs and Source
-evidence. Exceptional reflected native exits/reentry and broader aggregate
-custody remain separate acceptance obligations; the bounded producer adds no
-policy ban. The full goal remains active at the rough 87% planning estimate.
+evidence. The original Source06 additionally passes all eight exceptional scripts
+through 16 reference observations, 16 objects and 16 Source-deleted native single
+entries in both checking profiles, with exact completion and pre-teardown retirement.
+Exceptional same-grant reentry, derived Return/Break/Continue/Default native controls
+and broader aggregate custody remain separate acceptance obligations; the bounded
+producer adds no policy ban. The full goal remains active at the rough 87% estimate.

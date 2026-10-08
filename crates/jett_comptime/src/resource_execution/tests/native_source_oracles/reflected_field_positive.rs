@@ -50,3 +50,9 @@ fn reflected_field_four_positive_sources_clean_same_grant_reentry() {
         }
     }
 }
+
+#[test]
+fn reflected_field_source06_exceptional_native_inputs_match_real_reference() {
+    assert_eq!(reflected_field_cases::SOURCE06_EXCEPTIONAL_CASES.len(), 8);
+    run_reference_cases(reflected_field_cases::SOURCE06_EXCEPTIONAL_CASES);
+}

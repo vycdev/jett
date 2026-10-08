@@ -177,6 +177,24 @@ records `production_changed: false` and no established ordinary equal-type
 coalescing defect. These ordinary controls do not establish Resource transport
 for those broader reflection families.
 
+## Original reflected failure single entries
+
+The byte-identical 929-byte Source06 now passes all eight original exceptional
+scripts in both checking profiles: 16 reference observations, 16 emitted objects
+and **16 Source-deleted native executions**. The cases cover handled construction
+and borrow failures, provider panic, explicit close cleanup failure and both
+provider/domain failure with cleanup failure. Exact completion channels, messages,
+ordered events, script exhaustion, zero ordinary/Resource obligations before
+teardown and one Session destruction agree with the strict native oracles.
+
+`target/native-reflected-exceptional-native-evidence/after-v1.json`
+(SHA-256 `38662e59e4dfebfbbde4236ee0a8d6b2cc647b6a9554ea8afb9f2b1119bf3085`)
+records actual session 2180, terminal `aa0907`, all three commands exiting zero,
+and all 3,720 frozen inputs plus nine measured runtime files unchanged at
+`2be038c77f084395e8638beaaf2617fe86b49730`. Only additive test leaves are involved;
+compiler/runtime code, four READY controls and the 191-case catalog are unchanged.
+These single entries do not establish exceptional same-grant reentry.
+
 ## Remaining native and reflection work
 
 The producer breadth is deliberately limited to the exact direct nominal-struct
@@ -185,9 +203,9 @@ families, reflected variants, machines, `TypeInfo.args`, nested reflected
 producers and broader function compositions remain compiler implementation and
 Source-evidence obligations in the checked Resource path. The ordinary controls
 above establish their own bounded parity and leave ordinary `lower_program`
-unchanged. Exceptional reflected native exits/reentry and broad aggregate
-Resource custody remain separate acceptance obligations. This boundary adds no
-compiler-policy ban on existing Source semantics.
+unchanged. Exceptional same-grant reentry, derived Return/Break/Continue/Default
+native controls and broad aggregate Resource custody remain separate acceptance
+obligations. This boundary adds no compiler-policy ban on existing Source semantics.
 
 The full native-codegen goal remains active at the rough 87% planning estimate.
 The fixed 207-fixture / 182-run-pass inventory denominators do not change.

@@ -2647,3 +2647,17 @@ inputs unchanged**; its SHA-256 is
 defect. These ordinary controls do not establish Resource transport for their
 broader reflection families. The full goal remains active at the rough **87%**
 estimate; fixed **207/182** inventory denominators remain unchanged.
+#### Original reflected Source06 exceptional single-entry acceptance
+
+The eight original failure/cleanup scripts pass in both checking profiles:
+**16 reference observations / 16 object attempts / 16 Source-deleted native
+executions**, with unchanged exact 929-byte Source06. Strict completion channels,
+messages, event order, script exhaustion and zero obligations before one teardown
+all pass. The existing four READY cases and 191-case catalog are retained unchanged.
+`target/native-reflected-exceptional-native-evidence/after-v1.json` records actual
+session **2180**, terminal **aa0907**, three command exits **0**, and all **3,720
+frozen inputs / nine runtime files unchanged** at `2be038c7`; its SHA-256 is
+`38662e59e4dfebfbbde4236ee0a8d6b2cc647b6a9554ea8afb9f2b1119bf3085`.
+Exceptional same-grant reentry and derived Return/Break/Continue/Default native
+controls remain required. This evidence adds no aggregate transport acceptance
+and leaves the full goal, rough **87%** estimate and fixed **207/182** inventory intact.

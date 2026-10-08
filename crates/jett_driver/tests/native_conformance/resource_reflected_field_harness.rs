@@ -175,3 +175,22 @@ fn native_resource_reflected_field_four_sources_clean_same_grant_reentry() {
         "Resource reflected-field clean reentry acceptance: 4 cases; 8 Source-deleted executions; 16 entries on the same per-executable provider/grant; profiles=debug,release"
     );
 }
+
+#[test]
+fn native_resource_reflected_field_source06_exceptional_scripts_emit_in_both_profiles() {
+    assert_eq!(reflected_field_cases::SOURCE06_EXCEPTIONAL_CASES.len(), 8);
+    run_object_preflight(
+        reflected_field_cases::SOURCE06_EXCEPTIONAL_CASES,
+        "reflected-field-source06-exceptional",
+    );
+}
+
+#[test]
+#[ignore = "requires exact Root-measured double-cfg Debug/Release single-runtime archive receipt"]
+fn native_resource_reflected_field_source06_exceptional_scripts_retire_before_teardown() {
+    assert_eq!(reflected_field_cases::SOURCE06_EXCEPTIONAL_CASES.len(), 8);
+    run_native_cases(reflected_field_cases::SOURCE06_EXCEPTIONAL_CASES);
+    eprintln!(
+        "Resource reflected-field exceptional single-entry acceptance: 8 cases; 16 Source-deleted executions; profiles=debug,release; exceptional same-grant reentry remains separate"
+    );
+}
