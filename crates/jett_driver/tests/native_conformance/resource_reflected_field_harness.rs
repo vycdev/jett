@@ -203,3 +203,9 @@ mod reflected_derived_cases;
 
 #[path = "resource_reflected_derived_harness.rs"]
 mod derived_controls;
+
+#[path = "resource_reflected_return_cases.rs"]
+mod reflected_return_cases;
+
+#[path = "resource_reflected_return_harness.rs"]
+mod reflected_returns;

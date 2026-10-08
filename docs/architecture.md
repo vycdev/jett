@@ -4580,7 +4580,38 @@ entry-begin checks and immutable first observations are unchanged, with no reset
 retains all 3,725 frozen inputs and nine measured v2 runtime files unchanged in
 the tested candidate based on parent `f4c63a0f`, using the MSVC receipt pin above.
 Prior original Source06 and 191/382 receipts remain separate. This gate adds no
-GNU carrier/fresh-v3 native execution acceptance. Dedicated Resource Return cases,
-broader body/Default lifetimes, aggregate custody and coherent-revision successor
-gates remain separate obligations under existing Source semantics. The full goal
-stays active at the rough 87% estimate and fixed 207/182 inventory denominators.
+GNU carrier/fresh-v3 native execution acceptance. The dedicated Return successor
+is recorded below; broader lifetimes and coherent-revision gates remain separate.
+
+Dedicated additive Sources10/11 now pass twelve shared cases for genuine first-
+and second-field successful Return, handled first/later borrow failure and cleanup
+combinations. Three equal-int64 fields and terminal sentinels verify skipped
+subsequent fields/statements. Source10's implicit Return retires its scoped loan
+and outer optional owner; cleanup failure preserves original body0/cleanup255.
+Source11 returns a distinct owned Resource892 while retiring aliased outer891.
+Successful outer cleanup gates publication and exact caller Borrow892(29)/close;
+helper cleanup failure suppresses caller use, retires891 then provisional892 and
+propagates root body255/cleanup255. The helper Source follows a normal Return
+path; the report observes the entry-root completion and retirement events, not a
+separate nested callee completion. Cleanup channel, exact diagnostic and first
+exit71 remain immutable after same-Source READY.
+
+Actual sessions 64018 (`0b2a26`) and 47358 (`dcfb82`) pass all five one-test gates:
+72 reference calls, 24 objects, 24 Source-deleted single executables/24 entries
+and 24 same-grant reentry executables/48 entries, for **48 native executables /
+72 entries**. All eight native custody counts and ordinary storage retire before
+one destruction; continuous ordered events, per-entry boundaries, script
+exhaustion and both exact completions remain preserved on the same
+Session/provider/paired Network grant. No reset or failure-latch clearing occurs.
+`target/native-reflected-body-return-native-evidence/after-v2.json`
+(SHA-256 `9250a5d37375cd66ba212e1cfcaa489ef0b55571dba0efa72dc59a6d306baa18`)
+retains all 3,730 frozen inputs and nine measured v2 runtime files unchanged at
+tested parent `91105876e5dbbbe9bbaa1d19bc2408ec9a274255`, using the unchanged
+MSVC receipt pin above. Sources7/8/9 and their historical ten scripts remain exact.
+
+The Return operand continues to precede certified lexical retirement; the
+successful owned-return case uses a survivor without the outer owner's resident
+lease. Same-owner live-lease Return, broader body/Default lifetimes, generic/nested
+reflected producers, aggregate custody, fresh-v3 native evidence and coherent-
+workspace/exact-revision CI gates remain separate full-goal obligations. The
+rough 87% estimate and fixed 207/182 inventory denominators remain unchanged.

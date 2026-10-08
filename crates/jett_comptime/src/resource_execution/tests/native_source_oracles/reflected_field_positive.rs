@@ -65,3 +65,9 @@ mod reflected_derived_cases;
 
 #[path = "reflected_field_positive/derived_controls.rs"]
 mod derived_controls;
+
+#[path = "../../../../../jett_driver/tests/native_conformance/resource_reflected_return_cases.rs"]
+mod reflected_return_cases;
+
+#[path = "reflected_field_positive/reflected_returns.rs"]
+mod reflected_returns;

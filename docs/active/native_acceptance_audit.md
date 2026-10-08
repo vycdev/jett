@@ -2706,8 +2706,8 @@ gates supply this acceptance.
 
 The exact 929-byte original Source06 and prior single-entry/four READY/191-case
 evidence remain unchanged. This is bounded local MSVC original-script reentry
-acceptance; the bounded derived matrix is accepted below. Dedicated Resource
-Return/broader Default lifetimes, fresh-archive predecessor compatibility,
+acceptance; the bounded derived matrix and dedicated Return successor are
+accepted below. Broader Default lifetimes, fresh-archive predecessor compatibility,
 coherent-workspace/exact-revision CI gates and broader
 aggregate Resource transport remain required. The full goal stays active at the
 rough **87%** estimate and fixed **207/182** inventory denominators.
@@ -2753,8 +2753,59 @@ the unchanged compiled receipt pin
 Original Source06's nine-script matrix and earlier single-entry/four READY/
 ordinary-control/191-case evidence retain their original counts, receipts and
 archive pins. This is local MSVC derived-control acceptance; GNU carrier/fresh-v3
-native execution is separate. Dedicated Resource Return cases and broader
-body/Default lifetimes, aggregate transport, fresh-archive predecessor,
-coherent-workspace and exact-revision CI acceptance remain required. No Source
-policy ban is added. The full goal stays active at the rough **87%** estimate
-and fixed **207/182** inventory denominators.
+native execution is separate. The dedicated Return successor is recorded below.
+Broader body/Default lifetimes, aggregate transport, fresh-archive predecessor,
+coherent-workspace and exact-revision CI remain required. No Source policy ban is
+added; the rough **87%** estimate and fixed **207/182** denominators stay unchanged.
+
+#### Dedicated reflected body and owned Resource Return acceptance
+
+The additive Sources10/11 and twelve shared rows pass in both profiles. Each
+retains three equal-int64 fields and the statements following its conditional
+Return and loop. Finite provider scripts/sentinels establish true successful
+first/second-field Return and skipped later fields/statements, independently of
+the original Sources7/8/9 ten-script matrix, which remains unchanged.
+
+Source10 returns nothing with scoped projection/outer owner retirement. Its two
+implicit-cleanup cases retain **body0 / cleanup255 / Cleanup / exit71**, empty
+ordinary message and exact `native Resource cleanup failed`. Source11 returns
+owned survivor892 while outer891 retains the selected body's alias; successful
+outer cleanup precedes publication and exact caller Borrow892(29)/close. The
+successful events place F891 before B892. Its two cleanup cases suppress
+publication/consumer borrowing, retire891 then provisional892, and retain root
+**body255 / cleanup255 / Cleanup / exit71**. The helper Source follows a normal
+Return path; the report directly observes the entry-root completion and exact
+retirement/publication-suppression events, without reading a nested callee
+completion.
+Clean/handled-domain Return cases retain body0/cleanup0/clean/empty messages/exit0.
+
+Actual reference/object session **64018**, terminal **0b2a26**, passes three
+one-test filters with exits0: **24 single reference calls + 48 same-grant calls =
+72**, and **24 final objects**. Actual linked session **47358**, terminal
+**dcfb82**, passes two one-test filters with exits0: **24 Source-deleted single
+executables / 24 entries** and **24 same-grant reentry executables / 48 entries**,
+for **48 native executables / 72 entries**. READY retains the same byte-identical
+Source, Session/provider/paired Network grant. Increasing attempt IDs, immutable
+first completion/diagnostics/first nonzero exit, continuous events and boundaries,
+all eight zero Resource counts and empty ordinary storage before teardown,
+combined-script exhaustion and one destruction pass. No reset or latch clearing
+is introduced.
+
+`target/native-reflected-body-return-native-evidence/after-v1.json` records the
+reference/object checkpoint. Linked acceptance is recorded in
+`target/native-reflected-body-return-native-evidence/after-v2.json`, SHA-256
+`9250a5d37375cd66ba212e1cfcaa489ef0b55571dba0efa72dc59a6d306baa18`.
+All **3,730 frozen inputs / nine measured v2 runtime files** remain unchanged at
+tested parent `91105876e5dbbbe9bbaa1d19bc2408ec9a274255`, using the unchanged
+measured MSVC Debug/Release receipt pin
+`96721717326f7d6f96dd2bb98dc1d6e919f7119235e33e103e5ac89bd6f29d0a`.
+This local MSVC gate gives no fresh-v3/GNU carrier or successor-workspace/CI
+credit; predecessor receipts retain their original counts and archive pins.
+
+Owned operands still precede certified lexical retirement. A same-owner move
+while its resident lease remains live is not covered by the distinct-survivor
+success. That lifetime seam, broader Resource-valued Default/body compositions,
+generic/nested reflection, aggregate live custody, fresh-archive predecessor
+compatibility and coherent-workspace/exact-revision CI remain full-goal
+obligations under unchanged Source semantics. The rough87% estimate and fixed
+207/182 inventory denominators remain unchanged.

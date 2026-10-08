@@ -9,7 +9,8 @@ ordinal bridge through HIR and MIR. Four focused Source cases pass 16 linked
 native executions and 24 entry attempts; the unchanged 191-case corpus also
 passes all 382 Source-deleted Debug/Release executions. Original Source06 also
 passes 18 exceptional same-grant executables / 36 entry attempts. Derived
-Sources7/8/9 separately pass 42 native executables / 62 entries, recorded below.
+Sources7/8/9 separately pass 42 native executables / 62 entries. Dedicated
+Sources10/11 pass 48 native executables / 72 entries, recorded separately below.
 
 ## Retained selection proof
 
@@ -293,6 +294,62 @@ The earlier original Source06 nine-script, four READY, ordinary-control and
 191/382 receipts remain separate evidence. No GNU carrier/fresh-v3 native
 execution acceptance follows from this local MSVC gate.
 
+## Dedicated reflected body and owned Resource Return acceptance
+
+Sources10/11 are separately named additive controls; the original Sources7/8/9,
+historical ten scripts and scalar-Default READY baseline remain byte-identical.
+Twelve new shared cases execute genuine first- and second-field successful
+Returns, handled first/later borrow failures and four cleanup combinations in
+both checking profiles. Each Source retains three equal-int64 reflected fields,
+its statements after the Return condition and its statements after the loop.
+Finite provider scripts and terminal sentinels verify that Return skips those
+statements and all later fields.
+
+Source10 returns `nothing` from the selected scoped-type body while an outer
+optional Resource owner remains live. Its exact borrowed projection ends and the
+outer owner retires during Scope completion. Both cleanup cases retain original
+body **0**, cleanup **255**, Cleanup channel, empty ordinary message, exact
+`native Resource cleanup failed` and first process exit **71**. This differs from
+the historical derived explicit-close cases' body255/cleanup255.
+
+Source11's helper returns an actual distinct, unborrowed Resource owner892 while
+aliasing outer owner891. Successful body retirement and outer cleanup precede
+publication; the caller's exact Borrow892(29) and consuming close establish the
+returned owner's identity and custody. Its ordered events place Finalized891
+before caller Borrowed892. Both helper cleanup cases suppress publication and
+caller borrowing, retire891 then the provisional892, and retain root body **255**,
+cleanup **255**, Cleanup channel and exit **71**. The helper Source follows a
+normal Return path before cleanup failure propagates. The directly observed
+tuple belongs to the entry root; the report does not separately read a nested
+callee completion. Clean success and
+handled failures remain body0/cleanup0 with empty messages and exit0.
+
+Actual session **64018**, terminal **0b2a26**, passes two one-test reference groups
+and one final object group: **24 single-entry reference calls + 48 same-grant
+reference calls = 72**, and **24 objects**. Actual session **47358**, terminal
+**dcfb82**, passes both one-test linked groups: **24 Source-deleted single-entry
+executables / 24 entries** plus **24 same-grant reentry executables / 48 entries**,
+for **48 native executables / 72 entries**. Every first script is followed by its
+same byte-identical Source's READY on the same Session/provider/paired Network
+grant. Increasing nonzero attempt identities, immutable first completion/messages
+and first nonzero exit, continuous events/entry boundaries, all eight zero native
+Resource counts and empty ordinary storage before teardown, combined-script
+exhaustion and one clean destruction all pass. No reset, latch clearing or grant
+replacement is introduced.
+
+`target/native-reflected-body-return-native-evidence/after-v1.json` records the
+reference/object gate. The linked receipt is
+`target/native-reflected-body-return-native-evidence/after-v2.json`
+(SHA-256 `9250a5d37375cd66ba212e1cfcaa489ef0b55571dba0efa72dc59a6d306baa18`).
+Both gates retain all **3,730 frozen inputs / nine measured v2 runtime files**
+unchanged in the tested candidate based on parent
+`91105876e5dbbbe9bbaa1d19bc2408ec9a274255`. The unchanged measured MSVC
+Debug/Release receipt pin is
+`96721717326f7d6f96dd2bb98dc1d6e919f7119235e33e103e5ac89bd6f29d0a`.
+Earlier original/derived/191-case receipts retain their counts and archive pins.
+This is bounded local MSVC Return acceptance; it adds no fresh-v3, GNU carrier,
+coherent-workspace or exact-revision CI acceptance.
+
 ## Remaining native and reflection work
 
 The producer breadth is deliberately limited to the exact direct nominal-struct
@@ -302,9 +359,12 @@ producers and broader function compositions remain compiler implementation and
 Source-evidence obligations in the checked Resource path. The ordinary controls
 above establish their own bounded parity and leave ordinary `lower_program`
 unchanged. Original Source06 exceptional same-grant reentry is accepted above.
-The derived historical control matrix is accepted above. Dedicated Resource
-Return cases, broader body/Default lifetimes and broad aggregate Resource custody
-remain separate acceptance obligations. This boundary adds no
+The derived historical control matrix and dedicated body/owned Resource Return
+controls are accepted above. Same-owner Return while its resident lease remains
+live, broader body/Default lifetimes and broad aggregate Resource custody remain
+separate obligations. Return operands still precede certified lexical retirement;
+the accepted owned-return control uses a distinct unborrowed survivor. This
+boundary adds no
 compiler-policy ban on existing Source semantics.
 
 The full native-codegen goal remains active at the rough 87% planning estimate.

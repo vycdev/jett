@@ -1,0 +1,36 @@
+namespace app
+struct IterationShape:
+    first: int64
+    second: int64
+    third: int64
+function return_selected(view net: Network, survivor: resource_probe.TestHandle, outer: resource_probe.TestHandle) returns resource_probe.TestHandle:
+    use resource_probe
+    optional[resource_probe.TestHandle] held = some(outer)
+    for field in type.fields[IterationShape]():
+        comptime type Element = field.type_info:
+            resource_probe.TestHandle token = view((view held) handle:
+                return survivor
+            )
+            Element observed = resource_probe.borrow(view net, view token) handle error:
+                return survivor
+            if observed == 17:
+                return survivor
+            if observed == 17:
+                int64 skipped_after_return = resource_probe.terminal_label()
+        if field.index != 0:
+            int64 skipped_after_body = resource_probe.terminal_label()
+    int64 skipped_after_loop = resource_probe.terminal_label()
+    return survivor
+export function main(net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle outer = resource_probe.create(view net, 891) handle error:
+        return nothing
+    resource_probe.TestHandle survivor = resource_probe.create(view net, 892) handle error:
+        return nothing
+    resource_probe.TestHandle returned = return_selected(view net, survivor, outer)
+    int64 observed = resource_probe.borrow(view net, view returned) handle error:
+        return nothing
+    if observed != 29:
+        int64 wrong_return = resource_probe.terminal_label()
+    resource_probe.close(returned)
+    return nothing
