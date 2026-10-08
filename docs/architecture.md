@@ -2367,6 +2367,21 @@ callee View/Owned access. Nested checked calls keep those envelopes through
 ordinary function entry/return rather than unwrapping a Resource into an
 ordinary Value argument.
 
+Generated absent For/Match binders use a private original-control proof keyed to
+the current checked attempt and active body. It retains each original binder,
+ordinal, resolver definition, concrete TypeId and immutable ownership mode; Match
+also retains the exact selected arm and its payload cardinality. Complete proof
+revalidation and the existing recursive absence-shape validator precede binding
+publication. Resource-bearing children enter the existing declaration slot as
+ordinary evaluated values with empty custody; the strict missing-slot identifier
+guard remains intact. Original view loops borrow their retained parent binding
+through the existing transport, and generated scope retirement leaves unrelated
+live owner tickets intact. No Resource owner/grant, runtime leaf, ABI or native
+aggregate permission is added. The full comptime replay passes 554 tests,
+including the original 28-wrapper/120-constructor controls and 60 focused entry
+observations. Native aggregate emission remains a separate gate. See the
+[generated-binding contract](active/native_resource_absent_generated_bindings.md).
+
 An executable source function rejoins a unique retained AST declaration and its
 exact resolver definition. Ordinary declarations use their actual DefInfo span;
 mutual definitions additionally rejoin the actual-body resolution and retained

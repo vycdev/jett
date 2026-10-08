@@ -16,8 +16,9 @@ use jett_types::TypeId;
 pub use checked::ExecutionPurpose;
 pub(crate) use checked::{
     CheckedAttemptKey, CheckedBodyCursor, CheckedBodyReference, CheckedExecution,
-    CheckedInvocation, FunctionInvocation, PreparedIntrinsicArguments, PreparedPipelineStep,
-    PreparedReflectedFieldIteration, PreparedReflectedFieldLoop, PreparedRequiredExpression,
+    CheckedInvocation, FunctionInvocation, PreparedAbsentBindings, PreparedIntrinsicArguments,
+    PreparedPipelineStep, PreparedReflectedFieldIteration, PreparedReflectedFieldLoop,
+    PreparedRequiredExpression,
 };
 pub use checked::{
     CheckedRequiredOwner, CheckedRequiredResourceHook, CheckedRequiredScope, CheckedRequiredValue,

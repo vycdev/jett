@@ -256,3 +256,6 @@ mod source06_exceptional;
 
 #[path = "native_source_oracles/reflected_field_positive.rs"]
 mod reflected_field_positive;
+
+#[path = "native_source_oracles/absent_aggregate_baseline.rs"]
+mod absent_aggregate_baseline;

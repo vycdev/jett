@@ -5,9 +5,9 @@ pub(crate) use assignment::CheckedAssignment;
 #[path = "checked/body_reference.rs"]
 mod body_reference;
 pub(crate) use body_reference::{
-    CheckedAttemptKey, CheckedBodyReference, PreparedDirectScope, PreparedIntrinsicArguments,
-    PreparedNamedCallable, PreparedPipelineStep, PreparedReflectedFieldIteration,
-    PreparedReflectedFieldLoop, PreparedRequiredExpression,
+    CheckedAttemptKey, CheckedBodyReference, PreparedAbsentBindings, PreparedDirectScope,
+    PreparedIntrinsicArguments, PreparedNamedCallable, PreparedPipelineStep,
+    PreparedReflectedFieldIteration, PreparedReflectedFieldLoop, PreparedRequiredExpression,
 };
 pub use body_reference::{
     CheckedRequiredOwner, CheckedRequiredResourceHook, CheckedRequiredScope, CheckedRequiredValue,
@@ -192,6 +192,7 @@ pub(crate) struct CheckedExecution {
 }
 
 struct BodyFacts<'a> {
+    selections: Option<&'a HashMap<Span, jett_typecheck::CheckedStaticSelection>>,
     calls: &'a HashMap<Span, CheckedCallOwnership>,
     bindings: &'a HashMap<Span, CheckedBindingFact>,
     types: &'a HashMap<Span, TypeId>,
@@ -208,6 +209,7 @@ struct BodyFacts<'a> {
 impl<'a> BodyFacts<'a> {
     fn scoped(body: &'a CheckedBodyFacts) -> Self {
         Self {
+            selections: Some(&body.static_selections),
             calls: &body.call_ownership,
             bindings: &body.binding_facts,
             types: &body.type_map,
@@ -373,6 +375,7 @@ impl CheckedExecution {
         let checked = self.program.checked();
         let mut facts = match cursor.root {
             BodyRoot::Ordinary => BodyFacts {
+                selections: None,
                 calls: &checked.call_ownership,
                 bindings: &checked.binding_facts,
                 types: &checked.type_map,
@@ -391,6 +394,7 @@ impl CheckedExecution {
                     .get(index)
                     .ok_or(ResourceExecutionError::MissingCheckedBody)?;
                 BodyFacts {
+                    selections: Some(&body.static_selections),
                     calls: &body.call_ownership,
                     bindings: &body.binding_facts,
                     types: &body.type_map,

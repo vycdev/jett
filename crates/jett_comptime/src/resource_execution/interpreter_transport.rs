@@ -2,6 +2,9 @@
 #[path = "interpreter_transport/assignment.rs"]
 mod assignment;
 
+#[path = "interpreter_transport/absent_generated.rs"]
+mod absent_generated;
+
 use super::*;
 use crate::resource_execution::FunctionInvocation;
 use crate::resource_execution::{

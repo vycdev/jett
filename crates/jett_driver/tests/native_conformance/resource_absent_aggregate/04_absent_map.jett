@@ -1,0 +1,98 @@
+namespace app
+struct TokenEnvelope:
+    tokens: list[resource_probe.TestHandle]
+    fallback: optional[resource_probe.TestHandle]
+    marker: int64
+struct TokenBox[T]:
+    items: list[T]
+type PositiveMarker = int64 where value > 0
+struct RefinedEnvelope:
+    marker: PositiveMarker
+    tokens: list[resource_probe.TestHandle]
+enum TokenChoice:
+    empty
+    vacant(marker: int64, tokens: list[resource_probe.TestHandle])
+    occupied(token: resource_probe.TestHandle)
+machine TokenState:
+    states:
+        vacant(fallback: optional[resource_probe.TestHandle], marker: string)
+        waiting(fallback: optional[resource_probe.TestHandle], marker: string)
+        occupied(token: resource_probe.TestHandle)
+    transitions:
+        vacant to waiting
+        vacant to occupied
+export function empty_tokens() returns list[resource_probe.TestHandle]:
+    return list()
+export function absent_tokens() returns list[optional[resource_probe.TestHandle]]:
+    return list(none, none)
+export function empty_map() returns map[string, resource_probe.TestHandle]:
+    return map()
+export function absent_map() returns map[string, optional[resource_probe.TestHandle]]:
+    return map("empty": none)
+export function empty_result_tokens() returns result[list[resource_probe.TestHandle], string]:
+    return ok(list())
+export function failed_result_tokens() returns result[list[resource_probe.TestHandle], string]:
+    return fail("empty")
+export function absent_envelope() returns TokenEnvelope:
+    return TokenEnvelope(tokens: list(), fallback: none, marker: 17)
+export function absent_box() returns TokenBox[resource_probe.TestHandle]:
+    return TokenBox[resource_probe.TestHandle](items: list())
+export function empty_choice() returns TokenChoice:
+    return TokenChoice.empty
+export function absent_choice() returns TokenChoice:
+    return TokenChoice.vacant(17, list())
+export function absent_state() returns TokenState:
+    return TokenState(vacant, none, "empty")
+export function absent_exact_state() returns TokenState at vacant:
+    return TokenState(vacant, none, "empty")
+export function refined_shape_contract(view value: RefinedEnvelope) returns nothing:
+    return nothing
+function absent_collection_controls() returns int64:
+    list[resource_probe.TestHandle] empty = empty_tokens()
+    list[optional[resource_probe.TestHandle]] absent = absent_tokens()
+    map[string, resource_probe.TestHandle] vacant = empty_map()
+    map[string, optional[resource_probe.TestHandle]] missing = absent_map()
+    result[list[resource_probe.TestHandle], string] successful = empty_result_tokens()
+    result[list[resource_probe.TestHandle], string] failure = failed_result_tokens()
+    return 17
+function absent_nominal_controls() returns int64:
+    TokenEnvelope envelope = absent_envelope()
+    TokenBox[resource_probe.TestHandle] box = absent_box()
+    TokenChoice empty = empty_choice()
+    TokenChoice vacant = absent_choice()
+    TokenState state = absent_state()
+    TokenState at vacant exact = absent_exact_state()
+    return 17
+int64 absent_namespace_value = comptime absent_nominal_controls()
+export function absent_required_controls() returns int64:
+    int64 collections = comptime absent_collection_controls()
+    int64 nominal = comptime absent_nominal_controls()
+    return collections + nominal
+verify absent_aggregate_verify:
+    assert absent_collection_controls() == 17
+    assert absent_nominal_controls() == 17
+property absent_aggregate_property:
+    given marker: int64
+    assert absent_collection_controls() == 17
+    assert absent_nominal_controls() == 17
+    assert marker == marker
+
+function source17_absent_optional(view candidate: optional[resource_probe.TestHandle]) returns bool:
+    resource_probe.TestHandle token = view((view candidate) handle:
+        return true
+    )
+    return false
+
+export function main(net: Network) returns nothing:
+    map[string, optional[resource_probe.TestHandle]] values = absent_map()
+    if map.length[string, optional[resource_probe.TestHandle]](view values) != 1:
+        int64 ignored = resource_probe.terminal_label()
+    mutable int64 absent_count = 0
+    for key, candidate in values:
+        if key != "empty":
+            int64 ignored = resource_probe.terminal_label()
+        if source17_absent_optional(view candidate):
+            absent_count = absent_count + 1
+    if absent_count != 1:
+        int64 ignored = resource_probe.terminal_label()
+    return nothing
