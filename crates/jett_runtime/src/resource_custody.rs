@@ -250,6 +250,24 @@ struct Loan {
     live: bool,
 }
 
+/// Private test-only distinction between the two real begin-frame allocations.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FrameReservationSite {
+    Frames,
+    ActiveFrames,
+}
+
+#[cfg(test)]
+impl FrameReservationSite {
+    fn index(self) -> usize {
+        match self {
+            Self::Frames => 0,
+            Self::ActiveFrames => 1,
+        }
+    }
+}
+
 pub(crate) struct ResourceCustody {
     id: u64,
     program: RegisteredResourceProgram,
@@ -257,6 +275,10 @@ pub(crate) struct ResourceCustody {
     active: Vec<usize>,
     owners: Vec<Owner>,
     loans: Vec<Loan>,
+    #[cfg(test)]
+    frame_reservation_fault: Option<FrameReservationSite>,
+    #[cfg(test)]
+    frame_reservation_observations: [(usize, usize); 2],
 }
 
 impl ResourceCustody {
@@ -282,6 +304,10 @@ impl ResourceCustody {
             active: Vec::new(),
             owners: Vec::new(),
             loans: Vec::new(),
+            #[cfg(test)]
+            frame_reservation_fault: None,
+            #[cfg(test)]
+            frame_reservation_observations: [(0, 0); 2],
         })
     }
 
@@ -352,6 +378,43 @@ impl ResourceCustody {
         Ok(token.index)
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_arm_frame_reservation(&mut self, site: FrameReservationSite) {
+        assert!(
+            self.frame_reservation_fault.is_none(),
+            "one pending frame reservation fault"
+        );
+        self.frame_reservation_fault = Some(site);
+    }
+
+    #[cfg(test)]
+    fn test_frame_reservation_checkpoint(
+        &mut self,
+        site: FrameReservationSite,
+        growing: bool,
+    ) -> Result<(), CustodyError> {
+        if !growing {
+            return Ok(());
+        }
+        let observation = &mut self.frame_reservation_observations[site.index()];
+        observation.0 += 1;
+        if self.frame_reservation_fault == Some(site) {
+            self.frame_reservation_fault = None;
+            observation.1 += 1;
+            return Err(CustodyError::CapacityExhausted);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_frame_reservation_snapshot(
+        &self,
+        site: FrameReservationSite,
+    ) -> (usize, usize, bool) {
+        let (growth, refusal) = self.frame_reservation_observations[site.index()];
+        (growth, refusal, self.frame_reservation_fault == Some(site))
+    }
+
     pub(crate) fn begin_frame(
         &mut self,
         kind: ResourceFrameKind,
@@ -364,9 +427,19 @@ impl ResourceCustody {
         } else if self.live_owners() != 0 || self.live_loans() != 0 {
             return Err(CustodyError::InvalidFrame);
         }
+        #[cfg(test)]
+        self.test_frame_reservation_checkpoint(
+            FrameReservationSite::Frames,
+            self.frames.len() == self.frames.capacity(),
+        )?;
         self.frames
             .try_reserve(1)
             .map_err(|_| CustodyError::CapacityExhausted)?;
+        #[cfg(test)]
+        self.test_frame_reservation_checkpoint(
+            FrameReservationSite::ActiveFrames,
+            self.active.len() == self.active.capacity(),
+        )?;
         self.active
             .try_reserve(1)
             .map_err(|_| CustodyError::CapacityExhausted)?;

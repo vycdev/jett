@@ -217,7 +217,7 @@ pub unsafe extern "C" fn jett_rt_v1_resource_test_entry_begin(
                 .as_mut()
                 .ok_or(NativeResourceError::MissingInstallation)?;
             let attempt = resource.begin_entry(
-                &state.values,
+                &mut state.values,
                 &state.resources,
                 resource.entry,
                 ResourcePurpose::Runtime,

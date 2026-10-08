@@ -36,7 +36,7 @@ fn op(state: &NativeResourceState, predicate: impl Fn(&Op) -> bool) -> u32 {
 }
 fn start(
     state: &mut NativeResourceState,
-    ordinary: &values::NativeValues,
+    ordinary: &mut values::NativeValues,
     registry: &ResourceRegistry,
 ) -> ResourceResult<(ResourceHandleId, ResourceHandleId)> {
     let attempt = state.begin_entry(ordinary, registry, entry(), ResourcePurpose::Runtime)?;
@@ -46,7 +46,7 @@ fn start(
 }
 fn none(
     state: &mut NativeResourceState,
-    ordinary: &values::NativeValues,
+    ordinary: &mut values::NativeValues,
     frame: ResourceHandleId,
     slot: u32,
 ) -> ResourceResult<ResourceHandleId> {
@@ -59,7 +59,7 @@ fn none(
 }
 fn record(
     state: &mut NativeResourceState,
-    ordinary: &values::NativeValues,
+    ordinary: &mut values::NativeValues,
     frame: ResourceHandleId,
     marker: u64,
 ) -> ResourceResult<ResourceHandleId> {

@@ -371,7 +371,15 @@ fn execute(input: &inputs::Input, release: bool, archive: &Archive, attempts: u3
     );
 }
 
-fn run_native(clean_reentry: bool) {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NativeAttemptMode {
+    Single,
+    CleanReentry,
+    AllReentry,
+}
+
+fn run_native(mode: NativeAttemptMode) {
+    let clean_reentry = mode == NativeAttemptMode::CleanReentry;
     assert_eq!(inputs::INPUTS.len(), 14);
     let mut passed = 0;
     let mut failures = Vec::new();
@@ -381,7 +389,11 @@ fn run_native(clean_reentry: bool) {
             if clean_reentry && matches!(input.reference, inputs::ReferenceExpectation::Error(_)) {
                 continue;
             }
-            let attempts = if clean_reentry { 2 } else { 1 };
+            let attempts = if mode == NativeAttemptMode::Single {
+                1
+            } else {
+                2
+            };
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 execute(input, release, &archive, attempts)
             }));
@@ -400,7 +412,12 @@ fn run_native(clean_reentry: bool) {
         "strict Source-deleted native gate failures: {failures:#?}"
     );
     assert_eq!(passed, required);
-    let entries = if clean_reentry { 52 } else { 28 };
+    let entries = required
+        * if mode == NativeAttemptMode::Single {
+            1
+        } else {
+            2
+        };
     eprintln!(
         "ABSENT_NATIVE_TOTAL executables={passed} entries={entries} clean_reentry={clean_reentry}"
     );
@@ -409,7 +426,7 @@ fn run_native(clean_reentry: bool) {
 #[test]
 #[ignore = "requires exact Root-measured double-cfg Debug/Release single-runtime archive receipt"]
 fn native_resource_absent_aggregate_all_original_sources_retire_before_teardown() {
-    run_native(false);
+    run_native(NativeAttemptMode::Single);
 }
 
 #[test]
@@ -417,5 +434,15 @@ fn native_resource_absent_aggregate_all_original_sources_retire_before_teardown(
 fn native_resource_absent_aggregate_thirteen_clean_sources_same_grant_reentry() {
     // Source13 remains in the full single-entry gate above. Its original two-error
     // reference behavior is a separate unresolved native failure-lifetime obligation.
-    run_native(true);
+    run_native(NativeAttemptMode::CleanReentry);
+}
+
+#[test]
+#[ignore = "requires exact Root-measured ordinary-error-reentry Debug/Release archive receipt"]
+fn native_resource_absent_aggregate_all_original_sources_reenter_with_same_provider_grant() {
+    // Every original row is selected, including Source13's signed bounds error
+    // twice on one retained context/provider/grant. assert_observed checks both
+    // original completions, exact diagnostics, zero pre-teardown obligations,
+    // continuous empty events and first process failure; execute deletes Source.
+    run_native(NativeAttemptMode::AllReentry);
 }

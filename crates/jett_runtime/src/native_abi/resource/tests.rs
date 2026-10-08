@@ -520,7 +520,7 @@ fn native_resource_state_descriptor_and_prepared_handles_cannot_be_replayed() {
 }
 
 #[test]
-fn native_resource_state_ordinary_failure_is_sampled_not_reset_or_permanently_latched() {
+fn native_resource_state_ordinary_failure_is_attempt_owned_without_reset() {
     context(|auth| {
         install(auth, &[], 2);
         let (attempt, _, _, _) = start(auth, ResourcePurpose::Runtime);
@@ -544,37 +544,11 @@ fn native_resource_state_ordinary_failure_is_sampled_not_reset_or_permanently_la
         .unwrap();
         auth.with_state(|_, state| {
             assert!(state.values.resource_failure().is_some());
-            assert_eq!(
-                state.resource_state.as_mut().unwrap().begin_entry(
-                    &state.values,
-                    &state.resources,
-                    entry(),
-                    ResourcePurpose::Runtime
-                ),
-                Err(NativeResourceError::Ordinary(
-                    JettRuntimeStatusV1::INVALID_ARGUMENT
-                ))
-            );
             Ok(())
         })
         .unwrap();
-        // This is the real existing Source operation, not an adapter reset hook.
-        let prefix = b"handled: ";
-        let text = unsafe {
-            values::jett_rt_v1_failure_take_prefixed_text(
-                auth.key.owner_address as *const JettRuntimeContextV1,
-                prefix.as_ptr(),
-                prefix.len() as u64,
-            )
-        };
-        assert_ne!(text, 0);
-        auth.with_state(|_, state| {
-            state
-                .values
-                .drop_resource_ordinary_companion(text)
-                .map_err(ordinary_error)
-        })
-        .unwrap();
+        // The exact completed error remains immutable. A fresh constructor owns
+        // the next execution; no post-completion capture or reset is performed.
         let (attempt, _, _, _) = start(auth, ResourcePurpose::Runtime);
         assert_eq!(complete(auth, attempt, 0).selected_kind, 0);
         assert_empty(auth);
@@ -1004,3 +978,11 @@ fn native_resource_replacement_preflight_stale_rhs_handle_has_no_finalizer_effec
 
 #[path = "borrowed_sum_tests.rs"]
 mod borrowed_sum_tests;
+
+#[path = "ordinary_attempt_owner_tests.rs"]
+mod ordinary_attempt_owners;
+#[path = "ordinary_error_reentry_tests.rs"]
+mod ordinary_error_reentry;
+
+#[path = "ordinary_reservation_failure_tests.rs"]
+mod ordinary_reservation_failures;

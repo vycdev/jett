@@ -20,6 +20,7 @@ mod debug_equal;
 mod debug_format;
 mod graphics_decode;
 pub mod interface_conversion;
+mod ordinary_attempts;
 
 pub type NativeHandle = u64;
 type Failure = (JettRuntimeStatusV1, &'static [u8]);
@@ -903,6 +904,7 @@ pub(super) struct NativeValues {
     sums_destroyed: u64,
     bytes_created: u64,
     bytes_destroyed: u64,
+    resource_ordinary_channels: ordinary_attempts::ResourceOrdinaryChannels,
     failure: Option<Failure>,
     dynamic_failure_message: Option<Vec<u8>>,
     // Diagnostic bytes only; this metadata retains no owned Jett values.
@@ -1019,7 +1021,7 @@ impl NativeValues {
             return Ok(0);
         };
         let suffix = if remaining == 1 { "sample" } else { "samples" };
-        self.dynamic_failure_message = Some(
+        self.set_dynamic_failure_message(
             format!("{capability}: test provider has {remaining} unconsumed {suffix}").into_bytes(),
         );
         Err((
@@ -1087,7 +1089,7 @@ impl NativeValues {
             let left = self.format_string(left)?;
             let right = self.format_string(right)?;
             let operation = if not_equal { "NotEq" } else { "Eq" };
-            self.dynamic_failure_message = Some(
+            self.set_dynamic_failure_message(
                 format!("unsupported binary operation: {left} {operation} {right}").into_bytes(),
             );
             return Err(UNSUPPORTED_STRING_COMPARISON);
@@ -1124,8 +1126,9 @@ impl NativeValues {
         let left = layout.format_value(self, left, layout.root)?;
         let right = layout.format_value(self, right, layout.root)?;
         let operation = if not_equal == 0 { "Eq" } else { "NotEq" };
-        self.dynamic_failure_message =
-            Some(format!("unsupported binary operation: {left} {operation} {right}").into_bytes());
+        self.set_dynamic_failure_message(
+            format!("unsupported binary operation: {left} {operation} {right}").into_bytes(),
+        );
         Err(UNSUPPORTED_ENUM_COMPARISON)
     }
     fn same_string_value(&self, left: u64, right: u64) -> LeafResult<bool> {
@@ -1143,8 +1146,9 @@ impl NativeValues {
             return Ok(0);
         }
         let value = self.format_string(id)?;
-        self.dynamic_failure_message =
-            Some(format!("Displayable.display returned {value} instead of string").into_bytes());
+        self.set_dynamic_failure_message(
+            format!("Displayable.display returned {value} instead of string").into_bytes(),
+        );
         Err(INVALID_DISPLAY_RESULT)
     }
     fn display_string(&mut self, id: u64) -> LeafResult<u64> {
@@ -1231,8 +1235,9 @@ impl NativeValues {
             return Ok(0);
         }
         let pending = format_pending_value(&label, depth)?;
-        self.dynamic_failure_message =
-            Some(format!("expected function value, got {pending}").into_bytes());
+        self.set_dynamic_failure_message(
+            format!("expected function value, got {pending}").into_bytes(),
+        );
         Err(PENDING_FUNCTION_CALL)
     }
     fn debug_append(&mut self, builder: u64, label: &str, bits: u64, kind: u32) -> LeafResult<u32> {
@@ -1289,7 +1294,7 @@ impl NativeValues {
         }
         let layout = NativeDebugLayout::parse(layout)?;
         let value = layout.format_value(self, value, layout.root)?;
-        self.dynamic_failure_message = Some(
+        self.set_dynamic_failure_message(
             format!("handle block requires a result or optional value, got {value}").into_bytes(),
         );
         Err((
@@ -1450,7 +1455,7 @@ impl NativeValues {
         if let Some(message) = message {
             let mut full = prefix.to_vec();
             full.extend_from_slice(message.as_bytes());
-            self.dynamic_failure_message = Some(full);
+            self.set_dynamic_failure_message(full);
             return Err(INVALID_PENDING_HANDLE_CHECK);
         }
         Ok(0)
@@ -1580,8 +1585,9 @@ impl NativeValues {
         let left = format_nothing(left)?;
         let right = format_nothing(right)?;
         let operation = if not_equal == 0 { "Eq" } else { "NotEq" };
-        self.dynamic_failure_message =
-            Some(format!("unsupported binary operation: {left} {operation} {right}").into_bytes());
+        self.set_dynamic_failure_message(
+            format!("unsupported binary operation: {left} {operation} {right}").into_bytes(),
+        );
         Err(UNSUPPORTED_NOTHING_COMPARISON)
     }
     fn check_pending_scalar_binary(
@@ -1600,7 +1606,7 @@ impl NativeValues {
         }
         let left = format_pending_value(&self.debug_value(left_bits, left_kind)?, left_depth)?;
         let right = format_pending_value(&self.debug_value(right_bits, right_kind)?, right_depth)?;
-        self.dynamic_failure_message = Some(
+        self.set_dynamic_failure_message(
             format!(
                 "unsupported binary operation: {left} {} {right}",
                 operation.label()
@@ -1628,7 +1634,7 @@ impl NativeValues {
             2 => format!("breakpoint condition must be bool, got {value}"),
             _ => return Err(INVALID_TRACE_LABEL),
         };
-        self.dynamic_failure_message = Some(message.into_bytes());
+        self.set_dynamic_failure_message(message.into_bytes());
         Err(PENDING_BOOL_CONDITION)
     }
     fn byte_result(&mut self, decoded: Result<Vec<u8>, String>) -> LeafResult<u64> {
@@ -1754,8 +1760,9 @@ impl NativeValues {
                 return Err(INVALID_LIST);
             }
             if inner.pending_depth != 0 {
-                self.dynamic_failure_message =
-                    Some(b"csv.__stringify expects list[list[string]]".to_vec());
+                self.set_dynamic_failure_message(
+                    b"csv.__stringify expects list[list[string]]".to_vec(),
+                );
                 return Err(INVALID_PENDING_HANDLE_CHECK);
             }
             let mut fields = Vec::new();
@@ -1795,8 +1802,9 @@ impl NativeValues {
         index: i64,
         fallback: Failure,
     ) -> LeafResult<u64> {
-        self.dynamic_failure_message =
-            Some(format!("{operation}: index {index} out of bounds").into_bytes());
+        self.set_dynamic_failure_message(
+            format!("{operation}: index {index} out of bounds").into_bytes(),
+        );
         Err(fallback)
     }
     fn check_list_arguments(
@@ -1873,7 +1881,7 @@ impl NativeValues {
         if first_depth == 0 && second_depth == 0 && third_depth == 0 {
             return Ok(0);
         }
-        self.dynamic_failure_message = Some(message.to_vec());
+        self.set_dynamic_failure_message(message.to_vec());
         Err((
             JettRuntimeStatusV1::INVALID_ARGUMENT,
             b"pending scalar intrinsic operand",
@@ -1904,7 +1912,7 @@ impl NativeValues {
         if depth == 0 {
             return Ok(0);
         }
-        self.dynamic_failure_message = Some(message.to_vec());
+        self.set_dynamic_failure_message(message.to_vec());
         Err((
             JettRuntimeStatusV1::INVALID_ARGUMENT,
             b"pending handle intrinsic operand",
@@ -2835,7 +2843,7 @@ impl NativeValues {
                 .ok_or(INVALID_HANDLE)?;
             if string.pending_depth != 0 {
                 let value = format_pending_value(&string.text, string.pending_depth)?;
-                self.dynamic_failure_message = Some(
+                self.set_dynamic_failure_message(
                     format!("string.__join requires a list of strings, found {value}").into_bytes(),
                 );
                 return Err(INVALID_PENDING_HANDLE_CHECK);
@@ -3196,8 +3204,9 @@ impl NativeValues {
             return Ok(0);
         }
         let actor = format_pending_value(&format!("actor#{ordinal}"), depth)?;
-        self.dynamic_failure_message =
-            Some(format!("send/ask: expected actor value, got {actor}").into_bytes());
+        self.set_dynamic_failure_message(
+            format!("send/ask: expected actor value, got {actor}").into_bytes(),
+        );
         Err(PENDING_ACTOR_MESSAGE)
     }
     fn replace_actor_field(
@@ -3825,7 +3834,7 @@ impl NativeValues {
             nodes: vec![NativeDebugNode::TypeConstruction],
         };
         let value = layout.format_value(self, builder, 0)?;
-        self.dynamic_failure_message = Some(
+        self.set_dynamic_failure_message(
             format!("type.{operation}: first argument must be TypeConstruction, got {value}")
                 .into_bytes(),
         );
@@ -4156,7 +4165,7 @@ impl NativeValues {
         } else {
             message.to_owned()
         };
-        self.dynamic_failure_message = Some(message.into_bytes());
+        self.set_dynamic_failure_message(message.into_bytes());
         Err(INVALID_STRUCT)
     }
     fn enum_equal(&self, left: u64, right: u64, layout: &[u8]) -> LeafResult<u32> {
@@ -4240,7 +4249,7 @@ impl NativeValues {
         } else {
             return Ok(index as u64);
         };
-        self.dynamic_failure_message = Some(message.into_bytes());
+        self.set_dynamic_failure_message(message.into_bytes());
         Err(INVALID_TYPE_ARG_INDEX)
     }
     fn reflected_field_owner_label(&self, field: u64, mismatch: Failure) -> LeafResult<String> {
@@ -4268,7 +4277,7 @@ impl NativeValues {
             .pending_type_field_message(actual, metadata_layout, caller)
             .map_err(|_| mismatch)?
         {
-            self.dynamic_failure_message = Some(message.into_bytes());
+            self.set_dynamic_failure_message(message.into_bytes());
             return Err(mismatch);
         }
         let actual_owner = self.text(self.struct_field(actual, 1)?.bits)?;
@@ -4290,7 +4299,7 @@ impl NativeValues {
             || expected_owner.to_owned(),
             |member| format!("{expected_owner}.{member}"),
         );
-        self.dynamic_failure_message = Some(
+        self.set_dynamic_failure_message(
             format!(
                 "{caller}: field metadata belongs to '{actual_label}', expected '{expected_label}'"
             )
@@ -4347,7 +4356,7 @@ impl NativeValues {
             4 => ("type.machine_field_value", "machine"),
             _ => return Err(INVALID_REFLECTED_OWNER),
         };
-        self.dynamic_failure_message = Some(
+        self.set_dynamic_failure_message(
             format!("{caller}: expected {expected} value for '{owner_name}', got {actual}")
                 .into_bytes(),
         );
@@ -4379,7 +4388,7 @@ impl NativeValues {
         if !owner_type_matches || !owner_member_matches {
             let actual_owner = self.reflected_field_owner_label(actual, mismatch)?;
             let expected_owner = self.reflected_field_owner_label(expected, mismatch)?;
-            self.dynamic_failure_message = Some(
+            self.set_dynamic_failure_message(
                 format!(
                     "{caller}: field metadata belongs to '{actual_owner}', expected '{expected_owner}'"
                 )
@@ -4413,7 +4422,7 @@ impl NativeValues {
         if compatible == 0 {
             let name = self.text(self.struct_field(expected, 3)?.bits)?;
             let field_type = self.text(self.struct_field(expected, 4)?.bits)?;
-            self.dynamic_failure_message = Some(
+            self.set_dynamic_failure_message(
                 format!(
                     "{caller}: field '{name}' has type '{field_type}', requested '{requested_type}'"
                 )
@@ -4921,11 +4930,11 @@ pub(super) struct PreparedResourceNetwork {
 
 impl NativeValues {
     pub(super) fn resource_failure(&self) -> Option<ResourceOrdinaryFailure<'_>> {
-        self.failure
+        self.current_failure()
             .map(|(status, message)| ResourceOrdinaryFailure {
                 status,
-                message: self.dynamic_failure_message.as_deref().unwrap_or(message),
-                prefix: self.property_case_context.as_deref(),
+                message: self.current_dynamic_failure_message().unwrap_or(message),
+                prefix: self.current_property_case_context(),
             })
     }
 
@@ -5168,7 +5177,7 @@ fn leaf<T: FailureDefault>(
     let Some(state) = state.as_mut() else {
         return T::failure_default();
     };
-    if state.values.failure.is_some() && !cleanup {
+    if state.values.operation_failure().is_some() && !cleanup {
         return T::failure_default();
     }
     match catch_unwind(AssertUnwindSafe(|| operation(&mut state.values))) {
@@ -5183,7 +5192,7 @@ fn leaf<T: FailureDefault>(
                 Ok(Ok(_)) => unreachable!(),
             };
             state.values.cleanup_failed |= cleanup;
-            state.values.failure.get_or_insert(error);
+            state.values.record_ordinary_failure(error);
             T::failure_default()
         }
     }
@@ -5462,7 +5471,7 @@ leaves! {
     InterfacePendingDepth, jett_rt_v1_interface_pending_depth, false, (value: u64 => I64), u64 => I64,
         |s| s.structs.get(&value).map(|v| v.pending_depth).ok_or(INVALID_STRUCT);
     RuntimeFailMessage, jett_rt_v1_runtime_fail_message, false, (message: u64 => I64), u32 => I32,
-        |s| { s.dynamic_failure_message = Some(s.text(message)?.as_bytes().to_vec());
+        |s| { s.set_dynamic_failure_message(s.text(message)?.as_bytes().to_vec());
             Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"native runtime failure")) };
     StructNew, jett_rt_v1_struct_new, false, (count: u64 => I64), u64 => I64,
         |s| s.new_struct(count);
@@ -5562,7 +5571,7 @@ leaves! {
             if length > isize::MAX as usize || (length != 0 && layout.is_null()) { return Err(mismatch); }
             let layout = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(layout, length) } };
             if let Some(message) = s.pending_type_field_message(metadata, layout, caller).map_err(|_| mismatch)? {
-                s.dynamic_failure_message = Some(message.into_bytes());
+                s.set_dynamic_failure_message(message.into_bytes());
                 Err(mismatch)
             } else {
                 Ok(0)
@@ -6046,14 +6055,14 @@ leaves! {
             else { Ok(value.clamp(lower, upper)) }
         };
     Status, jett_rt_v1_value_status, true, (), u32 => I32,
-        |s| Ok(s.failure.map_or(0, |e| e.0.code()));
+        |s| Ok(s.current_failure().map_or(0, |e| e.0.code()));
     FailureTakePrefixedText, jett_rt_v1_failure_take_prefixed_text, true, (prefix: *const u8 => Pointer, length: u64 => I64), u64 => I64,
         |s| { let length = usize::try_from(length).map_err(|_| INVALID_FAILURE_COPY)?;
             if length > isize::MAX as usize || (length != 0 && prefix.is_null()) { return Err(INVALID_FAILURE_COPY); }
-            if s.cleanup_failed { return Err(INVALID_FAILURE_COPY); }
-            let (_, static_message) = s.failure.ok_or(INVALID_FAILURE_COPY)?;
+            if s.cleanup_failed || !s.can_capture_refinement_failure() { return Err(INVALID_FAILURE_COPY); }
+            let (_, static_message) = s.current_failure().ok_or(INVALID_FAILURE_COPY)?;
             let prefix = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(prefix, length) } };
-            let message = s.dynamic_failure_message.as_deref().unwrap_or(static_message);
+            let message = s.current_dynamic_failure_message().unwrap_or(static_message);
             let prefix = std::str::from_utf8(prefix).map_err(|_| INVALID_FAILURE_COPY)?;
             let message = std::str::from_utf8(message).map_err(|_| INVALID_FAILURE_COPY)?;
             let mut text = String::new();
@@ -6061,8 +6070,7 @@ leaves! {
             text.push_str(prefix);
             text.push_str(message);
             let value = s.insert(text)?;
-            s.failure = None;
-            s.dynamic_failure_message = None;
+            s.finish_refinement_failure_capture();
             Ok(value) };
     RefinementPendingBoolText, jett_rt_v1_refinement_pending_bool_text, true, (bits: u64 => I64, depth: u64 => I64, name: *const u8 => Pointer, length: u64 => I64), u64 => I64,
         |s| { let length = usize::try_from(length).map_err(|_| INVALID_FAILURE_COPY)?;
@@ -6073,9 +6081,9 @@ leaves! {
             let value = format_pending_value(value, depth)?;
             s.insert(format!("refinement constraint for '{name}' must return bool, got {value}")) };
     PropertyCaseSet, jett_rt_v1_property_case_set, false, (message: u64 => I64), u32 => I32,
-        |s| { s.property_case_context = Some(s.text(message)?.as_bytes().to_vec()); Ok(0) };
+        |s| { s.set_property_case_context(Some(s.text(message)?.as_bytes().to_vec())); Ok(0) };
     PropertyCaseClear, jett_rt_v1_property_case_clear, false, (), u32 => I32,
-        |s| { s.property_case_context = None; Ok(0) };
+        |s| { s.set_property_case_context(None); Ok(0) };
     AssertFail, jett_rt_v1_assert_fail, false, (), u32 => I32,
         |_s| Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"assertion failed"));
     AssertFailMessage, jett_rt_v1_assert_fail_message, false, (message: u64 => I64), u32 => I32,
@@ -6083,7 +6091,7 @@ leaves! {
             let mut owned = Vec::new();
             owned.try_reserve_exact(text.len()).map_err(|_| EXHAUSTED)?;
             owned.extend_from_slice(text);
-            s.dynamic_failure_message = Some(owned);
+            s.set_dynamic_failure_message(owned);
             Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"assertion failed")) };
     Retain, jett_rt_v1_string_retain, false, (value: u64 => I64), u64 => I64,
         |s| s.retain(value);
@@ -6431,7 +6439,7 @@ pub unsafe extern "C" fn jett_rt_v1_value_failure(
             }
         };
         let state = lock_unpoisoned(&lease.entry.state);
-        match state.as_ref().and_then(|s| s.values.failure) {
+        match state.as_ref().and_then(|s| s.values.current_failure()) {
             Some((status, message)) => JettRuntimeResultV1::failure(status, message),
             None => JettRuntimeResultV1::ok(),
         }
@@ -6490,15 +6498,13 @@ pub unsafe extern "C" fn jett_rt_v1_value_failure_copy(
         };
         let message = state
             .values
-            .dynamic_failure_message
-            .as_deref()
-            .or_else(|| state.values.failure.map(|(_, message)| message))
+            .current_dynamic_failure_message()
+            .or_else(|| state.values.current_failure().map(|(_, message)| message))
             .unwrap_or_default();
-        let prefix = if state.values.failure.is_some() {
+        let prefix = if state.values.current_failure().is_some() {
             state
                 .values
-                .property_case_context
-                .as_deref()
+                .current_property_case_context()
                 .unwrap_or_default()
         } else {
             &[]

@@ -52,7 +52,7 @@ fn bridge_context(operation: impl FnOnce(&AuthenticatedResourceContext)) {
 
 fn start_record(
     state: &mut NativeResourceState,
-    ordinary: &values::NativeValues,
+    ordinary: &mut values::NativeValues,
     registry: &ResourceRegistry,
 ) -> ResourceResult<(ResourceHandleId, ResourceHandleId, ResourceHandleId)> {
     let attempt = state.begin_entry(ordinary, registry, entry(), ResourcePurpose::Runtime)?;

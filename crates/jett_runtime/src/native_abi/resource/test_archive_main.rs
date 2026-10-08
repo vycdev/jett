@@ -641,13 +641,13 @@ fn run_attempt(session: &mut Session, report: &mut Report) -> Result<AttemptOutc
         2 => EXIT_PANIC,
         _ => return Err(()),
     };
-    // A completed Resource cleanup failure remains an immutable observation.
-    // Clean retirement permits the declared next entry; entry_begin independently
-    // rejects ordinary failures, ordinary cleanup failure and residual custody.
-    // No reset or failure-taking API is invoked by the launcher.
+    // Errors remain immutable attempt observations. Only entry_begin can issue
+    // the next ordinary channel after predecessor, session poison and retirement
+    // checks. The launcher neither resets nor takes a failure.
+    let _ = ordinary; // Preserve the required known observation for this attempt.
     Ok(AttemptOutcome {
         exit,
-        reenter: ordinary == 0,
+        reenter: true,
     })
 }
 fn run(session: &mut Session, report: &mut Report) -> c_int {

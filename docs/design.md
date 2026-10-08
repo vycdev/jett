@@ -8341,10 +8341,15 @@ String handles have explicit retain/release ownership and are destroyed at last
 release. MIR definite-initialization and liveness facts drive local and temporary
 cleanup through branches, loops, overwrites, returns, and terminal failures.
 
-Terminal runtime failure is a context-local first error, not `result.fail` data.
-Compiled calls test that channel before using a return value; failure edges release
-frame owners and propagate it to the launcher. Context destruction checks for leaked
-native owners, and cleanup failure overrides entry failure. UTF-8 string kernels
+Terminal runtime failure is the first error of the current execution lifetime,
+not `result.fail` data. Ordinary entries retain the context-local channel. Each
+independently declared checked Resource entry owns a privately authenticated
+attempt channel; nested calls share it. Exact completion seals its status and
+original diagnostic. Only the entry constructor may select a fresh attempt after
+retirement, while all prior completion/error records and session poison remain.
+Compiled calls test the current channel before using a return value; failure edges
+release frame owners and propagate it to the launcher. Context destruction checks
+for leaked native owners, and cleanup failure overrides entry failure. UTF-8 string kernels
 use the same extended-grapheme segmentation dependency as the interpreter. This
 initial handle representation is not the proposed inline/SSO optimization.
 
@@ -8635,8 +8640,9 @@ retain their complete nominal, generic, variant/state and qualification identity
 absence cannot erase a type's potential Resource paths or prove a refinement.
 Dedicated carrier observations and a parent-bound borrowed-sum adapter preserve
 existing Source ownership and cleanup. Wire v3 retains strict v1/v2 compatibility.
-This prototype has no native execution acceptance; live aggregate custody and
-replacement remain explicit implementation follow-ons. See the
+Bounded typed absence transport and its v21 local MSVC regression have actual
+native acceptance; the ordinary-error successor's twelve-gate regression also
+passes at v24. Live aggregate custody and replacement remain follow-ons. See the
 [typed aggregate plan](active/native_resource_aggregate_carriers.md).
 
 ### Native ordinary entries in Resource programs
@@ -8651,3 +8657,22 @@ mutable MIR cannot manufacture this authority afterward. This native metadata
 changes neither Source execution-family membership nor purity/comptime rules.
 See [the ordinary entry plan](active/native_resource_ordinary_entry.md) for the
 bounded implementation and pending acceptance gates.
+
+The selected ordinary-error reentry repair keeps sealed attempt observations
+separate from legacy session failures and persistent ordinary cleanup poison.
+It introduces no error reset, test recovery API or recovery inside a failed Source
+function. The managed runtime and fresh matched MSVC archives pass their measured
+checkpoint. The full fourteen-Source same-grant gate passes in Debug/Release,
+retaining both control13 signed Bounds errors, body1/cleanup0/Body and exact
+retirement before destruction. Its authenticated 28 executables/56 entries and
+eleven fresh predecessor gates at 576/672 establish a combined twelve-gate
+604-executable/728-entry scope. The fresh whole workspace passes 3,614 checks,
+zero failures and 14 ignored tests; independent v24 input/artifact verification
+passes. These are bounded local MSVC results. The separate normal-main linked
+baseline is complete: sixteen observations, twelve exit0 and four exit71, from
+eight exact opaque objects reused with Debug/Release runtime artifact profiles;
+all fifteen raw-probe Sources remain preserved. Baseline collection supplies no
+desired Source oracle, ordinary public-Main context-retirement observations or
+feature credit. Occupied aggregates, broader lifetimes, wider ordinary parity
+and fixes, and exact successor CI remain obligations. See the
+[ordinary terminal-error lifetime note](active/native_resource_ordinary_error_reentry.md).

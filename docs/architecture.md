@@ -4778,3 +4778,48 @@ remain full-goal obligations. Whole Source/export/refinement and verify/property
 purposes remain required. No refusal counts as successful Source execution, no
 Source policy exclusion is introduced, and the full native parity goal stays
 active. The rough 87% estimate and fixed 207/182 inventory do not advance.
+
+
+### Ordinary terminal-error lifetime for repeated checked entries
+
+The selected Resource entry lifetime keeps ordinary first-error state in a
+context-owned private record issued with the exact installed entry, purpose,
+RootScope and monotonic attempt identity. Nested ordinary/Source calls share
+that record. Exact entry completion retires Resource custody and verifies the
+ordinary owner/counter predicate before sealing status, dynamic diagnostic and
+prefix. Existing completed Resource diagnostics and original body status remain
+independent from selected cleanup. A failed report leaves a non-reenterable
+tombstone; a failed retirement leaves the Completing attempt observable.
+
+The next constructor authenticates the exact sealed predecessor, fresh ordinal,
+session failure/ordinary cleanup poison, installed layout and all original
+custody/storage guards before publishing another record under the same context
+lease. No reset/take-error API authorizes this transition. Existing checked
+refinement recovery applies only within its active evaluation and cannot consume
+a sealed terminal record. Historical Resource cleanup failure retains the
+accepted original Source06 behavior; persistent ordinary cleanup poison remains
+fatal even after empty tables. The private launcher requests declared entries,
+retains the first nonzero process exit and every completion, and destroys one
+Session. Legacy ordinary context failure behavior remains unchanged.
+
+The managed ordinary runtime passes 307 measured checks with fresh matched
+MSVC archives in measurements-02. The new fourteen-Source same-grant gate passes
+in Debug/Release: 28 Source-deleted executables / 56 entries, including both
+original control13 Bounds messages, body1/cleanup0/Body and retirement before
+one destruction. The accepted combined twelve-gate scope is 604 executables /
+728 entries: the authenticated first 28/56 plus eleven freshly rerun predecessor
+gates at 576/672. The fresh whole workspace passes 3,614 checks, zero failures
+and 14 ignored tests across 66 nonzero / 92 total groups. Independent v24 receipt
+verification preserves all 3,763 Source inputs, nine fresh/nine historical runtime
+artifacts, HEAD/inventory, both native binaries and fresh02 provenance.
+See the [ordinary error lifetime note](active/native_resource_ordinary_error_reentry.md)
+for exact sessions and hashes. Earlier Source13-pending statements describe
+historical checkpoints superseded by this bounded acceptance. No reset,
+independent nested callee observation, GNU archive credit or feature-denominator
+change is introduced. The separate normal-main linked baseline is complete:
+16 observations (12 exit0 / four exit71) from eight exact opaque objects reused
+with Debug/Release runtime artifact profiles, with fifteen raw-probe Sources
+preserved. It supplies no desired Source oracle, ordinary public-Main context-
+retirement observations or feature credit. Occupied custody, broader lifetimes,
+wider ordinary parity and fixes, and the successor's exact CI remain open; the
+rough estimate stays 87%.

@@ -17,8 +17,12 @@ mod carriers;
 mod carriers_sum;
 mod leaves;
 mod operations;
+#[cfg(test)]
+pub(super) mod ordinary_reservation_faults;
 mod provider;
 mod source;
+#[cfg(test)]
+use ordinary_reservation_faults::{ReservationFaults, ReservationSite};
 #[cfg(all(test, jett_resource_native_test_archive))]
 mod test_archive_api;
 #[cfg(all(test, jett_resource_native_test_archive))]
@@ -268,8 +272,55 @@ enum AttemptPhase {
     Running,
     Completing,
 }
+/// Solely issued by the exact installed Resource entry constructor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ResourceOrdinaryOwner {
+    context: ContextRegistryKey,
+    program: ResourceHandleId,
+    entry: NativeEntry,
+    root: ResourceHandleId,
+    attempt: ResourceHandleId,
+    purpose: ResourcePurpose,
+    ordinal: usize,
+}
+impl ResourceOrdinaryOwner {
+    pub(super) fn ordinal(self) -> usize {
+        self.ordinal
+    }
+    pub(super) fn within_attempt_budget(self) -> bool {
+        self.ordinal < MAX_ATTEMPTS
+    }
+    pub(super) fn continues_installation(self, previous: Self) -> bool {
+        self.context == previous.context
+            && self.program == previous.program
+            && self.entry == previous.entry
+            && self.attempt.raw() > previous.attempt.raw()
+            && self.root != previous.root
+            && previous.ordinal.checked_add(1) == Some(self.ordinal)
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ResourceOrdinaryCompletion {
+    owner: ResourceOrdinaryOwner,
+    completion: NativeResourceCompletion,
+    diagnostic_ready: bool,
+}
+impl ResourceOrdinaryCompletion {
+    pub(super) fn owner(self) -> ResourceOrdinaryOwner {
+        self.owner
+    }
+    pub(super) fn matches_owner(self) -> bool {
+        self.completion.attempt == self.owner.attempt.raw()
+            && self.completion.reserved == 0
+            && self.completion.selected_kind <= 3
+    }
+    pub(super) fn diagnostic_ready(self) -> bool {
+        self.diagnostic_ready && self.matches_owner()
+    }
+}
 struct NativeAttempt {
     id: ResourceHandleId,
+    ordinary_owner: ResourceOrdinaryOwner,
     entry: NativeEntry,
     purpose: ResourcePurpose,
     root_frame: ResourceHandleId,
@@ -294,6 +345,7 @@ pub(super) struct NativeResourceCompletion {
 }
 struct NativeCompletedAttempt {
     completion: NativeResourceCompletion,
+    ordinary: ResourceOrdinaryCompletion,
     resource_message: Vec<u8>,
     ordinary_message: Vec<u8>,
     report_error: Option<NativeResourceError>,
@@ -325,6 +377,8 @@ pub(super) struct NativeResourceState {
     active_frames: Vec<ResourceHandleId>,
     attempt: Option<NativeAttempt>,
     completed: Vec<NativeCompletedAttempt>,
+    #[cfg(test)]
+    reservation_faults: ReservationFaults,
     provider: InstalledProvider,
     entry: NativeEntry,
     network: Option<ResourceHandleId>,
@@ -361,6 +415,9 @@ impl NativeResourceState {
             .attempt
             .as_ref()
             .ok_or(NativeResourceError::InvalidEntry)?;
+        ordinary
+            .validate_resource_ordinary_attempt(attempt.ordinary_owner)
+            .map_err(ordinary_error)?;
         if attempt.phase != AttemptPhase::Running
             || attempt.body.is_some()
             || attempt.cleanup.is_some()
@@ -472,7 +529,7 @@ impl NativeResourceState {
 
     pub(super) fn begin_entry(
         &mut self,
-        ordinary: &values::NativeValues,
+        ordinary: &mut values::NativeValues,
         registry: &ResourceRegistry,
         entry: NativeEntry,
         purpose: ResourcePurpose,
@@ -495,21 +552,44 @@ impl NativeResourceState {
         {
             return Err(NativeResourceError::InvalidEntry);
         }
-        if let Some(failure) = ordinary.resource_failure() {
-            return Err(NativeResourceError::Ordinary(failure.status));
+        if let Some((status, _)) = ordinary.session_failure() {
+            return Err(NativeResourceError::Ordinary(status));
         }
-        if ordinary.cleanup_failed {
+        if ordinary.cleanup_failed || !ordinary.is_empty() {
             return Err(NativeResourceError::BodyFailed);
         }
         let mut ids = self.reserve(2)?;
+        #[cfg(test)]
+        self.reservation_faults.checkpoint(
+            ReservationSite::BeginActiveFrames,
+            self.active_frames.len() == self.active_frames.capacity(),
+        )?;
         self.active_frames
             .try_reserve(1)
             .map_err(|_| NativeResourceError::Capacity)?;
+        #[cfg(test)]
+        self.reservation_faults.checkpoint(
+            ReservationSite::BeginHistory,
+            self.completed.len() == self.completed.capacity(),
+        )?;
         self.completed
             .try_reserve(1)
             .map_err(|_| NativeResourceError::Capacity)?;
         let id = next_handle(&mut ids)?;
         let root_frame = next_handle(&mut ids)?;
+        let ordinary_owner = ResourceOrdinaryOwner {
+            context: self.context,
+            program: self.program_handle,
+            entry,
+            root: root_frame,
+            attempt: id,
+            purpose,
+            ordinal: self.completed.len(),
+        };
+        let predecessor = self.completed.last().map(|completed| completed.ordinary);
+        let prepared_ordinary = ordinary
+            .prepare_resource_ordinary_attempt(ordinary_owner, predecessor)
+            .map_err(ordinary_error)?;
         let token = self
             .custody
             .begin_frame(ResourceFrameKind::Scope, purpose)?;
@@ -526,6 +606,7 @@ impl NativeResourceState {
         self.active_frames.push(root_frame);
         self.attempt = Some(NativeAttempt {
             id,
+            ordinary_owner,
             entry,
             purpose,
             root_frame,
@@ -534,6 +615,7 @@ impl NativeResourceState {
             cleanup: None,
             phase: AttemptPhase::Running,
         });
+        prepared_ordinary.publish();
         Ok(id)
     }
     fn only_installation_handles(&self) -> bool {
@@ -639,6 +721,9 @@ impl NativeResourceState {
         if attempt.id != attempt_id || attempt.phase != AttemptPhase::Running {
             return Err(NativeResourceError::InvalidEntry);
         }
+        ordinary
+            .validate_resource_ordinary_attempt(attempt.ordinary_owner)
+            .map_err(ordinary_error)?;
         attempt.phase = AttemptPhase::Completing;
         if host_panic {
             attempt.body.get_or_insert(NativeBodyFailure::HostPanic);
@@ -709,6 +794,12 @@ impl NativeResourceState {
         {
             return Err(NativeResourceError::BodyFailed);
         }
+        if !ordinary.is_empty() {
+            // Resource retirement cannot hide an ordinary frame leak. Keep the
+            // Completing attempt and its error; neither can authorize reentry.
+            ordinary.cleanup_failed = true;
+            return Err(NativeResourceError::BodyFailed);
+        }
         let attempt = self
             .attempt
             .take()
@@ -751,9 +842,29 @@ impl NativeResourceState {
             }
         };
         let diagnostic: ResourceResult<(Vec<u8>, Vec<u8>)> = (|| {
+            #[cfg(not(test))]
             let resource_message = copy_diagnostic(None, resource_message.unwrap_or_default())?;
+            #[cfg(test)]
+            let resource_message = copy_diagnostic(
+                None,
+                resource_message.unwrap_or_default(),
+                &mut self.reservation_faults,
+                ReservationSite::ResourceDiagnostic,
+            )?;
             let ordinary_message = if let Some(failure) = ordinary_failure {
-                copy_diagnostic(failure.prefix, failure.message)?
+                #[cfg(not(test))]
+                {
+                    copy_diagnostic(failure.prefix, failure.message)?
+                }
+                #[cfg(test)]
+                {
+                    copy_diagnostic(
+                        failure.prefix,
+                        failure.message,
+                        &mut self.reservation_faults,
+                        ReservationSite::OrdinaryDiagnostic,
+                    )?
+                }
             } else {
                 Vec::new()
             };
@@ -763,9 +874,18 @@ impl NativeResourceState {
             Ok((resource, ordinary)) => (resource, ordinary, None),
             Err(error) => (Vec::new(), Vec::new(), Some(error)),
         };
+        let ordinary_completion = ResourceOrdinaryCompletion {
+            owner: attempt.ordinary_owner,
+            completion,
+            diagnostic_ready: report_error.is_none(),
+        };
+        ordinary
+            .seal_resource_ordinary_attempt(ordinary_completion)
+            .map_err(ordinary_error)?;
         // A report failure retains a completed tombstone; cleanup and retirement are not retried.
         self.completed.push(NativeCompletedAttempt {
             completion,
+            ordinary: ordinary_completion,
             resource_message,
             ordinary_message,
             report_error,
@@ -910,7 +1030,12 @@ impl NativeResourceState {
     }
 }
 
-fn copy_diagnostic(prefix: Option<&[u8]>, message: &[u8]) -> ResourceResult<Vec<u8>> {
+fn copy_diagnostic(
+    prefix: Option<&[u8]>,
+    message: &[u8],
+    #[cfg(test)] faults: &mut ReservationFaults,
+    #[cfg(test)] site: ReservationSite,
+) -> ResourceResult<Vec<u8>> {
     let prefix = prefix.unwrap_or_default();
     let length = prefix
         .len()
@@ -920,6 +1045,8 @@ fn copy_diagnostic(prefix: Option<&[u8]>, message: &[u8]) -> ResourceResult<Vec<
         return Err(NativeResourceError::Capacity);
     }
     let mut bytes = Vec::new();
+    #[cfg(test)]
+    faults.checkpoint(site, length != 0)?;
     bytes
         .try_reserve_exact(length)
         .map_err(|_| NativeResourceError::Capacity)?;
@@ -1036,6 +1163,8 @@ fn install_candidate(
         active_frames: Vec::new(),
         attempt: None,
         completed: Vec::new(),
+        #[cfg(test)]
+        reservation_faults: ReservationFaults::default(),
         provider,
         entry,
         network: network_handle,

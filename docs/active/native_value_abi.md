@@ -318,12 +318,18 @@ number of non-overlapping matches and zero for an empty needle. The scanner
 rejects byte matches that begin or end inside a grapheme, matching the
 interpreter's string contract.
 
-A context-local first terminal failure (fixed status plus static message) is
-separate from Jett result.fail. Fallible leaf and compiled calls are followed
-by a failure edge, which releases live temporaries/locals before returning a
-zero placeholder. Callers must inspect failure before using that placeholder.
-The entry wrapper returns failure status and the launcher renders the message
-before context destruction. Cleanup does not overwrite the first failure.
+The first terminal failure of the current execution lifetime is separate from
+Jett result.fail. Ordinary one-entry contexts keep their legacy session channel.
+Independently authenticated Resource entries retain separate attempt-owned
+status, dynamic message and diagnostic-prefix records. Nested compiled calls
+share the active record; exact completion seals it. A new entry constructor may
+select a fresh record only after predecessor, session-poison and complete
+custody/storage checks, preserving every old observation without resetting it.
+Fallible leaf and compiled calls are followed by a failure edge, which releases
+live temporaries/locals before returning a zero placeholder. Callers must inspect
+failure before using that placeholder. The entry wrapper returns failure status
+and the launcher renders the message before context destruction. Cleanup does
+not overwrite the first failure.
 Context destruction checks that all owning values have been released; it must
 not silently hide compiler leaks by acting as a program-long value arena.
 

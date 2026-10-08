@@ -3,7 +3,7 @@
 The ordinary-entry bridge has bounded Source17 object/native acceptance and a
 current compiler proof checkpoint. It changes entry metadata and wrapper emission,
 preserving Jett source semantics and ordinary function calling conventions.
-The current v20 whole-workspace gate and all eleven v21 MSVC-v3 native
+The earlier v20 whole-workspace gate and all eleven v21 MSVC-v3 native
 regression gates pass; exact-revision CI remains pending.
 
 ## Historical failure and selected repair
@@ -222,7 +222,7 @@ success.
 
 ## Current workspace and wider-language observations
 
-The current v20 whole-workspace gate passes **3,582 checks, zero failures and
+The earlier v20 whole-workspace gate passes **3,582 checks, zero failures and
 13 ignored tests**, across **66 real selected groups / 92 total result groups**.
 Actual session **75431**, terminal **1f1c8b**, exits zero for
 `cargo test --offline -q --workspace --no-fail-fast`.
@@ -262,9 +262,10 @@ prefixes remain intact. Earlier prospective fresh-v3, full-191/382 and reflected
 Return gate statements in retained historical sections are superseded by v21;
 broader body/Default, generic/reflected lifetimes and occupied custody remain open.
 
-Source13's repeated ordinary error, occupied resources, wider whole-language
-parity and exact-revision CI remain pending. The rough 87% estimate and fixed
-207/182 inventory do not advance.
+At v21, Source13's repeated ordinary error remained pending; the v24
+same-grant gate below closes that bounded obligation. Occupied resources, wider
+whole-language parity and the successor's exact-revision CI remain pending.
+The rough 87% estimate and fixed 207/182 inventory do not advance.
 
 The separate 15-case wider-language probe is an **observation baseline, not
 acceptance**. Actual session **77834**, terminal **ee797f**, leaves compiler
@@ -290,17 +291,57 @@ ordinary raw refinement behavior while retaining authenticated original authorit
 
 ## Remaining acceptance
 
-The current whole-workspace gate passes at v20, and all eleven fresh matched-
+The earlier whole-workspace gate passes at v20, and all eleven matched-
 MSVC-v3 native gates pass at v21, including full **191-case / 382-execution**,
-carrier, reflected-body and owned-Return regression. Exact-revision CI remains
-pending. Earlier accepted GNU Source-prefix and Return documentation and wire-v2
-receipts retain their independent historical scope; only the measured v21 gate
-supplies current MSVC-v3 regression credit. No GNU runtime-archive acceptance is
-inferred from these local MSVC results.
+carrier, reflected-body and owned-Return regression. These remain independent
+historical receipts; current ordinary-error regression and workspace acceptance
+are recorded at v24 below. Earlier accepted GNU Source-prefix and Return
+documentation and wire-v2 receipts retain their independent historical scope.
+The successor's exact-revision CI remains pending. No GNU runtime-archive
+acceptance is inferred from these local MSVC results.
 
-Source13 repeated-error lifetime, occupied aggregate transport/replacement,
-broader Resource-valued Default and generic/nested reflected lifetime compositions
-remain full-goal obligations. Whole Source/export/refinement and verify/property100
+Occupied aggregate transport/replacement, broader Resource-valued Default
+and generic/nested reflected lifetime compositions remain full-goal obligations. Whole Source/export/refinement and verify/property100
 purposes remain required. No refusal counts as successful Source execution, no
 Source policy exclusion is introduced, and the full native parity goal stays
 active. The rough 87% estimate and fixed 207/182 inventory do not advance.
+
+## Accepted ordinary-error successor checkpoint (v24)
+
+The changed ordinary runtime passes its measured **307-check** suite with fresh
+matched MSVC `measurements-02` archives. The accepted twelve-gate native scope
+covers **604 Source-deleted executables / 728 entries**: the new all-fourteen
+same-grant gate contributes **28/56** from session **62286**, including both
+Source13 Bounds errors and original body1/cleanup0/Body completions; session
+**76385**, terminal **d30da4**, passes the eleven predecessor gates with
+**576/672**. The latter includes full **191-case/382-execution** regression from
+**113 distinct Sources**, carrier, reflected body, owned Return and original
+Source06. No separate nested callee completion is inferred from Return root
+observations.
+
+The fresh whole workspace passes **3,614 checks, zero failures and 14 ignored
+tests**, across **66 nonzero / 92 total groups**, at actual session **75810**,
+terminal **0f5a7b**. Independent verification at **58261 / 75fabb** authenticates
+all **3,763 source inputs / nine fresh and nine historical runtime artifacts**,
+HEAD/inventory, both native binaries and fresh02 provenance/log hashes unchanged.
+The authoritative receipt is
+`target/native-resource-carrier-compile-evidence/after-v24-native12-workspace.json`
+(SHA-256
+`4dabdff125cefac5891d6b026cb0b67ec14448db67915755116f014698ea6aa2`).
+The v20/v21 receipts above retain their accepted historical scope; current
+ordinary-error regression is established independently by v24. Earlier
+Source13-pending statements describe their original checkpoint and are now
+superseded for this bounded same-grant obligation. See the
+[ordinary terminal-error note](native_resource_ordinary_error_reentry.md) for
+the exact archive, binary and per-attempt messages/retirement evidence.
+
+Local MSVC results provide no GNU runtime-archive or full platform acceptance.
+The separate normal-main linked baseline is complete: sixteen observations,
+twelve exit0 and four exit71, from eight exact opaque objects reused with
+Debug/Release runtime artifact profiles; all fifteen raw-probe Sources remain
+preserved. This is baseline collection without a desired Source oracle, new
+feature acceptance or ordinary public-Main context-retirement observations.
+Broader ordinary parity and fixes remain open. Occupied custody/replacement, broader Default and
+generic/nested reflected lifetimes, wider language parity and the successor's
+exact-revision CI remain open. The rough **87%** estimate, fixed **207/182**
+inventories and full 100% goal do not change.
