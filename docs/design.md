@@ -8321,8 +8321,10 @@ retaining their checked type and span. Supported namespace constant reads use
 the same materializer and have no runtime initializer. Ordinary pure calls
 outside required evaluation remain runtime calls. The backend rejects unresolved
 `Comptime` and namespace `Constant` markers instead of emitting their source
-computation. Move-only namespace constant ownership remains an explicit parity
-obligation. A native regression executes baked `math.factorial(5)` after removing
+computation. Other namespace constant types report E9001 under the current
+supported domain; a separate extension would require a read and ownership
+contract. Current parity validates admitted baked values and shared frontend
+rejections. A native regression executes baked `math.factorial(5)` after removing
 its source file.
 
 Native verify and property suites honor the selected debug or release build

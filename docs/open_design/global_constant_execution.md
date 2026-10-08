@@ -62,6 +62,8 @@ not a decision to narrow the language's constant contract permanently. Local
 values and supported explicit `comptime` results outside namespace declarations
 keep their existing behavior.
 
-Full native acceptance still requires closing this ownership policy and checking
-the final revision against the independent inventory, workspace, and distribution
-gates. The primitive handoff alone does not establish complete native parity.
+Extending namespace constants beyond the current supported domain requires
+selecting this ownership policy first. Current native acceptance validates the
+admitted baked values and conservative frontend rejections, together with the
+final revision's independent inventory, workspace and distribution gates. The
+primitive handoff alone does not establish complete native parity.
