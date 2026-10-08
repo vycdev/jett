@@ -2510,3 +2510,13 @@ Object emission is not execution, and these matched local MSVC runs do not prove
 GNU or other platform acceptance of the expanded packet. Broader Resource
 `For`/`Match`, reflected bodies and ordinary families remain separate work. This
 checkpoint leaves the **207/182** inventory and **about 87%** estimate unchanged.
+
+### Checked reflected-field reference repair (2026-10-08)
+
+[Direct field selection](native_resource_reflected_fields.md) now passes all
+541 comptime tests, including 19 added authority/recursion/control/metadata and
+Resource tests. Strict original Source06/derived controls pass 74 entry attempts
+in both checking profiles, including same-provider/grant reentry after every
+selected failure. `after-v5.json` records all 3,664 inputs unchanged at the
+complete crate gate. This proves checked reference behavior; native reflected
+Resource emission, Source-deleted execution and the full goal remain pending.

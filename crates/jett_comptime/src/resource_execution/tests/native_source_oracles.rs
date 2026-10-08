@@ -244,3 +244,6 @@ fn native_resource_source_cases_match_real_reference_events_and_cleanup_before_t
 fn native_resource_pipeline_source_cases_match_real_reference_events_and_cleanup_before_teardown() {
     run_reference_cases(cases::pipeline_cases());
 }
+
+#[path = "native_source_oracles/source06_exceptional.rs"]
+mod source06_exceptional;

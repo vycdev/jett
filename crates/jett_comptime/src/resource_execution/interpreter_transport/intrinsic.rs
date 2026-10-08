@@ -67,6 +67,24 @@ impl Interpreter {
                         )
                     })
             }
+            IntrinsicId::TypeFields => {
+                if let Some(result) = check_args(name, 0, &args) {
+                    return result;
+                }
+                let [owner] = prepared.types() else {
+                    return Err("checked type.fields has no exact owner type".to_string());
+                };
+                let owner_name = checked.program().checked().interner.type_name(*owner);
+                let fields = checked
+                    .checked_reflection_fields(*owner)
+                    .map_err(|error| error.to_string())?;
+                Ok(Value::List(
+                    fields
+                        .iter()
+                        .map(|field| Self::reflection_field_info_value(&owner_name, None, field))
+                        .collect(),
+                ))
+            }
             _ => {
                 let resolved = prepared
                     .types()

@@ -4424,3 +4424,11 @@ follow their [separate implementation](active/native_ordinary_borrowed_sum_codeg
 this does not extend Resource For/Match/reflected-body admission. See
 [the borrowed-sum contract](active/native_resource_borrowed_sums.md) and
 [the verified nested contract](active/native_resource_nested_sums.md).
+
+The [checked reflected-field reference bridge](active/native_resource_reflected_fields.md)
+retains the original For/body, parent attempt, resolver binder and ordered owner
+metadata. Each field ordinal selects its exact checker-owned scope and full
+reflection; runtime metadata alone grants no body authority. Calls isolate and
+restore item selectors, and normal/control/failure exits restore the entry frame.
+Retained `type.fields` facts also support pure required evaluation without a
+provider. Native ordinal/body transport and broader reflected loops remain pending.

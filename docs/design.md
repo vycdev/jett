@@ -8569,3 +8569,10 @@ same checked program can select its exact hook. Materialization preserves the
 original comptime expression and its full concrete generic and scoped context.
 Pure branch selection, aliases and relays do not introduce a separate eligibility
 rule; no runtime capability or provider enters the required worker.
+
+Checked reference execution now preserves exact field ordinals and original
+scope bodies in direct `type.fields` loops, including equal-type fields, aliases,
+recursive calls and Resource cleanup through early exits. Closed pure required
+evaluation uses the same boundary without runtime authority. This adds no Source
+rule; native reflected Resource transport remains pending. See the
+[reflected-field execution contract](active/native_resource_reflected_fields.md).

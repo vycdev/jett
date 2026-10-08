@@ -51,6 +51,9 @@ pub(crate) use intrinsic::PreparedIntrinsicArguments;
 #[path = "body_reference/named_callable.rs"]
 mod named_callable;
 pub(crate) use named_callable::PreparedNamedCallable;
+#[path = "body_reference/reflected_fields.rs"]
+mod reflected_fields;
+pub(crate) use reflected_fields::{PreparedReflectedFieldIteration, PreparedReflectedFieldLoop};
 
 /// Minted only from one retained program and an exact accepted body selection.
 #[derive(Debug, Clone)]

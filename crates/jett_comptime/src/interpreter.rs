@@ -2,7 +2,9 @@
 mod resource_capture;
 #[path = "resource_execution/interpreter_transport.rs"]
 mod resource_transport;
-use crate::resource_execution::{EvaluatedValue, ResourceTransport};
+use crate::resource_execution::{
+    EvaluatedValue, PreparedReflectedFieldIteration, ResourceTransport,
+};
 
 use crate::checked_types::{
     CheckedExpressionTypes, CheckedFunctionTypes, CheckedScopedTypes, select_scoped_types,
@@ -675,6 +677,8 @@ pub struct Interpreter {
     current_function_trusted_stdlib: bool,
     /// Trusted field metadata currently produced by direct `type.fields[T]()` loops.
     reflected_field_scopes: Vec<HashMap<String, ReflectedFieldBinding>>,
+    /// Private selectors for exact checked Source For iterations; never Value authority.
+    checked_reflected_fields: Vec<PreparedReflectedFieldIteration>,
     /// Trusted TypeInfo metadata currently produced by direct reflected `args` loops.
     reflected_type_info_scopes: Vec<HashMap<String, ReflectedTypeInfoBinding>>,
     /// Trusted TypeVariant metadata currently produced by direct `type.variants[T]()` loops.
@@ -761,6 +765,7 @@ impl Interpreter {
             lexical_scope_floor: 0,
             current_function_trusted_stdlib: false,
             reflected_field_scopes: Vec::new(),
+            checked_reflected_fields: Vec::new(),
             reflected_type_info_scopes: Vec::new(),
             reflected_variant_scopes: Vec::new(),
             reflected_machine_state_scopes: Vec::new(),
@@ -4361,8 +4366,25 @@ impl Interpreter {
             }
 
             Stmt::For(for_stmt) => {
-                let reflected_field_bindings =
-                    self.reflected_field_loop_bindings(&for_stmt.iterable)?;
+                let checked_field_loop = self.prepare_checked_resource_field_loop(for_stmt)?;
+                let reflected_field_bindings = match &checked_field_loop {
+                    Some(proof) => {
+                        let owner_type = proof.owner_name();
+                        Some(
+                            proof
+                                .fields()
+                                .map(|field| ReflectedFieldBinding {
+                                    index: field.index,
+                                    owner_type: owner_type.clone(),
+                                    owner_member: None,
+                                    name: field.name.clone(),
+                                    ty: Self::reflection_type_info_type_expr(&field.type_info),
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                    }
+                    None => self.reflected_field_loop_bindings(&for_stmt.iterable)?,
+                };
                 let reflected_variant_bindings =
                     self.reflected_variant_loop_bindings(&for_stmt.iterable)?;
                 let reflected_machine_state_bindings =
@@ -4384,7 +4406,23 @@ impl Interpreter {
                 };
                 match iterable.into_payload() {
                     Value::List(items) => {
+                        if let Some(proof) = &checked_field_loop {
+                            proof
+                                .validate_count(items.len())
+                                .map_err(|error| error.to_string())?;
+                        }
                         for (index, item) in items.into_iter().enumerate() {
+                            // Every fallible proof join precedes lexical or debug mutation.
+                            let checked_field_item = checked_field_loop
+                                .as_ref()
+                                .map(|proof| proof.iteration(index))
+                                .transpose()
+                                .map_err(|error| error.to_string())?;
+                            if let Some(proof) = &checked_field_item {
+                                proof
+                                    .validate_value(&item)
+                                    .map_err(|error| error.to_string())?;
+                            }
                             self.push_scope();
                             let loop_item = item.clone();
                             self.set_inferred_debug_binding(
@@ -4461,7 +4499,14 @@ impl Interpreter {
                                 })
                                 .is_some();
 
+                            let pushed_checked_field = checked_field_item.is_some();
+                            if let Some(proof) = checked_field_item {
+                                self.checked_reflected_fields.push(proof);
+                            }
                             let signal = self.exec_block_inner(&for_stmt.body);
+                            if pushed_checked_field {
+                                self.checked_reflected_fields.pop();
+                            }
                             if pushed_type_info_scope {
                                 self.reflected_type_info_scopes.pop();
                             }

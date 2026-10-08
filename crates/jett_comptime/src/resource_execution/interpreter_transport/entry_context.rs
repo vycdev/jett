@@ -22,6 +22,7 @@ pub(super) struct SavedResourceEntryContext {
     type_scopes: Vec<HashMap<String, TypeExpr>>,
     scoped_bindings: Vec<ClosureScopedTypeBinding>,
     fields: Vec<HashMap<String, ReflectedFieldBinding>>,
+    checked_fields: Vec<PreparedReflectedFieldIteration>,
     type_infos: Vec<HashMap<String, ReflectedTypeInfoBinding>>,
     variants: Vec<HashMap<String, ReflectedVariantBinding>>,
     states: Vec<HashMap<String, ReflectedMachineStateBinding>>,
@@ -59,6 +60,7 @@ impl SavedResourceEntryContext {
             type_scopes: interpreter.type_arg_scopes.clone(),
             scoped_bindings: interpreter.scoped_type_bindings.clone(),
             fields: interpreter.reflected_field_scopes.clone(),
+            checked_fields: interpreter.checked_reflected_fields.clone(),
             type_infos: interpreter.reflected_type_info_scopes.clone(),
             variants: interpreter.reflected_variant_scopes.clone(),
             states: interpreter.reflected_machine_state_scopes.clone(),
@@ -90,6 +92,7 @@ impl SavedResourceEntryContext {
         interpreter.type_arg_scopes = self.type_scopes;
         interpreter.scoped_type_bindings = self.scoped_bindings;
         interpreter.reflected_field_scopes = self.fields;
+        interpreter.checked_reflected_fields = self.checked_fields;
         interpreter.reflected_type_info_scopes = self.type_infos;
         interpreter.reflected_variant_scopes = self.variants;
         interpreter.reflected_machine_state_scopes = self.states;
@@ -126,7 +129,7 @@ pub(crate) struct EntryContextObservation {
     floor: usize,
     proofs: bool,
     scope_depths: [usize; 3],
-    metadata_depths: [usize; 7],
+    metadata_depths: [usize; 8],
     checked_function: bool,
     checked_scope: bool,
     source_active: bool,
@@ -156,6 +159,7 @@ impl Interpreter {
                 self.type_arg_scopes.len(),
                 self.scoped_type_bindings.len(),
                 self.reflected_field_scopes.len(),
+                self.checked_reflected_fields.len(),
                 self.reflected_type_info_scopes.len(),
                 self.reflected_variant_scopes.len(),
                 self.reflected_machine_state_scopes.len(),

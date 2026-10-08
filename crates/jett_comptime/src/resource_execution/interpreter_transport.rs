@@ -87,18 +87,61 @@ impl Interpreter {
         }
     }
 
+    pub(super) fn prepare_checked_resource_field_loop(
+        &self,
+        source: &jett_parser::ast::ForStmt,
+    ) -> Result<Option<Arc<crate::resource_execution::PreparedReflectedFieldLoop>>, String> {
+        let Some(transport) = self
+            .resource_transport
+            .as_ref()
+            .filter(|transport| transport.checked_source_active)
+        else {
+            return Ok(None);
+        };
+        transport
+            .checked
+            .prepare_reflected_field_loop(source)
+            .map_err(|error| error.to_string())
+    }
+
     pub(super) fn exec_checked_resource_type_bind(
         &mut self,
         bind: &jett_parser::ast::ComptimeTypeBindStmt,
     ) -> Result<Option<Signal>, String> {
         // Every fallible source/type/body join precedes interpreter mutation.
-        let prepared = self
+        let checked = &self
             .resource_transport
             .as_ref()
             .ok_or("missing checked Resource transport")?
-            .checked
-            .prepare_direct_scope(bind)
-            .map_err(|error| error.to_string())?;
+            .checked;
+        let prepared = match &bind.value {
+            Expr::FieldAccess(base, member, _) if member.name == "type_info" => {
+                let Expr::Ident(variable) = base.as_ref() else {
+                    return Err("resource execution has no exact checked body".to_string());
+                };
+                let definition = checked
+                    .program()
+                    .resolved()
+                    .resolutions
+                    .get(&variable.span)
+                    .ok_or("resource execution has no exact checked body")?;
+                let iteration = self
+                    .checked_reflected_fields
+                    .iter()
+                    .rev()
+                    .find(|proof| proof.variable() == *definition)
+                    .ok_or("resource execution has no exact checked body")?;
+                let current = self
+                    .get_variable(&variable.name)
+                    .ok_or("resource execution has no exact checked body")?;
+                iteration
+                    .validate_value(current)
+                    .map_err(|error| error.to_string())?;
+                checked.prepare_reflected_field_scope(bind, iteration)
+            }
+            _ => checked.prepare_direct_scope(bind),
+        }
+        .map_err(|error| error.to_string())?;
         let body = prepared.body().map_err(|error| error.to_string())?;
         let bound_type_expr =
             Self::simple_type_expr_from_name(&prepared.reflection().type_name, bind.value.span())
@@ -886,6 +929,7 @@ impl Interpreter {
         let saved_type_arguments = std::mem::replace(&mut self.current_type_arguments, arguments);
         let saved_scoped_types = std::mem::take(&mut self.scoped_type_bindings);
         let saved_checked_scope = self.active_checked_scope.take();
+        let saved_reflected_fields = std::mem::take(&mut self.checked_reflected_fields);
         // Resolve arguments above in the caller, then keep its type bindings
         // out of the callee's lexical scope, including non-generic callees.
         let saved_type_scopes = std::mem::replace(&mut self.type_arg_scopes, vec![type_scope]);
@@ -1072,6 +1116,7 @@ impl Interpreter {
         }
         self.lexical_scope_floor = saved_scope_floor;
         self.active_checked_scope = saved_checked_scope;
+        self.checked_reflected_fields = saved_reflected_fields;
         self.scoped_type_bindings = saved_scoped_types;
         self.type_arg_scopes = saved_type_scopes;
         self.current_type_arguments = saved_type_arguments;

@@ -17,7 +17,7 @@ pub use checked::ExecutionPurpose;
 pub(crate) use checked::{
     CheckedAttemptKey, CheckedBodyCursor, CheckedBodyReference, CheckedExecution,
     CheckedInvocation, FunctionInvocation, PreparedIntrinsicArguments, PreparedPipelineStep,
-    PreparedRequiredExpression,
+    PreparedReflectedFieldIteration, PreparedReflectedFieldLoop, PreparedRequiredExpression,
 };
 pub use checked::{
     CheckedRequiredOwner, CheckedRequiredResourceHook, CheckedRequiredScope, CheckedRequiredValue,

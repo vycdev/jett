@@ -27,6 +27,18 @@ pub(crate) struct CheckedAttemptKey {
     node: AttemptNode,
 }
 
+impl CheckedAttemptKey {
+    /// A selected lexical scope retains every concrete ancestor selection.
+    /// Another program, callable, generic instance or sibling is never an ancestor.
+    pub(super) fn is_lexical_descendant_of(&self, parent: &Self) -> bool {
+        Arc::ptr_eq(&self.program, &parent.program)
+            && self.node.origin == parent.node.origin
+            && self.node.generic == parent.node.generic
+            && self.node.path.starts_with(&parent.node.path)
+            && self.node.scopes.starts_with(&parent.node.scopes)
+    }
+}
+
 impl PartialEq for CheckedAttemptKey {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.program, &other.program) && self.node == other.node
