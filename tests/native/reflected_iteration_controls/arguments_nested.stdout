@@ -1,0 +1,2 @@
+first:int64;second:int64|left.first:first:int64;left.second:second:int64;right.first:first:int64;right.second:second:int64
+first:int64;second:int64|left.first:first:int64;left.second:second:int64;right.first:first:int64;right.second:second:int64

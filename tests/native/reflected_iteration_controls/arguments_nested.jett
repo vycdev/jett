@@ -1,0 +1,55 @@
+namespace app
+struct Inner:
+    first: int64
+    second: int64
+struct Outer:
+    left: Inner
+    right: Inner
+function first[T]() returns string:
+    return "first:{type.name[T]()}"
+function second[T]() returns string:
+    return "second:{type.name[T]()}"
+function is_first(index: int64) returns bool:
+    return index == 0
+function nested_label[T](name: string, index: int64) returns string:
+    if is_first(index):
+        return "{name}:{first[T]()}"
+    return "{name}:{second[T]()}"
+function arguments(high: bool) returns string:
+    mutable list[string] parts = list.new[string]()
+    mutable int64 index = 0
+    if high:
+        index = 1
+    for arg in type.info[map[int64, int64]]().args:
+        comptime type Arg = arg:
+            if is_first(index):
+                parts = list.append[string](parts, first[Arg]())
+            else:
+                parts = list.append[string](parts, second[Arg]())
+        index = index + 1
+    return string.join(parts, ";")
+function nested_fields() returns string:
+    mutable list[string] parts = list.new[string]()
+    for outer in type.fields[Outer]():
+        comptime type Field = outer.type_info:
+            for inner in type.fields[Field]():
+                comptime type Item = inner.type_info:
+                    string name = "{outer.name}.{inner.name}"
+                    parts = list.append[string](parts, nested_label[Item](name, inner.index))
+    return string.join(parts, ";")
+function report(high: bool) returns string:
+    return "{arguments(high)}|{nested_fields()}"
+function expected(high: bool) returns string:
+    string nested = "left.first:first:int64;left.second:second:int64;right.first:first:int64;right.second:second:int64"
+    if high:
+        return "second:int64;second:int64|{nested}"
+    return "first:int64;second:int64|{nested}"
+function main(stdout: Stdout) returns nothing:
+    string baked = comptime report(false)
+    Stdout.write(view stdout, "{report(false)}\n{baked}\n")
+verify ordinary_reflection_arguments_nested:
+    assert report(false) == expected(false)
+    assert report(true) == expected(true)
+property ordinary_reflection_arguments_nested_trials:
+    given high: bool
+    assert report(high) == expected(high)
