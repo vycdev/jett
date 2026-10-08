@@ -1,0 +1,85 @@
+namespace app
+bitfield Header:
+    left: 4 bits
+    right: 4 bits
+enum Event:
+    empty
+    first(left: int64, right: int64)
+    second(left: int64, right: int64)
+machine Session:
+    states:
+        empty
+        first(left: int64, right: int64)
+        second(left: int64, right: int64)
+    transitions:
+        empty to first
+        first to second
+function first(value: int64) returns int64:
+    return value + 10
+function second(value: int64) returns int64:
+    return value + 100
+function is_right(view field: TypeField) returns bool:
+    return field.name == "right"
+function bitfield_report(high: bool) returns string:
+    mutable int64 left = 2
+    mutable int64 right = 3
+    if high:
+        left = 5
+        right = 7
+    Header source = Header(left: left, right: right) handle error:
+        return error
+    mutable list[string] parts = list.new[string]()
+    for field in type.fields[Header]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[Header, Field](view source, view field)
+            if field.index == 0:
+                parts = list.append[string](parts, "{field.name}:{first(value)}")
+            else:
+                parts = list.append[string](parts, "{field.name}:{second(value)}")
+    return string.join(parts, ";")
+function variant_report(seed: int64) returns string:
+    mutable list[string] parts = list.new[string]()
+    for variant in type.variants[Event]():
+        string member = variant.name
+        mutable int64 total = 0
+        for field in variant.fields:
+            comptime type Field = field.type_info:
+                Field value = seed
+                if field.index == 0:
+                    total = total + first(value)
+                else:
+                    total = total + second(value)
+        parts = list.append[string](parts, "{member}:{total}")
+    return string.join(parts, ";")
+function machine_report(seed: int64) returns string:
+    mutable list[string] parts = list.new[string]()
+    for state in type.machine_states[Session]():
+        string member = state.name
+        mutable int64 total = 0
+        for field in state.fields:
+            comptime type Field = field.type_info:
+                Field value = seed
+                if is_right(view field):
+                    total = total + second(value)
+                else:
+                    total = total + first(value)
+        parts = list.append[string](parts, "{member}:{total}")
+    return string.join(parts, ";")
+function report(high: bool) returns string:
+    mutable int64 seed = 17
+    if high:
+        seed = 23
+    return "{bitfield_report(high)}|{variant_report(seed)}|{machine_report(seed)}"
+function expected(high: bool) returns string:
+    if high:
+        return "left:15;right:107|empty:0;first:156;second:156|empty:0;first:156;second:156"
+    return "left:12;right:103|empty:0;first:144;second:144|empty:0;first:144;second:144"
+function main(stdout: Stdout) returns nothing:
+    string baked = comptime report(false)
+    Stdout.write(view stdout, "{report(false)}\n{baked}\n")
+verify ordinary_reflection_members:
+    assert report(false) == expected(false)
+    assert report(true) == expected(true)
+property ordinary_reflection_member_trials:
+    given high: bool
+    assert report(high) == expected(high)

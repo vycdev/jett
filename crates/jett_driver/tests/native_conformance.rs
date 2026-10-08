@@ -8850,3 +8850,6 @@ fn native_whole_machine_rebinding_preserves_owned_payloads_pending_depth_and_sou
         assert!(actual.stderr.is_empty(), "{actual:?}");
     }
 }
+
+#[path = "native_conformance/reflected_iteration_controls.rs"]
+mod reflected_iteration_controls;
