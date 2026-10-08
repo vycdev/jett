@@ -4,6 +4,33 @@ mod analysis;
 mod breakpoint_regions;
 mod call_owner_generations;
 mod call_ownership;
+mod ordinary_borrowed_sums;
+pub use ordinary_borrowed_sums::{
+    OrdinaryBorrowedSumProjection, OrdinarySumPayloadPath, OrdinarySumProjectionSite,
+};
+mod resource_ownership;
+pub use resource_ownership::{
+    ResourceArgumentEffect, ResourceArgumentSyntax, ResourceBorrowedSumProjection,
+    ResourceCallActual, ResourceCallFormal, ResourceCallNode, ResourceCallOperand,
+    ResourceCallRegion, ResourceCallRegionId, ResourceCallResult, ResourceCarrierChild,
+    ResourceCarrierConstructor, ResourceCarrierEdge, ResourceCarrierField,
+    ResourceCarrierFunctionPlan, ResourceCarrierGeneration, ResourceCarrierIndex,
+    ResourceCarrierIteration, ResourceCarrierLoan, ResourceCarrierLoanId,
+    ResourceCarrierLoanSource, ResourceCarrierNode, ResourceCarrierObservation,
+    ResourceCarrierOperation, ResourceCarrierOperationId, ResourceCarrierOperationRole,
+    ResourceCarrierProjectionPath, ResourceCarrierShape, ResourceCarrierShapeId,
+    ResourceCarrierSlot, ResourceCarrierSlotId, ResourceCarrierState, ResourceCarrierValue,
+    ResourceCarrierVariant, ResourceCompanionPlan, ResourceCompletion, ResourceEntryScopePlan,
+    ResourceFrame, ResourceFrameId, ResourceFrameRole, ResourceFunctionPlan, ResourceLexicalExit,
+    ResourceLexicalExitId, ResourceLexicalExitKind, ResourceLexicalExitPlan, ResourceLoan,
+    ResourceLoanId, ResourceLoanSource, ResourceNamedCallableProof, ResourceOccupancy,
+    ResourceOperation, ResourceOperationId, ResourceOperationRole, ResourceOwnerSlot,
+    ResourceOwnerSlotId, ResourceOwnershipPlan, ResourcePath, ResourcePosition, ResourceShape,
+    ResourceSite, ResourceSlotStorage, ResourceSumPayloadPath, validate_resource_ownership,
+    validate_resource_ownership_for_entry,
+};
+#[cfg(test)]
+mod resource_manifest_tests;
 pub use call_owner_generations::{
     CallGenerationSlot, CallGenerationStoragePlan, CallOwnerEscrowId, CallOwnerGenerationId,
 };
@@ -25,7 +52,7 @@ pub use jett_hir::{FunctionId, Local, LocalId, Param, ParamMode};
 
 use jett_common::Span;
 use jett_hir::{self as hir, Expression, FieldId, FunctionIdentity, VariantId};
-use jett_types::{TypeId, TypeInterner};
+use jett_types::{Type, TypeId, TypeInterner};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlockId(u32);
@@ -38,6 +65,7 @@ impl BlockId {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
+    pub resource_manifest: hir::ResourceManifest,
     pub functions: Vec<Function>,
     pub equality_methods: std::collections::HashMap<TypeId, FunctionId>,
 }
@@ -61,6 +89,8 @@ pub struct Function {
     original_view_iterations: Vec<iteration_views::OriginalIteration>,
     breakpoint_regions: Vec<breakpoint_regions::BreakpointRegion>,
     call_owner_generations: Vec<call_owner_generations::CallOwnerGeneration>,
+    resource_lowering: Option<resource_ownership::ResourceLoweringWitness>,
+    ordinary_borrowed_sums: Option<ordinary_borrowed_sums::Witness>,
 }
 
 impl Function {
@@ -174,6 +204,10 @@ impl SequenceSource {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StatementKind {
+    /// Private constructor-owned lexical loan retirement; copied IDs grant nothing.
+    ResourceLexicalExit(ResourceLexicalExitId),
+    /// Constructor-authenticated Resource operation whose actuals span CFG blocks.
+    ResourceCall(ResourceCallNode),
     /// Empty, internal generation escrow; this is not an initialized Jett value.
     OpenCallOwnerGeneration {
         generation: CallOwnerGenerationId,
@@ -347,6 +381,7 @@ pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
             function,
             functions: &program.functions,
             function_count: program.functions.len(),
+            resource_manifest: &program.resource_manifest,
             errors: &mut errors,
         }
         .validate();
@@ -358,10 +393,62 @@ pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
     }
 }
 
+/// Conservative operational refusal until the separate Resource CFG plan exists.
+pub(crate) fn resource_type_pending(types: &TypeInterner, ty: TypeId) -> bool {
+    fn visit(
+        types: &TypeInterner,
+        ty: TypeId,
+        seen: &mut std::collections::HashSet<TypeId>,
+    ) -> bool {
+        if ty.index() as usize >= types.len() {
+            return true;
+        }
+        if !seen.insert(ty) {
+            return false;
+        }
+        match types.resolve(ty) {
+            Type::Resource(_) => true,
+            Type::List(inner)
+            | Type::Set(inner)
+            | Type::Optional(inner)
+            | Type::Secret(inner)
+            | Type::Refinement { base: inner, .. } => visit(types, *inner, seen),
+            Type::Map(key, value) | Type::Result(key, value) => {
+                visit(types, *key, seen) || visit(types, *value, seen)
+            }
+            Type::Function {
+                params,
+                return_type,
+                ..
+            } => {
+                params.iter().any(|ty| visit(types, *ty, seen)) || visit(types, *return_type, seen)
+            }
+            Type::Struct(id) => types
+                .resolve_struct(*id)
+                .fields
+                .iter()
+                .any(|(_, ty)| visit(types, *ty, seen)),
+            Type::Enum(id) => types
+                .resolve_enum(*id)
+                .variants
+                .iter()
+                .any(|variant| variant.fields.iter().any(|(_, ty)| visit(types, *ty, seen))),
+            Type::Machine(id) | Type::MachineState { machine: id, .. } => types
+                .resolve_machine(*id)
+                .states
+                .iter()
+                .any(|state| state.fields.iter().any(|(_, ty)| visit(types, *ty, seen))),
+            _ => false,
+        }
+    }
+    visit(types, ty, &mut std::collections::HashSet::new())
+}
+
 struct FunctionValidator<'function, 'errors> {
     function: &'function Function,
     functions: &'function [Function],
     function_count: usize,
+    resource_manifest: &'function hir::ResourceManifest,
     errors: &'errors mut Vec<ValidationError>,
 }
 
@@ -373,14 +460,36 @@ pub fn validate_call_ownership(
 ) -> Result<(), Vec<ValidationError>> {
     validate(program)?;
     let mut errors = Vec::new();
+    if let Err(message) = program.resource_manifest.validate(types) {
+        // Type bounds are a prerequisite for custody and invocation queries.
+        // A malformed type cannot establish that a Resource witness is needed.
+        return Err(vec![ValidationError {
+            span: Span::new(jett_common::FileId::new(0), 0, 0),
+            message,
+        }]);
+    }
     let validation = call_ownership::ProgramValidation::new(program);
     for function in &program.functions {
+        if let Err(message) = ordinary_borrowed_sums::validate(function, types) {
+            errors.push(ValidationError {
+                span: function.span,
+                message,
+            });
+            continue;
+        }
         if let Err(message) = validation.validate_function(function, types) {
             errors.push(ValidationError {
                 span: function.span,
                 message,
             });
         }
+    }
+    // Custody queries depend on valid invocation and original type metadata.
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    if let Err(mut witness_errors) = resource_ownership::validate_witnesses(program, types) {
+        errors.append(&mut witness_errors);
     }
     if errors.is_empty() {
         Ok(())
@@ -395,7 +504,17 @@ pub fn validate_caller_acquisitions<'a>(
     function: &'a Function,
     types: &TypeInterner,
 ) -> Result<CallerAcquisitions<'a>, String> {
-    call_ownership::validate_function(program, function, types)
+    let acquisitions = call_ownership::validate_function(program, function, types)?;
+    if acquisitions.resource_pending
+        || function
+            .locals
+            .iter()
+            .any(|local| resource_type_pending(types, local.ty))
+        || resource_type_pending(types, function.return_type)
+    {
+        return Err("pending ResourceOwnershipPlan: typed Resource nodes grant no ordinary move, copy, borrow or drop authority".into());
+    }
+    Ok(acquisitions)
 }
 
 impl FunctionValidator<'_, '_> {
@@ -582,6 +701,21 @@ impl FunctionValidator<'_, '_> {
 
     fn statement(&mut self, statement: &Statement) {
         match &statement.kind {
+            StatementKind::ResourceLexicalExit(_) => {}
+            StatementKind::ResourceCall(node) => match node {
+                ResourceCallNode::Stage {
+                    value, ordinary, ..
+                } => {
+                    self.expression(value);
+                    if let Some(local) = ordinary {
+                        self.check_local(*local, statement.span, "Resource call ordinary stage");
+                    }
+                }
+                ResourceCallNode::Invoke { output, .. } => {
+                    self.check_local(*output, statement.span, "Resource call output")
+                }
+                ResourceCallNode::Begin { .. } | ResourceCallNode::End { .. } => {}
+            },
             StatementKind::OpenCallOwnerGeneration { root, .. } => {
                 self.check_local(*root, statement.span, "generation root")
             }
@@ -899,7 +1033,8 @@ impl FunctionValidator<'_, '_> {
         let ownership = match &expression.kind {
             hir::ExpressionKind::Call { ownership, .. }
             | hir::ExpressionKind::Intrinsic { ownership, .. }
-            | hir::ExpressionKind::IndirectCall { ownership, .. } => Some(ownership),
+            | hir::ExpressionKind::IndirectCall { ownership, .. }
+            | hir::ExpressionKind::ResourceInvoke { ownership, .. } => Some(ownership),
             _ => None,
         };
         if let Some(ownership) = ownership {
@@ -910,6 +1045,31 @@ impl FunctionValidator<'_, '_> {
         match &expression.kind {
             hir::ExpressionKind::Local(local) => {
                 self.check_local(*local, expression.span, "expression");
+            }
+            hir::ExpressionKind::ResourceHookValue { hook } => {
+                if !self.resource_manifest.contains_hook(hook) {
+                    self.error(
+                        expression.span,
+                        "MIR Resource descriptor has no original manifest",
+                    );
+                }
+            }
+            hir::ExpressionKind::ResourceInvoke {
+                hook,
+                args,
+                evaluation_order,
+                ..
+            } => {
+                if !self.resource_manifest.contains_hook(hook) {
+                    self.error(
+                        expression.span,
+                        "MIR Resource invocation has no original manifest",
+                    );
+                }
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
+                for value in args {
+                    self.expression(value);
+                }
             }
             hir::ExpressionKind::FunctionRef(function) => {
                 self.check_function(*function, expression.span);
@@ -1146,6 +1306,18 @@ pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Ve
             })
             .collect());
     }
+    let resource_execution =
+        resource_ownership::authenticate_original(program, types).map_err(|message| {
+            vec![LowerError {
+                span: program
+                    .functions
+                    .first()
+                    .map_or(Span::new(jett_common::FileId::new(0), 0, 0), |function| {
+                        function.span
+                    }),
+                message,
+            }]
+        })?;
     let function_param_modes = program
         .functions
         .iter()
@@ -1157,11 +1329,21 @@ pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Ve
         })
         .collect();
     let lowered = Program {
+        resource_manifest: program.resource_manifest.clone(),
         equality_methods: program.equality_methods.clone(),
         functions: program
             .functions
             .iter()
-            .map(|function| lower_function(function, types, &function_param_modes))
+            .map(|function| {
+                lower_function(
+                    function,
+                    types,
+                    &function_param_modes,
+                    &program.resource_manifest,
+                    &program.resource_source,
+                    &resource_execution,
+                )
+            })
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| vec![error])?,
     };
@@ -1181,9 +1363,24 @@ fn lower_function(
     function: &hir::Function,
     types: &TypeInterner,
     function_param_modes: &std::collections::HashMap<FunctionId, Vec<ParamMode>>,
+    resource_manifest: &hir::ResourceManifest,
+    resource_source: &hir::ResourceSourceArchive,
+    resource_execution: &resource_ownership::ResourceExecutionClosure,
 ) -> Result<Function, LowerError> {
     let mut builder = Builder::new(function.body.span, types, function_param_modes);
     builder.locals = function.locals.clone();
+    builder.ordinary_sum_capture = ordinary_borrowed_sums::Capture::authenticated(function, types)
+        .map_err(|message| LowerError {
+            span: function.span,
+            message,
+        })?;
+    builder.resource_capture = resource_ownership::Capture::authenticated(
+        function,
+        resource_manifest,
+        resource_source,
+        types,
+        resource_execution,
+    );
     builder.view_params = function
         .params
         .iter()
@@ -1198,11 +1395,16 @@ fn lower_function(
             .map(|local| local.id),
     );
     builder.lower_block(&function.body);
+    if let Some(error) = builder.resource_error.take() {
+        return Err(error);
+    }
     if builder.open() && function.return_type == jett_types::TypeInterner::NOTHING {
         builder.terminate(TerminatorKind::Return(None), function.body.span);
     }
     let breakpoint_capture = std::mem::take(&mut builder.breakpoint_capture);
     let generation_capture = std::mem::take(&mut builder.generation_capture);
+    let resource_capture = std::mem::take(&mut builder.resource_capture);
+    let ordinary_sum_capture = std::mem::take(&mut builder.ordinary_sum_capture);
     let mut lowered = Function {
         id: function.id,
         identity: function.identity.clone(),
@@ -1220,6 +1422,8 @@ fn lower_function(
         original_view_iterations: Vec::new(),
         breakpoint_regions: Vec::new(),
         call_owner_generations: Vec::new(),
+        resource_lowering: None,
+        ordinary_borrowed_sums: None,
     };
     lowered.breakpoint_regions =
         breakpoint_capture
@@ -1235,23 +1439,43 @@ fn lower_function(
                 span: function.span,
                 message,
             })?;
+    lowered.resource_lowering =
+        resource_capture
+            .finish(&lowered)
+            .map_err(|message| LowerError {
+                span: function.span,
+                message,
+            })?;
+    lowered.ordinary_borrowed_sums =
+        ordinary_sum_capture
+            .finish(&lowered)
+            .map_err(|message| LowerError {
+                span: function.span,
+                message,
+            })?;
     iteration_views::capture_original(&mut lowered, types);
     Ok(lowered)
 }
 
 #[derive(Clone)]
 struct Builder<'a> {
+    resource_error: Option<LowerError>,
     types: &'a TypeInterner,
     function_param_modes: &'a std::collections::HashMap<FunctionId, Vec<ParamMode>>,
     blocks: Vec<BasicBlock>,
     current: BlockId,
-    loops: Vec<(BlockId, BlockId, usize)>,
+    loops: Vec<(BlockId, BlockId, usize, usize)>,
+    lexical_scopes: Vec<resource_ownership::LexicalScope>,
+    reflected_original_prefix: Option<Vec<usize>>,
     call_view_scopes: Vec<Vec<LocalId>>,
+    resource_call_scopes: Vec<ResourceCallRegionId>,
     locals: Vec<Local>,
     handlers: Vec<(LocalId, BlockId)>,
     view_params: Vec<LocalId>,
     breakpoint_capture: breakpoint_regions::Capture,
     generation_capture: call_owner_generations::Capture,
+    resource_capture: resource_ownership::Capture,
+    ordinary_sum_capture: ordinary_borrowed_sums::Capture,
 }
 
 impl<'a> Builder<'a> {
@@ -1263,6 +1487,8 @@ impl<'a> Builder<'a> {
         Self {
             types,
             function_param_modes,
+            lexical_scopes: Vec::new(),
+            reflected_original_prefix: None,
             blocks: vec![BasicBlock {
                 id: BlockId(0),
                 statements: Vec::new(),
@@ -1274,11 +1500,15 @@ impl<'a> Builder<'a> {
             current: BlockId(0),
             loops: Vec::new(),
             call_view_scopes: Vec::new(),
+            resource_call_scopes: Vec::new(),
             locals: Vec::new(),
             handlers: Vec::new(),
             view_params: Vec::new(),
+            resource_error: None,
             breakpoint_capture: breakpoint_regions::Capture::default(),
             generation_capture: call_owner_generations::Capture::default(),
+            resource_capture: resource_ownership::Capture::default(),
+            ordinary_sum_capture: ordinary_borrowed_sums::Capture::default(),
         }
     }
 
@@ -1294,6 +1524,7 @@ impl<'a> Builder<'a> {
         });
         self.breakpoint_capture.block(id);
         self.generation_capture.block(id);
+        self.resource_capture.block(id, span);
         id
     }
 
@@ -1308,6 +1539,7 @@ impl<'a> Builder<'a> {
         let value = Terminator { kind, span };
         self.breakpoint_capture.terminator(self.current, &value);
         self.generation_capture.terminator(self.current, &value);
+        self.resource_capture.terminator(self.current, &value);
         self.blocks[self.current.index() as usize].terminator = value;
     }
 
@@ -1318,6 +1550,14 @@ impl<'a> Builder<'a> {
             .statement(self.current, index, &value);
         self.generation_capture
             .statement(self.current, index, &value);
+        self.resource_capture.statement(self.current, index, &value);
+        if let StatementKind::ResourceCall(node) = &value.kind {
+            let site = self
+                .resource_capture
+                .site(self.current, index)
+                .expect("authenticated Resource node");
+            self.resource_capture.normalized_node(site, node);
+        }
         self.blocks[self.current.index() as usize]
             .statements
             .push(value);
@@ -1330,18 +1570,103 @@ impl<'a> Builder<'a> {
     }
 
     fn lower_block(&mut self, block: &hir::Block) {
+        let lexical = match self
+            .resource_capture
+            .lexical_scope_under(block, self.reflected_original_prefix.as_deref())
+        {
+            Ok(scope) => scope,
+            Err(message) => {
+                self.resource_error = Some(LowerError {
+                    span: block.span,
+                    message,
+                });
+                None
+            }
+        };
+        let entered = lexical.is_some();
+        if let Some(scope) = lexical {
+            self.lexical_scopes.push(scope);
+        }
         for statement in &block.statements {
             if !self.open() {
                 break;
             }
             self.lower_statement(statement);
         }
+        if entered {
+            if self.open() {
+                self.lower_lexical_exit(
+                    ResourceLexicalExitKind::Fallthrough,
+                    self.lexical_scopes.len() - 1,
+                    None,
+                    None,
+                    block.span,
+                );
+            }
+            self.lexical_scopes.pop();
+        }
+    }
+
+    fn lower_lexical_exit(
+        &mut self,
+        kind: ResourceLexicalExitKind,
+        floor: usize,
+        original: Option<&hir::Statement>,
+        target: Option<BlockId>,
+        span: Span,
+    ) {
+        let position = if kind == ResourceLexicalExitKind::Return {
+            ResourcePosition::Terminator
+        } else {
+            ResourcePosition::Statement(self.blocks[self.current.index() as usize].statements.len())
+        };
+        if let Some(id) = self.resource_capture.lexical_exit(
+            kind,
+            self.current,
+            position,
+            &self.lexical_scopes[floor..],
+            original,
+            target,
+        ) && kind != ResourceLexicalExitKind::Return
+        {
+            self.push(StatementKind::ResourceLexicalExit(id), span);
+        }
     }
 
     fn lower_statement(&mut self, statement: &hir::Statement) {
         match &statement.kind {
             hir::StatementKind::Let { local, value } => {
-                let value = if let Some(metadata) = self.locals.get(local.index() as usize)
+                let seed = match self
+                    .resource_capture
+                    .borrowed_sum_seed(*local, value, self.types)
+                {
+                    Ok(seed) => seed,
+                    Err(message) => {
+                        self.resource_error = Some(LowerError {
+                            span: statement.span,
+                            message,
+                        });
+                        None
+                    }
+                };
+                let ordinary_seed = match self.ordinary_sum_capture.seed(*local, value) {
+                    Ok(seed) => seed,
+                    Err(message) => {
+                        self.resource_error = Some(LowerError {
+                            span: statement.span,
+                            message,
+                        });
+                        None
+                    }
+                };
+                let value = if let Some(seed) = ordinary_seed {
+                    self.lower_ordinary_borrowed_sum_handle(seed)
+                } else if let Some(seed) = seed {
+                    if let Some(scope) = self.lexical_scopes.last_mut() {
+                        scope.active.push(*local);
+                    }
+                    self.lower_borrowed_sum_handle(seed)
+                } else if let Some(metadata) = self.locals.get(local.index() as usize)
                     && let Some(source) = metadata.view_source
                     && let Some(origin) = self
                         .locals
@@ -1355,6 +1680,15 @@ impl<'a> Builder<'a> {
                         self.types,
                     )
                     .is_ok()
+                    && (!resource_type_pending(self.types, metadata.ty)
+                        || hir::borrowed_sum_view_initializer(
+                            value,
+                            source,
+                            origin.ty,
+                            metadata.ty,
+                            self.types,
+                        )
+                        .is_ok_and(|handle| handle.is_none()))
                 {
                     // Stable aliases contain only transparent reads. Taking an
                     // owned snapshot would replace their checked backing local.
@@ -1434,22 +1768,53 @@ impl<'a> Builder<'a> {
             hir::StatementKind::Return(value) => {
                 // This branch abandons surrounding calls before the return
                 // operand may move their owner. Other CFG branches retain them.
+                let resource_scopes = self.abandon_resource_calls(statement.span);
                 self.end_call_views_since(0, statement.span);
                 let abandoned = std::mem::take(&mut self.call_view_scopes);
                 let generations = self.generation_capture.suspend();
                 let value = value.as_ref().map(|v| self.lower_value(v));
                 self.call_view_scopes = abandoned;
                 self.generation_capture.restore(generations);
+                self.resource_call_scopes = resource_scopes;
+                self.lower_lexical_exit(
+                    ResourceLexicalExitKind::Return,
+                    0,
+                    Some(statement),
+                    None,
+                    statement.span,
+                );
                 self.terminate(TerminatorKind::Return(value), statement.span);
             }
             hir::StatementKind::Break => {
-                let (_, target, depth) = *self.loops.last().expect("validated break has a loop");
+                if !self.resource_call_scopes.is_empty() {
+                    self.resource_error = Some(LowerError { span: statement.span, message: "pending Resource call region: Break needs its exact operation-depth exit proof".into() });
+                }
+                let (_, target, depth, lexical_depth) =
+                    *self.loops.last().expect("validated break has a loop");
                 self.end_call_views_since(depth, statement.span);
+                self.lower_lexical_exit(
+                    ResourceLexicalExitKind::Break,
+                    lexical_depth,
+                    Some(statement),
+                    Some(target),
+                    statement.span,
+                );
                 self.terminate(TerminatorKind::Goto(target), statement.span);
             }
             hir::StatementKind::Continue => {
-                let (target, _, depth) = *self.loops.last().expect("validated continue has a loop");
+                if !self.resource_call_scopes.is_empty() {
+                    self.resource_error = Some(LowerError { span: statement.span, message: "pending Resource call region: Continue needs its exact operation-depth exit proof".into() });
+                }
+                let (target, _, depth, lexical_depth) =
+                    *self.loops.last().expect("validated continue has a loop");
                 self.end_call_views_since(depth, statement.span);
+                self.lower_lexical_exit(
+                    ResourceLexicalExitKind::Continue,
+                    lexical_depth,
+                    Some(statement),
+                    Some(target),
+                    statement.span,
+                );
                 self.terminate(TerminatorKind::Goto(target), statement.span);
             }
             hir::StatementKind::If {
@@ -1566,8 +1931,12 @@ impl<'a> Builder<'a> {
         let body_block = self.new_block(body.span);
         let exit = self.new_block(statement_span);
         self.terminate(TerminatorKind::Goto(condition_block), statement_span);
-        self.loops
-            .push((condition_block, exit, self.call_view_scopes.len()));
+        self.loops.push((
+            condition_block,
+            exit,
+            self.call_view_scopes.len(),
+            self.lexical_scopes.len(),
+        ));
         self.current = condition_block;
         let condition = self.lower_value(condition);
         self.terminate(
@@ -1611,7 +1980,12 @@ impl<'a> Builder<'a> {
             },
             statement_span,
         );
-        self.loops.push((header, exit, self.call_view_scopes.len()));
+        self.loops.push((
+            header,
+            exit,
+            self.call_view_scopes.len(),
+            self.lexical_scopes.len(),
+        ));
         self.current = body_block;
         self.lower_block(body);
         self.close_to(header, body.span);
@@ -1685,6 +2059,13 @@ impl<'a> Builder<'a> {
         arms: &[hir::ReflectedTypeArm],
         statement_span: Span,
     ) {
+        if let Some(proof) = self
+            .resource_capture
+            .reflected_field_dispatch(type_info, arms)
+        {
+            self.lower_reflected_field_dispatch(proof, statement_span);
+            return;
+        }
         let arm_blocks = arms
             .iter()
             .map(|arm| self.new_block(arm.body.span))
@@ -1723,6 +2104,103 @@ impl<'a> Builder<'a> {
                 self.close_to(join, span);
             }
             self.current = join;
+        }
+    }
+    fn lower_reflected_field_dispatch(
+        &mut self,
+        proof: hir::ReflectedFieldDispatchProof,
+        statement_span: Span,
+    ) {
+        let Some(key) = self.locals.get(proof.key().index() as usize).cloned() else {
+            self.resource_error = Some(LowerError {
+                span: statement_span,
+                message: "Resource reflected binder lost its dense header".into(),
+            });
+            return;
+        };
+        let arms = proof.arms();
+        let mut guards = vec![self.current];
+        for _ in 1..arms.len() {
+            guards.push(self.new_block(statement_span));
+        }
+        let dispatches = arms
+            .iter()
+            .map(|_| self.new_block(statement_span))
+            .collect::<Vec<_>>();
+        let targets = arms
+            .iter()
+            .map(|arm| self.new_block(arm.body.span))
+            .collect::<Vec<_>>();
+        let otherwise = self.new_block(statement_span);
+        let mut exits = Vec::new();
+        for (index, arm) in arms.iter().enumerate() {
+            let condition = match resource_ownership::reflected_fields::ordinal_guard(
+                &proof,
+                proof.type_info(),
+                index,
+            ) {
+                Ok(condition) => condition,
+                Err(message) => {
+                    self.resource_error = Some(LowerError {
+                        span: statement_span,
+                        message,
+                    });
+                    return;
+                }
+            };
+            self.current = guards[index];
+            self.terminate(
+                TerminatorKind::Branch {
+                    condition,
+                    then_block: dispatches[index],
+                    else_block: guards.get(index + 1).copied().unwrap_or(otherwise),
+                },
+                statement_span,
+            );
+            self.current = dispatches[index];
+            self.terminate(
+                TerminatorKind::ReflectedTypeDispatch {
+                    type_info: proof.type_info().clone(),
+                    arms: vec![ReflectedTypeDispatchArm {
+                        iteration_index: index,
+                        bound_type: arm.bound_type,
+                        reflection_identity: arm.reflection_identity.clone(),
+                        target: targets[index],
+                    }],
+                    otherwise,
+                },
+                proof.type_info().span,
+            );
+            self.current = targets[index];
+            let prefix = proof.arm_container_path(index).map(<[_]>::to_vec);
+            if prefix.is_none() {
+                self.resource_error = Some(LowerError {
+                    span: statement_span,
+                    message: "Resource reflected body lost its exact original Scope path".into(),
+                });
+                return;
+            }
+            let previous = std::mem::replace(&mut self.reflected_original_prefix, prefix);
+            self.lower_block(&arm.body);
+            self.reflected_original_prefix = previous;
+            exits.push((self.current, self.open(), arm.body.span));
+        }
+        if exits.iter().any(|(_, open, _)| *open) {
+            let join = self.new_block(statement_span);
+            for (exit, _, span) in exits {
+                self.current = exit;
+                self.close_to(join, span);
+            }
+            self.current = join;
+        }
+        if let Err(message) = self
+            .resource_capture
+            .capture_reflected_field_dispatch(proof, key, guards, dispatches, targets, otherwise)
+        {
+            self.resource_error = Some(LowerError {
+                span: statement_span,
+                message,
+            });
         }
     }
 }

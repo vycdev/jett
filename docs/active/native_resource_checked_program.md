@@ -1,8 +1,9 @@
 # Immutable checked resource program handoff
 
-Status: implemented compiler handoff prerequisite over `b7180bd9`. All 43
-focused Resource groups and the resolver/typechecker/HIR suites pass. Full
-workspace and supported-host validation of this change remain pending.
+Status: implemented compiler handoff prerequisite. Its original isolated step
+over `b7180bd9` passed 43 focused Resource groups and the resolver/typechecker/HIR
+suites. The later private reference lifecycle now passes 36 focused tests, as
+recorded below; broader acceptance of that Resource candidate remains pending.
 The accepted authority is the opaque runtime resource contract in
 `docs/completed/opaque_runtime_resource_contract.md`.
 
@@ -95,12 +96,14 @@ The snapshot proves parsing, resolution, checking and hook shape only. It does
 not bypass explicit comptime or verification failures, retain baked runtime
 authority or authenticate a foreign raw DefId. The separate reference bridge
 repairs post-preparation rereading without granting live Resource authority.
-Program-bound callable descriptors, reached-hook runtime-context eligibility,
-checked caller ownership facts, one-owner ledgers and native drop elaboration
-remain required. Current name/source-position-based first-view retention and
-formal-mode lowering disagree on some call shapes; no universal bare-argument
-cleanup policy is selected here. The next characterization must establish those
-source outcomes before a live Resource route is admitted.
+Typed caller ownership now carries the existing Rule24 effects separately from
+callee access. The later private reference lifecycle adds program-bound hook
+descriptors, reached-hook purpose checks and one-owner custody ledgers; its
+36-test acceptance is recorded in
+[the resource-hook note](native_resource_hook_identity.md#reference-lifecycle-execution).
+The successful snapshot alone grants none of those execution rights. Broader
+scoped/reflected/indirect/worker cases, production providers and native drop
+elaboration remain required.
 
 
 ## Retained reference integration

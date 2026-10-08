@@ -1,0 +1,22 @@
+namespace app
+function observe_result(view net: Network, view outcome: result[resource_probe.TestHandle, string]) returns int64:
+    use resource_probe
+    resource_probe.TestHandle token = view((view outcome) handle error:
+        if error != "empty":
+            int64 ignored = resource_probe.terminal_label()
+        return 0
+    )
+    return resource_probe.borrow(view net, view token) handle error:
+        return 0
+export function main(net: Network) returns nothing:
+    use resource_probe
+    result[resource_probe.TestHandle, string] held = fail("empty")
+    int64 observed = observe_result(view net, view held)
+    if observed != 0:
+        int64 ignored = resource_probe.terminal_label()
+    resource_probe.TestHandle token = held handle error:
+        if error != "empty":
+            int64 ignored = resource_probe.terminal_label()
+        return nothing
+    resource_probe.close(token)
+    return nothing

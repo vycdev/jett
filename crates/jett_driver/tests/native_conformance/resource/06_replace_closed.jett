@@ -1,0 +1,10 @@
+namespace app
+function main(net: Network) returns nothing:
+    use resource_probe
+    mutable resource_probe.TestHandle token = resource_probe.create(view net, 2411) handle error:
+        return nothing
+    resource_probe.close(token)
+    token = resource_probe.create(view net, 2412) handle error:
+        return nothing
+    resource_probe.close(token)
+    return nothing

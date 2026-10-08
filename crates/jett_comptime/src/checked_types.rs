@@ -9,6 +9,8 @@ use crate::value::{ClosureTypeArgument, Value};
 
 #[derive(Debug, Clone, Default)]
 pub struct CheckedExpressionTypes {
+    /// Exact compiler session. Ordinary type-name projections confer no hook authority.
+    pub resource_program: Option<Arc<jett_typecheck::CheckedResourceProgram>>,
     pub bindings: CheckedScopedBindings,
     pub expressions: HashMap<Span, String>,
     pub functions: HashMap<Span, Vec<Arc<CheckedFunctionTypes>>>,

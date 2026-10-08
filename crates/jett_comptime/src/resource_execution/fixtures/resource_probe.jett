@@ -1,0 +1,17 @@
+namespace resource_probe
+export resource TestHandle
+export function create(view net: Network, label: int64) returns result[TestHandle, string]:
+    return kernel_create(view net, label)
+export function borrow(view net: Network, view token: TestHandle) returns result[int64, string]:
+    return kernel_borrow(view net, view token)
+export function close(token: TestHandle) returns nothing:
+    kernel_close(token)
+    return nothing
+export function close_descriptor() returns function(TestHandle) returns nothing:
+    return kernel_close
+export function empty() returns optional[TestHandle]:
+    return none
+export function terminal_failure() returns nothing:
+    list[int64] numbers = list(1)
+    list[int64] removed = list.__remove_at[int64](numbers, -1)
+    return nothing

@@ -381,7 +381,14 @@ fn definitions(function: &Function, id: LocalId) -> usize {
     for block in &function.blocks {
         for statement in &block.statements {
             count += usize::from(match &statement.kind {
-                StatementKind::Let { local, .. }
+                StatementKind::ResourceCall(
+                    ResourceCallNode::Stage {
+                        ordinary: Some(local),
+                        ..
+                    }
+                    | ResourceCallNode::Invoke { output: local, .. },
+                )
+                | StatementKind::Let { local, .. }
                 | StatementKind::BeginCallView { local, .. }
                 | StatementKind::CheckRefinement { local, .. } => *local == id,
                 StatementKind::SequenceGet { target, .. }

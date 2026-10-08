@@ -10412,11 +10412,181 @@ impl<'a> TypeChecker<'a> {
         if !explicit_view && matches!(value, Expr::Clone(_, _) | Expr::FieldAccess(_, _, _)) {
             return CheckedBindingMode::Owned;
         }
-        let source = Self::assignment_root(value)
+        let source = self
+            .borrowed_handle_binding_root(&declaration.value, initializer_type)
+            .or_else(|| Self::assignment_root(value))
             .and_then(|ident| self.ident_def_id(ident))
             .map(CheckedViewSource::Binding)
             .unwrap_or(CheckedViewSource::Other);
         CheckedBindingMode::View { source }
+    }
+
+    /// A borrowed sum payload retains the exact whole binding as its backing.
+    /// This is provenance only; HIR still checks the complete typed projection.
+    fn borrowed_handle_binding_root<'source>(
+        &self,
+        initializer: &'source Expr,
+        output: TypeId,
+    ) -> Option<&'source ast::Ident> {
+        let Expr::View(value, _) = Self::unparenthesized(initializer) else {
+            return None;
+        };
+        let Expr::Handle(target, error, failure, _) = Self::unparenthesized(value) else {
+            return None;
+        };
+        if Self::handle_body_has_default(failure) {
+            return None;
+        }
+        let target_ty = self.checked_expression_type(target.span())?;
+        match self.interner.resolve(target_ty) {
+            Type::Optional(payload) if *payload == output && error.is_none() => {}
+            Type::Result(payload, _) if *payload == output && error.is_some() => {}
+            _ => return None,
+        }
+        let Expr::View(backing, _) = Self::unparenthesized(target) else {
+            return None;
+        };
+        let Expr::Ident(binding) = Self::unparenthesized(backing) else {
+            return None;
+        };
+        let definition = self.ident_def_id(binding)?;
+        if !matches!(
+            self.resolve.scope_table.def(definition).kind,
+            DefKind::Variable | DefKind::Param
+        ) || self.checked_expression_type(backing.span()) != Some(target_ty)
+        {
+            return None;
+        }
+        Some(binding)
+    }
+
+    /// Defaults in nested Handle bodies yield to that nested Handle, whereas
+    /// defaults anywhere in this lexical body can yield an alternate payload.
+    fn handle_body_has_default(body: &Block) -> bool {
+        body.stmts.iter().any(|statement| match statement {
+            Stmt::VarDecl(value) => Self::handle_expression_has_default(&value.value),
+            Stmt::Assign(value) => {
+                Self::handle_expression_has_default(&value.target)
+                    || Self::handle_expression_has_default(&value.value)
+            }
+            Stmt::Return(value) => value
+                .value
+                .as_ref()
+                .is_some_and(Self::handle_expression_has_default),
+            Stmt::Respond(value) => Self::handle_expression_has_default(&value.value),
+            Stmt::ComptimeTypeBind(value) => {
+                Self::handle_expression_has_default(&value.value)
+                    || Self::handle_body_has_default(&value.body)
+            }
+            Stmt::If(value) => {
+                Self::handle_expression_has_default(&value.condition)
+                    || Self::handle_body_has_default(&value.then_block)
+                    || value.else_ifs.iter().any(|(condition, body)| {
+                        Self::handle_expression_has_default(condition)
+                            || Self::handle_body_has_default(body)
+                    })
+                    || value
+                        .else_block
+                        .as_ref()
+                        .is_some_and(Self::handle_body_has_default)
+            }
+            Stmt::For(value) => {
+                Self::handle_expression_has_default(&value.iterable)
+                    || Self::handle_body_has_default(&value.body)
+            }
+            Stmt::While(value) => {
+                Self::handle_expression_has_default(&value.condition)
+                    || Self::handle_body_has_default(&value.body)
+            }
+            Stmt::Match(value) => {
+                Self::handle_expression_has_default(&value.expr)
+                    || value
+                        .arms
+                        .iter()
+                        .any(|arm| Self::handle_body_has_default(&arm.body))
+            }
+            Stmt::Expr(value) => Self::handle_expression_has_default(&value.expr),
+            Stmt::Assert(value) => {
+                Self::handle_expression_has_default(&value.condition)
+                    || value
+                        .message
+                        .as_ref()
+                        .is_some_and(Self::handle_expression_has_default)
+            }
+            Stmt::Breakpoint(value) => value
+                .condition
+                .as_ref()
+                .is_some_and(Self::handle_expression_has_default),
+            Stmt::Use(_) | Stmt::Trace(_) | Stmt::Break(_) | Stmt::Continue(_) => false,
+        })
+    }
+
+    fn handle_expression_has_default(value: &Expr) -> bool {
+        match value {
+            Expr::Default(_, _) => true,
+            // Evaluating a nested Handle's target still belongs to this body;
+            // its failure body has its own nearest handler.
+            Expr::Handle(target, _, _, _) => Self::handle_expression_has_default(target),
+            Expr::Binary(left, _, right, _) => {
+                Self::handle_expression_has_default(left)
+                    || Self::handle_expression_has_default(right)
+            }
+            Expr::Unary(_, value, _)
+            | Expr::FieldAccess(value, _, _)
+            | Expr::Paren(value, _)
+            | Expr::View(value, _)
+            | Expr::Comptime(value, _)
+            | Expr::Ok(value, _)
+            | Expr::Fail(value, _)
+            | Expr::Some(value, _)
+            | Expr::Declassify(value, _)
+            | Expr::Coarsen(value, _)
+            | Expr::At(value, _, _)
+            | Expr::Spawn(value, _)
+            | Expr::Send(value, _)
+            | Expr::Ask(value, _)
+            | Expr::Clone(value, _)
+            | Expr::Run(value, _)
+            | Expr::Join(value, _)
+            | Expr::Cancel(value, _) => Self::handle_expression_has_default(value),
+            Expr::Call(callee, args, _) | Expr::GenericCall(callee, _, args, _) => {
+                Self::handle_expression_has_default(callee)
+                    || args
+                        .iter()
+                        .any(|arg| Self::handle_expression_has_default(&arg.value))
+            }
+            Expr::ListConstruct(values, _) => {
+                values.iter().any(Self::handle_expression_has_default)
+            }
+            Expr::MapConstruct(entries, _) => entries.iter().any(|(key, value)| {
+                Self::handle_expression_has_default(key)
+                    || Self::handle_expression_has_default(value)
+            }),
+            Expr::StringInterpolation(parts, _) => parts.iter().any(|part| match part {
+                ast::StringPart::Literal(_) => false,
+                ast::StringPart::Expr(value) => Self::handle_expression_has_default(value),
+            }),
+            Expr::Pipeline(value, steps, _) => {
+                Self::handle_expression_has_default(value)
+                    || steps.iter().any(|step| {
+                        Self::handle_expression_has_default(&step.function)
+                            || step
+                                .extra_args
+                                .iter()
+                                .any(|arg| Self::handle_expression_has_default(&arg.value))
+                    })
+            }
+            Expr::IntLiteral(_, _)
+            | Expr::FloatLiteral(_, _)
+            | Expr::StringLiteral(_, _)
+            | Expr::BoolLiteral(_, _)
+            | Expr::Nothing(_)
+            | Expr::Ident(_)
+            | Expr::None(_)
+            | Expr::EnumVariant(_, _, _)
+            | Expr::InlineFn(_, _, _, _)
+            | Expr::Error(_) => false,
+        }
     }
 
     fn assignment_place_is_view(&self, target: &Expr) -> bool {
@@ -17683,6 +17853,47 @@ function preserve(raw: string) returns string:
             "binding name must be unique in this body"
         );
         (span, mode)
+    }
+
+    #[test]
+    fn checked_binding_modes_borrowed_sum_projections_keep_exact_original_sources() {
+        let source = r#"function inspect(view optional_source: optional[list[int64]], view result_source: result[list[int64], string]) returns nothing:
+    list[int64] optional_alias = view((view optional_source) handle:
+        return nothing
+    )
+    list[int64] result_alias = view((view result_source) handle error:
+        return nothing
+    )
+    return nothing
+"#;
+        let parsed = parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        let checked = check(&parsed.module, &resolved);
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .chain(&checked.diagnostics)
+                .all(|error| { error.severity != jett_diagnostics::Severity::Error }),
+            "{:?}: {:?}",
+            resolved.diagnostics,
+            checked.diagnostics
+        );
+        for (alias, backing) in [
+            ("optional_alias", "optional_source"),
+            ("result_alias", "result_source"),
+        ] {
+            let (_, mode) = binding_mode_named(&checked.binding_modes, source, alias);
+            let CheckedBindingMode::View {
+                source: CheckedViewSource::Binding(definition),
+            } = mode
+            else {
+                panic!("expected stable borrowed sum projection: {mode:?}");
+            };
+            assert_eq!(resolved.scope_table.def(definition).name, backing);
+            assert_eq!(resolved.scope_table.def(definition).kind, DefKind::Param);
+        }
     }
 
     #[test]

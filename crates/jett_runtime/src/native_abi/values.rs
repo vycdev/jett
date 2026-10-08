@@ -20,6 +20,7 @@ mod debug_equal;
 mod debug_format;
 mod graphics_decode;
 pub mod interface_conversion;
+mod ordinary_attempts;
 
 pub type NativeHandle = u64;
 type Failure = (JettRuntimeStatusV1, &'static [u8]);
@@ -903,6 +904,7 @@ pub(super) struct NativeValues {
     sums_destroyed: u64,
     bytes_created: u64,
     bytes_destroyed: u64,
+    resource_ordinary_channels: ordinary_attempts::ResourceOrdinaryChannels,
     failure: Option<Failure>,
     dynamic_failure_message: Option<Vec<u8>>,
     // Diagnostic bytes only; this metadata retains no owned Jett values.
@@ -1019,7 +1021,7 @@ impl NativeValues {
             return Ok(0);
         };
         let suffix = if remaining == 1 { "sample" } else { "samples" };
-        self.dynamic_failure_message = Some(
+        self.set_dynamic_failure_message(
             format!("{capability}: test provider has {remaining} unconsumed {suffix}").into_bytes(),
         );
         Err((
@@ -1087,7 +1089,7 @@ impl NativeValues {
             let left = self.format_string(left)?;
             let right = self.format_string(right)?;
             let operation = if not_equal { "NotEq" } else { "Eq" };
-            self.dynamic_failure_message = Some(
+            self.set_dynamic_failure_message(
                 format!("unsupported binary operation: {left} {operation} {right}").into_bytes(),
             );
             return Err(UNSUPPORTED_STRING_COMPARISON);
@@ -1124,8 +1126,9 @@ impl NativeValues {
         let left = layout.format_value(self, left, layout.root)?;
         let right = layout.format_value(self, right, layout.root)?;
         let operation = if not_equal == 0 { "Eq" } else { "NotEq" };
-        self.dynamic_failure_message =
-            Some(format!("unsupported binary operation: {left} {operation} {right}").into_bytes());
+        self.set_dynamic_failure_message(
+            format!("unsupported binary operation: {left} {operation} {right}").into_bytes(),
+        );
         Err(UNSUPPORTED_ENUM_COMPARISON)
     }
     fn same_string_value(&self, left: u64, right: u64) -> LeafResult<bool> {
@@ -1143,8 +1146,9 @@ impl NativeValues {
             return Ok(0);
         }
         let value = self.format_string(id)?;
-        self.dynamic_failure_message =
-            Some(format!("Displayable.display returned {value} instead of string").into_bytes());
+        self.set_dynamic_failure_message(
+            format!("Displayable.display returned {value} instead of string").into_bytes(),
+        );
         Err(INVALID_DISPLAY_RESULT)
     }
     fn display_string(&mut self, id: u64) -> LeafResult<u64> {
@@ -1231,8 +1235,9 @@ impl NativeValues {
             return Ok(0);
         }
         let pending = format_pending_value(&label, depth)?;
-        self.dynamic_failure_message =
-            Some(format!("expected function value, got {pending}").into_bytes());
+        self.set_dynamic_failure_message(
+            format!("expected function value, got {pending}").into_bytes(),
+        );
         Err(PENDING_FUNCTION_CALL)
     }
     fn debug_append(&mut self, builder: u64, label: &str, bits: u64, kind: u32) -> LeafResult<u32> {
@@ -1271,6 +1276,15 @@ impl NativeValues {
         text.push_str(&value);
         Ok(0)
     }
+    /// Observe the selected ordinary payload without acquiring ownership.
+    /// Its exact type and stable backing belong to the checked MIR projection.
+    fn sum_payload_borrow(&self, value: u64, tag: u32) -> LeafResult<u64> {
+        let sum = self.sums.get(&value).ok_or(INVALID_SUM)?;
+        if tag > SUM_SUCCESS || sum.tag != tag || sum.pending_depth != 0 {
+            return Err(INVALID_SUM);
+        }
+        Ok(sum.bits)
+    }
     fn sum_handle_tag(&mut self, value: u64, layout: &[u8]) -> LeafResult<u32> {
         let sum = self.sums.get(&value).ok_or(INVALID_SUM)?;
         let tag = sum.tag;
@@ -1280,7 +1294,7 @@ impl NativeValues {
         }
         let layout = NativeDebugLayout::parse(layout)?;
         let value = layout.format_value(self, value, layout.root)?;
-        self.dynamic_failure_message = Some(
+        self.set_dynamic_failure_message(
             format!("handle block requires a result or optional value, got {value}").into_bytes(),
         );
         Err((
@@ -1441,7 +1455,7 @@ impl NativeValues {
         if let Some(message) = message {
             let mut full = prefix.to_vec();
             full.extend_from_slice(message.as_bytes());
-            self.dynamic_failure_message = Some(full);
+            self.set_dynamic_failure_message(full);
             return Err(INVALID_PENDING_HANDLE_CHECK);
         }
         Ok(0)
@@ -1571,8 +1585,9 @@ impl NativeValues {
         let left = format_nothing(left)?;
         let right = format_nothing(right)?;
         let operation = if not_equal == 0 { "Eq" } else { "NotEq" };
-        self.dynamic_failure_message =
-            Some(format!("unsupported binary operation: {left} {operation} {right}").into_bytes());
+        self.set_dynamic_failure_message(
+            format!("unsupported binary operation: {left} {operation} {right}").into_bytes(),
+        );
         Err(UNSUPPORTED_NOTHING_COMPARISON)
     }
     fn check_pending_scalar_binary(
@@ -1591,7 +1606,7 @@ impl NativeValues {
         }
         let left = format_pending_value(&self.debug_value(left_bits, left_kind)?, left_depth)?;
         let right = format_pending_value(&self.debug_value(right_bits, right_kind)?, right_depth)?;
-        self.dynamic_failure_message = Some(
+        self.set_dynamic_failure_message(
             format!(
                 "unsupported binary operation: {left} {} {right}",
                 operation.label()
@@ -1619,7 +1634,7 @@ impl NativeValues {
             2 => format!("breakpoint condition must be bool, got {value}"),
             _ => return Err(INVALID_TRACE_LABEL),
         };
-        self.dynamic_failure_message = Some(message.into_bytes());
+        self.set_dynamic_failure_message(message.into_bytes());
         Err(PENDING_BOOL_CONDITION)
     }
     fn byte_result(&mut self, decoded: Result<Vec<u8>, String>) -> LeafResult<u64> {
@@ -1745,8 +1760,9 @@ impl NativeValues {
                 return Err(INVALID_LIST);
             }
             if inner.pending_depth != 0 {
-                self.dynamic_failure_message =
-                    Some(b"csv.__stringify expects list[list[string]]".to_vec());
+                self.set_dynamic_failure_message(
+                    b"csv.__stringify expects list[list[string]]".to_vec(),
+                );
                 return Err(INVALID_PENDING_HANDLE_CHECK);
             }
             let mut fields = Vec::new();
@@ -1786,8 +1802,9 @@ impl NativeValues {
         index: i64,
         fallback: Failure,
     ) -> LeafResult<u64> {
-        self.dynamic_failure_message =
-            Some(format!("{operation}: index {index} out of bounds").into_bytes());
+        self.set_dynamic_failure_message(
+            format!("{operation}: index {index} out of bounds").into_bytes(),
+        );
         Err(fallback)
     }
     fn check_list_arguments(
@@ -1864,7 +1881,7 @@ impl NativeValues {
         if first_depth == 0 && second_depth == 0 && third_depth == 0 {
             return Ok(0);
         }
-        self.dynamic_failure_message = Some(message.to_vec());
+        self.set_dynamic_failure_message(message.to_vec());
         Err((
             JettRuntimeStatusV1::INVALID_ARGUMENT,
             b"pending scalar intrinsic operand",
@@ -1895,7 +1912,7 @@ impl NativeValues {
         if depth == 0 {
             return Ok(0);
         }
-        self.dynamic_failure_message = Some(message.to_vec());
+        self.set_dynamic_failure_message(message.to_vec());
         Err((
             JettRuntimeStatusV1::INVALID_ARGUMENT,
             b"pending handle intrinsic operand",
@@ -2826,7 +2843,7 @@ impl NativeValues {
                 .ok_or(INVALID_HANDLE)?;
             if string.pending_depth != 0 {
                 let value = format_pending_value(&string.text, string.pending_depth)?;
-                self.dynamic_failure_message = Some(
+                self.set_dynamic_failure_message(
                     format!("string.__join requires a list of strings, found {value}").into_bytes(),
                 );
                 return Err(INVALID_PENDING_HANDLE_CHECK);
@@ -3187,8 +3204,9 @@ impl NativeValues {
             return Ok(0);
         }
         let actor = format_pending_value(&format!("actor#{ordinal}"), depth)?;
-        self.dynamic_failure_message =
-            Some(format!("send/ask: expected actor value, got {actor}").into_bytes());
+        self.set_dynamic_failure_message(
+            format!("send/ask: expected actor value, got {actor}").into_bytes(),
+        );
         Err(PENDING_ACTOR_MESSAGE)
     }
     fn replace_actor_field(
@@ -3816,7 +3834,7 @@ impl NativeValues {
             nodes: vec![NativeDebugNode::TypeConstruction],
         };
         let value = layout.format_value(self, builder, 0)?;
-        self.dynamic_failure_message = Some(
+        self.set_dynamic_failure_message(
             format!("type.{operation}: first argument must be TypeConstruction, got {value}")
                 .into_bytes(),
         );
@@ -4147,7 +4165,7 @@ impl NativeValues {
         } else {
             message.to_owned()
         };
-        self.dynamic_failure_message = Some(message.into_bytes());
+        self.set_dynamic_failure_message(message.into_bytes());
         Err(INVALID_STRUCT)
     }
     fn enum_equal(&self, left: u64, right: u64, layout: &[u8]) -> LeafResult<u32> {
@@ -4231,7 +4249,7 @@ impl NativeValues {
         } else {
             return Ok(index as u64);
         };
-        self.dynamic_failure_message = Some(message.into_bytes());
+        self.set_dynamic_failure_message(message.into_bytes());
         Err(INVALID_TYPE_ARG_INDEX)
     }
     fn reflected_field_owner_label(&self, field: u64, mismatch: Failure) -> LeafResult<String> {
@@ -4259,7 +4277,7 @@ impl NativeValues {
             .pending_type_field_message(actual, metadata_layout, caller)
             .map_err(|_| mismatch)?
         {
-            self.dynamic_failure_message = Some(message.into_bytes());
+            self.set_dynamic_failure_message(message.into_bytes());
             return Err(mismatch);
         }
         let actual_owner = self.text(self.struct_field(actual, 1)?.bits)?;
@@ -4281,7 +4299,7 @@ impl NativeValues {
             || expected_owner.to_owned(),
             |member| format!("{expected_owner}.{member}"),
         );
-        self.dynamic_failure_message = Some(
+        self.set_dynamic_failure_message(
             format!(
                 "{caller}: field metadata belongs to '{actual_label}', expected '{expected_label}'"
             )
@@ -4338,7 +4356,7 @@ impl NativeValues {
             4 => ("type.machine_field_value", "machine"),
             _ => return Err(INVALID_REFLECTED_OWNER),
         };
-        self.dynamic_failure_message = Some(
+        self.set_dynamic_failure_message(
             format!("{caller}: expected {expected} value for '{owner_name}', got {actual}")
                 .into_bytes(),
         );
@@ -4370,7 +4388,7 @@ impl NativeValues {
         if !owner_type_matches || !owner_member_matches {
             let actual_owner = self.reflected_field_owner_label(actual, mismatch)?;
             let expected_owner = self.reflected_field_owner_label(expected, mismatch)?;
-            self.dynamic_failure_message = Some(
+            self.set_dynamic_failure_message(
                 format!(
                     "{caller}: field metadata belongs to '{actual_owner}', expected '{expected_owner}'"
                 )
@@ -4404,7 +4422,7 @@ impl NativeValues {
         if compatible == 0 {
             let name = self.text(self.struct_field(expected, 3)?.bits)?;
             let field_type = self.text(self.struct_field(expected, 4)?.bits)?;
-            self.dynamic_failure_message = Some(
+            self.set_dynamic_failure_message(
                 format!(
                     "{caller}: field '{name}' has type '{field_type}', requested '{requested_type}'"
                 )
@@ -4859,9 +4877,264 @@ fn native_lines(text: &str) -> Vec<String> {
     parts
 }
 fn next_identity() -> LeafResult<u64> {
+    reserve_native_identities(1)?.take()
+}
+
+// Resource machinery samples the ordinary channel; it never takes or resets it.
+pub(super) struct ResourceOrdinaryFailure<'a> {
+    pub(super) status: JettRuntimeStatusV1,
+    pub(super) message: &'a [u8],
+    pub(super) prefix: Option<&'a [u8]>,
+}
+
+pub(super) struct ReservedNativeIdentities {
+    next: u64,
+    end: u64,
+}
+
+pub(super) fn reserve_native_identities(count: u64) -> LeafResult<ReservedNativeIdentities> {
     static NEXT: AtomicU64 = AtomicU64::new(1);
-    NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
-        .map_err(|_| EXHAUSTED)
+    if count == 0 {
+        return Err(EXHAUSTED);
+    }
+    let next = NEXT
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            if next == 0 {
+                None
+            } else {
+                next.checked_add(count)
+            }
+        })
+        .map_err(|_| EXHAUSTED)?;
+    Ok(ReservedNativeIdentities {
+        next,
+        end: next + count,
+    })
+}
+
+impl ReservedNativeIdentities {
+    pub(super) fn take(&mut self) -> LeafResult<u64> {
+        if self.next == 0 || self.next >= self.end {
+            return Err(EXHAUSTED);
+        }
+        let value = self.next;
+        self.next += 1;
+        Ok(value)
+    }
+}
+
+// A staged record cannot be created from an independently supplied Network bit.
+pub(super) struct PreparedResourceNetwork {
+    authority: u64,
+}
+
+impl NativeValues {
+    pub(super) fn resource_failure(&self) -> Option<ResourceOrdinaryFailure<'_>> {
+        self.current_failure()
+            .map(|(status, message)| ResourceOrdinaryFailure {
+                status,
+                message: self.current_dynamic_failure_message().unwrap_or(message),
+                prefix: self.current_property_case_context(),
+            })
+    }
+
+    pub(super) fn prepare_resource_network(
+        &mut self,
+        identities: &mut ReservedNativeIdentities,
+    ) -> LeafResult<PreparedResourceNetwork> {
+        if self.opaque_capabilities.contains_key("Network") {
+            return Err(INVALID_HANDLE);
+        }
+        self.opaque_capabilities
+            .try_reserve(1)
+            .map_err(|_| EXHAUSTED)?;
+        Ok(PreparedResourceNetwork {
+            authority: identities.take()?,
+        })
+    }
+
+    pub(super) fn commit_resource_network(&mut self, prepared: PreparedResourceNetwork) -> u64 {
+        let authority = prepared.authority;
+        // The caller holds the same state mutex from preparation through publication.
+        self.opaque_capabilities.insert("Network", authority);
+        authority
+    }
+
+    /// Check ordinary carriers at the exact installed schema. This cannot recover
+    /// Resource tokens: occupied shapes are refused and the Resource table is separate.
+    pub(super) fn validate_resource_ordinary(
+        &self,
+        value: u64,
+        layout: &crate::resource_custody::RegisteredNativeLayout,
+        shape: u32,
+    ) -> LeafResult<()> {
+        use crate::resource_custody::NativeShape;
+        let mut shape = shape;
+        let mut value = value;
+        loop {
+            match layout.shapes().get(shape as usize).ok_or(INVALID_HANDLE)? {
+                NativeShape::Integer { .. } | NativeShape::Float { .. } => return Ok(()),
+                NativeShape::Bool if value <= 1 => return Ok(()),
+                NativeShape::Nothing if value == 0 => return Ok(()),
+                NativeShape::String
+                    if self
+                        .strings
+                        .get(&value)
+                        .is_some_and(|s| s.references > 0 && s.pending_depth == 0) =>
+                {
+                    return Ok(());
+                }
+                NativeShape::Network if self.validates_resource_network(value) => return Ok(()),
+                NativeShape::HookDescriptor { .. } => return Err(INVALID_HANDLE),
+                NativeShape::Optional { child } => {
+                    let sum = self.sums.get(&value).ok_or(INVALID_HANDLE)?;
+                    if sum.pending_depth != 0 || sum.payload_pending_depth != 0 || sum.tag > 1 {
+                        return Err(INVALID_HANDLE);
+                    }
+                    if sum.tag == 0 {
+                        return if !sum.owned && sum.bits == 0 {
+                            Ok(())
+                        } else {
+                            Err(INVALID_HANDLE)
+                        };
+                    }
+                    let payload = layout.shapes().get(*child as usize).ok_or(INVALID_HANDLE)?;
+                    let owned = matches!(
+                        payload,
+                        NativeShape::String
+                            | NativeShape::Optional { .. }
+                            | NativeShape::Result { .. }
+                    );
+                    if sum.owned != owned {
+                        return Err(INVALID_HANDLE);
+                    }
+                    shape = *child;
+                    value = sum.bits;
+                }
+                NativeShape::Result { ok, fail } => {
+                    let sum = self.sums.get(&value).ok_or(INVALID_HANDLE)?;
+                    if sum.pending_depth != 0 || sum.payload_pending_depth != 0 || sum.tag > 1 {
+                        return Err(INVALID_HANDLE);
+                    }
+                    shape = if sum.tag == SUM_SUCCESS { *ok } else { *fail };
+                    let payload = layout.shapes().get(shape as usize).ok_or(INVALID_HANDLE)?;
+                    let owned = matches!(
+                        payload,
+                        NativeShape::String
+                            | NativeShape::Optional { .. }
+                            | NativeShape::Result { .. }
+                    );
+                    if sum.owned != owned {
+                        return Err(INVALID_HANDLE);
+                    }
+                    value = sum.bits;
+                }
+                _ => return Err(INVALID_HANDLE),
+            }
+        }
+    }
+
+    /// Copy only the exact ordinary String failure arm; never clone Resource data.
+    pub(super) fn clone_resource_string_companion(
+        &mut self,
+        layout: &crate::resource_custody::RegisteredNativeLayout,
+        shape: u32,
+        value: u64,
+    ) -> LeafResult<u64> {
+        if !matches!(
+            layout.shapes().get(shape as usize),
+            Some(crate::resource_custody::NativeShape::String)
+        ) {
+            return Err(INVALID_HANDLE);
+        }
+        self.validate_resource_ordinary(value, layout, shape)?;
+        self.clone_value(value)
+    }
+
+    pub(super) fn drop_resource_typed_companion(
+        &mut self,
+        layout: &crate::resource_custody::RegisteredNativeLayout,
+        shape: u32,
+        value: u64,
+    ) -> LeafResult<()> {
+        use crate::resource_custody::NativeShape;
+        self.validate_resource_ordinary(value, layout, shape)?;
+        match layout.shapes().get(shape as usize).ok_or(INVALID_HANDLE)? {
+            NativeShape::String | NativeShape::Optional { .. } | NativeShape::Result { .. } => {
+                self.drop_value(value).map(|_| ())
+            }
+            NativeShape::Integer { .. }
+            | NativeShape::Float { .. }
+            | NativeShape::Bool
+            | NativeShape::Nothing
+            | NativeShape::Network => Ok(()),
+            _ => Err(INVALID_HANDLE),
+        }
+    }
+
+    pub(super) fn validates_resource_network(&self, authority: u64) -> bool {
+        authority != 0 && self.opaque_capabilities.get("Network") == Some(&authority)
+    }
+
+    pub(super) fn prepare_resource_ordinary_output(
+        &mut self,
+    ) -> LeafResult<ReservedNativeIdentities> {
+        #[cfg(test)]
+        self.allocation_checkpoint()?;
+        self.strings.try_reserve(1).map_err(|_| EXHAUSTED)?;
+        self.sums.try_reserve(1).map_err(|_| EXHAUSTED)?;
+        self.sums_created.checked_add(1).ok_or(EXHAUSTED)?;
+        reserve_native_identities(2)
+    }
+
+    pub(super) fn publish_resource_error(
+        &mut self,
+        text: String,
+        identities: &mut ReservedNativeIdentities,
+    ) -> LeafResult<u64> {
+        let id = identities.take()?;
+        self.strings.insert(
+            id,
+            NativeString {
+                text,
+                references: 1,
+                pending_depth: 0,
+            },
+        );
+        Ok(id)
+    }
+
+    pub(super) fn publish_resource_borrow_result(
+        &mut self,
+        result: Result<i64, String>,
+        identities: &mut ReservedNativeIdentities,
+    ) -> LeafResult<u64> {
+        let (tag, bits, owned) = match result {
+            Ok(value) => (SUM_SUCCESS, value as u64, false),
+            Err(text) => (
+                SUM_FAILURE,
+                self.publish_resource_error(text, identities)?,
+                true,
+            ),
+        };
+        let id = identities.take()?;
+        self.sums.insert(
+            id,
+            NativeSum {
+                tag,
+                bits,
+                owned,
+                pending_depth: 0,
+                payload_pending_depth: 0,
+            },
+        );
+        self.sums_created += 1;
+        Ok(id)
+    }
+
+    pub(super) fn drop_resource_ordinary_companion(&mut self, handle: u64) -> LeafResult<()> {
+        self.drop_value(handle).map(|_| ())
+    }
 }
 
 // Hold the existing context lease through the operation. Cleanup is permitted
@@ -4904,7 +5177,7 @@ fn leaf<T: FailureDefault>(
     let Some(state) = state.as_mut() else {
         return T::failure_default();
     };
-    if state.values.failure.is_some() && !cleanup {
+    if state.values.operation_failure().is_some() && !cleanup {
         return T::failure_default();
     }
     match catch_unwind(AssertUnwindSafe(|| operation(&mut state.values))) {
@@ -4919,7 +5192,7 @@ fn leaf<T: FailureDefault>(
                 Ok(Ok(_)) => unreachable!(),
             };
             state.values.cleanup_failed |= cleanup;
-            state.values.failure.get_or_insert(error);
+            state.values.record_ordinary_failure(error);
             T::failure_default()
         }
     }
@@ -5100,7 +5373,7 @@ macro_rules! leaves {
             pub fn result(self) -> AbiScalar { match self { $( Self::$variant => AbiScalar::$retabi, )* } }
         }
         $(
-            /// Typed leaf operation; borrowed inputs, owned handle results.
+            /// Typed leaf operation; result ownership follows its operation contract.
             /// # Safety
             /// Context must be readable, stationary and live for the call.
             /// Pointer/length inputs must describe one readable allocation.
@@ -5198,7 +5471,7 @@ leaves! {
     InterfacePendingDepth, jett_rt_v1_interface_pending_depth, false, (value: u64 => I64), u64 => I64,
         |s| s.structs.get(&value).map(|v| v.pending_depth).ok_or(INVALID_STRUCT);
     RuntimeFailMessage, jett_rt_v1_runtime_fail_message, false, (message: u64 => I64), u32 => I32,
-        |s| { s.dynamic_failure_message = Some(s.text(message)?.as_bytes().to_vec());
+        |s| { s.set_dynamic_failure_message(s.text(message)?.as_bytes().to_vec());
             Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"native runtime failure")) };
     StructNew, jett_rt_v1_struct_new, false, (count: u64 => I64), u64 => I64,
         |s| s.new_struct(count);
@@ -5298,7 +5571,7 @@ leaves! {
             if length > isize::MAX as usize || (length != 0 && layout.is_null()) { return Err(mismatch); }
             let layout = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(layout, length) } };
             if let Some(message) = s.pending_type_field_message(metadata, layout, caller).map_err(|_| mismatch)? {
-                s.dynamic_failure_message = Some(message.into_bytes());
+                s.set_dynamic_failure_message(message.into_bytes());
                 Err(mismatch)
             } else {
                 Ok(0)
@@ -5601,6 +5874,9 @@ leaves! {
             s.sum_handle_tag(value, layout) };
     SumPayloadPendingDepth, jett_rt_v1_sum_payload_pending_depth, false, (value: u64 => I64), u64 => I64,
         |s| s.sums.get(&value).map(|v| v.payload_pending_depth).ok_or(INVALID_SUM);
+    // The selected payload remains borrowed from the unchanged owning sum.
+    SumPayloadBorrow, jett_rt_v1_sum_payload_borrow, false, (value: u64 => I64, tag: u32 => I32), u64 => I64,
+        |s| s.sum_payload_borrow(value, tag);
     SumTake, jett_rt_v1_sum_take, false, (value: u64 => I64, tag: u32 => I32), u64 => I64,
         |s| { if s.sums.get(&value).is_none_or(|v| v.tag != tag) { return Err(INVALID_SUM); }
             let sum = s.sums.remove(&value).ok_or(INVALID_SUM)?;
@@ -5779,14 +6055,14 @@ leaves! {
             else { Ok(value.clamp(lower, upper)) }
         };
     Status, jett_rt_v1_value_status, true, (), u32 => I32,
-        |s| Ok(s.failure.map_or(0, |e| e.0.code()));
+        |s| Ok(s.current_failure().map_or(0, |e| e.0.code()));
     FailureTakePrefixedText, jett_rt_v1_failure_take_prefixed_text, true, (prefix: *const u8 => Pointer, length: u64 => I64), u64 => I64,
         |s| { let length = usize::try_from(length).map_err(|_| INVALID_FAILURE_COPY)?;
             if length > isize::MAX as usize || (length != 0 && prefix.is_null()) { return Err(INVALID_FAILURE_COPY); }
-            if s.cleanup_failed { return Err(INVALID_FAILURE_COPY); }
-            let (_, static_message) = s.failure.ok_or(INVALID_FAILURE_COPY)?;
+            if s.cleanup_failed || !s.can_capture_refinement_failure() { return Err(INVALID_FAILURE_COPY); }
+            let (_, static_message) = s.current_failure().ok_or(INVALID_FAILURE_COPY)?;
             let prefix = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(prefix, length) } };
-            let message = s.dynamic_failure_message.as_deref().unwrap_or(static_message);
+            let message = s.current_dynamic_failure_message().unwrap_or(static_message);
             let prefix = std::str::from_utf8(prefix).map_err(|_| INVALID_FAILURE_COPY)?;
             let message = std::str::from_utf8(message).map_err(|_| INVALID_FAILURE_COPY)?;
             let mut text = String::new();
@@ -5794,8 +6070,7 @@ leaves! {
             text.push_str(prefix);
             text.push_str(message);
             let value = s.insert(text)?;
-            s.failure = None;
-            s.dynamic_failure_message = None;
+            s.finish_refinement_failure_capture();
             Ok(value) };
     RefinementPendingBoolText, jett_rt_v1_refinement_pending_bool_text, true, (bits: u64 => I64, depth: u64 => I64, name: *const u8 => Pointer, length: u64 => I64), u64 => I64,
         |s| { let length = usize::try_from(length).map_err(|_| INVALID_FAILURE_COPY)?;
@@ -5806,9 +6081,9 @@ leaves! {
             let value = format_pending_value(value, depth)?;
             s.insert(format!("refinement constraint for '{name}' must return bool, got {value}")) };
     PropertyCaseSet, jett_rt_v1_property_case_set, false, (message: u64 => I64), u32 => I32,
-        |s| { s.property_case_context = Some(s.text(message)?.as_bytes().to_vec()); Ok(0) };
+        |s| { s.set_property_case_context(Some(s.text(message)?.as_bytes().to_vec())); Ok(0) };
     PropertyCaseClear, jett_rt_v1_property_case_clear, false, (), u32 => I32,
-        |s| { s.property_case_context = None; Ok(0) };
+        |s| { s.set_property_case_context(None); Ok(0) };
     AssertFail, jett_rt_v1_assert_fail, false, (), u32 => I32,
         |_s| Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"assertion failed"));
     AssertFailMessage, jett_rt_v1_assert_fail_message, false, (message: u64 => I64), u32 => I32,
@@ -5816,7 +6091,7 @@ leaves! {
             let mut owned = Vec::new();
             owned.try_reserve_exact(text.len()).map_err(|_| EXHAUSTED)?;
             owned.extend_from_slice(text);
-            s.dynamic_failure_message = Some(owned);
+            s.set_dynamic_failure_message(owned);
             Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"assertion failed")) };
     Retain, jett_rt_v1_string_retain, false, (value: u64 => I64), u64 => I64,
         |s| s.retain(value);
@@ -6164,7 +6439,7 @@ pub unsafe extern "C" fn jett_rt_v1_value_failure(
             }
         };
         let state = lock_unpoisoned(&lease.entry.state);
-        match state.as_ref().and_then(|s| s.values.failure) {
+        match state.as_ref().and_then(|s| s.values.current_failure()) {
             Some((status, message)) => JettRuntimeResultV1::failure(status, message),
             None => JettRuntimeResultV1::ok(),
         }
@@ -6223,15 +6498,13 @@ pub unsafe extern "C" fn jett_rt_v1_value_failure_copy(
         };
         let message = state
             .values
-            .dynamic_failure_message
-            .as_deref()
-            .or_else(|| state.values.failure.map(|(_, message)| message))
+            .current_dynamic_failure_message()
+            .or_else(|| state.values.current_failure().map(|(_, message)| message))
             .unwrap_or_default();
-        let prefix = if state.values.failure.is_some() {
+        let prefix = if state.values.current_failure().is_some() {
             state
                 .values
-                .property_case_context
-                .as_deref()
+                .current_property_case_context()
                 .unwrap_or_default()
         } else {
             &[]
@@ -7638,7 +7911,7 @@ mod tests {
 
     #[test]
     fn display_result_check_preserves_strings_and_requires_every_pending_layer_to_join() {
-        for text in ["", "shown", "é🦀", "pending(shown)"] {
+        for text in ["", "shown", "ÃƒÂ©Ã°Å¸Â¦â‚¬", "pending(shown)"] {
             let mut values = NativeValues::default();
             let ready = values.insert(text.into()).unwrap();
             let alias = values.retain(ready).unwrap();
@@ -7730,7 +8003,7 @@ mod tests {
 
     #[test]
     fn display_result_check_leaf_preserves_ownership_status_and_first_failure() {
-        for text in ["", "shown", "é🦀"] {
+        for text in ["", "shown", "ÃƒÂ©Ã°Å¸Â¦â‚¬"] {
             for (selected, rendered) in [
                 (0, None),
                 (1, Some(format!("pending({text})"))),
@@ -8266,7 +8539,7 @@ mod tests {
     #[test]
     fn strings_release_immediately_and_retain_preserves_aliases() {
         let context = Context::new();
-        let value = context.text("hé\0llo");
+        let value = context.text("hÃƒÂ©\0llo");
         assert_ne!(value, 0);
         assert_eq!(context.count(), 1);
         unsafe {
@@ -8431,16 +8704,16 @@ mod tests {
                 if clear {
                     assert_eq!(jett_rt_v1_property_case_clear(context.pointer()), 0);
                 }
-                let message = context.text("backend 🧪");
+                let message = context.text("backend Ã°Å¸Â§Âª");
                 assert_ne!(
                     jett_rt_v1_assert_fail_message(context.pointer(), message),
                     0
                 );
                 assert_eq!(jett_rt_v1_string_release(context.pointer(), message), 0);
                 let expected = if clear {
-                    "backend 🧪"
+                    "backend Ã°Å¸Â§Âª"
                 } else {
-                    "property 'target' trial 4: backend 🧪"
+                    "property 'target' trial 4: backend Ã°Å¸Â§Âª"
                 };
                 for _ in 0..2 {
                     assert_eq!(
@@ -8487,7 +8760,7 @@ mod tests {
     #[test]
     fn native_assert_failure_copies_dynamic_message_without_changing_v1_static_result() {
         let context = Context::new();
-        let message = "expected 42, got 🧪";
+        let message = "expected 42, got Ã°Å¸Â§Âª";
         let handle = context.text(message);
         unsafe {
             assert_ne!(jett_rt_v1_assert_fail_message(context.pointer(), handle), 0);
@@ -10198,7 +10471,7 @@ mod tests {
         let mut values = NativeValues::default();
         let zebra = values.insert("zebra".into()).unwrap();
         let apple = values.insert("apple".into()).unwrap();
-        let eclair = values.insert("éclair".into()).unwrap();
+        let eclair = values.insert("ÃƒÂ©clair".into()).unwrap();
         let list = values.new_list(true).unwrap();
         values.lists.get_mut(&list).unwrap().elements =
             vec![Some(zebra), Some(eclair), Some(apple)];
@@ -10710,3 +10983,9 @@ mod tests {
 
 #[cfg(test)]
 mod reflected_container_tests;
+
+#[cfg(test)]
+mod resource_companion_tests;
+
+#[cfg(test)]
+mod ordinary_borrowed_sum_tests;

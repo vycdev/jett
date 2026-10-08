@@ -828,9 +828,36 @@ Copy-owned alias expressions acquire retained string or cloned descriptor
 temporaries before entering containers; borrowed argument lowering reads their
 existing handles. Plain string view expressions retain ordinary copy behavior.
 
+Ordinary handled optional/result projections authenticate the explicit outer
+View, inner View of an exact stable immutable sum local or View parameter,
+concrete endpoint type and terminal Return continuation. HIR retains the
+checked binding identity. MIR seals the original declaration, current local
+headers, tag observation, selecting branch, success projection, absent path
+and final initializer before pruning or ownership planning. Generated sum and
+success-payload locals remain nonowning; a move-only final alias has the same
+backing dependency and no cleanup slot.
+
+The checked final ownership mode distinguishes a borrowed payload from an
+implicitly copyable primitive or String destination. The copy destination may
+be mutable, and String receives an owning retained copy. After it is
+initialized, constructor-only projection intermediates leave the borrow
+inventory, permitting a later ordinary shell transfer or unwrap. The Result
+Fail companion likewise owns one String copy. A nonconsuming runtime payload
+read preserves the shell and selected payload identity; pending scalar depth
+and opaque container metadata remain intact. Outer pending sums fail at Handle
+observation before either extraction or failure continuation.
+
+This bounded ordinary proof does not grant Resource custody or prove the
+payload identity hidden by erased interfaces, callables, actors or capability
+carriers. Alternate outer Default payload lifetimes, mutable backing origins,
+temporary-backed aliases and general loan expiry remain outside it. See the
+[ordinary borrowed-sum implementation](active/native_ordinary_borrowed_sum_codegen.md).
+
 Native ownership planning conservatively refuses owner consumption or rebinding
-after a source local alias may have been created on a reachable path. It does
-not select a source lifetime-expiry rule. Mutable source alias chains,
+after a persistent move-only source alias may have been created on a reachable
+path. Final copied primitive/String bindings retain the ordinary ownership
+behavior described above. This does not select a source lifetime-expiry rule.
+Mutable source alias chains,
 temporary-backed source aliases, projected mutation, allocating conversions,
 flow-narrowed bare-machine origins, and field paths without the checked
 declared-owner proof remain explicit native limitations. Owner transitions
@@ -1437,8 +1464,10 @@ returns retain ordinary assignment checks before any native arm is removed.
 Contextual sum handling keeps the producer's original local or call signature.
 Inhabited nested containers receive an explicit conversion before extraction;
 empty collections are rebuilt with the target ownership flags, and nested
-function values retain their checked adapters. Handler snapshots clone the
+function values retain their checked adapters. Owning Handle snapshots clone the
 underlying local before conversion so owned and borrowed sources stay readable.
+A certified ordinary borrowed-payload initializer instead preserves the exact
+backing and nonowning success projection described above.
 Inferred generic reflection peels transparent aliases only at each argument's
 root and preserves nested alias witnesses. Repeated compatible witnesses fill
 only missing `never` slots; concrete alias identity follows declaration parameter
@@ -2329,9 +2358,121 @@ finalizers, and rejected insertions release their consumed provider payloads.
 Suppressed panic payloads are dropped under unwind protection; if their
 destructors panic too, only that secondary payload is deliberately forgotten
 to bound cleanup while retaining the first failure for propagation.
-The checked identity substrate does not yet install interpreter trusted-hook
-dispatch, live owned Resource values or source-level scope/drop integration.
-Those remain later stages of the resource contract.
+The private reference interpreter now carries Resource and hook-descriptor
+values bound to an Arc of the successful checked program. The physical carrier
+may be copied internally without creating ownership; the separate non-cloneable
+holder ticket records custody and acquisition order. Checked argument packets
+supply source order, formal permutation and caller effects independently of
+callee View/Owned access. Nested checked calls keep those envelopes through
+ordinary function entry/return rather than unwrapping a Resource into an
+ordinary Value argument.
+
+Generated absent For/Match binders use a private original-control proof keyed to
+the current checked attempt and active body. It retains each original binder,
+ordinal, resolver definition, concrete TypeId and immutable ownership mode; Match
+also retains the exact selected arm and its payload cardinality. Complete proof
+revalidation and the existing recursive absence-shape validator precede binding
+publication. Resource-bearing children enter the existing declaration slot as
+ordinary evaluated values with empty custody; the strict missing-slot identifier
+guard remains intact. Original view loops borrow their retained parent binding
+through the existing transport, and generated scope retirement leaves unrelated
+live owner tickets intact. No Resource owner/grant, runtime leaf, ABI or native
+aggregate permission is added. The full comptime replay passes 554 tests,
+including the original 28-wrapper/120-constructor controls and 60 focused entry
+observations. Native aggregate emission remains a separate gate. See the
+[generated-binding contract](active/native_resource_absent_generated_bindings.md).
+
+An executable source function rejoins a unique retained AST declaration and its
+exact resolver definition. Ordinary declarations use their actual DefInfo span;
+mutual definitions additionally rejoin the actual-body resolution and retained
+forward declaration. Namespace and header checks remain exact. Runtime
+registration clones identify the original checked body and cannot replace it.
+Generic selection remains an independent concrete-body proof.
+
+The ordered ledger covers source scopes, operation temporaries, partial actuals,
+owned storage/returns and occupied result payloads. Explicit close and reverse
+scope/failure cleanup retire each owning ticket once; views keep a live checked
+backing and never gain a ticket. Cleanup completes before context teardown.
+Protected cleanup continues after a finalizer panic. A cleanup failure takes
+precedence over entry failure; clean cleanup preserves the ordinary entry error,
+and source result.fail remains data. The implemented synchronous reference
+slice does not prove task/actor cancellation or all aggregate operations.
+
+Hook descriptors grant no invocation authority. A reached exact hook must have
+ReferenceRuntime purpose, matching program/type/signature/caller facts and
+runtime capability provenance. Explicit comptime, constants, verify and property
+workers cannot execute it; purpose is restored after property evaluation.
+The production catalog remains empty, its installed provider is Disabled, and
+scripted provider installation is compiler-test-only. All 83 Resource-focused
+reference tests pass, including both-profile Source lifecycles, exact absent
+aggregate layouts, enum-constructor dispatch and required-worker controls.
+Direct scoped/generic/required regions retain original body identity and complete
+concrete intrinsic metadata. Pipelines preserve original steps and lexical actual
+order; mutable assignment retains declaration slots and replaces owners only
+after RHS evaluation. Repeated entry restores metadata and body cursors.
+Ordinary refinement predicates, occupied aggregate custody, broader captured/
+reflected/worker coverage and production providers remain pending. Checked HIR
+lowering now retains an Arc-bound Resource manifest, exact hook descriptors and
+original Source invocation packets; MIR preserves that same manifest and lexical
+argument order. Whole-program validation checks unused hooks, nominal types and
+complete signatures. Raw lowering has an empty manifest and cannot authorize a
+Resource layout. Ordinary staging, acquisition, copy, move and native emission
+refuse Resource operations until the separate CFG ownership/drop plan and ABI
+exist. Five focused Source handoff groups and all 522 HIR/MIR/codegen/object
+emission tests pass; this does not establish native Resource execution. See
+[the current reference record](active/native_resource_hook_identity.md#reference-lifecycle-execution).
+
+A separate private `jett_runtime::resource_custody` core now keeps program/kind/
+owner-slot identity, non-cloneable owner and loan tokens, and scope/operation/
+return frames. Moves advance holder generations; copied physical carriers
+cannot adopt an owner. Protected reverse cleanup continues after a finalizer
+panic and records Resource cleanup failures separately from ordinary native
+first-error state. A private native registration module now decodes bounded
+owned little-endian layout tables and validates every row, including unused
+hooks, complete signatures, occupied paths and operation references, before
+issuing fresh nominal kinds. Its single installation holder binds the registry
+context and rejects second installation, shutdown and live registry entries.
+Frame signature consistency follows the containing function independently of
+instruction site. A separate physical acquisition preflight checks/reserves
+storage before a future provider effect; core and opaque-table preflights remain
+mandatory. Registration itself creates no owner, loan, payload or provider.
+The private native context adapter now uses the existing stationary context
+lease and registry for exact installed layout, attempt, frame, owner, loan,
+prepared hook and sum records. Ordinary and Resource lookup IDs share one checked
+monotonic allocator; lookup bits alone cannot supply custody. Moves consume the
+old carrier only after successful core transfer, and refused transfers restore
+it. Test-only provider installation stages its paired Network publication after
+fallible preflight. Production state remains absent and providers disabled.
+
+Completion performs protected reverse cleanup before retaining outcome messages
+and counts. The caller's observed body status remains unchanged; ordinary first
+error, Resource body faults, host panic and cleanup failures determine the
+separate selected outcome. A legal ordinary FailureTake cannot erase a Resource
+fault. Ordinary borrow Result carriers and their error strings use the existing
+recursive native destruction path. Complete v2 Source rows retain lexical/formal
+permutations, exact owned argument holders, resident parent loans, callee Scope
+and provisional Return frames, and the original caller result destination.
+Source entry validates every owned transfer and reserves the whole acquisition
+log before moving a prefix. Return publication requires the completed Scope and
+current Return activation; failed Scope or Return cleanup cancels publication
+and takes priority over body failure. Absent and failed sum shells move as whole
+carriers without recovering a Resource owner. Historical v1 metadata cannot
+activate these Source transitions.
+
+All 32 exact Resource leaves use the existing authenticated context; entry
+getters return its actual root Scope and paired Network carrier. Output checks
+precede effects and reject known context/output overlaps. The formatted runtime
+package passes 204 unit and 13 integration tests, including nine Source controls,
+three v2 registration controls, two batch-transfer controls and all fifteen
+previous adapter controls. The exact root-outcome getter reads the body status
+saved only after root Scope retirement in the same Runtime attempt; it neither
+resets errors nor substitutes cleanup status. Five controls pin the original
+status, active/stale/foreign refusal and body zero with cleanup panic. Ordinary
+failure-companion validation checks every selected nested sum payload's ownership
+bit before drop. These are runtime host/C-boundary checks. Dedicated
+compiler body emission and ordinary companion cleanup, the matched archive,
+linked Source lifecycle execution and production providers remain pending. See
+[the Source runtime record](active/native_resource_hook_identity.md#native-source-runtime-and-custody-leaves).
 
 Move dataflow transfers one cleanup obligation; views never own cleanup. Scope
 exit, return, handled failure, cancellation, dropped actor messages, and runtime
@@ -3628,6 +3769,13 @@ in the interpreter. Every attempt has a fresh process/context and a deadline.
 Only exits 0 and 71 count as completed attempts; other exits, compilation/link
 errors, timeouts, and non-reproducible failures abort the runner. Initial suite
 stdout/stderr remain separate from replay output and the shrunk counterexample.
+Native link and execution capture retains parent-owned append-only temporary
+files and gives each child an owned duplicate handle. Each readback uses explicit
+offsets bounded by one sampled file length; append-only writes preserve earlier
+bytes when Windows positioned reads move the shared cursor. Capture errors retain
+their stream, creation/duplication/snapshot stage and original I/O source. The
+existing polling deadline and child kill/reap protocol do not wait for EOF from
+descendants that inherited output handles.
 The CLI validates explicit build targets before loading source, accepting only
 the current supported host. Native `build` invokes the driver object and link stages and publishes an
 executable atomically. `build --check` retains frontend-only validation. The
@@ -4027,3 +4175,651 @@ The native move planner borrows only explicitly viewed Join operands for that
 copy operation and ends the temporary loan before returning the owning result.
 Ordinary Join operands retain their consumption checks, including view-parameter
 rejection without an explicit `view`.
+
+### Source-authenticated Resource ownership analysis
+
+Successful checked HIR lowering captures an immutable archive of the complete
+original functions, equality map and type meanings, including nominal definitions
+and generic arguments. MIR authenticates it before constructor capture. A private
+per-function witness records the initially emitted graph and exact original/current
+Source call associations. Full Source operands, target, access, lexical context and
+evaluation order remain independently checked. Canonical block/local compaction
+remaps current records; other unsupported rewrites roll back transactionally.
+Nominal bounds are checked before archive getters, and malformed type metadata
+is rejected before dependent custody queries.
+
+`ResourceOwnershipPlan` separately analyzes scope/operation/provisional-return
+frames, exact local/expression/argument holders, incoming views, bounded loans,
+moves, occupied Optional/Result arms and cleanup obligations. A relinquished
+Resource actual has no ordinary caller owning-operand claim. The dynamic runtime
+acquisition log must determine reverse cleanup order; local-number order is not
+cleanup order. The plan's entry block is distinct from the driver-selected program
+entry function. The initial plain/Optional/Result analysis does not yet implement
+the execution ABI. A fresh plan now supplies the emitted native layout described
+below. Direct handled actuals use the constructor-owned call regions described
+below; complete aggregate/scoped/reflected custody and concurrency remain required.
+
+The formatted affected gate passes 535 HIR/MIR/codegen/object-emission tests,
+32 type-library tests and the MIR doctest. Twelve focused ownership groups and
+the missing-nominal-table regression pass. These are compiler checks, not linked
+native Resource execution. See the [ownership handoff record](active/native_resource_hook_identity.md#source-authenticated-ownership-handoff).
+
+### Bounded recursive lowering frames on Windows
+
+Heavy HIR statement, equality and inline-function branches and MIR expression
+and per-actual branches now execute in private non-inlined helpers. Their
+existing Source checks, context restoration, lexical argument order, whole-call
+preflight and rollback remain unchanged. Resource call capture remains at the
+original expression-lowering entry. This reduces unrelated Debug branch locals
+in recursive callers without changing Source limits, worker stacks or launcher
+ordering. The original Windows CLI capture regression and all nine capture
+checks pass; compiler/object and driver/fixture gates pass. Measured MIR
+lower_value frames decrease from 169,448 to 15,272 bytes. See the
+[repair receipt](active/native_resource_hook_identity.md#windows-lowering-stack-repair)
+for individual frame measurements and exact verification scopes. Native
+Resource Source execution remains pending its connected ABI and cleanup.
+
+### Resource execution family and object layout
+
+After authenticating the entire original checked HIR archive, MIR derives a
+private execution family from Resource functions and their direct Source caller
+predecessors. Resource-free wrappers receive their own sealed constructor
+witnesses and fresh Scope and invocation proofs. Current graph edits cannot
+recompute or expand that authority. Direct calls with handled actuals use typed
+Begin/Stage/Invoke/End statements. Their private witness retains the original
+call, lexical/formal permutation, generated endpoint headers, complete current
+graph and exact completion sites. Fresh CFG analysis tracks the active operation
+stack and arrived argument prefix across handler edges. Abandonment retires that
+prefix before the original Return operand; normal completion follows exactly one
+reached invocation.
+
+The reference interpreter records each callable body's operation floor and
+Return destination separately from its lexical Scopes. Checked Source functions
+retain the exact caller destination; ordinary closure and named-callable bodies
+have no Resource publication destination. Return retires only newer Operations,
+innermost first, while interleaved Scope owners and loans remain live. Private
+one-shot receipts bind a canceled Operation to its exact parent and permit
+completion only while propagating Return or error, never ordinary successful
+output adoption. Cleanup failure drains the eligible prefix before preventing
+the original Return operand.
+
+Native Source status checks validate a terminal completion record tied to the
+exact caller Operation, immutable Source tuple and retired callee Scope/Return
+frames. That record keeps the original body status separate from cleanup
+failure. An aborted call propagates its recorded failure without permitting
+output publication; incomplete or unrelated calls cannot acquire a completion
+record. Clean output still requires a running attempt with no latched failure.
+
+Each native operation-frame slot stores its dynamic frame and prepared Source
+call in sixteen bytes. Begin prepares the complete Source tuple without actual
+effects. Stage evaluates once, activates its exact transfer or loan, and records
+one lexical actual. Invoke consumes arrived endpoints and checks Source status
+before publishing its result. End clears prepared storage and retires only the
+proved prefix. Prepared borrowed-formal metadata remains complete even when no
+invocation is reached, using the existing wire-v2 rows and runtime ABI.
+
+The fresh custody plan also records the exact incoming execution frame at every
+reachable current statement and terminator. Sum tag reads, temporary transfers
+and selected extraction use that frame; their Local storage may remain in the
+ancestor Scope. This projection has no span, type or holder fallback, and public
+graph edits still fail the original/current witness checks.
+
+The code generator projects one fresh whole-program ownership plan into bounded,
+deterministic v2 layout bytes. Rows preserve exact containing-function signatures,
+parameter access and evaluation order, caller result destinations, provisional
+Return storage, absent sums and ordinary failure companions. Return publication
+uses the callee's completed root Scope while retaining the distinct Return slot.
+The immutable object accessor exposes that layout and the actual driver-selected
+entry function, signature and root Scope. It emits no Source body or provider.
+Dedicated body calls to the runtime ABI, a matched archive and linked lifecycle
+execution remain required.
+
+ResourceCompanionPlan borrows one fresh ResourceOwnershipPlan and selects only
+its exact immutable current function and types. Its private context retains the
+complete Source caller validation and ordinary type/child, initialization,
+liveness, alias, loan and move checks. Ordinary ownership storage excludes
+Resource carriers; their custody remains in the independent CFG plan. The plan
+exposes readonly ordinary storage and complete Source acquisition facts with the
+same immutable program lifetime. Public ordinary CopyValuePlan, MoveValuePlan
+and caller admission keep their Resource-pending refusals. The CFG validator
+associates roles with exact current expression occurrences; clones or same-span,
+same-type expressions cannot select those roles. This is a compiler prerequisite,
+not native body or runtime authority. Three focused both-profile groups and all
+546 HIR/MIR/codegen/object checks plus the MIR doctest pass.
+
+### Direct Resource emission and private matched archives
+
+The direct Resource emitter validates the original checked graph before native
+preparation, derives a fresh immutable custody/layout plan and retains the full
+ordinary companion/acquisition analyses. Only functions in that plan receive
+the internal Scope argument. Ordinary functions retain their previous CFG and
+storage: Resource failure blocks and Return cleanup slots are allocated only
+for selected Resource functions. The C entry reads the authenticated original
+root body outcome after retirement; Scope cleanup has its separate channel.
+
+One double-cfg `jett_runtime` staticlib owns the compiler-test main, private
+installation and read-only observations. It carries the actual wire-v2 codec
+and 32 Resource leaves. The matching receipt records actual profile, source,
+archive, native-library order, CRT fingerprints and complete symbol/import
+inspection. The driver report decoder preserves original outcome fields and
+pre-destruction counts; missing observations refuse acceptance. Ordinary
+runtime/test builds exclude the private modules. Actual HOST controls and five
+shared reference/native Source scenarios pass in both private archive profiles;
+the native programs run after deleting their Project and synthetic Stdlib files.
+Exact outcomes/events and zero obligations are observed before teardown. The
+private link uses its actual measured library ordering; the reviewed bcrypt/
+advapi32 prefix difference does not alter production launcher validation.
+This is a local compiler-test distribution seam, with production providers,
+supported-host distribution and broader Resource execution still pending.
+
+### Resource replacement preflight
+
+The native replacement leaf preflights its exact old and evaluated replacement owners against the registered destination before removing handles or invoking finalizers. Core custody checks both current generations and runtime frames, exclusive destination occupancy, absent loans, nominal kind and reserved transfer capacity. The existing transfer rechecks custody after old cleanup; no reusable transfer permission is exposed. Cleanup failure still retires the independently staged replacement and keeps its original failure priority. Four focused replacement tests and all 220 runtime checks pass. The Source projection is described below; aggregate replacement remains required.
+
+### Source Resource replacement emission
+
+The fresh MIR custody constructor seals the evaluated RHS slot into Replace, alongside its original mutable destination and old occupancy. The layout projects these exact distinct plain-owner slots to existing tag 12; equal nominal shape and the containing Scope are checked independently. Assignment emits the composite replacement once and publishes its new handle only after Status0, without replaying descriptive Drop/Transfer rows. Constructor-authenticated Local-to-same-Local reseating has no runtime row; vacant assignment uses its exact Transfer. Public Source/witness, ordinary companion and current activation checks stay mandatory. Eleven original Source scenarios pass the real reference and generated native programs in both profiles, with Source deleted before native launch and all native obligations retired before destroy. Conditional/sum, aggregate and projected replacement remain separate transport work.
+
+### Named Resource function values
+
+Checked named-indirect body selection retains the original Indirect invocation
+and exact argument packet. A private proof joins the original callee occurrence,
+immutable local initializer/alias chain, signature and retained declaration under
+the current checked program/body attempt. Namespace-qualified producers require
+the whole expression span to resolve to that Function definition and exact
+retained header/signature; instance fields and method adapters carry no such
+namespace authority. The reached function value and runtime
+registration must identify that declaration; matching a signature or supplying a
+public function name cannot select a replacement body. Execution uses the
+retained Source body and the existing Scope, argument envelopes and Return floor.
+
+MIR captures the original root-scope immutable producer and aliases, authenticates
+current headers/initializers after local remaps, and derives target facts through
+the current CFG. An independent current-use check refuses escapes even if a
+private current-body witness is copied and resealed. Exact current producer,
+value and reached invocation occurrences receive readonly projections. Ordinary
+companion storage admits only those proven descriptor expressions and locals;
+public type-only Resource signature refusals and compiler-hook descriptor
+handling remain unchanged.
+
+The native callee is evaluated once after the original actuals. Callable checks,
+exact selected code-address equality and environment-zero validation precede
+SourceEnter. Refusal reaches ordinary failure cleanup and retires the acquired
+prefix. Accepted calls use the selected Resource family's context/environment/
+Scope/actual ABI, followed by SourceStatus; an ordinary indirect call cannot
+supply that Scope. The descriptor has its ordinary owner lifetime and does not
+create another Resource owner or finalizer. Runtime ABI and wire-v2 are unchanged.
+
+Thirty-two shared Source scenarios pass in both reference and linked native
+profiles, including exact same-signature target selection, immutable aliases,
+construction failure, terminal body failure, finalizer failure and combined
+body/cleanup failure. Native Source is absent at launch and obligations are zero
+before teardown. This is local MSVC private-archive acceptance; returned hook,
+captured/scoped/generic and handled/pipeline callback forms and
+GNU private-archive Source execution remain separate required work.
+
+
+### Returned Resource hook descriptor transport
+
+Exact hook Return summaries are captured from the retained checked Source archive.
+Current producer/alias/Return occurrences, headers and CFG state are joined to
+that archive, with an independent body/entry/header snapshot checked before
+canonical remaps. Readonly getters select only exact current opaque metadata
+occurrences. A preceding ordinary branch can preserve a single root Return;
+nested returns, captures and dynamic alternatives do not inherit that proof.
+
+Returned hook shape 10 and indirect invocation tag 15 select the exact hook and
+signature plus a separate Acquire, Borrow or Close row at the same sealed frame.
+Actual staging precedes the once-only callee evaluation and HookPrepare. Source
+results are read only after SourceStatus completes Scope retirement. Exact opaque
+metadata avoids ordinary Function cloning/ownership storage; it creates no
+Resource owner or finalizer. Existing runtime wire-v2 and custody leaves are
+unchanged. Authenticated Resource function roots seed typed dependency traversal,
+so ordinary helpers receive normal declarations, verification and their existing
+context/environment ABI.
+
+All 46 shared Source scenarios pass in both reference and Source-absent linked
+native profiles (92 executions each), with zero obligations before teardown.
+Nine focused MIR groups and 242 MIR library tests, seven focused codegen groups,
+100 codegen library tests, 63 object tests and all 92 driver-library tests pass.
+This is local MSVC private-archive acceptance. Broader implemented callback,
+aggregate and reflection combinations, GNU private-archive Source execution and
+coherent-revision release gates remain in current parity scope. Production
+provider and asynchronous scheduler integration are unimplemented extension work.
+See the
+[returned descriptor note](active/native_returned_resource_hooks.md).
+
+Required Resource materialization uses an opaque value proof produced from
+jett_comptime's private program-bound checked cache. HIR consumes that proof
+through an acyclic compiler-internal dependency, derives the admitted replacement
+itself and records an authenticated execution view while retaining the immutable
+original ResourceSourceArchive. MIR checks the original-to-materialized occurrence,
+function identity, specialization and same-manifest hook relation through CFG
+transforms. Public mirrored cache data or a fresh snapshot of mutated HIR cannot
+supply this authority.
+
+The driver exposes checked required evaluation and baking seams using one
+CheckedResourceProgram. Runtime Resource operations are preserved during baking;
+only explicit required values are replaced. Compile-time-only helper classification
+must be authenticated from the original checked call graph and exported/runtime
+roots. It cannot be inferred from a callable signature or used to erase original
+body, header or type integrity checks.
+
+
+Required-value rows also seal ordinary helpers' current MIR bodies. Proof capture
+is distinct from runtime custody classification: it cannot add Resource frames,
+executable Resource roots or hidden Resource ABI parameters to an ordinary helper.
+Both syntactic arms of an exact sum-tag guard are planned; the emitted runtime
+branch and extraction checks retain actual absence/occupancy. Typed sum headers
+and normalized operation nodes remain visible to disconnected-custody checks.
+The current shared checkpoint passes 61 scenarios in both reference and Source-
+absent native profiles (122 runs each) against the unchanged matched MSVC archives.
+
+### Borrowed Resource sum integration
+
+The next Resource family retains the checked concrete body's exact handled-view
+binding origin through HIR and a private MIR projection region. Generated sum and
+payload locals are nonowning. Fresh typed tag edges distinguish Some/Ok projections
+from None/Fail observations; ordinary consuming SumTake remains a separate role.
+Wire-v2 registration adds conditional source formals and explicit sum borrow,
+observe, project, failure-read and end operations. Five selected status/out C leaves
+extend the Resource leaf inventory from 32 to 37 without changing public record ABI.
+Absent shells receive live-loan guards despite having no occupied Resource token.
+
+The expanded 138-scenario corpus passes 276 reference and 276 Source-deleted
+native runs in Debug/Release against matched measured MSVC private runtime
+archives. Original declaration keys include exact lexical paths; current headers,
+backings, guards and constructor graphs retain independent seals. Certified
+Fallthrough/Return/Break/Continue records end child loans before parent loans and
+clear nonowning aliases before joins/backedges. Return operands run first; lexical
+retirement does not complete RootScope or consume its backing. Recursive declaration
+inventory alone does not admit For/Match/reflected bodies or unemitted declarations.
+Alternate outer Default lifetimes remain pending. Ordinary borrowed data sums
+follow their [separate implementation](active/native_ordinary_borrowed_sum_codegen.md);
+this borrowed-sum slice does not itself extend Resource For/Match/reflected-body
+admission. See
+[the borrowed-sum contract](active/native_resource_borrowed_sums.md) and
+[the verified nested contract](active/native_resource_nested_sums.md).
+
+A separate [Resource control-flow proof](active/native_resource_control_flow.md)
+authenticates consuming Resource-free list ForEach and ordinary Resource-free enum
+Switch. Sequence preparation reconstructs the exact three temporary headers,
+source/cursor/length initialization, get/increment prefix and original CFG before
+transporting current borrowed, lexical, call and descriptor proofs. Strict joins
+and final raw ForEach refusal remain unchanged. The focused local MSVC packet
+passes 30 cases / 60 Source-deleted executions across seven Sources, including
+consecutive and nested loops. Full 191/382 reference and Source-deleted MSVC native
+execution pass. At committed control-flow revision
+`f4fa59da6656b1424e7689b78f7035975b14cc14`, the coherent workspace passes 3,454
+tests with zero failures and three ignored tests across 92 result groups; all
+3,659 frozen inputs remain unchanged. The receipt is
+`target/native-control-flow-f4fa-workspace-evidence/after-evidence.json`.
+[Exact-revision CI run 37744039455](https://github.com/vycdev/jett/actions/runs/37744039455)
+also completes all four Windows/Linux compiler and installed-toolchain jobs
+successfully, recorded in the adjacent `ci-final.json`. These accepted gates
+belong to that control-flow revision. The latest reflected-field bridge still
+requires its own coherent-workspace and exact-revision CI gates. Excluded erased
+carriers and other iterator forms need separate compiler transport proofs under existing
+Source semantics. Source06's separate reference repair passes strict Resource execution, including
+exceptional exits and same-grant reentry. A separate direct-field HIR/MIR ordinal
+bridge now retains the exact checked scopes and passes its bounded native gate,
+including clean same-grant reentry. Original Source06 exceptional native
+single-entry and same-grant reentry acceptance, plus the bounded derived control
+matrix, are recorded below. Broader lifetime combinations remain obligations.
+
+The [checked reflected-field reference bridge](active/native_resource_reflected_fields.md)
+retains the original For/body, parent attempt, resolver binder and ordered owner
+metadata. Each field ordinal selects its exact checker-owned scope and full
+reflection; runtime metadata alone grants no body authority. Calls isolate and
+restore item selectors, and normal/control/failure exits restore the entry frame.
+Retained `type.fields` facts also support pure required evaluation without a
+provider. Direct nominal-field native acceptance is recorded below; broader
+checked Resource reflected loops remain pending.
+
+### Checked Resource reflected-field ordinal transport
+
+`ResourceSourceArchive` now captures constructor-only correspondence for direct
+nominal-struct `TypeFields` loops in the root body of exact non-generic,
+noncapturing functions in its `CheckedResourceProgram`. HIR preserves
+every checked `ReflectedIteration(ordinal)` expansion instead of coalescing equal
+type/reflection arms in this path. The archive retains exact original For and
+binding objects, unique resolver declarations, owner TypeId and full source-aware
+reflection, ordered field snapshots, checked body facts, HIR headers and original
+loop/dispatch/arm Scope paths. Its opaque proof cannot be created from public HIR
+or caller-supplied metadata. The ordinary `lower_program` entry lacks this archive
+and retains its current coalescing behavior. Checking specializes type-level
+reflection facts while field-index/name branches inspect the current runtime
+binder. Independent ordinary positive controls pass 30 Source-deleted native
+main/verify/property executions across five forms without a production change.
+Those bounded controls establish no ordinary coalescing defect and do not prove
+broader checked Resource reflection transport.
+
+MIR consumes the exact archived dispatch occurrence. For each ordinal it derives
+the original immutable `TypeField` binder's index-equality guard and a one-arm
+`ReflectedTypeDispatch` with the full source-aware TypeInfo identity. Equal-TypeId
+fields consequently retain separate guards and body targets while the existing
+native dispatch uniqueness checks remain intact. Private original/current seals
+revalidate guard order, dispatches, body and refusing targets, field headers,
+archive membership and original lexical paths. Canonical sequence normalization,
+pruning and local remaps update only current sites and headers. Arm-specific
+subtree lookup preserves the exact nested handler paths; independent borrowed
+projection and lexical retirement validation keep local membership and custody
+joins unchanged.
+
+An ordinary function inside this checked Resource program can receive a proof-only
+MIR witness for its own archived loop. Execution-family classification remains
+ordinary: the witness adds no Resource plan, runtime Scope, provider permission or
+custody. Its ordinary map, string, view and uninhabited sequence lowering uses the
+existing finite `SequenceEdit` validator, retaining original headers and function
+identity and refreshing only the current graph and independent body seal.
+Resource execution functions retain their separate consuming-list reconstruction.
+No runtime leaf, ABI or wire-v2 row is added.
+
+The integrated affected-phase gate passes 1,202 checks with all 3,679 frozen inputs
+unchanged. The subsequent focused native gate passes 16 Source-deleted executables
+and 24 entries across four cases, including clean same-provider/grant reentry.
+The unchanged predecessor corpus separately passes all 191 cases / 382
+Source-deleted Debug/Release executions. Both native gates retain all 3,686 frozen
+inputs, nine matched MSVC runtime files and the frozen test executable unchanged.
+Exact receipts and the independent 30-execution ordinary positive control are in
+the [field-loop note](active/native_resource_reflected_fields.md).
+Generic/alias owners, bitfields, variants, machines, `TypeInfo.args` and nested
+producers still require checked Resource compiler transport proofs and Source
+evidence. The original Source06 additionally passes all eight exceptional scripts
+through 16 reference observations, 16 objects and 16 Source-deleted native single
+entries in both checking profiles, with exact completion and pre-teardown retirement.
+
+The original nine-script matrix also passes 18 Source-deleted same-grant native
+executables / 36 entries in Debug/Release: every original script followed by READY
+on one retained Session/provider/paired Network grant. The private launcher
+completes and observes the first attempt before requesting the next existing
+`entry_begin`. All eight Resource counts and ordinary value storage are zero
+before teardown; the runtime independently validates current ordinary
+first-error/cleanup state, installed entry, attempt budget and absence of active
+or residual custody. Completed Resource cleanup failure is retained historical
+evidence and permits the declared next entry after these checks. No error reset
+or failure-taking API is introduced. Both immutable completion/diagnostic records,
+continuous ordered events and original first nonzero process exit remain exact;
+the combined script is exhausted before one Session destruction.
+
+Fresh measured MSVC Debug/Release archives use compiled receipt pin
+`96721717326f7d6f96dd2bb98dc1d6e919f7119235e33e103e5ac89bd6f29d0a`.
+Actual reference/native session 30992, terminal `22c716`, passes both Rust
+harnesses with exit zero and retains all 3,722 inputs and nine runtime files
+unchanged in the tested candidate based on parent `b5c55ac7`, recorded in
+`target/native-reflected-exceptional-reentry-evidence/after-v3.json`
+(SHA-256 `f3dc34c6a13079c6e0be04716d37af9a69580a7b99b859a4ebd5301376e3aa8b`).
+The earlier zero-test filter attempt remains explicitly unaccepted in `after-v2.json`;
+each corrected manifest filter executed one real test. Runtime ABI 1, Source wire 2
+and private script/report protocol 1 remain unchanged. This is local MSVC original
+Source06 acceptance; the separate derived control acceptance follows.
+
+The unchanged derived Sources7/8/9 now additionally pass the historical ten-script
+matrix: three handled Returns, two Break paths, two Continue paths and three
+scalar Handle Default paths. Borrow-failure handlers in Sources7/8 return before
+Break/Continue; the executed signal, rather than the fixture family name, defines
+these counts. A separate Source9 READY baseline was verified without changing
+Source bytes. Break keeps total17 and retires its selected scoped-type body;
+Continue keeps total34 and skips the statement after that body; scalar Default
+supplies primitive17, resumes the selected body and preserves both field visits
+and total34. The outer optional owner is retained until the existing consuming
+close or handled Return.
+
+Actual session 18249, terminal `e1bcf6`, passes all five one-test gates with exit
+zero: 22 single-entry reference calls, 40 same-grant reference calls, 22 objects,
+22 Source-deleted single-entry executables / 22 entries and 20 same-grant reentry
+executables / 40 entries, for **42 native executables / 62 entries**. Each original
+script is followed by its own Source's READY on the same Session/provider/paired
+Network grant. Strict completion/diagnostic/event records, all eight zero
+Resource counts and empty ordinary storage before teardown, combined-script
+exhaustion and one destruction remain exact. Explicit-close cleanup failures
+retain body255 / cleanup255 / Cleanup channel / first exit71 after READY; existing
+entry-begin checks and immutable first observations are unchanged, with no reset.
+`target/native-reflected-derived-control-native-evidence/after-v1.json`
+(SHA-256 `f9cfe12b7a2013fd63ac0e73672a1c4fbee617e01a366e5747a1ab17a1e6da24`)
+retains all 3,725 frozen inputs and nine measured v2 runtime files unchanged in
+the tested candidate based on parent `f4c63a0f`, using the MSVC receipt pin above.
+Prior original Source06 and 191/382 receipts remain separate. This gate adds no
+GNU carrier/fresh-v3 native execution acceptance. The dedicated Return successor
+is recorded below; broader lifetimes and coherent-revision gates remain separate.
+
+Dedicated additive Sources10/11 now pass twelve shared cases for genuine first-
+and second-field successful Return, handled first/later borrow failure and cleanup
+combinations. Three equal-int64 fields and terminal sentinels verify skipped
+subsequent fields/statements. Source10's implicit Return retires its scoped loan
+and outer optional owner; cleanup failure preserves original body0/cleanup255.
+Source11 returns a distinct owned Resource892 while retiring aliased outer891.
+Successful outer cleanup gates publication and exact caller Borrow892(29)/close;
+helper cleanup failure suppresses caller use, retires891 then provisional892 and
+propagates root body255/cleanup255. The helper Source follows a normal Return
+path; the report observes the entry-root completion and retirement events, not a
+separate nested callee completion. Cleanup channel, exact diagnostic and first
+exit71 remain immutable after same-Source READY.
+
+Actual sessions 64018 (`0b2a26`) and 47358 (`dcfb82`) pass all five one-test gates:
+72 reference calls, 24 objects, 24 Source-deleted single executables/24 entries
+and 24 same-grant reentry executables/48 entries, for **48 native executables /
+72 entries**. All eight native custody counts and ordinary storage retire before
+one destruction; continuous ordered events, per-entry boundaries, script
+exhaustion and both exact completions remain preserved on the same
+Session/provider/paired Network grant. No reset or failure-latch clearing occurs.
+`target/native-reflected-body-return-native-evidence/after-v2.json`
+(SHA-256 `9250a5d37375cd66ba212e1cfcaa489ef0b55571dba0efa72dc59a6d306baa18`)
+retains all 3,730 frozen inputs and nine measured v2 runtime files unchanged at
+tested parent `91105876e5dbbbe9bbaa1d19bc2408ec9a274255`, using the unchanged
+MSVC receipt pin above. Sources7/8/9 and their historical ten scripts remain exact.
+
+The Return operand continues to precede certified lexical retirement; the
+successful owned-return case uses a survivor without the outer owner's resident
+lease. Same-owner live-lease Return, broader body/Default lifetimes, generic/nested
+reflected producers, aggregate custody, fresh-v3 native evidence and coherent-
+workspace/exact-revision CI gates remain separate full-goal obligations. The
+rough 87% estimate and fixed 207/182 inventory denominators remain unchanged.
+
+
+### Typed Resource aggregate carrier transport
+
+A separate private carrier plan captures the complete authenticated original type
+graph and exact constructor/projection/current-CFG associations. Its slots reuse
+Scope/Operation/Return frames while preserving individual leaf custody separately.
+Runtime roots bind installed shape, activation, slot and generation; typed paths
+and bounded leases validate live projections. Dedicated v3 graph/slot/Source roles
+retain strict accepted v1/v2 decoding. An explicit parent-bound sum-loan adapter
+bridges selected optional/result children without consuming borrowed backing.
+Ordinary ownership fields cannot contain Resource-table handles. Bounded v14/v15
+object/native absence acceptance and current post-repair fresh MSVC-v3
+regression pass as recorded below; broader lifetime/purpose acceptance remains
+required. See the
+[typed aggregate plan](active/native_resource_aggregate_carriers.md).
+
+### Authenticated ordinary native entry Scope
+
+The entry-aware MIR validator authenticates the complete current/original graph
+before canonical preparation and returns a separate readonly entry Scope plan.
+It adds no execution-family function, owner, loan or Source-call authority. Initial
+checked Resource-archive lowering captures proof-only metadata and an independent
+body seal for closed Network-only/Nothing candidates, including genuinely pure
+entries. Missing, foreign, transplanted or resealed mutable bodies refuse; raw
+HIR/default archive paths cannot mint this proof.
+
+Codegen serializes the selected wrapper root and Complete row separately from
+Source-family signature/frame maps and includes the exact entry as a reachability
+root. The wrapper validates the installed tuple, obtains the existing Network
+grant, calls the ordinary two-hidden-parameter body, reads its retained Status,
+attempts exact Complete without replacing the original outcome, and observes
+EntryOutcome. Existing Resource-family bodies keep their calling convention.
+Runtime ABI, layout wire and provider APIs remain unchanged by this entry bridge.
+Current compiler proof and bounded earlier native checkpoints are recorded below
+and in [the ordinary entry plan](active/native_resource_ordinary_entry.md).
+
+### Bounded object/native acceptance and current compiler checkpoint
+
+All fourteen whole-Source17 wrappers emitted **28/28** genuine host objects in
+both profiles at v14, with zero refusals. The full original 3,600-byte Source
+prefix, twelve exports, unused refined contract, required controls, verify and
+property100 remain intact and in scope. This main-wrapper gate does not establish
+every original purpose or live aggregate value.
+
+target/native-resource-carrier-compile-evidence/after-v14.json (SHA-256
+43c3a3f1fc2fa6d1e4c6cbd7cc7e0bad4f0d560dce0685e6a8fcb2b411aee2dc)
+records actual session 94028, terminal f7b2aa, exit zero.
+
+The separate v15 gate passes **28 Source-deleted single-entry executables /
+28 entries**, including Source13's exact ordinary bounds error, and **26 clean
+same-grant reentry executables / 52 entries**: **54 native executables /
+80 entries**. Exact completion/message/event reports, all eight zero Resource
+custody counts and empty ordinary storage before one teardown, event boundaries
+and script exhaustion pass. Source13's repeated ordinary-error call on the same
+grant remains pending; thirteen clean Sources in both profiles do not replace
+that lifetime obligation.
+
+target/native-resource-carrier-compile-evidence/after-v15.json (SHA-256
+b20c4d9427b11676e7207e5691171c64a861666e0f728b8aa24dba631123154b)
+records actual session 93295, terminal b1a472, exit zero. Both v14/v15 retain
+all **3,752 frozen inputs / nine runtime files unchanged** at parent
+91e3706b770124cbddca952e5fe6b558abc170be. The measured v15 runtime receipt pin is
+74a811660ee1772e0374e04579dd51234e8ff38191b942335bedaab5b4e4b6cd.
+
+The current post-refinement-repair compiler gate is separate from v15 native
+acceptance. At v19, **17 focused entry controls (13 MIR + four codegen)** pass,
+including four new raw/refinement archive controls. Full package gates pass
+**314 MIR checks (313 library + one doctest)** and **181 Cranelift checks
+(118 library + 63 object)**, with zero failures or ignored tests.
+
+target/native-resource-carrier-compile-evidence/after-v19.json (SHA-256
+b549b995be46093f29dbf45314b47f1eea3b09c9bfc20cebf068e477bfaa8f8b)
+records actual session 65346, terminal 26ed19, exit zero and all **3,757 frozen
+inputs / nine runtime files unchanged** at the same parent. Earlier v3 runtime
+gates passed **275 checks at v6** and **44 focused carrier checks at v7**. These
+are historical revision-specific results, not current whole-runtime or workspace
+success.
+
+### Current workspace and wider-language observations
+
+The current v20 whole-workspace gate passes **3,582 checks, zero failures and
+13 ignored tests**, across **66 real selected groups / 92 total result groups**.
+Actual session **75431**, terminal **1f1c8b**, exits zero for
+`cargo test --offline -q --workspace --no-fail-fast`.
+target/native-resource-carrier-compile-evidence/after-v20.json (SHA-256
+fb59285ab91f6d15ce57ab59ecf7cc5c00187cdf4c323de04b5bbafe4a78e7d2)
+records all **3,757 source inputs / nine runtime files unchanged** at parent
+91e3706b770124cbddca952e5fe6b558abc170be. The inputs-v20 manifest SHA-256 is
+58dd6f590a1bf2fd63f04d0ec0abdd15aa71452e9e00b1ff36b1feb29ab3612a;
+the workspace log SHA-256 is
+f610439bbbcb334d88de90c8b8ebf4178f1015be564cc7caf63bba2b5d6ed8da.
+This is measured workspace success, not fresh ignored-native acceptance.
+
+All **11 fresh-v3 native gates now pass**, each selected as a real one-test gate.
+Actual session **41872**, terminal **3c7b60**, exits zero with **576 Source-deleted
+native executions / 672 entry calls**, across Debug and Release. This includes
+the unchanged **191-case / 382-execution corpus drawn from 113 distinct Sources**,
+carrier controls, reflected-body controls and owned-Return regression. The v20
+workspace's ignored-test count is historical; v21 independently executes the
+eleven native gates rather than treating ignored tests as acceptance.
+
+target/native-resource-carrier-compile-evidence/after-v21.json (SHA-256
+38f67805c93e66e273d29de84c1cfc3351d70c0235bf656ea661244474582fa2)
+records all **3,757 source inputs / nine runtime files, HEAD and inventory
+unchanged** at parent 91e3706b770124cbddca952e5fe6b558abc170be. The frozen native
+binary SHA-256 remains
+110ba3b7bf23e63677ac7afd13a83fc2fa98aeccebc553e8df4f294fb5bc872f.
+Matched MSVC v3 archive provenance passes before and after execution with receipt
+pin 74a811660ee1772e0374e04579dd51234e8ff38191b942335bedaab5b4e4b6cd.
+The successful runner report SHA-256 is
+699f2364769ccdd489c7322832f2410690129d8f687006239e3dc6f0b6e82ae6.
+This gate establishes no GNU runtime-archive acceptance.
+
+Owned-Return cleanup failure retains caller/entry-root **body255 / cleanup255**;
+the observations establish retirement and root completion, not a separate nested
+callee completion. The accepted historical Return semantics and exact Source
+prefixes remain intact. Earlier prospective fresh-v3, full-191/382 and reflected-
+Return gate statements in retained historical sections are superseded by v21;
+broader body/Default, generic/reflected lifetimes and occupied custody remain open.
+
+Source13's repeated ordinary error, occupied resources, wider whole-language
+parity and exact-revision CI remain pending. The rough 87% estimate and fixed
+207/182 inventory do not advance.
+
+The separate 15-case wider-language probe is an **observation baseline, not
+acceptance**. Actual session **77834**, terminal **ee797f**, leaves compiler
+inputs unchanged and records eight emitted objects, six object refusals, one
+earlier backend failure and three reference failures. Frontend/driver build
+success does not establish linked parity. Its authoritative receipt is
+target/native-language-parity-probe-observations-v1/root-after-evidence.json
+(SHA-256 434cba150528d36e018d89b9dbe3acb05adf0309ac6a5aeb47a8ea1b906b4c3d).
+
+### Raw refinement proof boundary
+
+Pure refinement predicates lowered through raw/default HIR without an
+authenticated checked Resource archive stay ordinary through canonical
+preparation. Declaration kind or spelling alone supplies no Resource witness or
+entry Scope. Raw bodies with actual Resource custody retain the independent
+mandatory capture/refusal path.
+
+Authenticated predicate proof requirements derive the original declaration kind
+from the immutable archived function. Removing a witness and changing the current
+predicate kind cannot escape that requirement. Constructor seals reject missing
+or foreign proof, modified predicate body and changed header. The repair preserves
+ordinary raw refinement behavior while retaining authenticated original authority.
+
+### Remaining acceptance
+
+The current whole-workspace gate passes at v20, and all eleven fresh matched-
+MSVC-v3 native gates pass at v21, including full **191-case / 382-execution**,
+carrier, reflected-body and owned-Return regression. Exact-revision CI remains
+pending. Earlier accepted GNU Source-prefix and Return documentation and wire-v2
+receipts retain their independent historical scope; only the measured v21 gate
+supplies current MSVC-v3 regression credit. No GNU runtime-archive acceptance is
+inferred from these local MSVC results.
+
+Source13 repeated-error lifetime, occupied aggregate transport/replacement,
+broader Resource-valued Default and generic/nested reflected lifetime compositions
+remain full-goal obligations. Whole Source/export/refinement and verify/property100
+purposes remain required. No refusal counts as successful Source execution, no
+Source policy exclusion is introduced, and the full native parity goal stays
+active. The rough 87% estimate and fixed 207/182 inventory do not advance.
+
+
+### Ordinary terminal-error lifetime for repeated checked entries
+
+The selected Resource entry lifetime keeps ordinary first-error state in a
+context-owned private record issued with the exact installed entry, purpose,
+RootScope and monotonic attempt identity. Nested ordinary/Source calls share
+that record. Exact entry completion retires Resource custody and verifies the
+ordinary owner/counter predicate before sealing status, dynamic diagnostic and
+prefix. Existing completed Resource diagnostics and original body status remain
+independent from selected cleanup. A failed report leaves a non-reenterable
+tombstone; a failed retirement leaves the Completing attempt observable.
+
+The next constructor authenticates the exact sealed predecessor, fresh ordinal,
+session failure/ordinary cleanup poison, installed layout and all original
+custody/storage guards before publishing another record under the same context
+lease. No reset/take-error API authorizes this transition. Existing checked
+refinement recovery applies only within its active evaluation and cannot consume
+a sealed terminal record. Historical Resource cleanup failure retains the
+accepted original Source06 behavior; persistent ordinary cleanup poison remains
+fatal even after empty tables. The private launcher requests declared entries,
+retains the first nonzero process exit and every completion, and destroys one
+Session. Legacy ordinary context failure behavior remains unchanged.
+
+The managed ordinary runtime passes 307 measured checks with fresh matched
+MSVC archives in measurements-02. The new fourteen-Source same-grant gate passes
+in Debug/Release: 28 Source-deleted executables / 56 entries, including both
+original control13 Bounds messages, body1/cleanup0/Body and retirement before
+one destruction. The accepted combined twelve-gate scope is 604 executables /
+728 entries: the authenticated first 28/56 plus eleven freshly rerun predecessor
+gates at 576/672. The fresh whole workspace passes 3,614 checks, zero failures
+and 14 ignored tests across 66 nonzero / 92 total groups. Independent v24 receipt
+verification preserves all 3,763 Source inputs, nine fresh/nine historical runtime
+artifacts, HEAD/inventory, both native binaries and fresh02 provenance.
+See the [ordinary error lifetime note](active/native_resource_ordinary_error_reentry.md)
+for exact sessions and hashes. Earlier Source13-pending statements describe
+historical checkpoints superseded by this bounded acceptance. No reset,
+independent nested callee observation, GNU archive credit or feature-denominator
+change is introduced. The separate normal-main linked baseline is complete:
+16 observations (12 exit0 / four exit71) from eight exact opaque objects reused
+with Debug/Release runtime artifact profiles, with fifteen raw-probe Sources
+preserved. It supplies no desired Source oracle, ordinary public-Main context-
+retirement observations or feature credit. Occupied custody, broader lifetimes,
+wider ordinary parity and fixes, and the successor's exact CI remain open; the
+rough estimate stays 87%.

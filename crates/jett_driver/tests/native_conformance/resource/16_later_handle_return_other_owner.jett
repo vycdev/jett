@@ -1,0 +1,27 @@
+namespace app
+function accept_staged(marker: int64, view token: resource_probe.TestHandle, view net: Network) returns nothing:
+    use resource_probe
+    int64 observed = resource_probe.borrow(view net, view token) handle error:
+        return nothing
+    return nothing
+function fail_marker() returns result[int64, string]:
+    return fail("later marker")
+function observe_return(view net: Network, token: resource_probe.TestHandle) returns resource_probe.TestHandle:
+    use resource_probe
+    int64 observed = resource_probe.borrow(view net, view token) handle error:
+        return token
+    return token
+function return_retained(view net: Network, token: resource_probe.TestHandle, retained: resource_probe.TestHandle) returns resource_probe.TestHandle:
+    accept_staged(token: token, marker: fail_marker() handle error:
+        return observe_return(view net, retained)
+    , net: view net)
+    return retained
+export function main(net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle token = resource_probe.create(view net, 521) handle error:
+        return nothing
+    resource_probe.TestHandle retained = resource_probe.create(view net, 522) handle error:
+        return nothing
+    resource_probe.TestHandle returned = return_retained(view net, token, retained)
+    resource_probe.close(returned)
+    return nothing

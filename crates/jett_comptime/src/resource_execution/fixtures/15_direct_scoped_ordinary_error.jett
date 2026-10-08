@@ -1,0 +1,10 @@
+namespace app
+export function scenario(view net: Network) returns nothing:
+    use resource_probe
+    comptime type Token = type.info[resource_probe.TestHandle]():
+        Token owner = resource_probe.create(view net, 1501) handle error:
+            return nothing
+        int64 observed = resource_probe.borrow(view net, view owner) handle error:
+            return nothing
+        resource_probe.terminal_failure()
+    return nothing

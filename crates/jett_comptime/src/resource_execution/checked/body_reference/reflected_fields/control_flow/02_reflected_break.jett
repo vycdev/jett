@@ -1,0 +1,16 @@
+namespace app
+struct FlowShape:
+    first: int64
+    second: int64
+    third: int64
+export function scenario() returns int64:
+    mutable int64 path = 0
+    for field in type.fields[FlowShape]():
+        comptime type Element = field.type_info:
+            Element digit = field.index + 1
+            path = path * 10 + digit
+            if field.index == 1:
+                break
+            path = path * 10 + 8
+        path = path * 10 + 9
+    return path * 10 + 7

@@ -1,0 +1,13 @@
+namespace app
+function unused[T]() returns string:
+    return comptime type.name[T]()
+function label[T]() returns string:
+    string label_value = comptime type.name[T]()
+    return label_value
+export function generic_label() returns string:
+    return label[int64]()
+export function scoped_label() returns string:
+    comptime type Outer = type.info[list[int64]]():
+        comptime type Element = type.arg[Outer](0):
+            return comptime type.name[Element]()
+    return "unreached"

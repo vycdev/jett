@@ -1,7 +1,10 @@
 use super::*;
 use jett_diagnostics::Severity;
 
-fn checked_source(source: &str, tests: bool) -> Result<(Program, CheckResult), Vec<LowerError>> {
+pub(super) fn checked_source(
+    source: &str,
+    tests: bool,
+) -> Result<(Program, CheckResult), Vec<LowerError>> {
     let file = FileId::new(0);
     let parsed = jett_parser::parse(source, file);
     assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);

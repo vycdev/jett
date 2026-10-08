@@ -1,0 +1,20 @@
+namespace app
+function accept_staged(marker: int64, view first: resource_probe.TestHandle, view second: resource_probe.TestHandle, view net: Network) returns nothing:
+    use resource_probe
+    int64 observed_first = resource_probe.borrow(view net, view first) handle error:
+        return nothing
+    int64 observed_second = resource_probe.borrow(view net, view second) handle error:
+        return nothing
+    return nothing
+function fail_marker() returns result[int64, string]:
+    return fail("later marker")
+export function main(net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle first = resource_probe.create(view net, 511) handle error:
+        return nothing
+    resource_probe.TestHandle second = resource_probe.create(view net, 512) handle error:
+        return nothing
+    accept_staged(first: first, second: second, marker: fail_marker() handle error:
+        return nothing
+    , net: view net)
+    return nothing

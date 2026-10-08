@@ -41,6 +41,37 @@ jobs:
       - run: rustup override set 1.97.1
       - name: Check compiler and native conformance
         run: cargo test --locked --workspace --no-fail-fast --target ${{ matrix.target }}
+      - name: Check GNU Resource measurement controls
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python -m unittest tools.tests.test_measure_resource_native_archives
+      - name: Measure fresh GNU private Resource runtime archives
+        id: resource_archives
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: >-
+          python tools/measure_resource_native_archives.py prepare
+          --output target/native-resource-gnu
+          --github-output "$GITHUB_OUTPUT"
+      - name: Execute complete GNU Resource corpus with compiled receipt pin
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: >-
+          python tools/measure_resource_native_archives.py run
+          --receipt "${{ steps.resource_archives.outputs.receipt }}"
+          --expected-sha256 "${{ steps.resource_archives.outputs.sha256 }}"
+          --target-dir target/native-resource-gnu-gate
+      - name: Retain GNU Resource measurements and execution evidence
+        if: always() && matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-resource-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            target/native-resource-gnu/*.json
+            target/native-resource-gnu/*.jsonl
+            target/native-resource-gnu/*.log
+            target/native-resource-gnu/*-crt-probe
+            target/native-resource-gnu/*-crt-probe.c
+            target/native-resource-gnu/*-build/x86_64-unknown-linux-gnu/*/libjett_runtime.a
+          if-no-files-found: warn
+          retention-days: 7
       - name: Package release compiler and both runtime profiles
         run: python tools/package_native.py --output dist/package
       - name: Check installed compiler

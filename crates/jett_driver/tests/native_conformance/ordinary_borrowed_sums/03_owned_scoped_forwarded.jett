@@ -1,0 +1,61 @@
+namespace app
+function count[T](view source: optional[T]) returns int64:
+    T alias = view((view source) handle:
+        return 0
+    )
+    return 1
+function inspect_optional(view stdout: Stdout) returns nothing:
+    optional[list[int64]] source = some(list(2, 3))
+    list[int64] alias = view((view source) handle:
+        return nothing
+    )
+    list[int64] forwarded = alias
+    mutable list[int64] copied = clone forwarded
+    copied = list.append[int64](copied, 13)
+    if true:
+        list[int64] nested = view((view source) handle:
+            return nothing
+        )
+        Stdout.write(view stdout, "optional:nested:{list.sum[int64](view nested)}\n")
+    mutable int64 total = 0
+    for number in view forwarded:
+        list[int64] loop_alias = view((view source) handle:
+            return nothing
+        )
+        total = total + number + list.sum[int64](view loop_alias)
+    list[int64] retained = view((view source) handle:
+        return nothing
+    )
+    Stdout.write(view stdout, "optional:{list.sum[int64](view forwarded)}:{list.sum[int64](view copied)}:{total}:{list.sum[int64](view retained)}\n")
+    return nothing
+function inspect_result(view stdout: Stdout) returns nothing:
+    result[list[int64], string] source = ok(list(5, 7))
+    list[int64] alias = view((view source) handle error:
+        return nothing
+    )
+    list[int64] forwarded = alias
+    mutable list[int64] copied = clone forwarded
+    copied = list.append[int64](copied, 17)
+    if true:
+        list[int64] nested = view((view source) handle error:
+            return nothing
+        )
+        Stdout.write(view stdout, "result:nested:{list.sum[int64](view nested)}\n")
+    mutable int64 total = 0
+    for number in view forwarded:
+        list[int64] loop_alias = view((view source) handle error:
+            return nothing
+        )
+        total = total + number + list.sum[int64](view loop_alias)
+    list[int64] retained = view((view source) handle error:
+        return nothing
+    )
+    Stdout.write(view stdout, "result:{list.sum[int64](view forwarded)}:{list.sum[int64](view copied)}:{total}:{list.sum[int64](view retained)}\n")
+    return nothing
+function main(stdout: Stdout) returns nothing:
+    inspect_optional(view stdout)
+    inspect_result(view stdout)
+    optional[int64] scalar = some(7)
+    optional[list[int64]] values = some(list(11))
+    Stdout.write(view stdout, "generic:{count[int64](view scalar)}:{count[list[int64]](view values)}\n")
+    return nothing

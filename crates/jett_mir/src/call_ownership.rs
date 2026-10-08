@@ -8,7 +8,9 @@ use jett_hir::{self as hir, Expression, ExpressionKind as E, LocalId};
 use jett_typecheck::{CheckedCallerEffect, CheckedOwnershipContext};
 use jett_types::{Type, TypeId, TypeInterner};
 
-use crate::{BlockId, Function, Program, StatementKind as S, TerminatorKind as T};
+use crate::{
+    BlockId, Function, Program, ResourceCallNode, StatementKind as S, TerminatorKind as T,
+};
 
 #[cfg(test)]
 mod tests;
@@ -35,6 +37,7 @@ pub struct ArgumentAcquisition {
 /// Pointer equality is only a cache lookup, never ownership authority.
 #[derive(Debug)]
 pub struct CallerAcquisitions<'a> {
+    pub(crate) resource_pending: bool,
     owners: BTreeMap<u32, SourceAcquisition>,
     calls: Vec<(&'a Expression, Vec<ArgumentAcquisition>)>,
     operands: Vec<(&'a Expression, LocalId)>,
@@ -48,6 +51,7 @@ pub struct CallerAcquisitions<'a> {
 impl Default for CallerAcquisitions<'_> {
     fn default() -> Self {
         Self {
+            resource_pending: false,
             owners: BTreeMap::new(),
             calls: Vec::new(),
             operands: Vec::new(),
@@ -198,6 +202,7 @@ pub fn validate_function<'a>(
     function: &'a Function,
     types: &TypeInterner,
 ) -> Result<CallerAcquisitions<'a>, String> {
+    program.resource_manifest.validate(types)?;
     ProgramValidation::new(program).validate_function(function, types)
 }
 
@@ -242,7 +247,12 @@ impl<'p> ProgramValidation<'p> {
         function: &'a Function,
         types: &TypeInterner,
     ) -> Result<CallerAcquisitions<'a>, String> {
-        validate_function_with_signatures(function, types, &self.signatures)
+        validate_function_with_signatures(
+            function,
+            types,
+            &self.signatures,
+            &self._program.resource_manifest,
+        )
     }
 }
 
@@ -250,10 +260,11 @@ fn validate_function_with_signatures<'a>(
     function: &'a Function,
     types: &TypeInterner,
     signatures: &[hir::Function],
+    manifest: &hir::ResourceManifest,
 ) -> Result<CallerAcquisitions<'a>, String> {
     // Fresh exact site proof precedes lexical context selection.
     let breakpoint_sites = crate::breakpoint_regions::validate(function, types)?;
-    let mut validator = Validator::new(function, types, signatures)?;
+    let mut validator = Validator::new(function, types, signatures, manifest)?;
     let context = if function.debug_kind == hir::FunctionDebugKind::Inline {
         CheckedOwnershipContext::Ordinary
     } else {
@@ -300,6 +311,7 @@ struct Validator<'a, 't, 's> {
     function: &'a Function,
     types: &'t TypeInterner,
     signatures: &'s [hir::Function],
+    manifest: &'s hir::ResourceManifest,
     locals: Vec<hir::OwnershipLocalInfo>,
     definitions: BTreeMap<u32, Vec<Defined<'a>>>,
     predecessors: Vec<Vec<BlockId>>,
@@ -317,7 +329,17 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
         function: &'a Function,
         types: &'t TypeInterner,
         signatures: &'s [hir::Function],
+        manifest: &'s hir::ResourceManifest,
     ) -> Result<Self, String> {
+        manifest.validate_type(types, function.return_type)?;
+        for parameter in &function.params {
+            manifest.validate_type(types, parameter.ty)?;
+        }
+        for local in &function.locals {
+            manifest.validate_type(types, local.ty)?;
+            manifest.validate_type(types, local.debug_ty)?;
+        }
+        crate::ordinary_borrowed_sums::validate(function, types)?;
         let iteration_scopes = crate::iteration_views::scopes(function, types)?;
         let locals = function
             .locals
@@ -354,7 +376,12 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                     statement: index,
                 };
                 match &statement.kind {
-                    S::Let { local, value } => {
+                    S::ResourceCall(ResourceCallNode::Stage {
+                        value,
+                        ordinary: Some(local),
+                        ..
+                    })
+                    | S::Let { local, value } => {
                         define(*local, site, statement.span, Definition::Let(value))
                     }
                     S::BeginCallView { local, value } => {
@@ -364,16 +391,37 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                         source,
                         target,
                         success,
-                    } => define(
-                        *target,
-                        site,
-                        statement.span,
-                        Definition::SumTake {
-                            source: *source,
-                            success: *success,
-                        },
-                    ),
-                    S::CheckRefinement { local, .. }
+                    } => {
+                        let ordinary =
+                            function.ordinary_borrowed_sum_projection(block.id, index)?;
+                        let borrowed = function.resource_borrowed_sum_projection(
+                            block.id,
+                            crate::ResourcePosition::Statement(index),
+                        )?;
+                        let definition = if let Some(row) = ordinary {
+                            if row.source() != *source
+                                || (*success && row.output() != *target)
+                                || (!*success && row.error() != Some(*target))
+                            {
+                                return Err("call ownership ordinary borrowed Handle changed its extraction headers".into());
+                            }
+                            Definition::Other
+                        } else if let Some(row) = borrowed {
+                            if row.source() != *source || (*success && row.output() != *target) {
+                                return Err("call ownership borrowed Handle changed its current extraction headers".into());
+                            }
+                            // A guarded view projection is never an owning producer.
+                            Definition::Other
+                        } else {
+                            Definition::SumTake {
+                                source: *source,
+                                success: *success,
+                            }
+                        };
+                        define(*target, site, statement.span, definition);
+                    }
+                    S::ResourceCall(ResourceCallNode::Invoke { output: local, .. })
+                    | S::CheckRefinement { local, .. }
                     | S::SequenceLength { target: local, .. }
                     | S::SequenceGet { target: local, .. }
                     | S::SumTag { target: local, .. } => {
@@ -464,6 +512,7 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
             function,
             types,
             signatures,
+            manifest,
             locals,
             definitions,
             predecessors,
@@ -483,6 +532,36 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
         site: Site,
         context: CheckedOwnershipContext,
     ) -> Result<(), String> {
+        if let E::ResourceInvoke {
+            hook,
+            ownership,
+            args,
+            evaluation_order,
+            ..
+        } = &expression.kind
+        {
+            if !self.manifest.contains_hook(hook) {
+                return Err(
+                    "Resource invocation belongs to another original checked manifest".into(),
+                );
+            }
+            let locals = self.locals_at(site);
+            hir::validate_hir_invocation(
+                self.signatures,
+                &locals,
+                expression,
+                self.types,
+                context,
+            )?;
+            let hir::CallOwnership::Source(source) = ownership else {
+                return Err("Resource invocation cannot use Generated authority".into());
+            };
+            if source.arguments.len() != args.len() || evaluation_order.len() != args.len() {
+                return Err("Resource invocation source order or operand count changed".into());
+            }
+            self.acquisitions.resource_pending = true;
+            return Ok(());
+        }
         let (ownership, args, order) = match &expression.kind {
             E::Call {
                 ownership,
@@ -551,6 +630,17 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
             false,
         )?;
         hir::validate_invocation_target(self.signatures, expression, self.types, context)?;
+        let resource_original = crate::resource_ownership::original_call_at(
+            self.function,
+            self.manifest,
+            self.types,
+            expression,
+            site.block,
+            site.statement,
+        )?;
+        if resource_original {
+            self.acquisitions.resource_pending = true;
+        }
         match ownership {
             hir::CallOwnership::Source(source) => {
                 let mut original = Vec::new();
@@ -559,7 +649,14 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                     let acquisition = self.source_acquisition(argument, value.ty);
                     match argument.staging {
                         hir::ArgumentStaging::Original => {
-                            if argument.effect == CheckedCallerEffect::RelinquishOwned
+                            let resource_actual = resource_original
+                                && crate::resource_ownership::original_resource_actual(
+                                    self.manifest,
+                                    self.types,
+                                    argument.actual_type,
+                                );
+                            if (argument.effect == CheckedCallerEffect::RelinquishOwned
+                                && !resource_actual)
                                 || (argument.effect == CheckedCallerEffect::ObserveData
                                     && argument.physical_access
                                         == jett_typecheck::CheckedCalleeAccess::Owned)
@@ -567,7 +664,7 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                                 return Err("call ownership requires explicit owning staging at this physical boundary".into());
                             }
                             self.original(value, argument, &source.bridge, site)?;
-                            if consumes(argument.effect) {
+                            if consumes(argument.effect) && !resource_actual {
                                 if let Some(binding) = acquisition.binding {
                                     self.acquisitions.operands.push((value, binding));
                                 }
@@ -2895,7 +2992,8 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
         context: CheckedOwnershipContext,
     ) -> Result<(), String> {
         match statement {
-            S::Let { value, .. }
+            S::ResourceCall(ResourceCallNode::Stage { value, .. })
+            | S::Let { value, .. }
             | S::BeginCallView { value, .. }
             | S::Evaluate(value)
             | S::HandleDefault(value) => self.expression(value, site, context)?,
@@ -2949,9 +3047,21 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
         site: Site,
         context: CheckedOwnershipContext,
     ) -> Result<(), String> {
+        self.manifest.validate_type(self.types, expression.ty)?;
+        if let E::ResourceHookValue { hook } = &expression.kind {
+            if !self.manifest.contains_hook(hook) || expression.ty != hook.function_type() {
+                return Err(
+                    "Resource descriptor differs from its original checked manifest or signature"
+                        .into(),
+                );
+            }
+        }
         self.invocation(expression, site, context)?;
         match &expression.kind {
-            E::Call { args, .. } | E::Intrinsic { args, .. } | E::ActorSpawn { args, .. } => {
+            E::Call { args, .. }
+            | E::ResourceInvoke { args, .. }
+            | E::Intrinsic { args, .. }
+            | E::ActorSpawn { args, .. } => {
                 for value in args {
                     self.expression(value, site, context)?;
                 }
@@ -3048,6 +3158,7 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
             | E::Nothing
             | E::Local(_)
             | E::Constant { .. }
+            | E::ResourceHookValue { .. }
             | E::FunctionRef(_)
             | E::ClosureRef { .. }
             | E::OptionalNone

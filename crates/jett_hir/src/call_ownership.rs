@@ -168,6 +168,7 @@ pub enum ArgumentStaging {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallTarget {
+    ResourceHook(crate::ResourceHookRef),
     Function(FunctionId),
     /// Proven source facade identity; its implementation body need not survive pruning.
     Declaration {
@@ -188,6 +189,9 @@ pub enum CallTarget {
 /// An implementation helper does not change the original caller disposition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallBridge {
+    ResourceHook {
+        hook: crate::ResourceHookRef,
+    },
     Direct,
     TrustedIntrinsic {
         intrinsic: IntrinsicId,
@@ -272,6 +276,12 @@ struct GeneratedProducerShape {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum GeneratedProducerIdentity {
+    ResourceHook(crate::ResourceHookRef),
+    ResourceInvoke {
+        hook: crate::ResourceHookRef,
+        operands: Vec<(TypeId, Span)>,
+        order: Vec<usize>,
+    },
     Data,
     Transparent(GeneratedTransparentShape),
     Local(LocalId),
@@ -557,6 +567,8 @@ fn generated_backing_values(value: &Expression) -> Vec<&Expression> {
         | E::Local(_)
         | E::Constant { .. }
         | E::FunctionRef(_)
+        | E::ResourceHookValue { .. }
+        | E::ResourceInvoke { .. }
         | E::ClosureRef { .. }
         | E::Call { .. }
         | E::Intrinsic { .. }
@@ -578,6 +590,17 @@ impl GeneratedProducerShape {
             E::Local(local) => GeneratedProducerIdentity::Local(*local),
             E::Constant { declaration } => GeneratedProducerIdentity::Constant(*declaration),
             E::FunctionRef(function) => GeneratedProducerIdentity::Function(*function),
+            E::ResourceHookValue { hook } => GeneratedProducerIdentity::ResourceHook(hook.clone()),
+            E::ResourceInvoke {
+                hook,
+                args,
+                evaluation_order,
+                ..
+            } => GeneratedProducerIdentity::ResourceInvoke {
+                hook: hook.clone(),
+                operands: occurrence(args),
+                order: evaluation_order.clone(),
+            },
             E::ClosureRef { function, captures } => GeneratedProducerIdentity::Closure {
                 function: *function,
                 captures: captures.clone(),
@@ -950,7 +973,8 @@ impl GeneratedProducerShape {
         match &self.identity {
             GeneratedProducerIdentity::Call { operands, .. }
             | GeneratedProducerIdentity::Indirect { operands, .. }
-            | GeneratedProducerIdentity::Intrinsic { operands, .. } => {
+            | GeneratedProducerIdentity::Intrinsic { operands, .. }
+            | GeneratedProducerIdentity::ResourceInvoke { operands, .. } => {
                 for &(ty, _) in operands {
                     visit(ty);
                 }
@@ -958,6 +982,10 @@ impl GeneratedProducerShape {
             _ => {}
         }
         match &self.identity {
+            GeneratedProducerIdentity::ResourceHook(hook)
+            | GeneratedProducerIdentity::ResourceInvoke { hook, .. } => {
+                hook.metadata_types(&mut *visit)
+            }
             GeneratedProducerIdentity::Intrinsic { type_arguments, .. } => {
                 for &ty in type_arguments {
                     visit(ty);
@@ -1463,6 +1491,7 @@ impl CallOwnership {
                             visit(binding.ty);
                         }
                     }
+                    CallTarget::ResourceHook(hook) => hook.metadata_types(&mut visit),
                     CallTarget::Interface { interface_type, .. } => visit(*interface_type),
                     CallTarget::Indirect { signature_type } => visit(*signature_type),
                     _ => {}
@@ -2855,6 +2884,44 @@ impl crate::BodyLowerer<'_, '_> {
         Some(ownership)
     }
 
+    pub(crate) fn finish_resource_call_ownership(
+        &mut self,
+        mut ownership: CallOwnership,
+        hook: &crate::ResourceHookRef,
+        args: &[Expression],
+        span: Span,
+    ) -> Option<CallOwnership> {
+        let proof = (|| -> Result<(), String> {
+            hook.validate(&self.parent.check.interner)?;
+            if !self.parent.resource_manifest.contains_hook(hook) {
+                return Err("Resource hook is from another checked program".into());
+            }
+            let CallOwnership::Source(source) = &mut ownership else {
+                return Err("Resource invocation requires an original Source certificate".into());
+            };
+            if source.target != CallTarget::ResourceHook(hook.clone())
+                || source.shape
+                    != (CheckedInvocationShape::Function {
+                        signature_type: hook.function_type(),
+                    })
+                || source.arguments.len() != args.len()
+                || !source.generated_operands.is_empty()
+            {
+                return Err(
+                    "Resource invocation differs from its exact checked hook target".into(),
+                );
+            }
+            source.bridge = CallBridge::ResourceHook { hook: hook.clone() };
+            source.certificate.bridge = source.bridge.clone();
+            Ok(())
+        })();
+        if let Err(message) = proof {
+            self.parent.error(span, message);
+            return None;
+        }
+        Some(ownership)
+    }
+
     fn join_physical_ownership(
         &self,
         ownership: &mut CallOwnership,
@@ -3328,6 +3395,27 @@ impl crate::BodyLowerer<'_, '_> {
         shape: &CheckedInvocationShape,
     ) -> Result<CallTarget, String> {
         use jett_typecheck::CheckedInvocationTarget as Target;
+        if let Target::Resolved(definition) = target
+            && let Some(hook) = self
+                .parent
+                .resource_manifest
+                .hook_for_definition(*definition)
+        {
+            return Ok(CallTarget::ResourceHook(hook));
+        }
+        // A resolver kernel without the original envelope cannot become an ordinary function.
+        if let Target::Resolved(definition) = target
+            && self
+                .parent
+                .resolve
+                .resource_kernels
+                .contains_definition(*definition)
+        {
+            return Err(
+                "Resource hook requires lower_checked_resource_program and its original manifest"
+                    .into(),
+            );
+        }
         let key = match target {
             Target::Resolved(definition) => crate::FunctionKey::Definition {
                 definition: *definition,
@@ -3789,6 +3877,12 @@ pub fn validate_hir_invocation(
             args,
             evaluation_order,
             ..
+        }
+        | ExpressionKind::ResourceInvoke {
+            ownership,
+            args,
+            evaluation_order,
+            ..
         } => (ownership, args, evaluation_order),
         _ => return Ok(()),
     };
@@ -3862,6 +3956,12 @@ pub fn validate_invocation_target(
             args,
             evaluation_order,
             ..
+        }
+        | ExpressionKind::ResourceInvoke {
+            ownership,
+            args,
+            evaluation_order,
+            ..
         } => (ownership, args, evaluation_order),
         _ => return Ok(()),
     };
@@ -3903,6 +4003,52 @@ pub fn validate_invocation_target(
                 return Err("call ownership source context is not its lexical owner".into());
             }
             match (&source.target, &source.bridge, &expression.kind) {
+                (
+                    CallTarget::ResourceHook(target_hook),
+                    CallBridge::ResourceHook { hook: bridge_hook },
+                    ExpressionKind::ResourceInvoke { hook, .. },
+                ) if target_hook == hook && bridge_hook == hook => {
+                    hook.validate(types)?;
+                    if source.shape
+                        != (CheckedInvocationShape::Function {
+                            signature_type: hook.function_type(),
+                        })
+                        || !source.generated_operands.is_empty()
+                    {
+                        return Err("Resource invocation changed its original hook signature or added Generated operands".into());
+                    }
+                    let Type::Function {
+                        params,
+                        view_params,
+                        ..
+                    } = types.resolve(hook.function_type())
+                    else {
+                        return Err("Resource hook has no exact function signature".into());
+                    };
+                    if params.len() != args.len() || view_params.len() != args.len() {
+                        return Err("Resource invocation hook arity changed".into());
+                    }
+                    for (index, argument) in source.arguments.iter().enumerate() {
+                        let expected_access = if view_params[index] {
+                            CheckedCalleeAccess::View
+                        } else {
+                            CheckedCalleeAccess::Owned
+                        };
+                        if argument.physical_access != expected_access
+                            || argument.callee_access != expected_access
+                            || argument.parameter_type != params[index]
+                            || !source_parameter_matches(
+                                argument,
+                                args[index].ty,
+                                params[index],
+                                types,
+                            )
+                        {
+                            return Err("Resource invocation differs from its exact source formal type or mode".into());
+                        }
+                    }
+                }
+
                 (
                     CallTarget::Function(source_target),
                     CallBridge::Direct,
@@ -4283,7 +4429,12 @@ pub fn validate_invocation_target(
             }
         }
     }
-    let declared_result = if let Some(target) = target {
+    let declared_result = if let ExpressionKind::ResourceInvoke { hook, .. } = &expression.kind {
+        match types.resolve(hook.function_type()) {
+            Type::Function { return_type, .. } => Some(*return_type),
+            _ => None,
+        }
+    } else if let Some(target) = target {
         Some(target.return_type)
     } else if let ExpressionKind::IndirectCall { callee, .. } = &expression.kind {
         match types.resolve(callee.ty) {

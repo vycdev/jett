@@ -122,6 +122,8 @@ need audit. Nested ordinary Resource printing requires an observation boundary
 for occupied data, hidden Secret, known absence and omitted values; this slice
 does not select that policy. Trace/breakpoint type-and-ownership-availability
 summaries are distinct from ordinary printing and expose no registry key, slot,
-generation or provider state. Opaque layouts and source/native live Resource
-values remain unsupported. Actor/message transfer, pending work, cancellation,
+generation or provider state. The later private [reference lifecycle](native_resource_hook_identity.md#reference-lifecycle-execution)
+now has carrier/custody and scripted-provider Source tests; those 36 passing
+reference groups are separate from the static checking evidence above. Production
+providers, opaque native layouts and native Resource values remain unsupported. Actor/message transfer, pending work, cancellation,
 late completion and real provider authority remain independent lifecycle work.

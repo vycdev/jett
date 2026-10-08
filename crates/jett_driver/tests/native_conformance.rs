@@ -27,6 +27,15 @@ mod inventory_execution;
 #[path = "native_conformance/call_ownership.rs"]
 mod call_ownership;
 
+#[path = "native_conformance/resource_report.rs"]
+mod resource_report;
+
+#[path = "native_conformance/resource_cases.rs"]
+mod resource_cases;
+
+#[path = "native_conformance/resource_execution.rs"]
+mod resource_execution;
+
 #[path = "native_conformance/scoped_call_views.rs"]
 mod scoped_call_views;
 
@@ -107,6 +116,12 @@ mod uninhabited_callbacks;
 
 #[path = "native_conformance/latent_callbacks.rs"]
 mod latent_callbacks;
+
+#[path = "native_conformance/ordinary_borrowed_sums.rs"]
+mod ordinary_borrowed_sums;
+
+#[path = "native_conformance/ordinary_borrowed_sums_additional.rs"]
+mod ordinary_borrowed_sums_additional;
 
 struct Launcher {
     bundle: NativeLauncherBundle,
@@ -8835,3 +8850,6 @@ fn native_whole_machine_rebinding_preserves_owned_payloads_pending_depth_and_sou
         assert!(actual.stderr.is_empty(), "{actual:?}");
     }
 }
+
+#[path = "native_conformance/reflected_iteration_controls.rs"]
+mod reflected_iteration_controls;

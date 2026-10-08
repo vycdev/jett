@@ -67,6 +67,12 @@ pub enum Value {
     Nothing,
     /// An opaque runtime-provided capability handle.
     Capability(String),
+    /// Physical carrier only; cleanup custody is never part of Value::Clone.
+    Resource(crate::resource_execution::ResourceCarrier),
+    /// Program-bound closed hook descriptor; storing it does not invoke a hook.
+    ResourceHook(crate::resource_execution::ResourceHookDescriptor),
+    /// Compiler-installed provenance-bearing authority, never a capability string.
+    GrantedNetwork(crate::resource_execution::GrantedNetwork),
     /// An opaque reflected construction builder.
     TypeConstruction {
         type_name: String,
@@ -121,6 +127,48 @@ pub enum Value {
 }
 
 impl Value {
+    pub(crate) fn contains_live_resource_or_grant(&self) -> bool {
+        match self {
+            Self::Resource(_) | Self::GrantedNetwork(_) => true,
+            Self::Typed { value, .. }
+            | Self::ResultOk(value)
+            | Self::ResultFail(value)
+            | Self::OptionalSome(value)
+            | Self::Pending(value) => value.contains_live_resource_or_grant(),
+            Self::List(values)
+            | Self::Set(values)
+            | Self::Enum { fields: values, .. }
+            | Self::Machine { fields: values, .. } => {
+                values.iter().any(Self::contains_live_resource_or_grant)
+            }
+            Self::Struct { fields, .. } => fields
+                .iter()
+                .any(|(_, value)| value.contains_live_resource_or_grant()),
+            Self::Map(values) => values.iter().any(|(key, value)| {
+                key.contains_live_resource_or_grant() || value.contains_live_resource_or_grant()
+            }),
+            Self::TypeConstruction { fields, .. } => fields
+                .iter()
+                .any(|(_, _, _, value)| value.contains_live_resource_or_grant()),
+            Self::Function { captures, .. } => {
+                captures.values().any(Self::contains_live_resource_or_grant)
+            }
+            Self::Int64(_)
+            | Self::Uint64(_)
+            | Self::Float64(_)
+            | Self::String(_)
+            | Self::Bool(_)
+            | Self::Bytes(_)
+            | Self::OptionalNone
+            | Self::Nothing
+            | Self::Capability(_)
+            | Self::Actor(_)
+            | Self::Error(_)
+            | Self::NamedFunction(_)
+            | Self::ResourceHook(_) => false,
+        }
+    }
+
     pub(crate) fn primitive_carrier_name(&self) -> Option<&'static str> {
         match self {
             Self::Int64(_) => Some("int64"),
@@ -265,6 +313,9 @@ impl fmt::Display for Value {
             Value::OptionalNone => write!(f, "none"),
             Value::Nothing => write!(f, "nothing"),
             Value::Capability(name) => write!(f, "<{name} capability>"),
+            Value::Resource(_) => f.write_str("<opaque resource>"),
+            Value::ResourceHook(_) => f.write_str("<checked function>"),
+            Value::GrantedNetwork(_) => f.write_str("<runtime authority>"),
             Value::TypeConstruction {
                 type_name,
                 variant,

@@ -733,6 +733,13 @@ impl Coercions<'_> {
     fn expression(&self, expression: &mut Expression, handled: Option<TypeId>) {
         let ty = expression.ty;
         match &mut expression.kind {
+            ExpressionKind::ResourceInvoke { hook, args, .. } => {
+                if let Type::Function { params, .. } = self.types.resolve(hook.function_type()) {
+                    for (argument, expected) in args.iter_mut().zip(params) {
+                        self.expected(argument, *expected, handled);
+                    }
+                }
+            }
             ExpressionKind::Call { function, args, .. } => {
                 for (argument, expected) in args
                     .iter_mut()

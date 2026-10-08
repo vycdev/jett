@@ -4,6 +4,12 @@ assertion_line: 7203
 expression: program
 ---
 Program {
+    resource_manifest: ResourceManifest {
+        data: None,
+    },
+    resource_source: ResourceSourceArchive {
+        authenticated: false,
+    },
     functions: [
         Function {
             id: FunctionId(

@@ -1,0 +1,7 @@
+namespace app
+export function scenario(view net: Network) returns int64:
+    use resource_probe
+    resource_probe.TestHandle token = net into view resource_probe.create(2201) handle error:
+        return -1
+    token into resource_probe.close()
+    return 9

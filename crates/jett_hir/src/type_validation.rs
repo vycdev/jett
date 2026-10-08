@@ -22,6 +22,7 @@ pub fn validate_backend_types(
     interner: &TypeInterner,
 ) -> Result<(), Vec<ValidationError>> {
     let mut validator = BackendTypeValidator {
+        resource_manifest: &program.resource_manifest,
         interner,
         functions: &program.functions,
         ownership_locals: Vec::new(),
@@ -35,6 +36,9 @@ pub fn validate_backend_types(
         iteration_binders: HashSet::new(),
         errors: Vec::new(),
     };
+    if let Err(message) = program.resource_manifest.validate(interner) {
+        validator.error(Span::new(jett_common::FileId::new(0), 0, 0), message);
+    }
     for function in &program.functions {
         validator.function(function);
     }
@@ -86,6 +90,7 @@ enum DefinitionKey {
 }
 
 struct BackendTypeValidator<'a> {
+    resource_manifest: &'a crate::ResourceManifest,
     interner: &'a TypeInterner,
     functions: &'a [Function],
     ownership_locals: Vec<crate::OwnershipLocalInfo>,
@@ -351,7 +356,8 @@ impl BackendTypeValidator<'_> {
     fn expression(&mut self, expression: &Expression, function_name: &str) {
         if let ExpressionKind::Call { ownership, .. }
         | ExpressionKind::IndirectCall { ownership, .. }
-        | ExpressionKind::Intrinsic { ownership, .. } = &expression.kind
+        | ExpressionKind::Intrinsic { ownership, .. }
+        | ExpressionKind::ResourceInvoke { ownership, .. } = &expression.kind
         {
             let mut metadata_types = Vec::new();
             ownership.metadata_types(|ty| metadata_types.push(ty));
@@ -445,6 +451,27 @@ impl BackendTypeValidator<'_> {
                         expression.span,
                         "container callback target".into(),
                     );
+                }
+            }
+            ExpressionKind::ResourceHookValue { hook } => {
+                if !self.resource_manifest.contains_hook(hook)
+                    || expression.ty != hook.function_type()
+                {
+                    self.error(
+                        expression.span,
+                        "Resource descriptor differs from its original manifest or signature",
+                    );
+                }
+            }
+            ExpressionKind::ResourceInvoke { hook, args, .. } => {
+                if !self.resource_manifest.contains_hook(hook) {
+                    self.error(
+                        expression.span,
+                        "Resource invocation belongs to another original manifest",
+                    );
+                }
+                for argument in args {
+                    self.expression(argument, function_name);
                 }
             }
             ExpressionKind::Call { args, .. } => {
@@ -812,8 +839,12 @@ impl BackendTypeValidator<'_> {
             | Type::Nothing
             | Type::TypeConstruction
             | Type::Never
-            | Type::Capability(_)
-            | Type::Resource(_) => {}
+            | Type::Capability(_) => {}
+            Type::Resource(_) => {
+                if !self.resource_manifest.contains_type(type_id) {
+                    self.error(span, "Resource type requires the original checked manifest; raw HIR lowering cannot authorize its layout");
+                }
+            }
         }
     }
 
@@ -1009,6 +1040,8 @@ mod tests {
     fn program_with(return_type: TypeId, statements: Vec<Statement>) -> Program {
         let span = test_span();
         Program {
+            resource_manifest: crate::ResourceManifest::empty(),
+            resource_source: crate::ResourceSourceArchive::empty(),
             equality_methods: Default::default(),
             functions: vec![Function {
                 id: FunctionId(0),
@@ -1203,6 +1236,7 @@ mod tests {
         let statement = Statement {
             kind: StatementKind::Expression(Expression {
                 kind: ExpressionKind::Comptime {
+                    scopes: Vec::new(),
                     source_span: span,
                     value: Box::new(Expression {
                         kind: ExpressionKind::Int(7),

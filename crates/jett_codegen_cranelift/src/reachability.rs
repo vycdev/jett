@@ -9,14 +9,35 @@ use crate::CodegenError;
 /// declaration and object-symbol order stay deterministic.
 #[cfg(test)]
 fn reachable_function_ids(program: &Program) -> Result<Vec<FunctionId>, CodegenError> {
-    reachable_functions(program, None)
+    reachable_functions(program, None, &[], &[])
 }
 
 pub(crate) fn reachable_function_ids_with_types(
     program: &Program,
     types: &jett_types::TypeInterner,
 ) -> Result<Vec<FunctionId>, CodegenError> {
-    reachable_functions(program, Some(types))
+    reachable_functions(program, Some(types), &[], &[])
+}
+
+/// Constructor-selected families are executable roots even when ordinary
+/// project reachability did not use their descriptor-producing bodies.
+pub(crate) fn reachable_resource_function_ids(
+    plan: &jett_mir::ResourceOwnershipPlan<'_>,
+) -> Result<Vec<FunctionId>, CodegenError> {
+    let mut roots = plan
+        .functions()
+        .iter()
+        .map(|function| function.function())
+        .collect::<Vec<_>>();
+    if let Some(entry) = plan.entry_scope() {
+        roots.push(entry.function());
+    }
+    reachable_functions(
+        plan.program(),
+        Some(plan.types()),
+        &roots,
+        plan.required_only_function_ids(),
+    )
 }
 
 struct References<'a> {
@@ -33,6 +54,8 @@ impl References<'_> {
 fn reachable_functions(
     program: &Program,
     types: Option<&jett_types::TypeInterner>,
+    additional_roots: &[FunctionId],
+    required_only: &[FunctionId],
 ) -> Result<Vec<FunctionId>, CodegenError> {
     let mut reachable = vec![false; program.functions.len()];
     let mut pending = Vec::new();
@@ -42,6 +65,7 @@ fn reachable_functions(
             && function.identity.declaration.kind != hir::DeclarationKind::RefinementPredicate
             && function.debug_kind != hir::FunctionDebugKind::Inline
             && !uninhabited_specialization(function)
+            && !required_only.contains(&function.id)
         {
             mark_reachable(
                 program,
@@ -52,6 +76,27 @@ fn reachable_functions(
                 &mut pending,
             )?;
         }
+    }
+
+    for &id in additional_roots {
+        if required_only.contains(&id) {
+            return Err(CodegenError::Backend(
+                "required-only helper cannot become an executable Resource root".into(),
+            ));
+        }
+        let function = resolve_function(program, id).ok_or_else(|| {
+            CodegenError::Backend(
+                "authenticated Resource root is absent from the current MIR function table".into(),
+            )
+        })?;
+        mark_reachable(
+            program,
+            id,
+            function.span,
+            function,
+            &mut reachable,
+            &mut pending,
+        )?;
     }
 
     while let Some((function_id, function_span)) = pending.pop() {
@@ -68,6 +113,14 @@ fn reachable_functions(
             collect_function_references(function, &mut references);
         }
         for (target, span) in references.functions {
+            if required_only.contains(&target) {
+                return Err(CodegenError::InvalidMirContract {
+                    function: function.identity.declaration.name.clone(),
+                    span,
+                    message: "runtime reference reaches a helper authenticated only for required evaluation"
+                        .into(),
+                });
+            }
             mark_reachable(
                 program,
                 target,
@@ -156,6 +209,20 @@ fn collect_function_references(function: &Function, references: &mut References<
     for block in &function.blocks {
         for statement in &block.statements {
             match &statement.kind {
+                StatementKind::ResourceCall(jett_mir::ResourceCallNode::Stage {
+                    value, ..
+                }) => {
+                    collect_expression_references(value, references);
+                }
+                StatementKind::ResourceCall(
+                    jett_mir::ResourceCallNode::Begin { region }
+                    | jett_mir::ResourceCallNode::Invoke { region, .. },
+                ) => {
+                    if let Some(region) = function.resource_call_region(*region) {
+                        references.push((region.function(), statement.span));
+                    }
+                }
+                StatementKind::ResourceCall(jett_mir::ResourceCallNode::End { .. }) => {}
                 StatementKind::Let { value, .. }
                 | StatementKind::BeginCallView { value, .. }
                 | StatementKind::CheckRefinement { call: value, .. }
@@ -184,6 +251,7 @@ fn collect_function_references(function: &Function, references: &mut References<
                 | StatementKind::ReplaceCallOwnerGeneration { .. }
                 | StatementKind::CloseCallOwnerGeneration { .. }
                 | StatementKind::EndCallView { .. }
+                | StatementKind::ResourceLexicalExit(_)
                 | StatementKind::ReflectedContainerReady { .. }
                 | StatementKind::IterationBorrow { .. }
                 | StatementKind::SequenceLength { .. }
@@ -292,6 +360,12 @@ fn collect_hir_block_references(block: &hir::Block, references: &mut References<
 /// to traverse it.
 fn collect_expression_references(expression: &Expression, references: &mut References<'_>) {
     match &expression.kind {
+        ExpressionKind::ResourceHookValue { .. } => {}
+        ExpressionKind::ResourceInvoke { args, .. } => {
+            for argument in args {
+                collect_expression_references(argument, references);
+            }
+        }
         ExpressionKind::FunctionRef(function) => references.push((*function, expression.span)),
         ExpressionKind::FunctionAdapter { value, function } => {
             references.push((*function, expression.span));

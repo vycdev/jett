@@ -1,0 +1,81 @@
+namespace app
+struct Record:
+    left: int64
+    right: int64
+struct PairOf[T]:
+    left: T
+    right: T
+type Slot = int64
+struct AliasPair:
+    left: Slot
+    right: Slot
+function first(value: int64) returns int64:
+    return value + 10
+function second(value: int64) returns int64:
+    return value + 100
+function is_right(view field: TypeField) returns bool:
+    return field.name == "right"
+function typed_label[T](name: string) returns string:
+    return "{name}:{type.name[T]()}"
+function by_index(view source: Record) returns string:
+    mutable list[string] parts = list.new[string]()
+    for field in type.fields[Record]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[Record, Field](view source, view field)
+            if field.index == 0:
+                parts = list.append[string](parts, "{field.name}:{first(value)}")
+            else:
+                parts = list.append[string](parts, "{field.name}:{second(value)}")
+    return string.join(parts, ";")
+function by_name(view source: Record) returns string:
+    mutable list[string] parts = list.new[string]()
+    for field in type.fields[Record]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[Record, Field](view source, view field)
+            if is_right(view field):
+                parts = list.append[string](parts, "{field.name}:{first(value)}")
+            else:
+                parts = list.append[string](parts, "{field.name}:{second(value)}")
+    return string.join(parts, ";")
+function generic_by_index[T](view source: T) returns string:
+    mutable list[string] parts = list.new[string]()
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[T, Field](view source, view field)
+            if field.index == 0:
+                parts = list.append[string](parts, "{field.name}:{first(value)}")
+            else:
+                parts = list.append[string](parts, "{field.name}:{second(value)}")
+    return string.join(parts, ";")
+function alias_labels() returns string:
+    mutable list[string] parts = list.new[string]()
+    for field in type.fields[AliasPair]():
+        comptime type Field = field.type_info:
+            parts = list.append[string](parts, typed_label[Field](field.name))
+    return string.join(parts, ";")
+function report(high: bool) returns string:
+    mutable int64 left = 2
+    mutable int64 right = 3
+    if high:
+        left = 5
+        right = 7
+    Record source = Record(left: left, right: right)
+    PairOf[int64] generic_source = PairOf[int64](left: left, right: right)
+    string indexed = by_index(view source)
+    string named = by_name(view source)
+    string generic_record = generic_by_index[Record](view source)
+    string generic_owner = generic_by_index[PairOf[int64]](view generic_source)
+    return "{indexed}|{named}|{generic_record}|{generic_owner}|{alias_labels()}"
+function expected(high: bool) returns string:
+    if high:
+        return "left:15;right:107|left:105;right:17|left:15;right:107|left:15;right:107|left:app.Slot;right:app.Slot"
+    return "left:12;right:103|left:102;right:13|left:12;right:103|left:12;right:103|left:app.Slot;right:app.Slot"
+function main(stdout: Stdout) returns nothing:
+    string baked = comptime report(false)
+    Stdout.write(view stdout, "{report(false)}\n{baked}\n")
+verify ordinary_reflection_nominal:
+    assert report(false) == expected(false)
+    assert report(true) == expected(true)
+property ordinary_reflection_nominal_trials:
+    given high: bool
+    assert report(high) == expected(high)

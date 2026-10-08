@@ -1,0 +1,15 @@
+namespace app
+export function descriptor_storage() returns nothing:
+    use resource_probe
+    comptime type Token = type.info[resource_probe.TestHandle]():
+        function(Token) returns nothing finalizer = resource_probe.close_descriptor()
+        comptime type Nested = type.arg[optional[Token]](0):
+            optional[Nested] absent = resource_probe.empty()
+    return nothing
+export function absent_close_path() returns nothing:
+    use resource_probe
+    comptime type Token = type.info[resource_probe.TestHandle]():
+        Token missing = resource_probe.empty() handle:
+            return nothing
+        resource_probe.close(missing)
+    return nothing

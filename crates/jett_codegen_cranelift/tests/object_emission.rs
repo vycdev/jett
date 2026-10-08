@@ -1686,6 +1686,7 @@ fn rejects_statically_zero_integer_divisors() {
 #[test]
 fn rejects_an_explicit_non_host_target_before_object_generation() {
     let program = Program {
+        resource_manifest: jett_hir::ResourceManifest::empty(),
         functions: Vec::new(),
         equality_methods: HashMap::new(),
     };
@@ -1704,6 +1705,7 @@ fn rejects_an_explicit_non_host_target_before_object_generation() {
 #[test]
 fn rejects_malformed_target_text() {
     let program = Program {
+        resource_manifest: jett_hir::ResourceManifest::empty(),
         functions: Vec::new(),
         equality_methods: HashMap::new(),
     };

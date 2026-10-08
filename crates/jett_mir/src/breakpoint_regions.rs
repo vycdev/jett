@@ -1024,6 +1024,20 @@ pub(super) fn blocks_equal(left: &[BasicBlock], right: &[BasicBlock]) -> bool {
             .zip(right)
             .all(|(left, right)| block_equal(left, right))
 }
+pub(super) fn expressions_equal(left: &Expression, right: &Expression) -> bool {
+    let (mut left, mut right) = (left.clone(), right.clone());
+    let (mut left_bits, mut right_bits) = (Vec::new(), Vec::new());
+    float_expression(&mut left, &mut left_bits);
+    float_expression(&mut right, &mut right_bits);
+    left == right && left_bits == right_bits
+}
+pub(super) fn hir_blocks_equal(left: &hir::Block, right: &hir::Block) -> bool {
+    let (mut left, mut right) = (left.clone(), right.clone());
+    let (mut left_bits, mut right_bits) = (Vec::new(), Vec::new());
+    float_hir_block(&mut left, &mut left_bits);
+    float_hir_block(&mut right, &mut right_bits);
+    left == right && left_bits == right_bits
+}
 fn block_equal(left: &BasicBlock, right: &BasicBlock) -> bool {
     let (mut left, mut right) = (left.clone(), right.clone());
     let (mut left_bits, mut right_bits) = (Vec::new(), Vec::new());
@@ -1035,7 +1049,8 @@ fn block_equal(left: &BasicBlock, right: &BasicBlock) -> bool {
 fn float_block(block: &mut BasicBlock, bits: &mut Vec<u64>) {
     for statement in &mut block.statements {
         match &mut statement.kind {
-            StatementKind::Let { value, .. }
+            StatementKind::ResourceCall(ResourceCallNode::Stage { value, .. })
+            | StatementKind::Let { value, .. }
             | StatementKind::BeginCallView { value, .. }
             | StatementKind::CheckRefinement { call: value, .. }
             | StatementKind::Evaluate(value)
@@ -1055,7 +1070,13 @@ fn float_block(block: &mut BasicBlock, bits: &mut Vec<u64>) {
                     float_expression(value, bits);
                 }
             }
-            StatementKind::OpenCallOwnerGeneration { .. }
+            StatementKind::ResourceCall(
+                ResourceCallNode::Begin { .. }
+                | ResourceCallNode::Invoke { .. }
+                | ResourceCallNode::End { .. },
+            )
+            | StatementKind::ResourceLexicalExit(_)
+            | StatementKind::OpenCallOwnerGeneration { .. }
             | StatementKind::ReplaceCallOwnerGeneration { .. }
             | StatementKind::CloseCallOwnerGeneration { .. }
             | StatementKind::EndCallView { .. }
@@ -1124,6 +1145,7 @@ fn float_expression(value: &mut Expression, bits: &mut Vec<u64>) {
         | E::View(value)
         | E::Clone(value) => float_expression(value, bits),
         E::Call { args, .. }
+        | E::ResourceInvoke { args, .. }
         | E::Intrinsic { args, .. }
         | E::ActorSpawn { args, .. }
         | E::StructConstruct { fields: args, .. }
@@ -1177,6 +1199,7 @@ fn float_expression(value: &mut Expression, bits: &mut Vec<u64>) {
         | E::Nothing
         | E::Local(_)
         | E::Constant { .. }
+        | E::ResourceHookValue { .. }
         | E::FunctionRef(_)
         | E::ClosureRef { .. }
         | E::OptionalNone

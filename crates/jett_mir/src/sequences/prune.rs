@@ -5,7 +5,9 @@ use super::*;
 
 pub(crate) fn unreachable(function: &mut Function) -> bool {
     let before = (!function.breakpoint_regions.is_empty()
-        || crate::call_owner_generations::has_records(function))
+        || crate::call_owner_generations::has_records(function)
+        || crate::resource_ownership::has_records(function)
+        || crate::ordinary_borrowed_sums::has_records(function))
     .then(|| function.clone());
     let Ok(cfg) = ControlFlowGraph::analyze(function) else {
         return false;
@@ -50,6 +52,8 @@ pub(crate) fn unreachable(function: &mut Function) -> bool {
 
     if before.as_ref().is_some_and(|before| {
         crate::call_owner_generations::remap_blocks(function, before, &blocks).is_err()
+            || crate::resource_ownership::remap_blocks(function, before, &blocks).is_err()
+            || crate::ordinary_borrowed_sums::remap_blocks(function, before, &blocks).is_err()
     }) || crate::breakpoint_regions::remap_blocks(function, &blocks).is_err()
         || !unused_locals(function)
     {
@@ -65,7 +69,9 @@ pub(crate) fn unreachable(function: &mut Function) -> bool {
 /// Every parameter, binding, read, capture and debug or loan reference survives.
 pub(crate) fn unused_locals(function: &mut Function) -> bool {
     let before = (!function.breakpoint_regions.is_empty()
-        || crate::call_owner_generations::has_records(function))
+        || crate::call_owner_generations::has_records(function)
+        || crate::resource_ownership::has_records(function)
+        || crate::ordinary_borrowed_sums::has_records(function))
     .then(|| function.clone());
     let mut used = vec![false; function.locals.len()];
     for parameter in &function.params {
@@ -137,7 +143,10 @@ pub(crate) fn unused_locals(function: &mut Function) -> bool {
     function
         .original_view_iterations
         .retain_mut(|record| record.remap_locals(&locals));
-    if crate::call_owner_generations::remap_locals(function, &locals).is_err()
+    if before.as_ref().is_some_and(|before| {
+        crate::resource_ownership::remap_locals(function, before, &locals).is_err()
+            || crate::ordinary_borrowed_sums::remap_locals(function, before, &locals).is_err()
+    }) || crate::call_owner_generations::remap_locals(function, &locals).is_err()
         || crate::breakpoint_regions::remap_locals(function, &locals).is_err()
     {
         if let Some(before) = before {
@@ -220,6 +229,19 @@ fn visit_block_locals(
 ) {
     for statement in &mut block.statements {
         match &mut statement.kind {
+            StatementKind::ResourceLexicalExit(_) => {}
+            StatementKind::ResourceCall(node) => match node {
+                ResourceCallNode::Stage {
+                    value, ordinary, ..
+                } => {
+                    if let Some(local) = ordinary {
+                        visit(local);
+                    }
+                    expression(value, visit, floor, metadata);
+                }
+                ResourceCallNode::Invoke { output, .. } => visit(output),
+                ResourceCallNode::Begin { .. } | ResourceCallNode::End { .. } => {}
+            },
             StatementKind::OpenCallOwnerGeneration { root, .. } => visit(root),
             StatementKind::ReplaceCallOwnerGeneration {
                 root, rhs_owner, ..
@@ -339,7 +361,8 @@ fn expression(
         let packet = match &mut value.kind {
             ExpressionKind::Call { ownership, .. }
             | ExpressionKind::IndirectCall { ownership, .. }
-            | ExpressionKind::Intrinsic { ownership, .. } => Some(ownership),
+            | ExpressionKind::Intrinsic { ownership, .. }
+            | ExpressionKind::ResourceInvoke { ownership, .. } => Some(ownership),
             _ => None,
         };
         if let Some(packet) = packet {
@@ -387,6 +410,7 @@ fn expression(
         | ExpressionKind::View(value)
         | ExpressionKind::Clone(value) => expression(value, visit, floor, metadata),
         ExpressionKind::Call { args, .. }
+        | ExpressionKind::ResourceInvoke { args, .. }
         | ExpressionKind::Intrinsic { args, .. }
         | ExpressionKind::ActorSpawn { args, .. }
         | ExpressionKind::StructConstruct { fields: args, .. }
@@ -458,6 +482,7 @@ fn expression(
         | ExpressionKind::Bool(_)
         | ExpressionKind::Nothing
         | ExpressionKind::Constant { .. }
+        | ExpressionKind::ResourceHookValue { .. }
         | ExpressionKind::FunctionRef(_)
         | ExpressionKind::OptionalNone
         | ExpressionKind::RuntimeFailure(_)

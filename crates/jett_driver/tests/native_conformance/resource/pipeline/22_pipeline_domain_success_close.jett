@@ -1,0 +1,13 @@
+namespace app
+export function scenario(view net: Network) returns int64:
+    use resource_probe
+    resource_probe.TestHandle token = net into view resource_probe.create(2201) handle error:
+        return -1
+    token into resource_probe.close()
+    return 9
+export function main(net: Network) returns nothing:
+    use resource_probe
+    int64 observed = scenario(view net)
+    if observed != 9:
+        int64 ignored = resource_probe.terminal_label()
+    return nothing

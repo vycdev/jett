@@ -347,12 +347,12 @@ below records implementation coverage; a row is complete only when its native
 object, linked execution, and differential behavior gates all pass. Typed
 lowering alone never changes an execution row to complete.
 
-For planning, the broad native-language coverage estimate is **about 85%**.
-Track it in five-percentage-point steps as the remaining surface gaps close.
-This is a judgment based on the matrix, while the fixture counts below are
-measured pass/denominator gates.
-Later dated notes retain earlier 80% checkpoints as history; 85% is the
-current estimate.
+For planning, the broad native-language coverage estimate is **about 87%**.
+Update it as concrete language families gain linked native coverage. This is a
+judgment based on the matrix, while fixture counts remain measured
+pass/denominator gates. Earlier 80%, 85% and 86% checkpoints below are history.
+The latest increase follows the verified
+[ordinary borrowed-sum family](native_ordinary_borrowed_sum_codegen.md).
 
 | Surface | Validated HIR/MIR | Cranelift object | Linked native behavior |
 | --- | --- | --- | --- |
@@ -364,7 +364,7 @@ current estimate.
 | CSV | covered | checked parse, parse-with-header, and stringify leaves over owned lists and maps | strict quoting, CRLF, header values/errors, and nested allocation cleanup match interpreter |
 | Crypto | covered | private SHA-256, SHA-512, MD5, and HMAC-SHA-256 byte kernels | native differential fixture covers public text digests, binary HMAC, long keys, secret comparison, and explicit declassification |
 | Secret values | covered | transparent scalar and owned representations; redaction and string/bytes comparison | native differential fixture covers equal, unequal, length-mismatched and Unicode strings, bytes, redaction, and aggregate ownership |
-| Results, optionals, and `handle` control flow | explicit CFG for statement-root, direct-call, indirect-call, supported intrinsic-argument, unary, cloneable binary, short-circuit boolean, collection, value-constructor, string-interpolation, machine-transition, task `run`/`join`, actor-spawn, actor-message, field-receiver, state-test, clone, coarsen, declassify, condition, match-scrutinee, for-iterable, assertion-condition, and breakpoint-condition handlers | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits, terminal bypass, ordered call arguments and constructor fields, scalar, string, and enum evaluation order, short-circuit fallback skipping, handled field/state projections in `if`, `while`, and `match`, one-time for-iterable evaluation, handled debug conditions, ordered transition source/payload defaults, handled task values including pending `nothing`, actor source/argument order, and interpolated success/failure paths with ordered segment evaluation covered; other nested-expression and refinement handlers pending |
+| Results, optionals, and `handle` control flow | explicit CFG for statement-root, direct-call, indirect-call, supported intrinsic-argument, unary, cloneable binary, short-circuit boolean, collection, value-constructor, string-interpolation, machine-transition, task `run`/`join`, actor-spawn, actor-message, field-receiver, state-test, clone, coarsen, declassify, condition, match-scrutinee, for-iterable, assertion-condition, and breakpoint-condition handlers | genuine tags, owned payloads, selected extraction and certified nonconsuming handled payload views | nested sums, defaults, early returns, loop exits, terminal bypass, ordered call arguments and constructor fields, scalar, string, and enum evaluation order, short-circuit fallback skipping, handled field/state projections in `if`, `while`, and `match`, one-time for-iterable evaluation, handled debug conditions, ordered transition source/payload defaults, handled task values including pending `nothing`, actor source/argument order, and interpolated success/failure paths with ordered segment evaluation covered; stable ordinary handled-view list payloads, copied primitive/String destinations, later argument failures and pending metadata now have 15-Source/30-native coverage; other carriers, outer Default lifetimes, nested-expression and refinement handlers remain pending |
 | Function values, closures, and indirect calls | covered; inline bodies extract to checked functions with explicit capture parameters and ownership modes | owned descriptors carry code addresses, copied capture environments, and source-derived debug labels; indirect calls pass the environment after the runtime context and borrow view parameters; parenthesized, returned, projected, inline, and pipeline callee expressions retain checked call order | named, capture-free, and captured callbacks passed, returned, copied through aggregates, and invoked through indirect calls, including view and capability parameters; callee handlers and terminal failures clean already evaluated owned arguments; explicit `comptime` materializes named, capture-free, and captured inline function values from closed pure expressions, including capability-accepting callbacks whose bodies execute only with runtime authority |
 | Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.arg`, struct/bitfield, enum, and machine metadata lists and layouts, active enum variant and machine state metadata, reflected field values, and checked reflected-type dispatch covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, indexed type arguments, struct/bitfield, enum, and machine metadata, active enum and machine state selection, reflected field values, and alias-aware `comptime type` dispatch match the interpreter on positive cases; alias probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Explicit `comptime` values | checked closed pure expressions and contextual expected types covered | evaluated scalar and supported composite values materialize as typed HIR; captured closure values gain typed caller-local bindings; original source bodies are not emitted | linked native/interpreter fixtures cover nested collections, sums, structs, bitfields, enums, machines, bytes, contextual `ok`/`fail`/`none`, named functions, capture-free inline functions, captured closures, and pending `nothing` values, including captured and list-contained values; runtime authority remains unsupported |
@@ -2300,8 +2300,240 @@ simultaneous cohorts and other owner kinds remain open.
 
 The [contract](native_call_ownership_facts.md) and
 [acceptance record](native_acceptance_audit.md#typed-caller-ownership-integration)
-separate these focused results from pending full-workspace, fresh complete native
-corpus, 182-object inventory and supported-host checks. The a9 predecessor is accepted locally
+separate these focused results from the later complete Windows native receipt:
+480/480 pass at exact committed `a63f891016fac7dc50fffdde33be8b0ce45c655f`,
+with stable HEAD/tracked sources in
+`target/native480-after-owner-generation/receipt.json`, ending
+`2026-10-04T14:20:12.987780+00:00`. Resource changes are absent. Full-workspace,
+current 182-object inventory and supported-host acceptance remain pending. The a9 predecessor is accepted locally
 and on all four supported-host jobs. The fixed 207 inventory, about 85% tracking
-and 100% whole-language goal remain unchanged. Actual Resource lifecycle and
-provider dispatch, followed by native ownership/cleanup, are the next work.
+and 100% whole-language goal remain unchanged. A separate private reference Resource lifecycle now passes 36 focused tests,
+including actual Source cleanup and required-worker controls. Production
+provider dispatch and native ownership/cleanup remain required.
+
+
+### Private reference Resource lifecycle
+
+The exact checked program now supports private reference hook descriptors,
+runtime-purpose invocation gates, non-cloneable owning tickets and ordered
+custody through Source calls, scopes, temporaries and occupied results.
+Ordinary/mutual declarations rejoin their retained executable AST and exact
+resolver metadata; registration clones cannot replace checked bodies. Caller
+source order and formal permutation remain separate. Explicit close and reverse
+cleanup retire owners before context teardown. Cleanup failure overrides entry
+failure; clean cleanup preserves an ordinary entry error and source result.fail
+remains data. The public production catalog and provider remain disabled.
+
+Root terminal `923450` passes all 36 Resource-focused reference tests in
+`target/native-resource-after-checked-call-relay-focused.log`, including real
+both-profile Source lifecycles, failed later actuals, indirect close, terminal
+failure and required-worker/purpose controls. This is separate from the committed
+caller native480 receipt and adds no native inventory case. Broad library,
+full-workspace and supported-host acceptance of this Resource candidate remain
+pending. See [the exact scope](native_resource_hook_identity.md#reference-lifecycle-execution).
+Whole scoped/reflected/indirect/worker and aggregate ownership breadth, real
+providers, native hook/carrier/drop integration and task/actor cancellation remain
+required. The about-85% estimate, fixed 207/182 inventory and 100% goal are unchanged.
+
+### Source plain Resource replacement
+
+Native assignment now executes exact checked plain Resource replacement, self-reseat and vacant-after-close transfer. Six new shared scenarios extend the original five; all 11 pass in both real-reference profiles and as generated native programs after Source deletion. Runtime preflight preserves invalid inputs before finalization, and failure tests distinguish an ordinary RHS error from old-finalizer cleanup failure. The formatted compiler gate passes 558 checks plus the MIR doctest and606 frontend/lowering checks pass. One temporary capture failure in the broad driver-library run passes isolated replay; clean full-library, complete native regression and supported-host results remain separate gates. Conditional/aggregate/projected replacement and broader Resource/provider/async/reflection work remain required. The coarse estimate remains about 85%, with fixed 207 fixtures and 182 object obligations unchanged.
+
+### Handled Resource call progress (2026-10-05)
+
+The local native Resource gate now includes eighteen shared original Source
+scenarios in both profiles (36 native and 36 reference executions). Direct Result
+handlers inside call arguments preserve lexical evaluation, prepared formals,
+acquired-prefix cleanup, retained views, clean skipped invocations and observed
+cleanup failure. Nested first-factory success/failure also distinguish Scope
+storage from the current execution frame. Every native case runs after Source
+deletion and observes zero obligations before destroy.
+
+The formatted affected compiler/object gate passes 573 checks plus the MIR
+doctest, with 606 frontend/lowering fixture checks, all four fixed inventory
+gates (182 emitted host objects), and the complete 92-test driver library.
+The final formatted Source replay passes all 36 native and 36 reference runs.
+This advances the Resource row without closing its remaining indirect, aggregate, refinement and broader
+control-flow obligations. The broad estimate remains about 85%; full current
+native/workspace and supported-host release gates remain separate requirements.
+
+### Callable cleanup boundaries (2026-10-06)
+
+Three new original Source programs extend the shared lifecycle gate from 18 to
+22 scenarios. Both reference and native profiles pass all 44 executions each;
+native launch follows Source deletion and observes exact reports and zero
+obligations before teardown. The additions cover reversed lexical/formal order
+with two temporary view owners, a Return helper using an independent owner,
+a continuing default, and cleanup panic suppressing the Return helper.
+
+The reference evaluator now retires the pending call prefix before evaluating
+the original Return operand. Ordinary closure and named-callable bodies have
+their own operation floor and no inherited Resource return destination. Native
+Source joins retain authenticated terminal failure outcomes, keeping original
+body status separate from cleanup instead of replacing status 255 with 1.
+
+The affected gates pass all 508 reference-library tests, all 92 driver-library
+tests, and all 222 runtime tests (209 unit and 13 integration). Six private
+Return-prefix controls and eleven focused native Source controls are included
+in those totals. Fresh matched debug/release archives contain one main, eight
+private exports and all 32 Resource leaves each, with the unchanged ABI/wire.
+
+Parent a30ca97e's exact source tree passed the complete workspace on GNU and
+MSVC, including 486 default native tests per host and both source-absent installed
+package jobs. The local full run had 26 deadline failures; all 26 subsequently
+passed at the same deadlines, in a 25-case replay and an isolated inventory
+replay. This is not a clean full local run. The successor's complete workspace
+and supported-host checks remain separate release gates. Overall tracking stays
+about 85%; indirect/aggregate/refinement Resource calls, broader projections and
+reflection, production providers and shared scheduling remain in the full goal.
+
+### Named Resource function values, 2026-10-06
+
+Exact named non-generic, capability-free callbacks now retain their original
+Indirect Source authority through immutable root-scope locals and aliases. A
+private original/current producer/use proof selects the retained body; native
+code and empty-environment checks precede the existing hidden-Scope Source
+bridge. Ordinary descriptor storage is admitted only for exact proved values,
+with public signature refusals and raw hook descriptor handling unchanged.
+
+The shared Resource corpus increases from 22 to 28 scenarios. All 56 genuine reference
+and 56 linked native executions pass in both profiles, including distinct
+same-signature body selection and separate body/cleanup failure propagation.
+The complete reference library passes 511 tests, MIR 233, native codegen 93 and
+object emission 63. Runtime sources/archives are unchanged; native Source is
+removed before launch and obligations retire before teardown. The complete
+driver library passes 92 tests; ordinary callable regression groups pass
+13 function, one captured-closure, one collection-callback and 16 caller-ownership
+tests. Parent a5e33b1f passed the full workspace and 486 default native tests on
+both GNU and MSVC, plus both Source-absent installed package jobs. Its tested
+merge has the identical source tree. Fresh supported-host acceptance of this
+named-callback successor remains a separate gate.
+Namespace-member/returned/captured/scoped/generic/handled/pipeline forms,
+aggregate/refinement Resource paths and production provider/concurrency work
+remain required. The coarse 85% estimate, 207-fixture/182-object inventory and
+whole-language 100% goal remain unchanged.
+
+### Namespace-qualified Resource callbacks, 2026-10-06
+
+The interpreter now joins a qualified function value to its exact full-span
+resolved declaration and retained checked header/signature. Instance fields,
+method adapters, generic functions and compiler hooks cannot mint named-body
+proof. Original expression identity, alias chain, body attempt and indirect
+argument tuple remain authenticated.
+
+Two new Source programs and four shared oracles grow the Resource corpus from
+28 to 32 scenarios. All 64 reference and 64 Source-absent linked native executions
+pass across debug and release, including alias close, handled factory failure
+and cleanup panic. Seven callback-proof tests and the complete 515-test reference
+library pass; the complete driver library passes 92 tests. Fresh supported-host
+acceptance remains a separate gate. Runtime sources and matched archives are
+unchanged.
+
+Returned Resource hook callbacks are the next executed baseline. MIR currently
+loses exact hook identity across a factory return, and native invocation still
+refuses the descriptor route. Existing runtime descriptor validation and frame
+staging provide a compatible ABI path; exact return provenance, opaque carrier
+transport and emitted descriptor invocation rows remain to implement. Dynamic,
+captured/scoped/generic/handled/pipeline/required callbacks, aggregates, providers
+and concurrency remain required. Overall tracking remains about 85%.
+
+
+### Returned compiler-hook callbacks, 2026-10-06
+
+Exact returned Factory, Borrow and Close descriptors now pass all 46 shared
+Resource scenarios in both reference and Source-absent linked native profiles:
+92 executions each, including stored/alias/relay/unused metadata, immediate
+callees, observable argument-before-callee order and factory/actual/callee/
+finalizer failure cleanup. Immutable return provenance and independent current
+body/entry/header proofs survive canonical remaps. Copied/resealed pruning
+regressions are refused before evidence can be erased. Returned metadata is
+installation-owned; only exact proved occurrences bypass ordinary Function
+storage. Existing wire-v2/runtime leaves and matched archives remain unchanged.
+
+Nine focused MIR groups and 242 MIR library tests pass. Seven focused codegen
+groups, all 100 codegen library tests and 63 object tests pass. Authenticated
+Resource roots now seed typed reachability before walking ordinary dependencies;
+pure helpers retain their normal ABI. All 92 driver-library tests pass; fresh
+supported-host gates remain pending. See
+[the contract and remaining forms](native_returned_resource_hooks.md).
+Required/comptime materialization, returned named callbacks, dynamic/captured/
+scoped/generic/handled/pipeline forms, nested returns, aggregates and production
+providers/concurrency remain required. The coarse estimate remains about 85%,
+the fixed inventory remains 207 fixtures/182 objects, and the whole-language
+100% goal is active.
+
+### Required Resource descriptors: candidate extension
+
+The shared original Source corpus has 60 candidate scenarios (46 previously
+accepted plus fourteen new cases across eleven Source files). The reference
+oracle now runs the real provider-free required worker, installs its same-program
+checked cache before runtime registration, and refuses missing or failed required
+evaluation. All 120 debug/release reference executions pass. The initial native
+baseline fails on the first new comptime descriptor with pending nested Resource
+evaluation requiring exact Source-order staging.
+
+Implementation in progress uses opaque private checked required proofs and an
+authenticated materialized HIR view that preserves original Source. New candidate
+cases cover Factory/Borrow/Close, factory and cleanup failure, aliases, relays,
+unused storage, immediate invocation, absence, pure conditional selection and
+generic/scoped selectors. They do not count as accepted native execution until
+the same cases pass both profiles with source absent, exact event/status oracles
+and zero obligations before teardown. The whole-language estimate remains about
+85%, and the full completion obligations remain active.
+
+
+### Verified required Resource values and ordinary helper seals (2026-10-06)
+
+The shared original Source corpus now contains 61 scenarios. All 122 reference
+and 122 source-absent native executions pass in both profiles against the
+unchanged matched MSVC compiler-test archives. Required capture and materialization
+use the actual driver seams; acceptance also includes production HIR value
+conversion and general MIR validation before native object emission.
+
+Opaque private-cache proofs retain the exact checked program, original owner,
+required region, specialization and scoped selection. The original archive is
+immutable. Every required row seals its current body, including ordinary runtime
+helpers that retain their normal ABI and receive no Resource execution authority.
+Exact guarded sum arms are both planned; runtime absence still skips extraction
+and finalization. Disconnected Resource headers and normalized operation nodes
+remain custody obligations.
+
+Nine focused MIR controls, 251 MIR library tests and the driver foreign-context
+control pass. Full native coverage remains active: qualified/complex required
+transport, broader callbacks/aggregates/views/reflection, production providers,
+concurrency, GNU private-archive execution and final coherent workspace/platform
+acceptance are still required. The rough tracking estimate remains about 85%.
+
+The complete affected codegen suite passes 100 library and 63 object tests;
+all 93 driver-library tests also pass. Final Rust/Jett formatting and whitespace
+checks pass, and all 2,168 frozen source/config inputs revalidate unchanged.
+
+### Verified borrowed optional/result Resource payloads (2026-10-07)
+
+Sources 45..56 add twelve scenarios covering written/bare None/Some/Fail/Ok,
+named-argument prefix abort, and handled borrow-domain failure. The unchanged
+baseline passed all 73 shared scenarios / 146 reference executions but refused
+Source45 at HIR stable-origin admission. The complete corpus now passes 146
+Source-deleted native executions against freshly measured Debug/Release MSVC
+private runtime archives, with exact events and zero obligations before teardown.
+
+All 305 checker, 203 HIR, 254 MIR and 215 runtime library tests pass. Three focused
+MIR groups and six runtime groups cover original-body custody, guarded projections,
+conditional shell lifetimes, failure companions, argument aborts and forgery.
+The full codegen suite passes 102 library and 63 object tests, including unchanged
+prior invalid-MIR controls. Archives contain 37 Resource leaves, eight private
+exports and one main; independent source/symbol/CRT receipts remain mandatory.
+
+Admission is limited to root-body Resource aliases. Nested/scoped aliases,
+ordinary non-Resource borrowed sums and alternate Default payload lifetimes remain
+pending. The rough full-language estimate stays about 85%, and the full 100%
+native-codegen goal, GNU Resource gate and broader language/platform requirements
+remain open. See [the integration contract](native_resource_borrowed_sums.md).
+
+All 521 reference-evaluator and 93 driver-library tests pass. The existing
+Source33 required-value assertion now verifies its exact two original proofs,
+including scalar 761 and the unique checked hook; other fixtures retain exact
+one-value counts. This separately fixes the sole failure observed on both hosts
+at 17d6c841. Rust and all twelve new Jett Source format checks pass, and the
+2,188 frozen source/config inputs revalidate. The final MIR-only formatting change
+is exactly one error-return line wrap and passes all 254 MIR tests again.

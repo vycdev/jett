@@ -1,7 +1,9 @@
 //! Linear native places, call loans, and immutable nonowning local aliases.
 //! Definite availability is an intersection fixed point over actual CFG edges.
 use crate::copy_values::{CopyValuePlan, switch_bindings_on_edge};
-use crate::{ControlFlowGraph, Function, ParamMode, Program, StatementKind, TerminatorKind};
+use crate::{
+    ControlFlowGraph, Function, ParamMode, Program, ResourceCallNode, StatementKind, TerminatorKind,
+};
 use jett_hir::{BinaryOp, Expression, ExpressionKind, IntrinsicId, StringSegment};
 use jett_types::{Type, TypeId, TypeInterner};
 use std::collections::{BTreeMap, BTreeSet};
@@ -167,10 +169,46 @@ impl MoveValuePlan {
         function: &Function,
         types: &TypeInterner,
     ) -> Result<CopyValuePlan, String> {
+        Self::analyze_inner(program, function, types, None)
+    }
+    pub(crate) fn analyze_companion(
+        context: &crate::resource_ownership::CompanionContext<'_>,
+    ) -> Result<CopyValuePlan, String> {
+        Self::analyze_inner(
+            context.program,
+            context.function,
+            context.types,
+            Some(context),
+        )
+    }
+    fn analyze_inner(
+        program: &Program,
+        function: &Function,
+        types: &TypeInterner,
+        companion: Option<&crate::resource_ownership::CompanionContext<'_>>,
+    ) -> Result<CopyValuePlan, String> {
+        if companion.is_none()
+            && (crate::resource_type_pending(types, function.return_type)
+                || function
+                    .locals
+                    .iter()
+                    .any(|local| crate::resource_type_pending(types, local.ty)))
+        {
+            return Err("pending ResourceOwnershipPlan: ordinary MoveValuePlan cannot transfer or drop Resource custody".into());
+        }
         validate_local_view_initializers(function, types)?;
         let call_views = crate::call_views::validate(function, types)?;
-        let caller_acquisitions = crate::validate_caller_acquisitions(program, function, types)?;
-        let mut plan = CopyValuePlan::analyze_storage(function, types, Some(program))?;
+        // The private companion context already borrows the exact fresh custody
+        // proof. Re-run complete Source call validation without the public
+        // ordinary admission gate; every ordinary acquisition check is retained.
+        let caller_acquisitions = match companion {
+            Some(_) => crate::call_ownership::validate_function(program, function, types)?,
+            None => crate::validate_caller_acquisitions(program, function, types)?,
+        };
+        let mut plan = match companion {
+            Some(context) => CopyValuePlan::analyze_companion(context)?,
+            None => CopyValuePlan::analyze_storage(function, types, Some(program))?,
+        };
         if function.identity.declaration.kind == jett_hir::DeclarationKind::ActorHandler {
             // Captured state is written back after a return/respond terminator.
             // Keep its owning slots live even when the source body stops reading it.
@@ -266,6 +304,7 @@ impl MoveValuePlan {
                     caller_acquisitions: &caller_acquisitions,
                     taking_binding: None,
                     validate: false,
+                    companion,
                 }
                 .block(id)?;
                 changed |= next != outgoing[id.index() as usize]
@@ -294,6 +333,7 @@ impl MoveValuePlan {
                 caller_acquisitions: &caller_acquisitions,
                 taking_binding: None,
                 validate: true,
+                companion,
             }
             .block(id)?;
         }
@@ -307,9 +347,49 @@ pub fn validate_local_view_initializers(
     function: &Function,
     types: &TypeInterner,
 ) -> Result<(), String> {
+    crate::ordinary_borrowed_sums::validate(function, types)?;
     let stages = crate::call_views::validate(function, types)?;
     let mut initialized = Set::new();
-    for statement in function.blocks.iter().flat_map(|block| &block.statements) {
+    for (block, index, statement) in function.blocks.iter().flat_map(|block| {
+        block
+            .statements
+            .iter()
+            .enumerate()
+            .map(move |(index, statement)| (block.id, index, statement))
+    }) {
+        if let StatementKind::SumTake {
+            source,
+            target,
+            success: true,
+        } = statement.kind
+            && let Some(row) = function.ordinary_borrowed_sum_projection(block, index)?
+        {
+            if row.source() != source || row.output() != target {
+                return Err(
+                    "ordinary borrowed initializer changed its constructor projection".into(),
+                );
+            }
+            initialized.insert(target.index() as usize);
+            continue;
+        }
+        if let StatementKind::SumTake {
+            source,
+            target,
+            success: true,
+        } = statement.kind
+            && let Some(row) = function.resource_borrowed_sum_projection(
+                block,
+                crate::ResourcePosition::Statement(index),
+            )?
+        {
+            if row.source() != source || row.output() != target {
+                return Err(
+                    "borrowed Resource initializer changed its constructor projection".into(),
+                );
+            }
+            initialized.insert(target.index() as usize);
+            continue;
+        }
         let (local, value) = match &statement.kind {
             StatementKind::Let { local, value } => {
                 if stages.contains_key(&(local.index() as usize)) {
@@ -329,7 +409,17 @@ pub fn validate_local_view_initializers(
         let origin = function
             .local(source)
             .ok_or("borrowed local initializer source is outside its function")?;
-        jett_hir::validate_local_view_initializer(value, source, origin.ty, definition.ty, types)?;
+        if !function.ordinary_borrowed_sum_alias(*local, value)?
+            && !function.resource_borrowed_sum_alias(*local, value)?
+        {
+            jett_hir::validate_local_view_initializer(
+                value,
+                source,
+                origin.ty,
+                definition.ty,
+                types,
+            )?;
+        }
         initialized.insert(local.index() as usize);
     }
     for local in &function.locals {
@@ -356,11 +446,12 @@ struct Flow<'a> {
     caller_acquisitions: &'a crate::CallerAcquisitions<'a>,
     taking_binding: Option<crate::LocalId>,
     validate: bool,
+    companion: Option<&'a crate::resource_ownership::CompanionContext<'a>>,
 }
 impl Flow<'_> {
     fn block(mut self, id: crate::BlockId) -> Result<(Set, Set, Set), String> {
         let block = &self.function.blocks[id.index() as usize];
-        for statement in &block.statements {
+        for (index, statement) in block.statements.iter().enumerate() {
             match &statement.kind {
                 StatementKind::OpenCallOwnerGeneration { root, .. } => {
                     self.read(*root, "generation owner")?;
@@ -459,7 +550,67 @@ impl Flow<'_> {
                     let root = self.read(*source, "sum source")?;
                     if matches!(statement.kind, StatementKind::SumTake { .. }) {
                         if self.function.is_view_local(*source) {
-                            return Err("cannot take payload from borrowed sum".into());
+                            if let Some(row) = self
+                                .function
+                                .ordinary_borrowed_sum_projection(block.id, index)?
+                            {
+                                if row.source() != *source {
+                                    return Err(
+                                        "ordinary borrowed extraction changed its exact source"
+                                            .into(),
+                                    );
+                                }
+                                if matches!(
+                                    statement.kind,
+                                    StatementKind::SumTake { success: true, .. }
+                                ) {
+                                    if row.output() != *target
+                                        || !self.function.is_view_local(*target)
+                                    {
+                                        return Err(
+                                            "ordinary borrowed projection gained owning output"
+                                                .into(),
+                                        );
+                                    }
+                                    self.aliases.insert(target.index() as usize);
+                                } else {
+                                    if row.error() != Some(*target) {
+                                        return Err("ordinary borrowed extraction changed its failure local".into());
+                                    }
+                                    self.require_owned_definition(*target)?;
+                                }
+                                self.state.insert(target.index() as usize);
+                                continue;
+                            }
+                            let row = self
+                                .function
+                                .resource_borrowed_sum_projection(
+                                    block.id,
+                                    crate::ResourcePosition::Statement(index),
+                                )?
+                                .ok_or("cannot take payload from borrowed sum")?;
+                            if row.source() != *source {
+                                return Err(
+                                    "borrowed Resource extraction changed its current source"
+                                        .into(),
+                                );
+                            }
+                            if matches!(
+                                statement.kind,
+                                StatementKind::SumTake { success: true, .. }
+                            ) {
+                                if row.output() != *target || !self.function.is_view_local(*target)
+                                {
+                                    return Err(
+                                        "borrowed Resource projection gained owning output".into(),
+                                    );
+                                }
+                                self.aliases.insert(target.index() as usize);
+                            } else {
+                                self.require_owned_definition(*target)?;
+                            }
+                            self.state.insert(target.index() as usize);
+                            continue;
                         }
                         self.reject_aliased_owner_change(root)?;
                         self.state.remove(&source_id);
@@ -476,6 +627,16 @@ impl Flow<'_> {
                     self.aliases.insert(id);
                     self.state.insert(id);
                 }
+                StatementKind::ResourceLexicalExit(_) => {
+                    let exit = self
+                        .function
+                        .resource_lexical_exit(block.id, crate::ResourcePosition::Statement(index))?
+                        .ok_or("Resource lexical marker lost its private constructor proof")?;
+                    for local in exit.current_locals(self.function)? {
+                        self.aliases.remove(&(local.index() as usize));
+                        self.state.remove(&(local.index() as usize));
+                    }
+                }
                 StatementKind::EndCallView { local } => {
                     let id = local.index() as usize;
                     if !self.call_views.contains_key(&id)
@@ -487,7 +648,12 @@ impl Flow<'_> {
                     self.aliases.remove(&id);
                     self.state.remove(&id);
                 }
-                StatementKind::Let { local, value } => {
+                StatementKind::ResourceCall(ResourceCallNode::Stage {
+                    value,
+                    ordinary: Some(local),
+                    ..
+                })
+                | StatementKind::Let { local, value } => {
                     let definition = self
                         .function
                         .local(*local)
@@ -497,13 +663,17 @@ impl Flow<'_> {
                             .function
                             .local(source)
                             .ok_or("borrowed local initializer source is outside its function")?;
-                        jett_hir::validate_local_view_initializer(
-                            value,
-                            source,
-                            origin.ty,
-                            definition.ty,
-                            self.types,
-                        )?;
+                        if !self.function.ordinary_borrowed_sum_alias(*local, value)?
+                            && !self.function.resource_borrowed_sum_alias(*local, value)?
+                        {
+                            jett_hir::validate_local_view_initializer(
+                                value,
+                                source,
+                                origin.ty,
+                                definition.ty,
+                                self.types,
+                            )?;
+                        }
                         self.expr(value, true)?;
                         self.aliases.insert(local.index() as usize);
                     } else {
@@ -518,6 +688,17 @@ impl Flow<'_> {
                         result?;
                     }
                     self.state.insert(local.index() as usize);
+                    // A copied primitive/String final binding owns its value. Its
+                    // constructor-only read intermediates cannot keep the shell borrowed.
+                    if let Some(intermediates) = self
+                        .function
+                        .ordinary_copied_sum_intermediates(*local, value)?
+                    {
+                        for intermediate in intermediates {
+                            self.aliases.remove(&(intermediate.index() as usize));
+                            self.state.remove(&(intermediate.index() as usize));
+                        }
+                    }
                 }
                 StatementKind::CheckRefinement { local, call, .. } => {
                     self.require_owned_definition(*local)?;
@@ -545,6 +726,48 @@ impl Flow<'_> {
                         return Err("cannot overwrite a borrowed native place".into());
                     }
                     self.state.insert(local.index() as usize);
+                }
+                StatementKind::ResourceCall(ResourceCallNode::Stage {
+                    value,
+                    ordinary: None,
+                    ..
+                }) => {
+                    if self.companion.is_none() {
+                        return Err("Resource call stage requires its fresh companion plan".into());
+                    }
+                    self.expr(value, false)?;
+                }
+                StatementKind::ResourceCall(ResourceCallNode::Invoke { region, output }) => {
+                    if self.companion.is_none() {
+                        return Err("Resource call invoke requires its fresh companion plan".into());
+                    }
+                    let record = self
+                        .function
+                        .resource_call_region(*region)
+                        .ok_or("Resource call invoke lacks its sealed region")?;
+                    for actual in record.actuals() {
+                        if let Some(local) = actual.ordinary() {
+                            self.read(local, "Resource call arrived ordinary endpoint")?;
+                            let header = self
+                                .function
+                                .local(local)
+                                .ok_or("Resource call endpoint header missing")?;
+                            if is_linear(self.types, header.ty)
+                                || is_copy_owned(self.types, header.ty)
+                            {
+                                self.state.remove(&(local.index() as usize));
+                            }
+                        }
+                    }
+                    self.require_owned_definition(*output)?;
+                    self.state.insert(output.index() as usize);
+                }
+                StatementKind::ResourceCall(
+                    ResourceCallNode::Begin { .. } | ResourceCallNode::End { .. },
+                ) => {
+                    if self.companion.is_none() {
+                        return Err("Resource call region requires its fresh companion plan".into());
+                    }
                 }
                 StatementKind::Evaluate(value) => self.expr(value, false)?,
                 StatementKind::Assert { condition, message } => {
@@ -653,6 +876,72 @@ impl Flow<'_> {
     }
 
     fn expr_inner(&mut self, value: &Expression, borrowed: bool) -> Result<(), String> {
+        if let Some(context) = self.companion {
+            if !context.contains(value) {
+                return Err("Resource companion move is outside its current function".into());
+            }
+            if context.resource_expression(value) {
+                if context.carrier_expression(value) {
+                    match &value.kind {
+                        ExpressionKind::ListConstruct { elements } => {
+                            for child in elements {
+                                self.expr(child, false)?;
+                            }
+                            return Ok(());
+                        }
+                        ExpressionKind::MapConstruct { entries } => {
+                            for entry in entries {
+                                self.expr(&entry.key, false)?;
+                                self.expr(&entry.value, false)?;
+                            }
+                            return Ok(());
+                        }
+                        ExpressionKind::StructConstruct {
+                            fields,
+                            evaluation_order,
+                            ..
+                        } => {
+                            for index in evaluation_order {
+                                self.expr(&fields[*index], false)?;
+                            }
+                            return Ok(());
+                        }
+                        ExpressionKind::EnumConstruct {
+                            payloads,
+                            evaluation_order,
+                            ..
+                        } => {
+                            for index in evaluation_order {
+                                self.expr(&payloads[*index], false)?;
+                            }
+                            return Ok(());
+                        }
+                        ExpressionKind::MachineConstruct { payloads, .. } => {
+                            for child in payloads {
+                                self.expr(child, false)?;
+                            }
+                            return Ok(());
+                        }
+                        ExpressionKind::Field { base, .. } => return self.expr(base, true),
+                        ExpressionKind::InterfaceCoerce { value, adapters }
+                            if adapters.is_empty() =>
+                        {
+                            return self.expr(value, borrowed);
+                        }
+                        _ => {}
+                    }
+                }
+                match &value.kind {
+                    ExpressionKind::Local(local) => { self.read(*local, "Resource companion initialization")?; return Ok(()); }
+                    ExpressionKind::View(inner) => return self.expr(inner, true),
+                    ExpressionKind::Clone(inner) if context.descriptor_expression(value) => return self.expr(inner, false),
+                    ExpressionKind::ResourceHookValue { .. } | ExpressionKind::OptionalNone => return Ok(()),
+                    ExpressionKind::ResultOk(inner) | ExpressionKind::ResultFail(inner) | ExpressionKind::OptionalSome(inner) => return self.expr(inner, false),
+                    ExpressionKind::Call { .. } | ExpressionKind::IndirectCall { .. } | ExpressionKind::ResourceInvoke { .. } => {},
+                    _ => return Err("pending Resource companion: expression requires its dedicated custody transport".into()),
+                }
+            }
+        }
         match &value.kind {
             ExpressionKind::Local(local) => {
                 let id = local.index() as usize;
@@ -939,6 +1228,13 @@ impl Flow<'_> {
                     }
                 }
             }
+            ExpressionKind::ResourceInvoke { hook, args, evaluation_order, .. } if self.companion.is_some() => {
+                let Type::Function { view_params, .. } = self.types.resolve(hook.function_type()) else { return Err("Resource hook has no exact function signature".into()); };
+                let saved = self.loans.clone();
+                for &parameter in evaluation_order { self.expr(&args[parameter], view_params[parameter])?; }
+                self.loans = saved;
+            }
+            ExpressionKind::ResourceHookValue { .. } | ExpressionKind::ResourceInvoke { .. } => return Err("pending ResourceOwnershipPlan: ordinary move expression cannot own Resource descriptors or invokes".into()),
             ExpressionKind::Int(_)
             | ExpressionKind::Float(_)
             | ExpressionKind::Bool(_)

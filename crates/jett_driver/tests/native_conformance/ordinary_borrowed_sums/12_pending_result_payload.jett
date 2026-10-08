@@ -1,0 +1,15 @@
+namespace app
+function inspect(view stdout: Stdout, view source: result[list[int64], string]) returns nothing:
+    list[int64] alias = view((view source) handle error:
+        Stdout.write(view stdout, "unexpected handler\n")
+        return nothing
+    )
+    list[int64] forwarded = alias
+    Stdout.write(view stdout, "afteralias\n")
+    int64 total = list.sum[int64](view forwarded)
+    Stdout.write(view stdout, "unexpected sum:{total}\n")
+    return nothing
+function main(stdout: Stdout) returns nothing:
+    result[list[int64], string] source = ok(run run list(2, 3))
+    inspect(view stdout, view source)
+    return nothing

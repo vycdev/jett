@@ -23,6 +23,9 @@ pub(crate) fn bake_values(
     reflection: &ReflectionMetadata,
     method_value_definitions: &HashSet<Span>,
 ) -> Result<(), Vec<LowerError>> {
+    if !program.resource_manifest.kinds().is_empty() {
+        return jett_hir::materialize_checked_required_values(program, values, types);
+    }
     let function_values = function_value_candidates(&program.functions, method_value_definitions);
     let mut errors = Vec::new();
     for function in &mut program.functions {
@@ -219,6 +222,10 @@ impl Baker<'_> {
             return;
         }
         match &mut expr.kind {
+            E::ResourceInvoke { .. } | E::ResourceHookValue { .. } => self.errors.push(LowerError {
+                span: expr.span,
+                message: "pending ResourceOwnershipPlan: native constant materialization cannot represent a Resource operation or descriptor".into(),
+            }),
             E::Binary { left, right, .. } => {
                 self.expression(left);
                 self.expression(right);
