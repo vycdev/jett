@@ -55,7 +55,6 @@ separate from parity for existing accepted behavior.
 
 The following semantic and implementation gaps prevent a full parity claim:
 
-- [Actor equality](../open_design/actor_equality.md): actor identity versus rejecting comparisons.
 - [Actor handles escaping comptime](../open_design/comptime_actor_values.md): reject escaping handles versus materializing a defined actor graph.
 - [Erased interface equality](../open_design/interface_value_equality.md): explicit comparison versus a defined dynamic equality contract.
 - [Concrete-owner arguments in erased calls](../open_design/interface_same_owner_arguments.md): runtime validation versus rejecting unsafe erased calls statically.
@@ -74,6 +73,17 @@ The following semantic and implementation gaps prevent a full parity claim:
   current checks admit some refinement/base requests with matching carriers and
   secrecy. Preserving the actual owner on an admitted interface read does not
   select the broader requested-type contract or authorize arbitrary nominal casts.
+
+[Actor identity equality](actor_identity_equality.md) implements the selected
+live-instance contract in the reference evaluator and native backend. Direct
+comparisons require the same exact checked nominal actor type; recursive enum
+payload comparison checks identity and per-handle pending depth without reading
+state. Local MSVC static-CRT acceptance on 2026-10-12 passes nine Source-deleted
+executables per Debug/Release runtime profile, including production output with
+both Jett optimization settings. Escaping comptime actor graph import, full
+predecessor, GNU, installed-distribution and coherent-revision acceptance remain
+open. This bounded acceptance does not change the rough 87% planning estimate,
+the fixed inventory denominators or the whole-language completion requirement.
 
 The [inferred uninhabited JSON parser repair](native_json_uninhabited_parse_slots.md)
 is accepted at predecessor `08f9f7e7`: its 19 Source tests, frozen full workspace
