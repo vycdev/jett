@@ -3966,7 +3966,6 @@ impl Verifier<'_> {
                         | ScalarKind::Bitfield
                         | ScalarKind::Machine
                         | ScalarKind::Function
-                        | ScalarKind::Actor
                 ) && result == ScalarKind::Bool
             }
             BinaryOp::Less | BinaryOp::Greater | BinaryOp::LessEqual | BinaryOp::GreaterEqual => {

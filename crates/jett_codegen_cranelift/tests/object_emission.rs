@@ -2939,3 +2939,64 @@ function inspect(view source: Record, view field: TypeField) returns Independent
         .collect();
     assert_eq!(checks, ["app.Independent"]);
 }
+
+#[test]
+fn actor_identity_emits_a_checked_leaf_and_nested_layout_without_structural_state_comparison() {
+    for source in [
+        include_str!("../../../tests/native/actor_enum_equality.jett"),
+        include_str!("../../../tests/native/actor_pending_alias_baseline.jett"),
+        include_str!("../../../tests/native/actor_pending_alias_identity.jett"),
+        include_str!("../../../tests/native/actor_direct_identity.jett"),
+        include_str!("../../../tests/native/actor_nested_identity.jett"),
+    ] {
+        let (program, types) = lower_source_with_equatable(source, true);
+        emit_host_object(&program, &types).expect("selected checked actor identity");
+    }
+}
+
+#[test]
+fn actor_identity_rejects_a_different_nominal_mir_operand() {
+    let source = "namespace app\nactor First:\n    receive read responds int64:\n        respond 1\nactor Second:\n    receive read responds int64:\n        respond 1\nfunction compare(view first: First, view second: First) returns bool:\n    return first == second\n";
+    let (mut program, types) = lower_source(source);
+    emit_host_object(&program, &types).expect("same checked nominal actor type");
+    let wrong_actor = types.type_ids()
+        .find(|id| matches!(types.resolve(*id), Type::Actor(actor) if types.resolve_actor(*actor).name == "app.Second"))
+        .expect("second nominal actor type");
+    let function = program
+        .functions
+        .iter_mut()
+        .find(|function| function.identity.declaration.name.ends_with("compare"))
+        .unwrap();
+    let entry = function.entry.index() as usize;
+    let TerminatorKind::Return(Some(value)) = &mut function.blocks[entry].terminator.kind else {
+        panic!("returned comparison");
+    };
+    let jett_hir::ExpressionKind::Binary { right, .. } = &mut value.kind else {
+        panic!("binary comparison");
+    };
+    right.ty = wrong_actor;
+    let error =
+        emit_host_object(&program, &types).expect_err("exact nominal actor handoff is required");
+    assert!(
+        matches!(error, CodegenError::InvalidMirContract { .. }),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn actor_identity_frontend_rejects_different_nominal_owners() {
+    let parsed = jett_parser::parse(
+        "namespace app\nactor First:\n    receive read responds int64:\n        respond 1\nactor Second:\n    receive read responds int64:\n        respond 1\nfunction compare(view first: First, view second: Second) returns bool:\n    return first == second\n",
+        FileId::new(0),
+    );
+    assert!(parsed.errors.is_empty());
+    let resolved = jett_resolve::resolve(&parsed.module);
+    let checked = jett_typecheck::check(&parsed.module, &resolved);
+    assert!(
+        checked.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == jett_diagnostics::Severity::Error
+                && diagnostic.code.code() == 301
+        }),
+        "different actor declarations cannot share an equality operand type"
+    );
+}

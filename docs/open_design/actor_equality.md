@@ -1,10 +1,14 @@
 # Actor handle equality
 
-The checker currently accepts `first == first` for actor handles, but the
-interpreter rejects it at runtime as an unsupported binary operation. An enum
-whose payload is an actor handle is also accepted; the interpreter's recursive
-enum equality compares the actor IDs, while native aggregate enum equality
-rejects that payload type. These paths need one language rule before native
+Decision status: live instance identity implemented in the reference evaluator and native backend; local Debug/Release native acceptance passes. See [the active selected contract](../active/actor_identity_equality.md). The observations and alternatives below record the prior unresolved state.
+
+## Historical divergence and alternatives
+
+Before this implementation, the checker accepted `first == first` for actor handles, but the
+interpreter rejected it at runtime as an unsupported binary operation. An enum
+whose payload is an actor handle was also accepted; the interpreter's recursive
+enum equality compared the actor IDs, while native aggregate enum equality
+rejected that payload type. These paths needed one language rule before native
 codegen can claim parity.
 
 Two coherent choices are:
@@ -20,3 +24,7 @@ Two coherent choices are:
 The decision should preserve user-defined struct equality's separate exact
 `Equatable.equals` rule. Differential tests should cover the same cloned actor
 handle, distinct spawned actors, nested enum and list payloads, and `!=`.
+
+## Selected contract
+
+Actor equality now selects live instance identity. Exact checked nominal actor types must match; runtime IDs must belong to the owning context. Cloning preserves identity, distinct spawns remain unequal even with equal state, and != negates the same comparison. State is never structurally compared. See [the selected implementation note](../active/actor_identity_equality.md). Escaping comptime actor graph import remains a separate contract.

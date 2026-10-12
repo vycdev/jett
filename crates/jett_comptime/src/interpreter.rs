@@ -2572,6 +2572,21 @@ impl Interpreter {
         .map(|value| self.retain_checked_identity(type_name, value))
     }
 
+    fn actor_identity_equal(&self, left: u64, right: u64) -> Result<bool, String> {
+        let left_actor = self
+            .actor_instances
+            .get(&left)
+            .ok_or_else(|| format!("actor equality: unknown actor instance #{left}"))?;
+        let right_actor = self
+            .actor_instances
+            .get(&right)
+            .ok_or_else(|| format!("actor equality: unknown actor instance #{right}"))?;
+        if left_actor.type_name != right_actor.type_name {
+            return Err("actor equality requires matching nominal actor types".into());
+        }
+        Ok(left == right)
+    }
+
     fn enum_payload_equal(&mut self, left: &Value, right: &Value) -> Result<bool, String> {
         let mut work = vec![(left, right)];
         while let Some((left, right)) = work.pop() {
@@ -2663,6 +2678,11 @@ impl Interpreter {
                 | (Value::OptionalSome(a), Value::OptionalSome(b))
                 | (Value::ResultOk(a), Value::ResultOk(b))
                 | (Value::ResultFail(a), Value::ResultFail(b)) => work.push((a, b)),
+                (Value::Actor(left), Value::Actor(right)) => {
+                    if !self.actor_identity_equal(*left, *right)? {
+                        return Ok(false);
+                    }
+                }
                 _ if left != right => return Ok(false),
                 _ => {}
             }
@@ -2776,6 +2796,17 @@ impl Interpreter {
                     _ => {}
                 }
                 let right = value_or_signal!(self, rhs);
+                if matches!(op, BinOp::Eq | BinOp::NotEq)
+                    && let (Value::Actor(left), Value::Actor(right)) =
+                        (left.payload(), right.payload())
+                {
+                    let equal = self.actor_identity_equal(*left, *right)?;
+                    return Ok(ExprFlow::Value(Value::Bool(if *op == BinOp::Eq {
+                        equal
+                    } else {
+                        !equal
+                    })));
+                }
                 if matches!(op, BinOp::Eq | BinOp::NotEq)
                     && matches!(
                         (left.payload(), right.payload()),
@@ -27572,3 +27603,7 @@ function main() returns nothing:
         );
     }
 }
+
+#[cfg(test)]
+#[path = "interpreter/actor_identity_tests.rs"]
+mod actor_identity_tests;

@@ -8676,3 +8676,20 @@ desired Source oracle, ordinary public-Main context-retirement observations or
 feature credit. Occupied aggregates, broader lifetimes, wider ordinary parity
 and fixes, and exact successor CI remain obligations. See the
 [ordinary terminal-error lifetime note](active/native_resource_ordinary_error_reentry.md).
+
+### Actor handle identity equality
+
+Actor `==` and `!=` compare live instance identity for the same checked nominal
+actor type in its owning runtime context. An explicit clone aliases the same
+actor; distinct spawns compare unequal even when state is identical. `!=`
+negates the same comparison. Enum payload traversal applies this rule through
+supported nested containers. Explicit user-struct `Equatable.equals` remains
+its own exact two-view boundary.
+
+The actor registry separates base instance identity from pending handle depth.
+`run` creates a registered pending alias that shares state, and `join` reaches
+the same base instance at ready depth. Ready cloned aliases remain ready when
+another handle is wrapped. Recursive actor payload equality compares instance
+identity and per-handle pending depth. Direct pending comparisons retain their
+unsupported binary-operation error. Context retirement releases actor state
+once. See [the implementation and verification note](active/actor_identity_equality.md).

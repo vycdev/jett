@@ -4823,3 +4823,21 @@ preserved. It supplies no desired Source oracle, ordinary public-Main context-
 retirement observations or feature credit. Occupied custody, broader lifetimes,
 wider ordinary parity and fixes, and the successor's exact CI remain open; the
 rough estimate stays 87%.
+
+### Native actor identity comparison
+
+Validated MIR retains exact nominal actor operand TypeIds and the checked
+aggregate layout. The direct comparison leaf validates both opaque IDs in the
+current context actor registry and requires complete live backing records.
+The recursive Actor layout node compares base instance identity and pending
+depth. Actor state stays behind its existing message interface.
+
+Pending handles use separate zero-field records with the base instance's debug
+ordinal. `run` and `join` retain shared state without changing other aliases'
+depths. Context retirement releases the base state once. The reference evaluator
+uses the same live identity rule for direct and recursive comparison.
+
+The local actor suite passes on Debug and Release runtime archives after Source
+deletion, including production output with Jett optimization enabled. See the
+[actor identity verification note](active/actor_identity_equality.md) for scope
+and remaining native codegen acceptance work.

@@ -45,6 +45,10 @@ const INVALID_ACTOR: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native actor handle or field",
 );
+const UNSUPPORTED_ACTOR_COMPARISON: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"unsupported binary operation on pending actor",
+);
 const INVALID_CAPABILITY: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native capability authority or task",
@@ -874,6 +878,12 @@ impl NativeBitfieldLayout {
         Ok(fields)
     }
 }
+#[derive(Clone, Copy)]
+struct NativeActorIdentity {
+    instance: NativeHandle,
+    ordinal: u64,
+}
+
 #[derive(Default)]
 pub(super) struct NativeValues {
     #[cfg(test)]
@@ -887,7 +897,7 @@ pub(super) struct NativeValues {
     maps: HashMap<NativeHandle, NativeMap>,
     structs: HashMap<NativeHandle, NativeStruct>,
     equalities: HashMap<NativeHandle, debug_equal::EqualityCursor>,
-    actors: HashMap<NativeHandle, u64>,
+    actors: HashMap<NativeHandle, NativeActorIdentity>,
     capability_tasks: HashMap<NativeHandle, (u64, u64)>,
     opaque_capabilities: HashMap<&'static str, u64>,
     next_actor_ordinal: u64,
@@ -3173,33 +3183,94 @@ impl NativeValues {
         let Some(record) = self.structs.get(&id) else {
             return Err(INVALID_ACTOR);
         };
-        if record.fields.iter().any(Option::is_none) || self.actors.contains_key(&id) {
+        if record.fields.iter().any(Option::is_none)
+            || record.pending_depth != 0
+            || self.actors.contains_key(&id)
+        {
             return Err(INVALID_ACTOR);
         }
         let next = self.next_actor_ordinal.checked_add(1).ok_or(EXHAUSTED)?;
-        self.actors.insert(id, self.next_actor_ordinal);
+        self.actors.insert(
+            id,
+            NativeActorIdentity {
+                instance: id,
+                ordinal: self.next_actor_ordinal,
+            },
+        );
         self.next_actor_ordinal = next;
         Ok(id)
     }
-    fn run_actor(&mut self, id: u64) -> LeafResult<u64> {
-        if !self.actors.contains_key(&id) {
+    fn actor_identity_parts(&self, id: u64) -> LeafResult<(NativeActorIdentity, u64)> {
+        let identity = *self.actors.get(&id).ok_or(INVALID_ACTOR)?;
+        let record = self.structs.get(&id).ok_or(INVALID_ACTOR)?;
+        let base_identity = self.actors.get(&identity.instance).ok_or(INVALID_ACTOR)?;
+        let base = self.structs.get(&identity.instance).ok_or(INVALID_ACTOR)?;
+        if base_identity.instance != identity.instance
+            || base_identity.ordinal != identity.ordinal
+            || base.pending_depth != 0
+            || base.fields.iter().any(Option::is_none)
+            || (id != identity.instance && (!record.fields.is_empty() || record.pending_depth == 0))
+        {
             return Err(INVALID_ACTOR);
         }
-        let record = self.structs.get_mut(&id).ok_or(INVALID_ACTOR)?;
-        record.pending_depth = record.pending_depth.checked_add(1).ok_or(EXHAUSTED)?;
-        Ok(id)
+        Ok((identity, record.pending_depth))
+    }
+    fn same_actor_identity(&self, left: u64, right: u64) -> LeafResult<bool> {
+        // Exact nominal actor types come from validated MIR/layout. IDs must
+        // still be registered in this context even when their bits are equal.
+        let (left_identity, left_depth) = self.actor_identity_parts(left)?;
+        let (right_identity, right_depth) = self.actor_identity_parts(right)?;
+        Ok(left_identity.instance == right_identity.instance && left_depth == right_depth)
+    }
+    fn equal_actor_identity(&mut self, left: u64, right: u64, not_equal: u32) -> LeafResult<u32> {
+        if not_equal > 1 {
+            return Err(INVALID_ACTOR);
+        }
+        let (left_identity, left_depth) = self.actor_identity_parts(left)?;
+        let (right_identity, right_depth) = self.actor_identity_parts(right)?;
+        if left_depth != 0 || right_depth != 0 {
+            let left =
+                format_pending_value(&format!("actor#{}", left_identity.ordinal), left_depth)?;
+            let right =
+                format_pending_value(&format!("actor#{}", right_identity.ordinal), right_depth)?;
+            let operation = if not_equal == 0 { "Eq" } else { "NotEq" };
+            self.set_dynamic_failure_message(
+                format!("unsupported binary operation: {left} {operation} {right}").into_bytes(),
+            );
+            return Err(UNSUPPORTED_ACTOR_COMPARISON);
+        }
+        Ok(u32::from(
+            (left_identity.instance == right_identity.instance) != (not_equal != 0),
+        ))
+    }
+    fn actor_pending_alias(
+        &mut self,
+        identity: NativeActorIdentity,
+        depth: u64,
+    ) -> LeafResult<u64> {
+        if depth == 0 {
+            return Ok(identity.instance);
+        }
+        self.actors.try_reserve(1).map_err(|_| EXHAUSTED)?;
+        let alias = self.new_struct(0)?;
+        self.structs
+            .get_mut(&alias)
+            .ok_or(INVALID_ACTOR)?
+            .pending_depth = depth;
+        self.actors.insert(alias, identity);
+        Ok(alias)
+    }
+    fn run_actor(&mut self, id: u64) -> LeafResult<u64> {
+        let (identity, depth) = self.actor_identity_parts(id)?;
+        self.actor_pending_alias(identity, depth.checked_add(1).ok_or(EXHAUSTED)?)
     }
     fn join_actor(&mut self, id: u64) -> LeafResult<u64> {
-        if !self.actors.contains_key(&id) {
-            return Err(INVALID_ACTOR);
-        }
-        let record = self.structs.get_mut(&id).ok_or(INVALID_ACTOR)?;
-        record.pending_depth = record.pending_depth.saturating_sub(1);
-        Ok(id)
+        let (identity, depth) = self.actor_identity_parts(id)?;
+        self.actor_pending_alias(identity, depth.saturating_sub(1))
     }
     fn check_actor_message(&mut self, id: u64) -> LeafResult<u32> {
-        let ordinal = *self.actors.get(&id).ok_or(INVALID_ACTOR)?;
-        let depth = self.structs.get(&id).ok_or(INVALID_ACTOR)?.pending_depth;
+        let (identity, depth) = self.actor_identity_parts(id)?;
+        let ordinal = identity.ordinal;
         if depth == 0 {
             return Ok(0);
         }
@@ -5499,6 +5570,8 @@ leaves! {
         |s| Ok(s.struct_field(value, index)?.pending_depth);
     ActorRegister, jett_rt_v1_actor_register, false, (value: u64 => I64), u64 => I64,
         |s| s.register_actor(value);
+    ActorIdentityEqual, jett_rt_v1_actor_identity_equal, false, (left: u64 => I64, right: u64 => I64, not_equal: u32 => I32), u32 => I32,
+        |s| s.equal_actor_identity(left, right, not_equal);
     ActorRun, jett_rt_v1_actor_run, false, (value: u64 => I64), u64 => I64,
         |s| s.run_actor(value);
     ActorTaskJoin, jett_rt_v1_actor_task_join, false, (value: u64 => I64), u64 => I64,
@@ -6556,6 +6629,8 @@ fn unsigned_gcd(mut a: u64, mut b: u64) -> u64 {
 mod tests {
     use super::*;
     use std::mem::MaybeUninit;
+
+    include!("values/actor_identity_tests.rs");
 
     #[test]
     fn float_remainder_leaf_preserves_ieee_values_without_runtime_failure() {

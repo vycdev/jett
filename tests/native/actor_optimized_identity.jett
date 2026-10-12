@@ -1,0 +1,46 @@
+namespace app
+actor Counter:
+    mutable int64 count = 1
+    receive add(amount: int64):
+        count = count + amount
+    receive read responds int64:
+        respond count
+enum Holder:
+    held(worker: Counter)
+enum Bundle:
+    grouped(values: list[Holder], worker: optional[Counter])
+struct Keyed:
+    key: int64
+    worker: Counter
+implement Equatable for Keyed:
+    function equals(view self: Keyed, view other: Keyed) returns bool:
+        return self.key == other.key
+enum Custom:
+    keyed(value: Keyed)
+function main(stdout: Stdout) returns nothing:
+    Counter worker = spawn Counter()
+    Counter alias = clone worker
+    Counter other = spawn Counter()
+    Stdout.write(view stdout, "{worker == alias} {worker != alias} {worker == other} {worker != other}\n")
+    Bundle first = Bundle.grouped(list(Holder.held(clone worker)), some(clone worker))
+    Bundle repeated = clone first
+    Bundle different = Bundle.grouped(list(Holder.held(clone other)), some(clone other))
+    Stdout.write(view stdout, "{first == repeated} {first != repeated} {first == different} {first != different}\n")
+    Counter pending = run clone worker
+    Counter also_pending = run clone worker
+    Counter twice = run clone pending
+    Holder pending_first = Holder.held(clone pending)
+    Holder pending_repeated = Holder.held(clone also_pending)
+    Holder deeper = Holder.held(clone twice)
+    Holder ready = Holder.held(clone worker)
+    Stdout.write(view stdout, "{pending_first == pending_repeated} {pending_first != pending_repeated} {pending_first == deeper} {pending_first != deeper} {pending_first == ready} {pending_first != ready}\n")
+    Counter once = join twice handle error:
+        return Stdout.write(view stdout, "unexpected first join: {error}\n")
+    Counter joined = join once handle error:
+        return Stdout.write(view stdout, "unexpected second join: {error}\n")
+    send joined.add(9)
+    Stdout.write(view stdout, "{worker == joined} {worker != joined} {ask worker.read} {ask joined.read}\n")
+    Custom left = Custom.keyed(Keyed(key: 7, worker: clone worker))
+    Custom right = Custom.keyed(Keyed(key: 7, worker: clone other))
+    Stdout.write(view stdout, "{left == right} {left != right}\n")
+    return nothing

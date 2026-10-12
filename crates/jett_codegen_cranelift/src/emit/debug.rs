@@ -303,7 +303,8 @@ pub(crate) fn equality_layout(
             | Type::String
             | Type::Bool
             | Type::Bytes
-            | Type::Nothing => true,
+            | Type::Nothing
+            | Type::Actor(_) => true,
             Type::List(element) | Type::Set(element) | Type::Optional(element) => {
                 supported(types, *element, seen, methods)
             }
@@ -336,7 +337,6 @@ pub(crate) fn equality_layout(
             | Type::TypeConstruction
             | Type::Never
             | Type::Interface(_)
-            | Type::Actor(_)
             | Type::Resource(_)
             | Type::Capability(_)
             | Type::Function { .. }

@@ -335,6 +335,7 @@ impl Comparison<'_> {
                     _ => left_bits == right_bits,
                 },
             ),
+            NativeDebugNode::Actor => values.same_actor_identity(left_bits, right_bits),
             NativeDebugNode::Nothing => Ok(left_bits == right_bits),
             NativeDebugNode::Bytes => values.same_bytes_value(left_bits, right_bits),
             NativeDebugNode::Alias(base) => {
@@ -481,7 +482,6 @@ impl Comparison<'_> {
             | NativeDebugNode::Redacted
             | NativeDebugNode::Interface
             | NativeDebugNode::Function
-            | NativeDebugNode::Actor
             | NativeDebugNode::TypeConstruction => Err(INVALID_STRUCT),
         }
     }

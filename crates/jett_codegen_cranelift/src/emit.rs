@@ -2358,6 +2358,19 @@ impl Translator<'_, '_> {
                     right.ty,
                     expression.span,
                 )?;
+                if operand_kind == ScalarKind::Actor {
+                    let not_equal = self
+                        .builder
+                        .ins()
+                        .iconst(ir::types::I32, i64::from(*op == BinaryOp::NotEqual));
+                    let value = self.leaf(
+                        NativeLeaf::ActorIdentityEqual,
+                        &[left_value, right_value, not_equal],
+                        true,
+                    )?;
+                    let value = self.builder.ins().ireduce(ir::types::I8, value);
+                    return Ok(LoweredValue::Scalar(value));
+                }
                 if operand_kind == ScalarKind::String {
                     let leaf = if *op == BinaryOp::NotEqual {
                         NativeLeaf::StringNotEqual

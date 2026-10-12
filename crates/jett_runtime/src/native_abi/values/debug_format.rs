@@ -166,15 +166,9 @@ impl Formatter<'_> {
                 self.append(values.function_debug_label(bits)?)?;
             }
             NativeDebugNode::Actor => {
-                let ordinal = values.actors.get(&bits).ok_or(INVALID_ACTOR)?;
-                self.pending(
-                    values
-                        .structs
-                        .get(&bits)
-                        .ok_or(INVALID_ACTOR)?
-                        .pending_depth,
-                )?;
-                self.append(&format!("actor#{ordinal}"))?;
+                let (identity, depth) = values.actor_identity_parts(bits)?;
+                self.pending(depth)?;
+                self.append(&format!("actor#{}", identity.ordinal))?;
             }
             NativeDebugNode::TypeConstruction => {
                 let builder = values.builders.get(&bits).ok_or(INVALID_CONSTRUCTION)?;
