@@ -541,48 +541,104 @@ fn native_resource_receipt_pin_runtime_env_cannot_replace_compiled_pin() {
 }
 
 fn run_native_cases(selected: &[cases::Case]) {
+    struct LinkedProgram {
+        source: &'static str,
+        directory: tempfile::TempDir,
+        binary: PathBuf,
+        binary_sha256: String,
+    }
+
     for release in [false, true] {
         let archive = archive(release);
+        // This cache cannot outlive the exact profile and measured archive. Support
+        // bytes, FileIds/origins, declaration order and kernel catalog are fixed by
+        // checked(); only the exact project bytes vary between these script rows.
+        // Cache completed artifacts, never compiler-session proofs or runtime state.
+        let mut previous: Option<LinkedProgram> = None;
+        let mut builds = 0usize;
         for case in selected {
+            let reuse = previous
+                .as_ref()
+                .is_some_and(|program| program.source.as_bytes() == case.source.as_bytes());
+            if !reuse {
+                // Retire the previous files before allocating the next build directory.
+                // At most one completed program is retained for the current profile.
+                drop(previous.take());
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let project = root.join("project");
+                let stdlib = root.join("synthetic-stdlib");
+                fs::create_dir(&project).unwrap();
+                fs::create_dir(&stdlib).unwrap();
+                let entry = project.join("main.jett");
+                let support = stdlib.join("resource_probe.jett");
+                fs::write(&entry, case.source).unwrap();
+                fs::write(&support, cases::SUPPORT).unwrap();
+                let artifact = object(&entry, &support, release);
+                assert_eq!(artifact.target, archive.target);
+                assert!(
+                    artifact
+                        .symbols
+                        .iter()
+                        .any(|symbol| symbol == jett_codegen_cranelift::JETT_AOT_ENTRY_SYMBOL_V1)
+                );
+                assert!(
+                    artifact
+                        .symbols
+                        .iter()
+                        .any(|symbol| symbol == "jett_aot_resource_v1_manifest")
+                );
+                let object_path = root.join("resource.obj");
+                let binary = root.join(if cfg!(windows) {
+                    "resource.exe"
+                } else {
+                    "resource"
+                });
+                fs::write(&object_path, artifact.bytes).unwrap();
+                // Every actual link retains the measured receipt/archive/linker guards.
+                link(&archive, &object_path, &binary, root);
+                fs::remove_dir_all(&project).unwrap();
+                fs::remove_dir_all(&stdlib).unwrap();
+                assert!(
+                    !entry.exists() && !support.exists() && !project.exists() && !stdlib.exists()
+                );
+                let binary_sha256 = digest(&fs::read(&binary).unwrap());
+                previous = Some(LinkedProgram {
+                    source: case.source,
+                    directory,
+                    binary,
+                    binary_sha256,
+                });
+                builds += 1;
+            }
+            let program = previous.as_ref().unwrap();
+            let compiled = program.directory.path();
+            assert!(
+                !compiled.join("project/main.jett").exists()
+                    && !compiled
+                        .join("synthetic-stdlib/resource_probe.jett")
+                        .exists()
+                    && !compiled.join("project").exists()
+                    && !compiled.join("synthetic-stdlib").exists()
+            );
+            assert_eq!(
+                digest(&fs::read(&program.binary).unwrap()),
+                program.binary_sha256,
+                "completed native program bytes before every execution"
+            );
+            // A cache hit still gets a cold directory, fresh child and its own report.
             let directory = tempfile::tempdir().unwrap();
             let root = directory.path();
-            let project = root.join("project");
-            let stdlib = root.join("synthetic-stdlib");
-            fs::create_dir(&project).unwrap();
-            fs::create_dir(&stdlib).unwrap();
-            let entry = project.join("main.jett");
-            let support = stdlib.join("resource_probe.jett");
-            fs::write(&entry, case.source).unwrap();
-            fs::write(&support, cases::SUPPORT).unwrap();
-            let artifact = object(&entry, &support, release);
-            assert_eq!(artifact.target, archive.target);
-            assert!(
-                artifact
-                    .symbols
-                    .iter()
-                    .any(|symbol| symbol == jett_codegen_cranelift::JETT_AOT_ENTRY_SYMBOL_V1)
-            );
-            assert!(
-                artifact
-                    .symbols
-                    .iter()
-                    .any(|symbol| symbol == "jett_aot_resource_v1_manifest")
-            );
-            let object_path = root.join("resource.obj");
-            let binary = root.join(if cfg!(windows) {
-                "resource.exe"
-            } else {
-                "resource"
-            });
-            fs::write(&object_path, artifact.bytes).unwrap();
-            link(&archive, &object_path, &binary, root);
-            // Native execution has neither primary Source nor the synthetic Stdlib files.
-            fs::remove_dir_all(&project).unwrap();
-            fs::remove_dir_all(&stdlib).unwrap();
-            assert!(!entry.exists() && !support.exists() && !project.exists() && !stdlib.exists());
+            assert!(!root.join("resource-native-report-v1.bin").exists());
+            assert!(!root.join("project").exists() && !root.join("synthetic-stdlib").exists());
+            if std::env::var_os("JETT_RESOURCE_NATIVE_EVIDENCE_DIR_V1").is_some() {
+                // Preserve the existing per-case object evidence without copying a
+                // linked executable into every transient execution directory.
+                fs::copy(compiled.join("resource.obj"), root.join("resource.obj")).unwrap();
+            }
             let encoded = script(case);
             let actual = super::run_bounded_with_env(
-                &binary,
+                &program.binary,
                 root,
                 Some(("JETT_RESOURCE_NATIVE_TEST_SCRIPT_V1", &encoded)),
             );
@@ -601,6 +657,11 @@ fn run_native_cases(selected: &[cases::Case]) {
             assert!(actual.stderr.is_empty(), "{actual:?}");
             assert_report(case, &report);
         }
+        eprintln!(
+            "Resource native build reuse: profile={}; {} Source-deleted executions; {builds} emitted/linked programs",
+            archive.profile,
+            selected.len()
+        );
     }
 }
 

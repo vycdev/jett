@@ -12,9 +12,10 @@ abandoned construction after a Resource has staged. Sources30..32 preserve the
 historical invalid view-capability entry and its E0503 refusal. The shared support
 Sources and original Source17 remain unchanged.
 
-## Current integration verification
+## Resource predecessor verification
 
-The restored integration includes the published actor identity change. Local
+At Resource commit `c141de22`, the integration includes the published actor
+identity change. Local
 MSVC static-CRT checks on 2026-10-12 pass all 308 runtime, 577 interpreter, 317
 MIR, and 120 code generator unit tests. The three-Source object gate emits all
 six objects with both codegen optimization settings. Focused tests validate
@@ -43,6 +44,34 @@ the native tests. Accounting distinguishes the original twelve-gate corpus from
 the subset and occupied gates. All 2,314 workspace library tests pass. This
 evidence does not include an independent second raw-report
 decoder or retain thousands of per-case executable copies.
+
+## Combined revision and executable reuse
+
+Fresh verification on 2026-10-12 includes Actor, Resource and Owner commit
+`7ff46cc7` plus the executable-reuse harness change. All sixteen private MSVC
+gates pass again: 754 Source-deleted executions and 900 entry completions.
+The newly measured Debug/Release ABI1/wire3 static-CRT runtimes include the
+additive Owner validation leaf. Receipt SHA-256 is
+`bc2ad54743380441f074d8d5d212048ecf440669817c0cb69ce2fd0810ba1c95`.
+Fresh gate compilation, source/archive/tool/binary/dep-info guards and the
+runtime-environment pin refusal control pass. The combined implementation
+passes all 2,331 workspace library tests; this is not full native conformance.
+
+Consecutive script cases with identical project bytes reuse one completed
+program within the exact runtime profile. Every case still runs in a fresh
+process and working directory, after Source removal and binary-hash validation,
+with its own script, report and unchanged oracle. Compiler-session proofs and
+runtime state are never cached. The 191-case gate retains 382 executions while
+reducing emitted/linked programs from 382 to 246. Occupied retirement retains
+22 executions while reducing builds from 22 to 6. Reentry gates are unchanged.
+
+An additional evidence-enabled occupied run passes all 22 cases. Independent
+file checks verify each executable, object, original script, report, exit and
+empty capture by size and SHA-256. Compact records retain report/script bytes
+and six distinct executable hashes; temporary per-case executable copies were
+pruned after verification. These checks validate report framing, not a second
+full event decoder. Source absence is asserted by the passing guarded harness.
+All wider language, provider and platform obligations below remain open.
 
 ## Historical checkpoint
 
