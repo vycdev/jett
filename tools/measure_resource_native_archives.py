@@ -48,6 +48,26 @@ CARRIER_EXPORTS = frozenset(
     )
 )
 CFGS = ["test", "jett_resource_native_test_archive"]
+STARTUP_SIGNATURES: dict[str, tuple[str, ...]] = {
+    "jett_rt_v1_resource_program_begin": (
+        "*const JettRuntimeContextV1", "*const ObjectManifest", "*mut u64",
+        "*mut JettRuntimeResultV1",
+    ),
+    "jett_rt_v1_resource_program_complete": (
+        "*const JettRuntimeContextV1", "u64", "u32",
+    ),
+    "jett_rt_v1_resource_program_unwind": (
+        "*const JettRuntimeContextV1", "u32", "u32", "*mut u32",
+    ),
+    "jett_rt_v1_resource_program_failure": (
+        "*const JettRuntimeContextV1", "*mut JettRuntimeResultV1",
+    ),
+    "jett_rt_v1_resource_program_failure_copy": (
+        "*const JettRuntimeContextV1", "*mut u8", "u64", "*mut u64",
+        "*mut JettRuntimeResultV1",
+    ),
+}
+STARTUP_EXPORTS = frozenset(STARTUP_SIGNATURES)
 PIN_ENV = "JETT_RESOURCE_NATIVE_TEST_ARCHIVE_EXPECTED_SHA256_V1"
 RECEIPT_ENV = "JETT_RESOURCE_NATIVE_TEST_ARCHIVE_RECEIPT_V1"
 TEST = ("resource_execution::"
@@ -472,6 +492,38 @@ def checked_compiler_commands(text: str, compiler: Path) -> None:
                 "Cargo used an unmeasured compiler or compiler wrapper")
 
 
+def startup_exports(directory: Path) -> set[str]:
+    owner, child = directory.with_suffix(".rs"), directory / "program_entry.rs"
+    require(owner.is_file() and child.is_file(), "Resource startup module sources are required")
+    owner_text = owner.read_text(encoding="utf-8")
+    module_pattern = r'(?m)^[ \t]*((?:#\[[^\n]*\][ \t]*\n[ \t]*)*)mod[ \t]+program_entry[ \t]*;'
+    modules = re.findall(module_pattern, owner_text)
+    require(len(re.findall(r"\bmod\s+program_entry\b", owner_text)) == 1 and modules == [""],
+            "Resource startup must have one unconditional canonical child module")
+    text = child.read_text(encoding="utf-8")
+    require("#![" not in text, "Resource startup child cannot carry conditional module attributes")
+    pattern = (r'(?m)^[ \t]*((?:#\[[^\n]*\][ \t]*\n[ \t]*)*)'
+               r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+(jett_rt_v1_resource_[a-z_]+)'
+               r'\s*\(([^)]*)\)\s*->\s*([A-Za-z_][A-Za-z0-9_]*)\s*\{')
+    declarations = re.findall(pattern, text)
+    names = [name for _, name, _, _ in declarations]
+    require(len(names) == len(set(names)) == 5 and set(names) == STARTUP_EXPORTS,
+            "five exact Resource startup exports are required")
+    for attributes, name, parameters, result in declarations:
+        require(attributes.strip() == "#[unsafe(no_mangle)]",
+                f"Resource startup export must be unconditional and unmangled: {name}")
+        types: list[str] = []
+        for parameter in parameters.split(","):
+            if not parameter.strip():
+                continue
+            parts = parameter.split(":", 1)
+            require(len(parts) == 2, f"invalid Resource startup parameter: {name}")
+            types.append(" ".join(parts[1].split()))
+        require(tuple(types) == STARTUP_SIGNATURES[name] and result == "JettRuntimeStatusV1",
+                f"Resource startup C signature differs: {name}")
+    return set(names)
+
+
 def export_names(repo: Path) -> tuple[set[str], set[str]]:
     directory = repo / "crates/jett_runtime/src/native_abi/resource"
     pattern = r'pub unsafe extern "C" fn (jett_rt_v1_resource_[a-z_]+)\('
@@ -486,7 +538,12 @@ def export_names(repo: Path) -> tuple[set[str], set[str]]:
     require(all(name.startswith("jett_rt_v1_resource_test_") for name in private),
             "unexpected private export name")
     require(len(set(leaves) | set(carriers)) == 50, "current Resource contract must contain 50 names")
-    return set(leaves) | set(carriers), set(private)
+    startup = startup_exports(directory)
+    require(not startup & (set(leaves) | set(carriers) | set(private)),
+            "Resource startup exports belong only to their canonical child module")
+    production = set(leaves) | set(carriers) | startup
+    require(len(production) == 55, "fifty-five production Resource exports are required")
+    return production, set(private)
 
 
 def checked_layout_wire(repo: Path) -> None:
@@ -925,6 +982,7 @@ def receipt_sources(receipt: Path, expected: str, repo: Path, *, target: str = T
             "receipt exceeds the test harness limit")
     require(digest(receipt) == expected, "receipt differs from the independently supplied compile-time pin")
     checked_layout_wire(repo)
+    export_names(repo)
     checked_measurement_source(repo)
     record = read_object(receipt)
     require(record.get("version") == 1, "unsupported archive receipt version")

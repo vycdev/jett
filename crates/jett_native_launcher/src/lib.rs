@@ -54,6 +54,13 @@ struct RuntimeCall {
 trait RuntimeLifecycle {
     fn create(&mut self, out_context: *mut JettRuntimeContextV1) -> RuntimeCall;
     fn destroy(&mut self, context: *mut JettRuntimeContextV1) -> RuntimeCall;
+    fn finish_entry(
+        &mut self,
+        _context: *mut JettRuntimeContextV1,
+        outcome: EntryOutcome,
+    ) -> EntryOutcome {
+        outcome
+    }
     fn failure(&mut self, _context: *mut JettRuntimeContextV1) -> Option<RuntimeCall> {
         None
     }
@@ -64,6 +71,40 @@ trait RuntimeLifecycle {
 
 #[derive(Default)]
 struct NativeRuntime;
+
+fn resource_failure(context: *mut JettRuntimeContextV1) -> Option<RuntimeCall> {
+    let mut result = MaybeUninit::uninit();
+    // SAFETY: the caller retains the stationary live context and distinct output.
+    let status = unsafe {
+        jett_runtime::native_abi::jett_rt_v1_resource_program_failure(context, result.as_mut_ptr())
+    };
+    (status != JettRuntimeStatusV1::OK).then(|| RuntimeCall {
+        status,
+        // SAFETY: the non-overlapping valid result is initialized on return.
+        result: unsafe { result.assume_init() },
+    })
+}
+
+unsafe fn copy_failure(
+    context: *mut JettRuntimeContextV1,
+    buffer: *mut u8,
+    capacity: u64,
+    out_length: *mut u64,
+    out_result: *mut JettRuntimeResultV1,
+) -> JettRuntimeStatusV1 {
+    // SAFETY: the caller supplies the same live context and exclusive copy outputs.
+    unsafe {
+        if resource_failure(context).is_some() {
+            jett_runtime::native_abi::jett_rt_v1_resource_program_failure_copy(
+                context, buffer, capacity, out_length, out_result,
+            )
+        } else {
+            jett_runtime::native_abi::values::jett_rt_v1_value_failure_copy(
+                context, buffer, capacity, out_length, out_result,
+            )
+        }
+    }
+}
 
 impl RuntimeLifecycle for NativeRuntime {
     fn create(&mut self, out_context: *mut JettRuntimeContextV1) -> RuntimeCall {
@@ -87,6 +128,9 @@ impl RuntimeLifecycle for NativeRuntime {
     }
 
     fn failure(&mut self, context: *mut JettRuntimeContextV1) -> Option<RuntimeCall> {
+        if let Some(failure) = resource_failure(context) {
+            return Some(failure);
+        }
         let mut result = MaybeUninit::uninit();
         // SAFETY: launch_with retains the stationary context until destruction.
         let status = unsafe {
@@ -108,7 +152,7 @@ impl RuntimeLifecycle for NativeRuntime {
         // SAFETY: the live context and distinct outputs remain valid through
         // this call. A null, zero-capacity buffer queries the required length.
         let status = unsafe {
-            jett_runtime::native_abi::values::jett_rt_v1_value_failure_copy(
+            copy_failure(
                 context,
                 std::ptr::null_mut(),
                 0,
@@ -128,7 +172,7 @@ impl RuntimeLifecycle for NativeRuntime {
         // SAFETY: `message` owns `length` writable bytes, and all output
         // records are distinct. The runtime copies while the context is live.
         let status = unsafe {
-            jett_runtime::native_abi::values::jett_rt_v1_value_failure_copy(
+            copy_failure(
                 context,
                 message.as_mut_ptr(),
                 required,
@@ -137,6 +181,35 @@ impl RuntimeLifecycle for NativeRuntime {
             )
         };
         (status == JettRuntimeStatusV1::OK && copied == required).then_some(message)
+    }
+
+    fn finish_entry(
+        &mut self,
+        context: *mut JettRuntimeContextV1,
+        outcome: EntryOutcome,
+    ) -> EntryOutcome {
+        let (body, panicked) = match outcome {
+            EntryOutcome::Status(status) => (status, 0),
+            EntryOutcome::Panicked => (JettRuntimeStatusV1::PANIC.code(), 1),
+        };
+        let mut selected_kind = 0;
+        // SAFETY: entry control returned; context and separate output remain live.
+        let status = unsafe {
+            jett_runtime::native_abi::jett_rt_v1_resource_program_unwind(
+                context,
+                body,
+                panicked,
+                &mut selected_kind,
+            )
+        };
+        if status == JettRuntimeStatusV1::OK {
+            return outcome;
+        }
+        if panicked != 0 && selected_kind == 2 {
+            EntryOutcome::Panicked
+        } else {
+            EntryOutcome::Status(status.code())
+        }
     }
 
     fn destroy(&mut self, context: *mut JettRuntimeContextV1) -> RuntimeCall {
@@ -202,6 +275,11 @@ where
         Ok(status) => EntryOutcome::Status(status),
         Err(()) => EntryOutcome::Panicked,
     };
+    let entry_outcome =
+        match catch_operation(|| runtime.finish_entry(context.as_mut_ptr(), entry_outcome)) {
+            Ok(outcome) => outcome,
+            Err(()) => EntryOutcome::Panicked,
+        };
 
     let entry_failure = runtime.failure(context.as_mut_ptr());
     let entry_message = entry_failure

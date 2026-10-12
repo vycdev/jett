@@ -55,6 +55,10 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use crate::{ResourceRegistry, discard_panic_payload};
 
 mod resource;
+pub use resource::{
+    jett_rt_v1_resource_program_failure, jett_rt_v1_resource_program_failure_copy,
+    jett_rt_v1_resource_program_unwind,
+};
 pub mod values;
 
 /// The native runtime ABI version implemented by this module.

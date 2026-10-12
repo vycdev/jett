@@ -4,6 +4,8 @@ use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Leaf {
+    ProgramBegin,
+    ProgramComplete,
     EntryScope,
     EntryNetwork,
     EntryOutcome,
@@ -60,6 +62,8 @@ impl Leaf {
         use Leaf::*;
         use ir::types::{I32, I64};
         match self {
+            ProgramBegin => ("jett_rt_v1_resource_program_begin", &[I64, I64, I64, I64]),
+            ProgramComplete => ("jett_rt_v1_resource_program_complete", &[I64, I64, I32]),
             EntryScope => ("jett_rt_v1_resource_entry_scope", &[I64, I64, I64]),
             EntryNetwork => ("jett_rt_v1_resource_entry_network", &[I64, I32, I64, I64]),
             EntryOutcome => (

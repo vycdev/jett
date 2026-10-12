@@ -2027,12 +2027,23 @@ impl Translator<'_, '_> {
     }
 }
 
-/// One C entry wrapper, selecting exactly the installed root and original body status.
+/// One C entry wrapper owns its exact installation and runtime attempt.
 fn define_entry(
     module: &mut ObjectModule,
     declarations: &DeclaredFunctions,
     layout: &EmittedResourceLayout<'_>,
 ) -> Result<(), CodegenError> {
+    let (id, mut context) = build_entry(module, declarations, layout)?;
+    module
+        .define_function(id, &mut context)
+        .map_err(|error| CodegenError::Backend(format!("Resource C entry: {error:?}")))
+}
+
+fn build_entry(
+    module: &mut ObjectModule,
+    declarations: &DeclaredFunctions,
+    layout: &EmittedResourceLayout<'_>,
+) -> Result<(FuncId, Context), CodegenError> {
     let selected = layout.entry();
     let entry = declarations
         .get(FunctionId::new(selected.function))
@@ -2049,6 +2060,8 @@ fn define_entry(
     builder.append_block_params_for_function_params(initial);
     builder.switch_to_block(initial);
     let ctx = builder.block_params(initial)[0];
+    let startup_refused = builder.create_block();
+    builder.append_block_param(startup_refused, ir::types::I32);
     let refused = builder.create_block();
     builder.append_block_param(refused, ir::types::I32);
     let scope_output = builder.create_sized_stack_slot(ir::StackSlotData::new(
@@ -2068,6 +2081,52 @@ fn define_entry(
     builder.ins().stack_store(zero, result_output, 16);
     let scope_address = builder.ins().stack_addr(ir::types::I64, scope_output, 0);
     let result_address = builder.ins().stack_addr(ir::types::I64, result_output, 0);
+    let manifest_output = builder.create_sized_stack_slot(ir::StackSlotData::new(
+        ir::StackSlotKind::ExplicitSlot,
+        32,
+        3,
+    ));
+    let attempt_output = builder.create_sized_stack_slot(ir::StackSlotData::new(
+        ir::StackSlotKind::ExplicitSlot,
+        8,
+        3,
+    ));
+    builder.ins().stack_store(zero, attempt_output, 0);
+    let manifest_address = builder.ins().stack_addr(ir::types::I64, manifest_output, 0);
+    let attempt_address = builder.ins().stack_addr(ir::types::I64, attempt_output, 0);
+    let mut manifest_signature = module.make_signature();
+    manifest_signature
+        .params
+        .push(AbiParam::new(ir::types::I64));
+    manifest_signature
+        .returns
+        .push(AbiParam::new(ir::types::I32));
+    let manifest = module
+        .declare_function(
+            "jett_aot_resource_v1_manifest",
+            Linkage::Export,
+            &manifest_signature,
+        )
+        .map_err(|error| CodegenError::Backend(error.to_string()))?;
+    let manifest = module.declare_func_in_func(manifest, builder.func);
+    let manifest_call = builder.ins().call(manifest, &[manifest_address]);
+    let manifest_status = builder.inst_results(manifest_call)[0];
+    let manifest_ready = builder.create_block();
+    let manifest_ok = builder.ins().icmp_imm(IntCC::Equal, manifest_status, 0);
+    builder.ins().brif(
+        manifest_ok,
+        manifest_ready,
+        &[],
+        startup_refused,
+        &[manifest_status.into()],
+    );
+    builder.switch_to_block(manifest_ready);
+    Leaf::ProgramBegin.checked(
+        module,
+        &mut builder,
+        &[ctx, manifest_address, attempt_address, result_address],
+        startup_refused,
+    )?;
     Leaf::EntryScope.checked(
         module,
         &mut builder,
@@ -2166,13 +2225,30 @@ fn define_entry(
         refused,
     )?;
     let body_status = builder.ins().stack_load(ir::types::I32, output, 0);
-    builder.ins().return_(&[body_status]);
+    let finish = builder.create_block();
+    builder.append_block_param(finish, ir::types::I32);
+    builder.ins().jump(finish, &[body_status.into()]);
     builder.switch_to_block(refused);
     let status = builder.block_params(refused)[0];
+    builder.ins().jump(finish, &[status.into()]);
+    builder.switch_to_block(finish);
+    let status = builder.block_params(finish)[0];
+    let attempt = builder.ins().stack_load(ir::types::I64, attempt_output, 0);
+    let borrowed = builder.ins().icmp_imm(IntCC::Equal, attempt, 0);
+    let external_finish = builder.create_block();
+    let generated_finish = builder.create_block();
+    builder
+        .ins()
+        .brif(borrowed, external_finish, &[], generated_finish, &[]);
+    builder.switch_to_block(external_finish);
+    builder.ins().return_(&[status]);
+    builder.switch_to_block(generated_finish);
+    let terminal = Leaf::ProgramComplete.call(module, &mut builder, &[ctx, attempt, status])?;
+    builder.ins().return_(&[terminal]);
+    builder.switch_to_block(startup_refused);
+    let status = builder.block_params(startup_refused)[0];
     builder.ins().return_(&[status]);
     builder.seal_all_blocks();
     builder.finalize();
-    module
-        .define_function(id, &mut context)
-        .map_err(|error| CodegenError::Backend(format!("Resource C entry: {error:?}")))
+    Ok((id, context))
 }

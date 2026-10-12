@@ -13,6 +13,20 @@ from unittest.mock import patch
 from tools import measure_resource_native_archives as measure
 
 
+def copy_resource_export_fixture(root: Path) -> tuple[Path, Path]:
+    resource = root / "crates/jett_runtime/src/native_abi/resource"
+    (resource / "leaves").mkdir(parents=True)
+    for relative in ("leaves.rs", "test_archive_api.rs", "program_entry.rs"):
+        original = measure.ROOT / "crates/jett_runtime/src/native_abi/resource" / relative
+        (resource / relative).write_bytes(original.read_bytes())
+    owner = resource.with_suffix(".rs")
+    owner.write_bytes((measure.ROOT / "crates/jett_runtime/src/native_abi/resource.rs").read_bytes())
+    carriers = resource / "leaves/carriers.rs"
+    carriers.write_text("\n".join(f'pub unsafe extern "C" fn {name}() {{}}'
+        for name in sorted(measure.CARRIER_EXPORTS)), encoding="utf-8")
+    return owner, resource / "program_entry.rs"
+
+
 class NativeLibraryTests(unittest.TestCase):
     def test_actual_order_and_duplicate_arguments_are_retained(self) -> None:
         text = "note: native-static-libs: -lgcc_s -lc -lm -lc\n  -lpthread\nFinished build\n"
@@ -94,9 +108,19 @@ class SymbolAndFingerprintTests(unittest.TestCase):
             f"{name} T 0 10" for name in sorted(self.leaves | self.private | {"main"}))
 
     def test_complete_current_source_export_contract(self) -> None:
-        self.assertEqual((len(self.leaves), len(self.private)), (50, 8))
+        self.assertEqual((len(self.leaves), len(self.private)), (55, 8))
         self.assertTrue(measure.CARRIER_EXPORTS <= self.leaves)
+        self.assertTrue(measure.STARTUP_EXPORTS <= self.leaves)
+        self.assertEqual(len(self.leaves - measure.STARTUP_EXPORTS), 50)
         measure.check_symbols(self.symbols, self.leaves, self.private)
+
+    def test_each_startup_symbol_must_have_one_text_definition(self) -> None:
+        for name in sorted(measure.STARTUP_EXPORTS):
+            line = f"{name} T 0 10"
+            for invalid in (self.symbols.replace(line, ""), self.symbols + "\n" + line,
+                            self.symbols.replace(line, f"{name} D 0 10")):
+                with self.subTest(name=name, symbols=invalid), self.assertRaises(measure.MeasurementError):
+                    measure.check_symbols(invalid, self.leaves, self.private)
 
     def test_missing_duplicate_foreign_or_nontext_exports_are_refused(self) -> None:
         leaf = sorted(self.leaves)[0]
@@ -130,6 +154,7 @@ class SymbolAndFingerprintTests(unittest.TestCase):
 
 class ReceiptAndGateTests(unittest.TestCase):
     def fixture(self, root: Path, inputs: dict[str, measure.Json]) -> Path:
+        copy_resource_export_fixture(root)
         helper = root / "tools/measure_resource_native_archives.py"
         helper.parent.mkdir(parents=True)
         helper.write_bytes(Path(measure.__file__).read_bytes())
@@ -307,14 +332,9 @@ class CarrierContractTests(unittest.TestCase):
         helper = root / "tools/measure_resource_native_archives.py"
         helper.parent.mkdir(parents=True)
         helper.write_bytes(Path(measure.__file__).read_bytes())
+        copy_resource_export_fixture(root)
         resource = root / "crates/jett_runtime/src/native_abi/resource"
-        (resource / "leaves").mkdir(parents=True)
-        for relative in ("leaves.rs", "test_archive_api.rs"):
-            original = measure.ROOT / "crates/jett_runtime/src/native_abi/resource" / relative
-            (resource / relative).write_bytes(original.read_bytes())
         carriers = resource / "leaves/carriers.rs"
-        carriers.write_text("\n".join(f'pub unsafe extern "C" fn {name}() {{}}'
-            for name in sorted(measure.CARRIER_EXPORTS)), encoding="utf-8")
         registration = root / "crates/jett_runtime/src/resource_custody/registration.rs"
         registration.parent.mkdir(parents=True)
         registration.write_text("pub(crate) const NATIVE_RESOURCE_LAYOUT_WIRE_VERSION: u32 = 3;\n",
@@ -327,8 +347,9 @@ class CarrierContractTests(unittest.TestCase):
             self.fixture(root)
             measure.checked_layout_wire(root)
             leaves, private = measure.export_names(root)
-            self.assertEqual((len(leaves), len(private)), (50, 8))
+            self.assertEqual((len(leaves), len(private)), (55, 8))
             self.assertTrue(measure.CARRIER_EXPORTS <= leaves)
+            self.assertEqual(leaves & measure.STARTUP_EXPORTS, measure.STARTUP_EXPORTS)
 
     def test_old_future_duplicate_or_missing_runtime_wire_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -355,7 +376,7 @@ class CarrierContractTests(unittest.TestCase):
             carriers.write_text(original, encoding="utf-8")
             legacy = carriers.parent.parent / "leaves.rs"
             original_legacy = legacy.read_text(encoding="utf-8")
-            first_name = sorted(measure.export_names(root)[0] - measure.CARRIER_EXPORTS)[0]
+            first_name = sorted(measure.export_names(root)[0] - measure.CARRIER_EXPORTS - measure.STARTUP_EXPORTS)[0]
             legacy.write_text(original_legacy.replace(first_name + "(",
                 "jett_rt_v1_resource_carrier_adapt("), encoding="utf-8")
             with self.assertRaises(measure.MeasurementError):
@@ -391,7 +412,7 @@ class CarrierContractTests(unittest.TestCase):
                 measure.checked_measurement_source(root)
 
     def test_guards_are_bound_to_the_source_snapshot_before_output_or_build(self) -> None:
-        for changed in ("wire", "exports"):
+        for changed in ("wire", "exports", "startup_module", "startup_signature", "startup_exports"):
             with self.subTest(changed=changed), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 registration, carriers = self.fixture(root)
@@ -402,8 +423,21 @@ class CarrierContractTests(unittest.TestCase):
                     if changed == "wire":
                         registration.write_text("pub(crate) const NATIVE_RESOURCE_LAYOUT_WIRE_VERSION: u32 = 2;\n",
                                                 encoding="utf-8")
-                    else:
+                    elif changed == "exports":
                         carriers.write_text("", encoding="utf-8")
+                    elif changed == "startup_module":
+                        owner = carriers.parent.parent.with_suffix(".rs")
+                        owner.write_text(owner.read_text(encoding="utf-8").replace(
+                            "mod program_entry;", "#[cfg(test)]\nmod program_entry;"), encoding="utf-8")
+                    else:
+                        child = carriers.parent.parent / "program_entry.rs"
+                        text = child.read_text(encoding="utf-8")
+                        if changed == "startup_signature":
+                            text = text.replace("out_attempt: *mut u64,", "out_attempt: *mut u32,")
+                        else:
+                            text = text.replace("jett_rt_v1_resource_program_begin(",
+                                                "jett_rt_v1_resource_program_foreign(")
+                        child.write_text(text, encoding="utf-8")
                     return {}
                 with patch.object(measure, "sources", side_effect=snapshot_mutation), \
                      patch.object(measure, "executable", return_value=root / "unused-tool"), \
@@ -413,6 +447,116 @@ class CarrierContractTests(unittest.TestCase):
                     measure.prepare(root, output, "unused-cc", "unused-nm", "unused-readelf")
                 toolchain.assert_not_called()
                 self.assertFalse(output.exists())
+
+
+class StartupContractTests(unittest.TestCase):
+    def test_module_missing_duplicate_conditional_or_redirected_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            owner, _ = copy_resource_export_fixture(root)
+            original = owner.read_text(encoding="utf-8")
+            for replacement in ("", "mod program_entry;\nmod program_entry;",
+                                "#[cfg(test)]\nmod program_entry;",
+                                '#[path = "other.rs"]\nmod program_entry;',
+                                "pub mod program_entry;"):
+                owner.write_text(original.replace("mod program_entry;", replacement), encoding="utf-8")
+                with self.subTest(module=replacement), self.assertRaises(measure.MeasurementError):
+                    measure.export_names(root)
+
+    def test_missing_child_and_inner_conditional_module_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, child = copy_resource_export_fixture(root)
+            original = child.read_text(encoding="utf-8")
+            child.write_text("#![cfg(test)]\n" + original, encoding="utf-8")
+            with self.assertRaises(measure.MeasurementError):
+                measure.export_names(root)
+            child.unlink()
+            with self.assertRaises(measure.MeasurementError):
+                measure.export_names(root)
+
+    def test_missing_duplicate_foreign_conditional_and_mangled_exports_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, child = copy_resource_export_fixture(root)
+            original = child.read_text(encoding="utf-8")
+            for name in sorted(measure.STARTUP_EXPORTS):
+                prefix = f'pub unsafe extern "C" fn {name}('
+                start = original.index(prefix)
+                end = original.index("{", start)
+                header = original[start:end]
+                for invalid in (
+                    original.replace(prefix, prefix.removeprefix("pub "), 1),
+                    original + '\n#[unsafe(no_mangle)]\n' + header + '{}\n',
+                    original.replace(name + "(", "jett_rt_v1_resource_program_foreign(", 1),
+                    original.replace(prefix, "#[cfg(test)]\n" + prefix, 1),
+                    original[:start].removesuffix("#[unsafe(no_mangle)]\n") + original[start:],
+                    original.replace(prefix, prefix.replace('extern "C"', 'extern "Rust"'), 1),
+                ):
+                    child.write_text(invalid, encoding="utf-8")
+                    with self.subTest(name=name, source=invalid), self.assertRaises(measure.MeasurementError):
+                        measure.export_names(root)
+
+    def test_every_startup_argument_and_return_type_is_exact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, child = copy_resource_export_fixture(root)
+            original = child.read_text(encoding="utf-8")
+            for name in sorted(measure.STARTUP_EXPORTS):
+                start = original.index(f'pub unsafe extern "C" fn {name}(')
+                end = original.index("{", start)
+                header = original[start:end]
+                lines = header.splitlines(keepends=True)
+                for index, line in enumerate(lines):
+                    if ": " not in line and "-> JettRuntimeStatusV1" not in line:
+                        continue
+                    changed = list(lines)
+                    if ": " in line:
+                        parameter = line.split(": ", 1)[0]
+                        changed[index] = parameter + ": usize,\n"
+                    else:
+                        changed[index] = line.replace("JettRuntimeStatusV1", "u32")
+                    child.write_text(original[:start] + "".join(changed) + original[end:], encoding="utf-8")
+                    with self.subTest(name=name, parameter=index), self.assertRaises(measure.MeasurementError):
+                        measure.export_names(root)
+
+    def test_startup_cannot_be_relocated_into_old_leaf_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, child = copy_resource_export_fixture(root)
+            leaves = child.parent / "leaves.rs"
+            original = leaves.read_text(encoding="utf-8")
+            names = sorted(measure.export_names(root)[0] - measure.CARRIER_EXPORTS - measure.STARTUP_EXPORTS)
+            leaves.write_text(original.replace(names[0] + "(",
+                "jett_rt_v1_resource_program_begin(", 1), encoding="utf-8")
+            with self.assertRaises(measure.MeasurementError):
+                measure.export_names(root)
+
+    def test_invalid_startup_is_refused_before_tool_discovery_and_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, carriers = CarrierContractTests().fixture(root)
+            startup = carriers.parent.parent / "program_entry.rs"
+            startup.write_text(startup.read_text(encoding="utf-8").replace(
+                "out_attempt: *mut u64,", "out_attempt: *mut u32,"), encoding="utf-8")
+            output = root / "fresh-measurement"
+            with patch.object(measure, "executable") as executable, \
+                 self.assertRaises(measure.MeasurementError):
+                measure.prepare(root, output, "unused-cc", "unused-nm", "unused-readelf")
+            executable.assert_not_called()
+            self.assertFalse(output.exists())
+
+    def test_receipt_authentication_checks_startup_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs: dict[str, measure.Json] = {"Cargo.lock": "frozen"}
+            receipt = ReceiptAndGateTests().fixture(root, inputs)
+            child = root / "crates/jett_runtime/src/native_abi/resource/program_entry.rs"
+            child.write_text(child.read_text(encoding="utf-8").replace(
+                "out_attempt: *mut u64,", "out_attempt: *mut u32,"), encoding="utf-8")
+            with patch.object(measure, "sources", return_value=inputs), \
+                 self.assertRaises(measure.MeasurementError):
+                measure.receipt_sources(receipt, measure.digest(receipt), root)
 
 
 class MsvcObservationTests(unittest.TestCase):
@@ -659,11 +803,13 @@ class MsvcReceiptTests(unittest.TestCase):
         helper.write_bytes(Path(measure.__file__).read_bytes())
         runtime = root / "crates/jett_runtime"
         resource = runtime / "src/native_abi/resource"
-        (resource / "leaves").mkdir(parents=True)
+        copy_resource_export_fixture(root)
         leaves, private = measure.export_names(measure.ROOT)
-        for path, names in ((resource / "leaves.rs", leaves - measure.CARRIER_EXPORTS),
-                            (resource / "leaves/carriers.rs", measure.CARRIER_EXPORTS),
-                            (resource / "test_archive_api.rs", private)):
+        for path, names in (
+            (resource / "leaves.rs", leaves - measure.CARRIER_EXPORTS - measure.STARTUP_EXPORTS),
+            (resource / "leaves/carriers.rs", measure.CARRIER_EXPORTS),
+            (resource / "test_archive_api.rs", private),
+        ):
             path.write_text("\n".join(f'pub unsafe extern "C" fn {name}() {{}}' for name in sorted(names)),
                             encoding="utf-8")
         registration = runtime / "src/resource_custody/registration.rs"
@@ -768,8 +914,9 @@ class MsvcReceiptTests(unittest.TestCase):
             self.assertEqual([row["profile"] for row in self.rows(receipt)], ["debug", "release"])
             self.assertEqual(self.rows(receipt)[0]["native_library_args"], MsvcObservationTests.libraries)
             leaves, private = measure.export_names(root)
-            self.assertEqual((len(leaves - measure.CARRIER_EXPORTS), len(measure.CARRIER_EXPORTS), len(private)),
-                             (37, 13, 8))
+            self.assertEqual((len(leaves - measure.CARRIER_EXPORTS - measure.STARTUP_EXPORTS),
+                              len(measure.CARRIER_EXPORTS), len(leaves & measure.STARTUP_EXPORTS), len(private)),
+                             (37, 13, 5, 8))
 
     def test_receipt_pin_and_actual_runtime_or_helper_source_changes_are_refused(self) -> None:
         for changed in ("Cargo.lock", "tools/measure_resource_native_archives.py",

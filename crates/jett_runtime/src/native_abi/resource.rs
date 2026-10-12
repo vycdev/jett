@@ -19,7 +19,12 @@ mod leaves;
 mod operations;
 #[cfg(test)]
 pub(super) mod ordinary_reservation_faults;
+mod program_entry;
 mod provider;
+pub use program_entry::{
+    jett_rt_v1_resource_program_failure, jett_rt_v1_resource_program_failure_copy,
+    jett_rt_v1_resource_program_unwind,
+};
 mod source;
 #[cfg(test)]
 use ordinary_reservation_faults::{ReservationFaults, ReservationSite};
@@ -345,6 +350,7 @@ pub(super) struct NativeResourceCompletion {
 }
 struct NativeCompletedAttempt {
     completion: NativeResourceCompletion,
+    terminal_status: JettRuntimeStatusV1,
     ordinary: ResourceOrdinaryCompletion,
     resource_message: Vec<u8>,
     ordinary_message: Vec<u8>,
@@ -370,6 +376,8 @@ pub(super) struct NativeResourceState {
     context: ContextRegistryKey,
     installation: NativeLayoutInstallation,
     layout: Arc<RegisteredNativeLayout>,
+    installed_wire: Vec<u8>,
+    entry_owner: program_entry::EntryOwner,
     program_handle: ResourceHandleId,
     custody: ResourceCustody,
     handles: HashMap<ResourceHandleId, NativeResourceEntry>,
@@ -831,6 +839,24 @@ impl NativeResourceState {
             selected_kind,
             reserved: 0,
         };
+        // Retain the original body field above. A refused leaf or an ordinary
+        // first error can also fail a body whose generated status was zero.
+        let terminal_status = if cleanup_status != 0 {
+            JettRuntimeStatusV1(cleanup_status)
+        } else if selected_kind == 2 {
+            JettRuntimeStatusV1::PANIC
+        } else if body_status != 0 {
+            JettRuntimeStatusV1(body_status)
+        } else if let Some(failure) = &attempt.body {
+            match failure {
+                NativeBodyFailure::Resource(error) => error.status(),
+                NativeBodyFailure::HostPanic => JettRuntimeStatusV1::PANIC,
+            }
+        } else if let Some(failure) = &ordinary_failure {
+            failure.status
+        } else {
+            JettRuntimeStatusV1::OK
+        };
         let resource_message = if attempt.cleanup.is_some() {
             Some(CLEANUP_FAILED)
         } else if ordinary.cleanup_failed {
@@ -886,6 +912,7 @@ impl NativeResourceState {
         // A report failure retains a completed tombstone; cleanup and retirement are not retried.
         self.completed.push(NativeCompletedAttempt {
             completion,
+            terminal_status,
             ordinary: ordinary_completion,
             resource_message,
             ordinary_message,
@@ -1121,6 +1148,12 @@ fn install_candidate(
     let layout = installation.install(&state.resources, bytes)?;
     let needs_network = validate_entry(&layout, entry)?;
     let pair_network = needs_network && provider.enabled();
+    // Own the exact authenticated bytes before publishing provider/grant state.
+    let mut installed_wire = Vec::new();
+    installed_wire
+        .try_reserve_exact(bytes.len())
+        .map_err(|_| NativeResourceError::Capacity)?;
+    installed_wire.extend_from_slice(bytes);
     let custody = ResourceCustody::new(layout.program().clone(), &state.resources)?;
     let mut handles = HashMap::new();
     handles
@@ -1171,6 +1204,8 @@ fn install_candidate(
         context: key,
         installation,
         layout,
+        installed_wire,
+        entry_owner: program_entry::EntryOwner::External,
         program_handle,
         custody,
         handles,

@@ -9,6 +9,7 @@ mod lexical_borrows;
 mod named_indirect;
 mod occupied_structs;
 mod ordinary_entry;
+mod program_entry;
 mod returned_hooks;
 mod sum_views;
 const SUPPORT: &str =

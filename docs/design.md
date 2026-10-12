@@ -8658,6 +8658,30 @@ changes neither Source execution-family membership nor purity/comptime rules.
 See [the ordinary entry plan](active/native_resource_ordinary_entry.md) for the
 bounded implementation and pending acceptance gates.
 
+The selected normal startup prerequisite makes the generated Resource object
+install its exact immutable layout and own the Runtime begin/complete lifecycle.
+It preserves the ordinary entry ABI, retained first-error/cleanup outcomes and
+Runtime-only authority. The normal provider remains Disabled and grants no
+Network authority; actual TCP/OS providers, public driver/catalog wiring, mixed
+entry capabilities and shipped-host execution remain required. The separate
+[generated startup note](active/native_resource_generated_startup.md) records the
+internal ABI choice, private-runner compatibility and current bounded validation.
+Current local MSVC controls pass all 68 Python helper, eight Runtime startup,
+four codegen and 11 existing launcher lifecycle controls, plus 2,371 workspace
+library tests. Four fresh callable Driver gates retain 48 executions against the
+changed normal launcher. The 16 fresh private Resource gates retain 754 executions
+and 900 entries. The complete local startup80 gate accepts 48 normal and 32
+private executions; the private reports retain 40 entries, with four derived
+borrowed probes classified separately. Actual linked Resource manifests are
+wire2; supplemental occupied Source33 wire3 is object-only. Normal links use the
+private-v6 measured ordered static-CRT vector; a separate normal compiler-emitted
+vector was not measured. Hosts must exclusively own entry and finish for a
+context; generated unwind has no invocation or thread token, and a rejected
+concurrent or recursive caller must not unwind its owner. The built-in launcher
+creates a fresh context for one entry. Full workspace/native conformance, exact
+CI, GNU, installed distribution, public providers and actor-graph import remain
+open. No concurrent-host ABI or real-provider acceptance is established.
+
 The selected ordinary-error reentry repair keeps sealed attempt observations
 separate from legacy session failures and persistent ordinary cleanup poison.
 It introduces no error reset, test recovery API or recovery inside a failed Source

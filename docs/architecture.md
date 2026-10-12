@@ -4312,6 +4312,35 @@ advapi32 prefix difference does not alter production launcher validation.
 This is a local compiler-test distribution seam, with production providers,
 supported-host distribution and broader Resource execution still pending.
 
+The selected normal-startup prerequisite is generated-object owned: the Resource
+C wrapper obtains its own immutable manifest, authenticates and installs the
+exact bytes/entry in the normal runtime, begins a Runtime attempt, and completes
+that attempt on body/refusal returns. Ordinary objects keep their entry ABI and
+the shared launcher has no optional manifest dependency. The normal launcher
+observes retained outcomes/messages and completes a Generated-owned Running
+attempt after a recoverable entry panic before its single context destruction.
+The double-cfg scripted private runner retains ownership of its existing
+attempts. Disabled installation supplies no Network authority or production I/O
+credit. See [the generated startup prerequisite](active/native_resource_generated_startup.md)
+for the exact handoff, first-error channels and current bounded validation. The
+restored source passes 68 Python helper controls, eight Runtime startup controls,
+four codegen controls, the 11 existing launcher lifecycle controls and 2,371
+workspace library tests. Fresh callable regression gates retain 48 executions
+against the changed normal launcher. The 16 fresh private Resource gates retain
+754 executions and 900 entries. The complete local startup80 gate passes all
+48 normal and 32 private controls across Runtime Debug/Release; the private
+controls retain 40 decoded entries, including four derived borrowed probes
+classified separately. Linked manifests are wire2; occupied Source33 wire3 is
+object-only in this startup packet. Normal links use the ordered library vector
+measured from private v6, without a separately measured normal compiler note.
+Hosts must exclusively own entry and finish for the context; generated unwind
+has no invocation or thread token, and a rejected concurrent or recursive caller
+must not unwind its owner. The built-in launcher uses a fresh context for one
+entry. Full workspace/native conformance, exact CI, GNU, installed distribution,
+actor-graph import, public catalog, typed TCP transport, mixed entry capabilities
+and real providers remain required. No concurrent-host ABI or provider acceptance
+is implied.
+
 ### Resource replacement preflight
 
 The native replacement leaf preflights its exact old and evaluated replacement owners against the registered destination before removing handles or invoking finalizers. Core custody checks both current generations and runtime frames, exclusive destination occupancy, absent loans, nominal kind and reserved transfer capacity. The existing transfer rechecks custody after old cleanup; no reusable transfer permission is exposed. Cleanup failure still retires the independently staged replacement and keeps its original failure priority. Four focused replacement tests and all 220 runtime checks pass. The Source projection is described below; aggregate replacement remains required.

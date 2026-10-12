@@ -10,7 +10,7 @@ fn words(bytes: &mut Vec<u8>, values: &[u32]) {
 fn layout() -> Vec<u8> {
     layout_with_entry_network(true)
 }
-fn layout_with_entry_network(network: bool) -> Vec<u8> {
+pub(super) fn layout_with_entry_network(network: bool) -> Vec<u8> {
     // Independent canonical wire data is checked by the sole real registration issuer.
     let mut bytes = b"JTRSC001".to_vec();
     words(&mut bytes, &[1, 0]);
@@ -80,7 +80,7 @@ fn layout_with_entry_network(network: bool) -> Vec<u8> {
     bytes[16..24].copy_from_slice(&length.to_le_bytes());
     bytes
 }
-fn script(rows: &[(u32, i64, i64, &str)], attempts: u32) -> DecodedScript {
+pub(super) fn script(rows: &[(u32, i64, i64, &str)], attempts: u32) -> DecodedScript {
     let mut bytes = b"JTRST001".to_vec();
     words(&mut bytes, &[1, 0]);
     bytes.extend_from_slice(&0u64.to_le_bytes());
@@ -101,7 +101,7 @@ fn script(rows: &[(u32, i64, i64, &str)], attempts: u32) -> DecodedScript {
     bytes[16..24].copy_from_slice(&length.to_le_bytes());
     DecodedScript::decode(&bytes).unwrap()
 }
-fn entry() -> NativeEntry {
+pub(super) fn entry() -> NativeEntry {
     NativeEntry {
         function: 0,
         signature: 3,
