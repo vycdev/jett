@@ -8712,3 +8712,17 @@ measured private archives. All sixteen gates pass 754 executions / 900 entries. 
 projection, extraction, replacement, reflection and captured aggregate lifetimes
 remain full native-codegen obligations. This checkpoint adds no Source policy
 exclusion. See the [occupied struct note](active/native_resource_occupied_structs.md).
+
+### Selected erased-interface concrete argument contract
+
+An erased call remains admissible when its interface method requires additional
+arguments of the receiver's concrete implementation type. Dynamic dispatch must
+validate those arguments' retained exact checked concrete identities before
+converting arguments or entering the concrete method. Structurally identical
+nominal types are not interchangeable. Validation preserves pending failure
+precedence, ordinary view semantics and argument cleanup, and supplies no clone
+or ownership authority. The reference evaluator and native backend implement this
+contract. Local MSVC Debug/Release gates pass, including optimized production
+matching/mismatched calls after Source deletion. See
+[exact concrete argument verification](active/native_erased_same_owner_arguments.md)
+for measured scope and remaining work; interface equality is separate.

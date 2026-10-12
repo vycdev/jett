@@ -29,6 +29,124 @@ pub enum NativeInterfaceConversion {
 }
 
 impl NativeInterfaceConversion {
+    pub fn requires_owner_validation(&self) -> bool {
+        match self {
+            Self::Unbox { .. } => true,
+            Self::List(inner) | Self::Optional(inner) | Self::Map(inner, _) => {
+                inner.requires_owner_validation()
+            }
+            Self::Result(ok, error) => {
+                ok.requires_owner_validation() || error.requires_owner_validation()
+            }
+            Self::Copy { .. } | Self::Box { .. } | Self::FunctionAdapter { .. } => false,
+        }
+    }
+
+    pub(super) fn validate_owners(
+        &self,
+        values: &NativeValues,
+        input: NativeField,
+    ) -> LeafResult<()> {
+        if !self.requires_owner_validation() {
+            return Ok(());
+        }
+        match self {
+            Self::Unbox {
+                concrete, owned, ..
+            } => {
+                if !input.owned {
+                    return Err(INVALID_STRUCT);
+                }
+                // Type metadata is available without inspecting, cloning or
+                // joining the concrete payload, including a pending payload.
+                if values.struct_field(input.bits, 0)?.bits != *concrete {
+                    return Err(INVALID_INTERFACE_ARGUMENT);
+                }
+                if values.struct_field(input.bits, 1)?.owned != *owned {
+                    return Err(INVALID_STRUCT);
+                }
+                Ok(())
+            }
+            Self::List(element) => {
+                let list = values.lists.get(&input.bits).ok_or(INVALID_LIST)?;
+                if input.pending_depth != 0 || list.pending_depth != 0 {
+                    return Err(INVALID_INTERFACE_ARGUMENT);
+                }
+                for (index, value) in list.elements.iter().enumerate() {
+                    if let Some(bits) = value {
+                        element.validate_owners(
+                            values,
+                            NativeField {
+                                bits: *bits,
+                                owned: list.owned,
+                                pending_depth: list
+                                    .element_pending_depths
+                                    .get(&index)
+                                    .copied()
+                                    .unwrap_or(0),
+                            },
+                        )?;
+                    }
+                }
+                Ok(())
+            }
+            Self::Map(element, strings) => {
+                let map = values.maps.get(&input.bits).ok_or(INVALID_MAP)?;
+                if input.pending_depth != 0 || map.pending_depth != 0 {
+                    return Err(INVALID_INTERFACE_ARGUMENT);
+                }
+                if map.key_strings != *strings && map.entries.iter().any(Option::is_some) {
+                    return Err(INVALID_MAP);
+                }
+                for entry in map.entries.iter().flatten() {
+                    if entry.key_taken {
+                        return Err(INVALID_MAP);
+                    }
+                    element.validate_owners(
+                        values,
+                        NativeField {
+                            bits: entry.value,
+                            owned: map.value_owned,
+                            pending_depth: entry.value_pending_depth,
+                        },
+                    )?;
+                }
+                Ok(())
+            }
+            Self::Optional(ok) => Self::validate_sum_owners(values, input, ok, None),
+            Self::Result(ok, error) => Self::validate_sum_owners(values, input, ok, Some(error)),
+            Self::Copy { .. } | Self::Box { .. } | Self::FunctionAdapter { .. } => Ok(()),
+        }
+    }
+
+    fn validate_sum_owners(
+        values: &NativeValues,
+        input: NativeField,
+        ok: &Self,
+        error: Option<&Self>,
+    ) -> LeafResult<()> {
+        let sum = values.sums.get(&input.bits).ok_or(INVALID_SUM)?;
+        if input.pending_depth != 0 || sum.pending_depth != 0 {
+            return Err(INVALID_INTERFACE_ARGUMENT);
+        }
+        let conversion = if sum.tag == SUM_SUCCESS {
+            Some(ok)
+        } else {
+            error
+        };
+        if let Some(conversion) = conversion {
+            conversion.validate_owners(
+                values,
+                NativeField {
+                    bits: sum.bits,
+                    owned: sum.owned,
+                    pending_depth: sum.payload_pending_depth,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         self.encode_with_function_offsets().0
     }

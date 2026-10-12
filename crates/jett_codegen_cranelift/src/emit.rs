@@ -3089,6 +3089,19 @@ impl Translator<'_, '_> {
         evaluation_order: &[usize],
         expression: &Expression,
     ) -> Result<LoweredValue, CodegenError> {
+        if let ExpressionKind::Call {
+            ownership: jett_hir::CallOwnership::Generated(generated),
+            ..
+        } = &expression.kind
+            && matches!(
+                generated.operation,
+                jett_hir::GeneratedOperation::InterfaceDispatch { .. }
+            )
+        {
+            for argument in args {
+                self.preflight_interface_dispatch_argument(argument)?;
+            }
+        }
         let environment = self.builder.ins().iconst(ir::types::I64, 0);
         self.call_with_environment(
             function,

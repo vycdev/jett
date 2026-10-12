@@ -174,6 +174,46 @@ struct ReflectedFieldConversion {
 }
 
 impl Translator<'_, '_> {
+    pub(super) fn preflight_interface_dispatch_argument(
+        &mut self,
+        expression: &Expression,
+    ) -> Result<(), CodegenError> {
+        match &expression.kind {
+            ExpressionKind::View(inner) | ExpressionKind::Clone(inner) => {
+                self.preflight_interface_dispatch_argument(inner)
+            }
+            ExpressionKind::InterfaceCoerce { value, adapters } => {
+                let conversion =
+                    interface_conversion(self.types, value.ty, expression.ty, adapters)
+                        .ok_or_else(|| {
+                            self.unsupported(
+                                expression.span,
+                                "interface dispatch conversion preflight",
+                            )
+                        })?;
+                if !conversion.requires_owner_validation() {
+                    return Ok(());
+                }
+                // Generated dispatch operands are the already evaluated formal
+                // values. Observe them without taking custody or converting.
+                let input = self.argument(value, true)?;
+                let input = self.scalar(input, value.span)?;
+                let (mut bytes, functions) = conversion.encode_with_function_offsets();
+                for (offset, _) in &functions {
+                    bytes[*offset..*offset + 8].fill(0);
+                }
+                let (layout, length) = self.static_data_with_functions(&bytes, &functions)?;
+                self.leaf(
+                    NativeLeaf::InterfaceValidate,
+                    &[input, layout, length],
+                    true,
+                )?;
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
     pub(super) fn interface_coerce(
         &mut self,
         expression: &Expression,

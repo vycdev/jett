@@ -22,6 +22,9 @@ mod graphics_decode;
 pub mod interface_conversion;
 mod ordinary_attempts;
 
+#[cfg(test)]
+mod interface_argument_tests;
+
 pub type NativeHandle = u64;
 type Failure = (JettRuntimeStatusV1, &'static [u8]);
 type LeafResult<T> = Result<T, Failure>;
@@ -36,6 +39,10 @@ const INVALID_STRING_SCALAR_INDEX: Failure = (
 const INVALID_STRUCT: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native struct handle or field",
+);
+const INVALID_INTERFACE_ARGUMENT: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"interface dispatch concrete argument owner mismatch",
 );
 const INVALID_FUNCTION: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
@@ -5517,6 +5524,13 @@ leaves! {
             s.builder_finish(builder, owner) };
     FunctionAdapter, jett_rt_v1_function_adapter, false, (source: u64 => I64, code: u64 => I64), u64 => I64,
         |s| s.function_adapter(source, code);
+    InterfaceValidate, jett_rt_v1_interface_validate, false, (value: u64 => I64, layout: *const u8 => Pointer, length: u64 => I64), u32 => I32,
+        |s| { let length = usize::try_from(length).map_err(|_| INVALID_STRUCT)?;
+            if length > isize::MAX as usize || layout.is_null() { return Err(INVALID_STRUCT); }
+            let bytes = unsafe { std::slice::from_raw_parts(layout, length) };
+            let conversion = interface_conversion::NativeInterfaceConversion::parse(bytes)?;
+            conversion.validate_owners(s, NativeField { bits: value, owned: true, pending_depth: 0 })?;
+            Ok(0) };
     InterfaceConvert, jett_rt_v1_interface_convert, false, (value: u64 => I64, layout: *const u8 => Pointer, length: u64 => I64), u64 => I64,
         |s| { let length = usize::try_from(length).map_err(|_| INVALID_STRUCT)?;
             if length > isize::MAX as usize || layout.is_null() { return Err(INVALID_STRUCT); }

@@ -57,7 +57,6 @@ The following semantic and implementation gaps prevent a full parity claim:
 
 - [Actor handles escaping comptime](../open_design/comptime_actor_values.md): reject escaping handles versus materializing a defined actor graph.
 - [Erased interface equality](../open_design/interface_value_equality.md): explicit comparison versus a defined dynamic equality contract.
-- [Concrete-owner arguments in erased calls](../open_design/interface_same_owner_arguments.md): runtime validation versus rejecting unsafe erased calls statically.
 - [Secrets hidden in debug print values](../open_design/debug_print_hidden_secrets.md): extend redaction to erased/builder payloads versus reject potentially secret values.
 - [Projected field assignment](../open_design/projected_field_assignment.md):
   implement safe updates to owned mutable locals versus reject projected writes
@@ -73,6 +72,27 @@ The following semantic and implementation gaps prevent a full parity claim:
   current checks admit some refinement/base requests with matching carriers and
   secrecy. Preserving the actual owner on an admitted interface read does not
   select the broader requested-type contract or authorize arbitrary nominal casts.
+
+[Exact concrete-owner preflight](native_erased_same_owner_arguments.md) now
+implements the selected runtime contract in reference direct/named-callback
+calls and generated native interface dispatch. It checks receiver-selected
+checked identities before argument normalization or body entry, preserving
+nominal types, generic arguments, primitive widths, ordinary view/owned modes
+and earlier argument failures. Native validation observes existing values
+without cloning or transferring ownership; existing unboxing guards remain.
+
+The restored integration's normal Debug and Release runtimes each pass thirteen
+original Source-deleted cases and four production-output executions spanning
+matching/mismatched owners and both Jett optimization settings: thirty-four
+executions overall. All 2,331 workspace library tests pass, including six runtime
+and eleven focused reference controls; twenty-seven broader interface tests pass.
+Full coherent native conformance, GNU, installed and exact-revision CI acceptance
+remain pending. Native Source coverage for refinement and pending combinations remains
+incomplete. Checker substitution remains at whole interface parameters;
+`list[Pairable]` retains its declared erased child contract without recursive
+Self substitution. Erased-interface equality remains an independent unresolved
+contract. These bounded gates leave the rough 87% estimate and fixed inventory
+denominators unchanged.
 
 [Actor identity equality](actor_identity_equality.md) implements the selected
 live-instance contract in the reference evaluator and native backend. Direct
@@ -287,7 +307,8 @@ either argument, generic wrappers, captured public-value callbacks, wholly baked
 results, and comptime-created callbacks invoked at runtime. It verifies concrete
 owner dispatch through interface collections and exact output in debug/release
 after source removal. These probes strengthen the facade/comptime audit without
-settling the remaining equality or erased-call policy decisions.
+settling the separate erased-interface equality contract. Current concrete-owner
+preflight acceptance is recorded above.
 
 The refined-sum audit fixes direct optional/result refinement boundaries to
 validate their whole declared base before considering extraction. Its linked

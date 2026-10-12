@@ -320,6 +320,27 @@ nominal refinements. The remaining interface audit and cross-platform release
 gates are tracked in [native interface values](native_interface_values.md).
 Passing the existing fixture denominators alone does not close these gates.
 
+[Exact concrete-owner preflight](native_erased_same_owner_arguments.md) now
+validates erased direct/named-callback calls in the reference evaluator and
+generated native dispatch before argument normalization or implementation body
+entry. Matching owners preserve their view/owned modes; mismatches report
+`interface dispatch concrete argument owner mismatch`. Retained nominal and
+generic identities and primitive widths govern validation, with earlier argument
+failure precedence and existing native unboxing guards preserved.
+
+The restored integration's normal Debug and Release runtimes each pass ten Owner
+tests: thirteen original Source-deleted cases plus four production executions for
+matching/mismatched owners with both Jett optimization settings, thirty-four
+executions overall. All 2,331 workspace library tests pass, including six runtime
+and eleven focused reference controls; twenty-seven broader interface tests pass.
+Full coherent native, GNU, installed and exact-revision CI acceptance remain pending;
+refinement and pending native Source combinations still need coverage. This
+change preserves the checker's whole-parameter substitution: declared erased
+children such as `list[Pairable]` retain their contract, and recursive Self
+substitution is not introduced. Erased-interface equality remains unresolved.
+These bounded gates do not change the rough 87% planning estimate, fixed
+207-fixture/182-object inventory or whole-language completion requirement.
+
 Explicit comptime values now retain each checked generic instantiation and
 lexical reflected type-binding chain, including nested callback bodies. The
 context fix and its differential regression coverage are recorded in

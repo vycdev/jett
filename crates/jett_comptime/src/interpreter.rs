@@ -53,6 +53,7 @@ use crate::value::{ClosureScopedTypeBinding, ClosureTypeArgument, ClosureTypeCon
 mod debug;
 mod generic_inference;
 mod graphics;
+mod interface_arguments;
 mod nominal_types;
 
 use graphics::GraphicsProvider;
@@ -12737,6 +12738,15 @@ impl Interpreter {
         }
 
         let type_scope = self.type_scope_for_function(&func, type_args)?;
+        if let Some(interface) = self.interface_dispatch_name(name) {
+            self.validate_interface_argument_owners(
+                &interface,
+                &func,
+                registered.namespace.as_deref(),
+                &type_scope,
+                &args,
+            )?;
+        }
         let arguments: Vec<TypeExpr> = func
             .type_params
             .iter()
@@ -13241,7 +13251,11 @@ impl Interpreter {
 
     fn resolve_interface_dispatch(&self, name: &str, args: &[Value]) -> Option<String> {
         if let Some(interface) = self.interface_dispatch_name(name) {
-            let receiver_type = runtime_type_name(args.first()?)?;
+            let receiver = args.first()?;
+            if matches!(receiver.payload(), Value::Pending(_)) {
+                return None;
+            }
+            let receiver_type = runtime_type_name(receiver)?;
             return self.interface_methods[&interface]
                 .get(&receiver_type)
                 .cloned();

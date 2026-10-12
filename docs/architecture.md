@@ -4866,3 +4866,21 @@ six occupied-struct object emissions. Private
 double-cfg archive measurement is separate from ordinary runtime unit execution.
 Owning strings/nested occupied carriers, broader aggregate families, public Driver
 provider admission, GNU and installed-distribution acceptance remain pending. See [the occupied struct checkpoint](active/native_resource_occupied_structs.md).
+
+### Selected erased-interface concrete argument validation
+
+The dispatch boundary must bind a selected concrete method to the receiver's
+retained checked implementation owner, then validate every concrete argument
+requirement before concrete normalization and body entry. Runtime values retain
+nominal and generic identities through erasure; identical field layouts cannot
+substitute for the checked type. This is validation only and does not authorize
+cloning, bypass pending failures, or remove native unboxing/handle guards.
+Generated dispatch preflights already evaluated formals with `InterfaceValidate`
+before normalization. Its exact retained TypeIds include nominal refinements,
+generic arguments and widths. The reference path uses the selected declaration
+namespace before installing callee scopes. The leaf grants no ownership and does
+not allocate native value storage; descriptor parsing may allocate Rust storage.
+Local MSVC Debug/Release Source-deleted gates pass, including optimized production
+matching/mismatched cases. See
+[exact concrete argument verification](active/native_erased_same_owner_arguments.md)
+for scope, helper-level limits and remaining platform acceptance.

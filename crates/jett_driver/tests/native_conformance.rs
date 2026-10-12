@@ -42,6 +42,9 @@ mod scoped_call_views;
 #[path = "native_conformance/local_view_aliases.rs"]
 mod local_view_aliases;
 
+#[path = "native_conformance/erased_same_owner_arguments.rs"]
+mod erased_same_owner_arguments;
+
 #[path = "native_conformance/pending_graphics.rs"]
 mod pending_graphics;
 
