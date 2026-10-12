@@ -174,7 +174,10 @@ pub(super) fn hir_block(block: &hir::Block, visit: &mut impl FnMut(&Expression))
 pub(super) fn mir_block(block: &BasicBlock, visit: &mut impl FnMut(&Expression)) {
     for statement in &block.statements {
         match &statement.kind {
-            StatementKind::ResourceCall(ResourceCallNode::Stage { value, .. })
+            StatementKind::ResourceConstructor(ResourceConstructorNode::Stage {
+                value, ..
+            })
+            | StatementKind::ResourceCall(ResourceCallNode::Stage { value, .. })
             | StatementKind::Let { value, .. }
             | StatementKind::BeginCallView { value, .. }
             | StatementKind::CheckRefinement { call: value, .. }
@@ -199,6 +202,11 @@ pub(super) fn mir_block(block: &BasicBlock, visit: &mut impl FnMut(&Expression))
                 ResourceCallNode::Begin { .. }
                 | ResourceCallNode::Invoke { .. }
                 | ResourceCallNode::End { .. },
+            )
+            | StatementKind::ResourceConstructor(
+                ResourceConstructorNode::Begin { .. }
+                | ResourceConstructorNode::Commit { .. }
+                | ResourceConstructorNode::End { .. },
             )
             | StatementKind::ResourceLexicalExit(_)
             | StatementKind::OpenCallOwnerGeneration { .. }
@@ -268,7 +276,7 @@ pub(super) fn mir_block_has_custody(
                     occupied(source.root()) || occupied(*target)
                 }
                 StatementKind::IterationBorrow { source, .. } => occupied(source.root()),
-                StatementKind::ResourceCall(_) => true,
+                StatementKind::ResourceCall(_) | StatementKind::ResourceConstructor(_) => true,
                 _ => false,
             })
         || match &block.terminator.kind {
@@ -354,7 +362,10 @@ pub(super) fn nested_resource_declaration(
 pub(super) fn mir_site(block: &BasicBlock, position: usize, visit: &mut impl FnMut(&Expression)) {
     if let Some(statement) = block.statements.get(position) {
         match &statement.kind {
-            StatementKind::ResourceCall(ResourceCallNode::Stage { value, .. })
+            StatementKind::ResourceConstructor(ResourceConstructorNode::Stage {
+                value, ..
+            })
+            | StatementKind::ResourceCall(ResourceCallNode::Stage { value, .. })
             | StatementKind::Let { value, .. }
             | StatementKind::BeginCallView { value, .. }
             | StatementKind::CheckRefinement { call: value, .. }
@@ -379,6 +390,11 @@ pub(super) fn mir_site(block: &BasicBlock, position: usize, visit: &mut impl FnM
                 ResourceCallNode::Begin { .. }
                 | ResourceCallNode::Invoke { .. }
                 | ResourceCallNode::End { .. },
+            )
+            | StatementKind::ResourceConstructor(
+                ResourceConstructorNode::Begin { .. }
+                | ResourceConstructorNode::Commit { .. }
+                | ResourceConstructorNode::End { .. },
             )
             | StatementKind::ResourceLexicalExit(_)
             | StatementKind::OpenCallOwnerGeneration { .. }

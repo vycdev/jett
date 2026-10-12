@@ -26,8 +26,8 @@ pub unsafe extern "C" fn jett_rt_v1_resource_carrier_child(
     ordinal: u32,
     bits: u64,
 ) -> JettRuntimeStatusV1 {
-    status(context, |s, v, _| {
-        s.carrier_child(v, id(builder)?, ordinal, bits)
+    status(context, |s, v, r| {
+        s.carrier_child_with_registry(v, r, id(builder)?, ordinal, bits)
     })
 }
 /// # Safety
@@ -55,8 +55,8 @@ pub unsafe extern "C" fn jett_rt_v1_resource_carrier_transfer(
     out: *mut u64,
 ) -> JettRuntimeStatusV1 {
     unsafe {
-        output(context, out, |s, v, _| {
-            s.carrier_transfer(v, id(frame)?, operation, id(input)?)
+        output(context, out, |s, v, r| {
+            s.carrier_transfer_with_registry(v, r, id(frame)?, operation, id(input)?)
                 .map(ResourceHandleId::raw)
         })
     }
@@ -170,8 +170,8 @@ pub unsafe extern "C" fn jett_rt_v1_resource_carrier_retire(
     operation: u32,
     input: u64,
 ) -> JettRuntimeStatusV1 {
-    status(context, |s, v, _| {
-        s.carrier_retire(v, id(frame)?, operation, id(input)?)
+    status(context, |s, v, r| {
+        s.carrier_retire_with_registry(v, r, id(frame)?, operation, id(input)?)
     })
 }
 /// # Safety

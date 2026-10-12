@@ -711,3 +711,6 @@ mod reflected_field_harness;
 
 #[path = "resource_execution/absent_aggregate_baseline.rs"]
 mod absent_aggregate_baseline;
+
+#[path = "resource_occupied_struct_harness.rs"]
+mod occupied_struct_harness;

@@ -620,6 +620,7 @@ impl NativeResourceState {
     }
     fn only_installation_handles(&self) -> bool {
         self.carrier_adapters.is_empty()
+            && self.custody.live_carrier_roots() == 0
             && self.handles.values().all(|entry| {
                 matches!(
                     entry,
@@ -984,6 +985,19 @@ impl NativeResourceState {
         if self.layout.wire_version() == 3 {
             // A sealed ended adapter still owns its shell until frame retirement.
             counts.provisional += self.carrier_adapters.len() as u64;
+            // A private root has exactly one native envelope. Report any orphan
+            // as a live obligation without changing the matched-envelope counts.
+            let envelopes = self
+                .handles
+                .values()
+                .filter(|entry| match entry {
+                    NativeResourceEntry::CarrierRoot(root) => root.custody.is_some(),
+                    NativeResourceEntry::CarrierBuilder(builder) => builder.custody.is_some(),
+                    _ => false,
+                })
+                .count();
+            counts.provisional +=
+                self.custody.live_carrier_roots().saturating_sub(envelopes) as u64;
         }
         counts
     }
@@ -1025,6 +1039,7 @@ impl NativeResourceState {
         self.attempt = None;
         failed
             || self.custody.live_owners() != 0
+            || self.custody.live_carrier_roots() != 0
             || self.custody.live_loans() != 0
             || registry.live_count() != 0
     }

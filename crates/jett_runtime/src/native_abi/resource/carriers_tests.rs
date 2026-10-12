@@ -19,6 +19,29 @@ fn context(test: impl FnOnce(&AuthenticatedResourceContext)) {
         test(auth);
     });
 }
+fn refused_cleanup_context(test: impl FnOnce(&AuthenticatedResourceContext)) {
+    let mut context = Box::new(JettRuntimeContextV1::retired());
+    let status = unsafe {
+        jett_rt_v1_context_create(
+            JETT_RUNTIME_ABI_VERSION_V1,
+            &mut *context,
+            &mut JettRuntimeResultV1::ok(),
+        )
+    };
+    assert_eq!(status, JettRuntimeStatusV1::OK);
+    let authenticated = AuthenticatedResourceContext::acquire(&*context).unwrap();
+    install_disabled(
+        &authenticated,
+        &crate::resource_custody::carrier_runtime_fixture_bytes(),
+        entry(),
+    )
+    .unwrap();
+    test(&authenticated);
+    drop(authenticated);
+    let status =
+        unsafe { jett_rt_v1_context_destroy(&mut *context, &mut JettRuntimeResultV1::ok()) };
+    assert_eq!(status, JettRuntimeStatusV1::INVALID_ARGUMENT);
+}
 fn op(state: &NativeResourceState, predicate: impl Fn(&Op) -> bool) -> u32 {
     state
         .layout
@@ -129,51 +152,92 @@ fn transfer_issues_a_fresh_generation_and_preserves_the_exact_nominal_stamp() {
     });
 }
 
+fn rejected_fake_leaf(
+    state: &mut NativeResourceState,
+    ordinary: &mut values::NativeValues,
+    registry: &mut ResourceRegistry,
+) -> ResourceResult<(ResourceHandleId, ResourceHandleId, ResourceHandleId)> {
+    let (attempt, frame) = start(state, ordinary, registry)?;
+    let mut ids = state.reserve(1)?;
+    let fake = next_handle(&mut ids)?;
+    state.handles.insert(
+        fake,
+        NativeResourceEntry::CarrierRoot(NativeCarrierRoot {
+            frame,
+            slot: 10,
+            generation: fake.raw(),
+            custody: None,
+            tree: NativeCarrierTree {
+                node: 3,
+                selector: 0,
+                ordinary: None,
+                owner: None,
+                children: vec![],
+                acquisition: vec![],
+            },
+        }),
+    );
+    let constructor = op(state, |r| {
+        matches!(
+            r,
+            Op::Construct {
+                destination: 0,
+                selector: 1,
+                ..
+            }
+        )
+    });
+    let builder = state.carrier_construct_begin(ordinary, frame, constructor)?;
+    assert_eq!(
+        state.carrier_child(ordinary, builder, 0, fake.raw()),
+        Err(NativeResourceError::WrongFamily)
+    );
+    let Some(NativeResourceEntry::CarrierBuilder(builder)) = state.handles.get(&builder) else {
+        panic!("builder")
+    };
+    assert_eq!(builder.next, 0);
+    assert!(builder.acquisition.is_empty());
+    assert!(state.handles.contains_key(&fake));
+    assert_eq!(registry.live_count(), 0);
+    Ok((attempt, frame, fake))
+}
+
 #[test]
 fn selected_live_leaf_refuses_before_a_fake_handle_is_consumed() {
+    refused_cleanup_context(|auth| {
+        auth.with_resource(|state, ordinary, registry| {
+            let (attempt, frame, fake) = rejected_fake_leaf(state, ordinary, registry)?;
+            assert_eq!(
+                finish(state, ordinary, registry, attempt),
+                Err(NativeResourceError::WrongFamily)
+            );
+            assert!(state.handles.contains_key(&fake));
+            assert_eq!(state.active_frames.last(), Some(&frame));
+            assert_eq!(
+                state.attempt.as_ref().unwrap().phase,
+                AttemptPhase::Completing
+            );
+            assert!(ordinary.cleanup_failed);
+            assert_eq!(registry.live_count(), 0);
+            Ok(())
+        })
+        .unwrap();
+    });
+}
+
+#[test]
+fn restored_private_fake_leaf_allows_clean_builder_completion() {
     context(|auth| {
         auth.with_resource(|state, ordinary, registry| {
-            let (attempt, frame) = start(state, ordinary, registry)?;
-            let mut ids = state.reserve(1)?;
-            let fake = next_handle(&mut ids)?;
-            state.handles.insert(
-                fake,
-                NativeResourceEntry::CarrierRoot(NativeCarrierRoot {
-                    frame,
-                    slot: 10,
-                    generation: fake.raw(),
-                    tree: NativeCarrierTree {
-                        node: 3,
-                        selector: 0,
-                        ordinary: None,
-                        children: vec![],
-                        acquisition: vec![],
-                    },
-                }),
-            );
-            let constructor = op(state, |r| {
-                matches!(
-                    r,
-                    Op::Construct {
-                        destination: 0,
-                        selector: 1,
-                        ..
-                    }
-                )
-            });
-            let builder = state.carrier_construct_begin(ordinary, frame, constructor)?;
-            assert_eq!(
-                state.carrier_child(ordinary, builder, 0, fake.raw()),
-                Err(NativeResourceError::UnsupportedCarrierCustody)
-            );
-            let Some(NativeResourceEntry::CarrierBuilder(builder)) = state.handles.get(&builder)
-            else {
-                panic!("builder")
-            };
-            assert_eq!(builder.next, 0);
-            assert!(builder.acquisition.is_empty());
-            assert!(state.handles.contains_key(&fake));
-            assert_eq!(registry.live_count(), 0);
+            let (attempt, frame, fake) = rejected_fake_leaf(state, ordinary, registry)?;
+            assert!(matches!(
+                state.carrier_root(ordinary, frame, fake, 10),
+                Err(NativeResourceError::WrongFamily)
+            ));
+            assert!(matches!(
+                state.handles.remove(&fake),
+                Some(NativeResourceEntry::CarrierRoot(_))
+            ));
             finish(state, ordinary, registry, attempt)
         })
         .unwrap();
@@ -225,15 +289,15 @@ fn latent_generic_state_and_refinement_metadata_never_synthesizes_live_custody()
     context(|auth| {
         auth.with_resource(|state,ordinary,registry|{
         let (attempt,_frame)=start(state,ordinary,registry)?;
-        let scalar=||NativeCarrierTree{node:0,selector:0,ordinary:Some((0,17)),children:vec![],acquisition:vec![]};
-        let absent=||NativeCarrierTree{node:4,selector:0,ordinary:None,children:vec![],acquisition:vec![]};
-        let generic=NativeCarrierTree{node:13,selector:0,ordinary:None,children:vec![Some(absent())],acquisition:vec![0]};
+        let scalar=||NativeCarrierTree{node:0,selector:0,ordinary:Some((0,17)),owner:None,children:vec![],acquisition:vec![]};
+        let absent=||NativeCarrierTree{node:4,selector:0,ordinary:None,owner:None,children:vec![],acquisition:vec![]};
+        let generic=NativeCarrierTree{node:13,selector:0,ordinary:None,owner:None,children:vec![Some(absent())],acquisition:vec![0]};
         state.validate_complete_tree(ordinary,&generic)?;
         assert!(matches!(state.layout.carriers().node(13)?,Node::Struct{arguments,..} if arguments==&[3]));
         assert!(matches!(state.layout.carriers().node(14)?,Node::Struct{arguments,..} if arguments==&[4]));
-        let state_value=NativeCarrierTree{node:11,selector:0,ordinary:None,children:vec![Some(scalar())],acquisition:vec![0]};state.validate_complete_tree(ordinary,&state_value)?;
+        let state_value=NativeCarrierTree{node:11,selector:0,ordinary:None,owner:None,children:vec![Some(scalar())],acquisition:vec![0]};state.validate_complete_tree(ordinary,&state_value)?;
         let wrong_state=NativeCarrierTree{selector:1,..state_value};assert!(state.validate_complete_tree(ordinary,&wrong_state).is_err());
-        let refined=NativeCarrierTree{node:12,selector:0,ordinary:None,children:vec![Some(scalar())],acquisition:vec![0]};
+        let refined=NativeCarrierTree{node:12,selector:0,ordinary:None,owner:None,children:vec![Some(scalar())],acquisition:vec![0]};
         assert_eq!(state.validate_complete_tree(ordinary,&refined),Err(NativeResourceError::UnprovedCarrierRefinement));
         assert_eq!(registry.live_count(),0);finish(state,ordinary,registry,attempt)
     }).unwrap();

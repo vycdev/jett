@@ -555,6 +555,14 @@ pub(crate) fn sequence_transition(
     for region in &mut witness.regions {
         region.shift_prefix(body, prefix_length);
     }
+    for region in &mut witness.constructors {
+        region.shift_prefix(body, prefix_length);
+    }
+    let mut constructor_seal = witness.constructor_seal.to_vec();
+    for region in &mut constructor_seal {
+        region.shift_prefix(body, prefix_length);
+    }
+    witness.constructor_seal = constructor_seal.into();
     // The independent body advances only after reconstructing the same finite edit.
     if original.descriptors.has_body() {
         witness.descriptors.seal_body(&expected);

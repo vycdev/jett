@@ -32,6 +32,9 @@ enum Leaf {
     Empty {
         origin: Origin,
     },
+    Occupied {
+        origin: Origin,
+    },
     Adapter {
         operation: ResourceCarrierOperationId,
     },
@@ -485,6 +488,21 @@ impl Analysis<'_> {
             .ok_or("carrier constructor graph row missing")?;
         let mut dynamic = None;
         let mut written_order = None;
+        if !operation.is_expression_operation() {
+            let witness = self
+                .function
+                .resource_lowering
+                .as_ref()
+                .ok_or("carrier constructor lost its checked Source witness")?;
+            if let Some(region) = witness
+                .constructors
+                .iter()
+                .find(|r| r.begin() == operation.site)
+            {
+                self.function.resource_constructor(region.id())?;
+                written_order = Some(region.evaluation_order().to_vec());
+            }
+        }
         let block = self
             .function
             .blocks
@@ -660,8 +678,31 @@ impl Analysis<'_> {
                         self.take_complete(state, slot)?;
                     }
                     ResourceCarrierValue::LeafOwned { slot } => {
-                        if !matches!(state.leaves.get(slot.index()), Some(Leaf::Empty { .. })) {
-                            return Err("pending Resource carrier: selected aggregate child lacks a proven zero-leaf producer".into());
+                        let endpoint = self
+                            .plan
+                            .slots
+                            .get(slot.index())
+                            .ok_or("carrier child lost its exact leaf holder")?;
+                        let node = &self
+                            .carriers
+                            .shape(child.shape)
+                            .ok_or("carrier child lost its exact leaf graph")?
+                            .node;
+                        let valid = match (&endpoint.shape, node, state.leaves.get(slot.index())) {
+                            (
+                                ResourceShape::Plain { kind },
+                                ResourceCarrierNode::Resource { kind: child_kind },
+                                Some(Leaf::Occupied { .. }),
+                            ) => kind == child_kind,
+                            (
+                                ResourceShape::Optional { .. } | ResourceShape::Result { .. },
+                                _,
+                                Some(Leaf::Empty { .. }),
+                            ) => true,
+                            _ => false,
+                        };
+                        if !valid {
+                            return Err("carrier child lacks its exact initialized occupied or absent leaf producer".into());
                         }
                         if state.leaf_loans.iter().any(|loan| {
                             self.plan.loans[loan.index()].source == ResourceLoanSource::Owner(slot)
@@ -1058,7 +1099,13 @@ impl Analysis<'_> {
                 state.leaves[destination.index()] = Leaf::Empty { origin: Origin::LeafAbsence(operation.id) };
             }
             ResourceOperationRole::Transfer { source, destination } => {
-                if !matches!(state.leaves[source.index()], Leaf::Empty { .. }) || !matches!(state.leaves[destination.index()], Leaf::Vacant | Leaf::Moved) { return Err("carrier leaf transfer lacks exact empty source/vacant destination".into()); }
+                let exact = self.plan.slots[source.index()].shape == self.plan.slots[destination.index()].shape;
+                let initialized = match (&self.plan.slots[source.index()].shape, &state.leaves[source.index()]) {
+                    (ResourceShape::Plain { .. }, Leaf::Occupied { .. }) => true,
+                    (ResourceShape::Optional { .. } | ResourceShape::Result { .. }, Leaf::Empty { .. }) => true,
+                    _ => false,
+                };
+                if !exact || !initialized || !matches!(state.leaves[destination.index()], Leaf::Vacant | Leaf::Moved) { return Err("carrier leaf transfer lacks exact initialized source/vacant destination".into()); }
                 if state.leaf_loans.iter().any(|loan| self.plan.loans[loan.index()].source == ResourceLoanSource::Owner(*source)) { return Err("carrier leaf transfer uses a source with an exact live sum lease".into()); }
                 state.leaves[destination.index()] = std::mem::replace(&mut state.leaves[source.index()], Leaf::Moved);
             }
@@ -1090,7 +1137,12 @@ impl Analysis<'_> {
                         }
                         ResourceCallOperand::CarrierBorrowed { loan, .. } => self.view_complete(state, *loan)?,
                         ResourceCallOperand::Owned { slot, .. } => {
-                            if !matches!(state.leaves[slot.index()], Leaf::Empty { .. }) { return Err("carrier Source leaf actual lacks an exact absent producer".into()); }
+                            let initialized = match (&self.plan.slots[slot.index()].shape, &state.leaves[slot.index()]) {
+                                (ResourceShape::Plain { .. }, Leaf::Occupied { .. }) => true,
+                                (ResourceShape::Optional { .. } | ResourceShape::Result { .. }, Leaf::Empty { .. }) => true,
+                                _ => false,
+                            };
+                            if !initialized { return Err("carrier Source leaf actual lacks an exact initialized producer".into()); }
                             state.leaves[slot.index()] = Leaf::Moved;
                         }
                         ResourceCallOperand::Borrowed { loan, .. } if state.leaf_loans.contains(loan) => {}
@@ -1125,7 +1177,10 @@ impl Analysis<'_> {
                 state.leaves[source.index()] = Leaf::Moved;
             }
             ResourceOperationRole::Drop { source, occupancy } => {
-                if *occupancy != ResourceOccupancy::Empty || !matches!(state.leaves[source.index()], Leaf::Empty { .. }) || state.leaf_loans.iter().any(|loan| self.plan.loans[loan.index()].source == ResourceLoanSource::Owner(*source)) { return Err("carrier leaf discard lacks its initialized exact empty unleased endpoint".into()); }
+                let initialized = matches!((&self.plan.slots[source.index()].shape, &state.leaves[source.index()], occupancy),
+                    (ResourceShape::Plain { .. },Leaf::Occupied { .. },ResourceOccupancy::Occupied)
+                    | (ResourceShape::Optional { .. } | ResourceShape::Result { .. },Leaf::Empty { .. },ResourceOccupancy::Empty));
+                if !initialized || state.leaf_loans.iter().any(|loan| self.plan.loans[loan.index()].source == ResourceLoanSource::Owner(*source)) { return Err("carrier leaf discard lacks its initialized exact unleased endpoint".into()); }
                 state.leaves[source.index()] = Leaf::Moved;
             }
             _ => return Err("pending Resource carrier: this leaf/control operation needs its dedicated independent flow proof".into()),
@@ -1319,6 +1374,17 @@ pub(super) fn validate(
             if matches!(&slot.storage, ResourceSlotStorage::Local { header } if header.id == param.local)
             {
                 analysis.install(&mut initial, slot.id, Origin::Formal(parameter))?;
+            }
+        }
+        if param.mode == ParamMode::Owned {
+            for slot in &plan.slots {
+                if matches!(&slot.storage, ResourceSlotStorage::Local { header } if header.id == param.local)
+                    && matches!(slot.shape, ResourceShape::Plain { .. })
+                {
+                    initial.leaves[slot.id.index()] = Leaf::Occupied {
+                        origin: Origin::Formal(parameter),
+                    };
+                }
             }
         }
     }

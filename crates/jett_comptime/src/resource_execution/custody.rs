@@ -100,6 +100,15 @@ pub(crate) struct EvaluatedValue {
 }
 
 impl ValueCustody {
+    /// Consume tickets in reached lexical order; no physical copy can supply one.
+    pub(crate) fn append_owned(&mut self, mut child: Self) -> Result<(), ResourceExecutionError> {
+        if !self.borrowed.is_empty() || !child.borrowed.is_empty() {
+            return Err(ResourceExecutionError::InvalidOwner);
+        }
+        self.owned.append(&mut child.owned);
+        Ok(())
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.owned.is_empty() && self.borrowed.is_empty()
     }

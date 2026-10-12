@@ -268,11 +268,77 @@ fn run_bounded_with_env(
             .unwrap();
         bytes
     };
-    std::process::Output {
+    let actual = std::process::Output {
         status,
         stdout: snapshot(stdout.as_file_mut()),
         stderr: snapshot(stderr.as_file_mut()),
+    };
+    retain_resource_native_evidence(executable, directory, scripted_provider, &actual);
+    actual
+}
+
+fn retain_resource_native_evidence(
+    executable: &Path,
+    directory: &Path,
+    scripted_provider: Option<(&str, &str)>,
+    actual: &std::process::Output,
+) {
+    let Some(root) = std::env::var_os("JETT_RESOURCE_NATIVE_EVIDENCE_DIR_V1") else {
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    assert!(root.is_absolute());
+    fs::create_dir_all(&root).unwrap();
+    let destination = root.join(directory.file_name().unwrap());
+    fs::create_dir(&destination).unwrap();
+    let mut files = Vec::new();
+    for path in [
+        executable.to_path_buf(),
+        directory.join("resource.obj"),
+        directory.join("resource-native-report-v1.bin"),
+    ] {
+        if path.is_file() {
+            let metadata = path.metadata().unwrap();
+            assert!(metadata.len() <= 256 * 1024 * 1024);
+            let saved = destination.join(path.file_name().unwrap());
+            fs::copy(&path, &saved).unwrap();
+            let hash = jett_runtime::crypto::sha256_digest(&fs::read(&saved).unwrap());
+            let hash = hash
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            files.push(serde_json::json!({"path": saved, "sha256": hash, "bytes": metadata.len()}));
+        }
     }
+    for (name, bytes) in [
+        ("stdout.bin", &actual.stdout),
+        ("stderr.bin", &actual.stderr),
+    ] {
+        let saved = destination.join(name);
+        fs::write(&saved, bytes).unwrap();
+        let hash = jett_runtime::crypto::sha256_digest(bytes);
+        let hash = hash
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        files.push(serde_json::json!({"path": saved, "sha256": hash, "bytes": bytes.len()}));
+    }
+    if let Some((name, script)) = scripted_provider {
+        let saved = destination.join("provider-script.txt");
+        fs::write(&saved, script).unwrap();
+        let hash = jett_runtime::crypto::sha256_digest(script.as_bytes());
+        let hash = hash
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        files.push(serde_json::json!({"path": saved, "sha256": hash, "bytes": script.len(), "environment_key": name}));
+    }
+    let receipt = serde_json::json!({"exit_code": actual.status.code(), "files": files, "captured_before_assertions_and_teardown": true});
+    fs::write(
+        destination.join("receipt.json"),
+        serde_json::to_vec_pretty(&receipt).unwrap(),
+    )
+    .unwrap();
 }
 
 #[test]

@@ -20,14 +20,15 @@ pub use resource_ownership::{
     ResourceCarrierOperation, ResourceCarrierOperationId, ResourceCarrierOperationRole,
     ResourceCarrierProjectionPath, ResourceCarrierShape, ResourceCarrierShapeId,
     ResourceCarrierSlot, ResourceCarrierSlotId, ResourceCarrierState, ResourceCarrierValue,
-    ResourceCarrierVariant, ResourceCompanionPlan, ResourceCompletion, ResourceEntryScopePlan,
-    ResourceFrame, ResourceFrameId, ResourceFrameRole, ResourceFunctionPlan, ResourceLexicalExit,
-    ResourceLexicalExitId, ResourceLexicalExitKind, ResourceLexicalExitPlan, ResourceLoan,
-    ResourceLoanId, ResourceLoanSource, ResourceNamedCallableProof, ResourceOccupancy,
-    ResourceOperation, ResourceOperationId, ResourceOperationRole, ResourceOwnerSlot,
-    ResourceOwnerSlotId, ResourceOwnershipPlan, ResourcePath, ResourcePosition, ResourceShape,
-    ResourceSite, ResourceSlotStorage, ResourceSumPayloadPath, validate_resource_ownership,
-    validate_resource_ownership_for_entry,
+    ResourceCarrierVariant, ResourceCompanionPlan, ResourceCompletion, ResourceConstructorField,
+    ResourceConstructorId, ResourceConstructorNode, ResourceConstructorRegion,
+    ResourceEntryScopePlan, ResourceFrame, ResourceFrameId, ResourceFrameRole,
+    ResourceFunctionPlan, ResourceLexicalExit, ResourceLexicalExitId, ResourceLexicalExitKind,
+    ResourceLexicalExitPlan, ResourceLoan, ResourceLoanId, ResourceLoanSource,
+    ResourceNamedCallableProof, ResourceOccupancy, ResourceOperation, ResourceOperationId,
+    ResourceOperationRole, ResourceOwnerSlot, ResourceOwnerSlotId, ResourceOwnershipPlan,
+    ResourcePath, ResourcePosition, ResourceShape, ResourceSite, ResourceSlotStorage,
+    ResourceSumPayloadPath, validate_resource_ownership, validate_resource_ownership_for_entry,
 };
 #[cfg(test)]
 mod resource_manifest_tests;
@@ -208,6 +209,7 @@ pub enum StatementKind {
     ResourceLexicalExit(ResourceLexicalExitId),
     /// Constructor-authenticated Resource operation whose actuals span CFG blocks.
     ResourceCall(ResourceCallNode),
+    ResourceConstructor(ResourceConstructorNode),
     /// Empty, internal generation escrow; this is not an initialized Jett value.
     OpenCallOwnerGeneration {
         generation: CallOwnerGenerationId,
@@ -702,6 +704,13 @@ impl FunctionValidator<'_, '_> {
     fn statement(&mut self, statement: &Statement) {
         match &statement.kind {
             StatementKind::ResourceLexicalExit(_) => {}
+            StatementKind::ResourceConstructor(node) => match node {
+                ResourceConstructorNode::Stage { value, .. } => self.expression(value),
+                ResourceConstructorNode::Commit { output, .. } => {
+                    self.check_local(*output, statement.span, "Resource constructor output")
+                }
+                _ => {}
+            },
             StatementKind::ResourceCall(node) => match node {
                 ResourceCallNode::Stage {
                     value, ordinary, ..
@@ -1469,6 +1478,8 @@ struct Builder<'a> {
     reflected_original_prefix: Option<Vec<usize>>,
     call_view_scopes: Vec<Vec<LocalId>>,
     resource_call_scopes: Vec<ResourceCallRegionId>,
+    resource_constructor_scopes: Vec<ResourceConstructorId>,
+    resource_operation_scopes: Vec<resource_ownership::constructors::ResourceOperationRegion>,
     locals: Vec<Local>,
     handlers: Vec<(LocalId, BlockId)>,
     view_params: Vec<LocalId>,
@@ -1501,6 +1512,8 @@ impl<'a> Builder<'a> {
             loops: Vec::new(),
             call_view_scopes: Vec::new(),
             resource_call_scopes: Vec::new(),
+            resource_constructor_scopes: Vec::new(),
+            resource_operation_scopes: Vec::new(),
             locals: Vec::new(),
             handlers: Vec::new(),
             view_params: Vec::new(),
@@ -1551,6 +1564,12 @@ impl<'a> Builder<'a> {
         self.generation_capture
             .statement(self.current, index, &value);
         self.resource_capture.statement(self.current, index, &value);
+        if let StatementKind::ResourceConstructor(node) = &value.kind {
+            if let Some(site) = self.resource_capture.site(self.current, index) {
+                self.resource_capture
+                    .constructor_node(site, node, &self.locals);
+            }
+        }
         if let StatementKind::ResourceCall(node) = &value.kind {
             let site = self
                 .resource_capture
@@ -1768,7 +1787,8 @@ impl<'a> Builder<'a> {
             hir::StatementKind::Return(value) => {
                 // This branch abandons surrounding calls before the return
                 // operand may move their owner. Other CFG branches retain them.
-                let resource_scopes = self.abandon_resource_calls(statement.span);
+                let (resource_scopes, constructor_scopes, operation_scopes) =
+                    self.abandon_resource_calls(statement.span);
                 self.end_call_views_since(0, statement.span);
                 let abandoned = std::mem::take(&mut self.call_view_scopes);
                 let generations = self.generation_capture.suspend();
@@ -1776,6 +1796,8 @@ impl<'a> Builder<'a> {
                 self.call_view_scopes = abandoned;
                 self.generation_capture.restore(generations);
                 self.resource_call_scopes = resource_scopes;
+                self.resource_constructor_scopes = constructor_scopes;
+                self.resource_operation_scopes = operation_scopes;
                 self.lower_lexical_exit(
                     ResourceLexicalExitKind::Return,
                     0,
@@ -1786,7 +1808,7 @@ impl<'a> Builder<'a> {
                 self.terminate(TerminatorKind::Return(value), statement.span);
             }
             hir::StatementKind::Break => {
-                if !self.resource_call_scopes.is_empty() {
+                if !self.resource_operation_scopes.is_empty() {
                     self.resource_error = Some(LowerError { span: statement.span, message: "pending Resource call region: Break needs its exact operation-depth exit proof".into() });
                 }
                 let (_, target, depth, lexical_depth) =
@@ -1802,7 +1824,7 @@ impl<'a> Builder<'a> {
                 self.terminate(TerminatorKind::Goto(target), statement.span);
             }
             hir::StatementKind::Continue => {
-                if !self.resource_call_scopes.is_empty() {
+                if !self.resource_operation_scopes.is_empty() {
                     self.resource_error = Some(LowerError { span: statement.span, message: "pending Resource call region: Continue needs its exact operation-depth exit proof".into() });
                 }
                 let (target, _, depth, lexical_depth) =

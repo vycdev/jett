@@ -8693,3 +8693,22 @@ another handle is wrapped. Recursive actor payload equality compares instance
 identity and per-handle pending depth. Direct pending comparisons retain their
 unsupported binary-operation error. Context retirement releases actor state
 once. See [the implementation and verification note](active/actor_identity_equality.md).
+
+### Occupied Resource struct constructor checkpoint
+
+The checked Resource path now stages named struct fields in their written
+evaluation order, then commits their owned tokens to one constructor carrier.
+Abandoning a partially initialized constructor retires its reached fields;
+normal scope exit retires committed fields in reverse acquisition order.
+Cleanup failure remains visible, and a later entry uses the existing sealed
+completion transition after the prior entry has retired its custody.
+
+Fresh local MSVC static-CRT Debug/Release acceptance on 2026-10-12 covers the
+three valid entry Sources for scope drop, reversed named arguments and abandoned
+prefix: 44 Source-deleted native executions / 66 entries. The original twelve-gate
+predecessor corpus passes 604 executions / 728 entries, and additional pipeline
+and control-flow subset gates pass 106 / 106 against the same independently
+measured private archives. All sixteen gates pass 754 executions / 900 entries. Recursive and generic aggregates, collections,
+projection, extraction, replacement, reflection and captured aggregate lifetimes
+remain full native-codegen obligations. This checkpoint adds no Source policy
+exclusion. See the [occupied struct note](active/native_resource_occupied_structs.md).

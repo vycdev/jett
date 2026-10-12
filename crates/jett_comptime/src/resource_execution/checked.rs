@@ -6,7 +6,7 @@ pub(crate) use assignment::CheckedAssignment;
 mod body_reference;
 pub(crate) use body_reference::{
     CheckedAttemptKey, CheckedBodyReference, PreparedAbsentBindings, PreparedDirectScope,
-    PreparedIntrinsicArguments, PreparedNamedCallable, PreparedPipelineStep,
+    PreparedIntrinsicArguments, PreparedNamedCallable, PreparedOwnedStruct, PreparedPipelineStep,
     PreparedReflectedFieldIteration, PreparedReflectedFieldLoop, PreparedRequiredExpression,
 };
 pub use body_reference::{

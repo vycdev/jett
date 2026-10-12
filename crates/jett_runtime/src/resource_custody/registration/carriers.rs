@@ -92,6 +92,7 @@ pub(crate) enum NativeCarrierChildSource {
     Ordinary { shape: u32 },
     Move { slot: u32 },
     LeafSum { slot: u32 },
+    LeafOwner { slot: u32 },
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NativeCarrierChild {
@@ -631,7 +632,8 @@ fn validate_operation(
                     NativeCarrierChildSource::Move { slot } => {
                         source(NativeCarrierSource::Slot(slot))?
                     }
-                    NativeCarrierChildSource::LeafSum { slot } => {
+                    NativeCarrierChildSource::LeafSum { slot }
+                    | NativeCarrierChildSource::LeafOwner { slot } => {
                         let s = layout
                             .slots
                             .get(slot as usize)
@@ -714,6 +716,20 @@ fn validate_operation(
                     }
                     NativeCarrierChildSource::Move { slot: id } => {
                         if slot(id)?.node != c.node {
+                            return Err(ResourceLayoutError::ShapeMismatch);
+                        }
+                    }
+                    NativeCarrierChildSource::LeafOwner { slot: id } => {
+                        let s = layout
+                            .slots
+                            .get(id as usize)
+                            .ok_or(ResourceLayoutError::InvalidReference)?;
+                        let NativeCarrierNode::Resource { kind } = graph.node(c.node)? else {
+                            return Err(ResourceLayoutError::ShapeMismatch);
+                        };
+                        if layout.shapes.get(s.shape as usize)
+                            != Some(&NativeShape::Resource { kind: *kind })
+                        {
                             return Err(ResourceLayoutError::ShapeMismatch);
                         }
                     }

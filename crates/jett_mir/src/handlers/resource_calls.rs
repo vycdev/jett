@@ -1,8 +1,9 @@
 //! Canonical constructor extraction; no public MIR graph may enter this path.
 use super::*;
+use crate::resource_ownership::constructors::ResourceOperationRegion;
 
 impl Builder<'_> {
-    fn resource_site(&self) -> ResourceSite {
+    pub(super) fn resource_site(&self) -> ResourceSite {
         self.resource_capture
             .site(
                 self.current,
@@ -48,6 +49,8 @@ impl Builder<'_> {
             original.span,
         );
         self.resource_call_scopes.push(region);
+        self.resource_operation_scopes
+            .push(ResourceOperationRegion::Call(region));
         for (source_index, &parameter) in evaluation_order.iter().enumerate() {
             let actual = args
                 .get(parameter)
@@ -122,7 +125,9 @@ impl Builder<'_> {
             }),
             original.span,
         );
-        if self.resource_call_scopes.pop() != Some(region) {
+        if self.resource_call_scopes.pop() != Some(region)
+            || self.resource_operation_scopes.pop() != Some(ResourceOperationRegion::Call(region))
+        {
             return Err("Resource call constructor lost its exact operation stack".into());
         }
         Ok(Expression {
@@ -133,17 +138,35 @@ impl Builder<'_> {
     }
 
     /// Suspend only the active operation suffix before a real Source Return read.
-    pub(crate) fn abandon_resource_calls(&mut self, span: Span) -> Vec<ResourceCallRegionId> {
-        let scopes = std::mem::take(&mut self.resource_call_scopes);
-        for &region in scopes.iter().rev() {
-            self.push(
-                StatementKind::ResourceCall(ResourceCallNode::End {
-                    region,
-                    outcome: ResourceCompletion::Abort,
-                }),
-                span,
-            );
+    pub(crate) fn abandon_resource_calls(
+        &mut self,
+        span: Span,
+    ) -> (
+        Vec<ResourceCallRegionId>,
+        Vec<ResourceConstructorId>,
+        Vec<ResourceOperationRegion>,
+    ) {
+        let calls = std::mem::take(&mut self.resource_call_scopes);
+        let constructors = std::mem::take(&mut self.resource_constructor_scopes);
+        let operations = std::mem::take(&mut self.resource_operation_scopes);
+        for operation in operations.iter().rev() {
+            match *operation {
+                ResourceOperationRegion::Call(region) => self.push(
+                    StatementKind::ResourceCall(ResourceCallNode::End {
+                        region,
+                        outcome: ResourceCompletion::Abort,
+                    }),
+                    span,
+                ),
+                ResourceOperationRegion::Constructor(constructor) => self.push(
+                    StatementKind::ResourceConstructor(ResourceConstructorNode::End {
+                        constructor,
+                        outcome: ResourceCompletion::Abort,
+                    }),
+                    span,
+                ),
+            }
         }
-        scopes
+        (calls, constructors, operations)
     }
 }

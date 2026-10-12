@@ -47,6 +47,223 @@ impl<'a> ResourceEmission<'a> {
 }
 
 impl Translator<'_, '_> {
+    fn carrier_staged_constructor(
+        &mut self,
+        node: &jett_mir::ResourceConstructorNode,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        use jett_mir::ResourceConstructorNode as Node;
+        let resource = self
+            .resource
+            .ok_or_else(|| pending("staged carrier constructor has no selected family"))?;
+        let function = resource
+            .layout
+            .plan()
+            .program()
+            .functions
+            .get(resource.function.index() as usize)
+            .filter(|f| f.id == resource.function)
+            .ok_or_else(|| pending("staged carrier constructor lost its exact function"))?;
+        let original = function
+            .resource_constructor(node.constructor())
+            .map_err(|error| pending(&error))?;
+        let operations = resource.carrier_at_site()?;
+        let wrappers = resource.at_site()?;
+        match node {
+            Node::Begin { .. } => {
+                let mut rows = operations
+                    .iter()
+                    .copied()
+                    .filter(|row| matches!(row.role(), CarrierRole::BeginConstructor { .. }));
+                let row = rows
+                    .next()
+                    .ok_or_else(|| pending("staged constructor has no exact Begin"))?;
+                if rows.next().is_some() || row.site() != original.begin() {
+                    return Err(pending("staged constructor Begin is ambiguous or foreign"));
+                }
+                let CarrierRole::BeginConstructor { destination, .. } = row.role() else {
+                    unreachable!()
+                };
+                self.resource_open_operation(row.frame())?;
+                let (context, frame, ordinal) = self.carrier_operation(row)?;
+                let builder = Leaf::CarrierConstructBegin.output(
+                    self.module,
+                    self.builder,
+                    &[context, frame, ordinal],
+                    resource.failure,
+                    8,
+                )?;
+                self.builder.ins().stack_store(
+                    builder,
+                    resource.carrier_builders[destination.index()],
+                    0,
+                );
+            }
+            Node::Stage {
+                source_index,
+                field,
+                value,
+                ..
+            } => {
+                let mut rows = operations.iter().copied().filter(|row| matches!(row.role(),CarrierRole::ConstructorChild { child, .. } if child.index == *field));
+                let row = rows
+                    .next()
+                    .ok_or_else(|| pending("staged constructor lost its exact Child"))?;
+                if rows.next().is_some()
+                    || original
+                        .fields()
+                        .get(*source_index)
+                        .is_none_or(|f| f.stage() != row.site() || f.field() != *field)
+                {
+                    return Err(pending(
+                        "staged constructor Child changed its exact lexical occurrence",
+                    ));
+                }
+                let CarrierRole::ConstructorChild { destination, child } = row.role() else {
+                    unreachable!()
+                };
+                self.carrier_stage_child(*destination, child.value, *source_index, value, span)?;
+            }
+            Node::Commit { output, .. } => {
+                let mut commits = operations
+                    .iter()
+                    .copied()
+                    .filter(|row| matches!(row.role(), CarrierRole::CommitConstructor { .. }));
+                let commit = commits
+                    .next()
+                    .ok_or_else(|| pending("staged constructor has no exact Commit"))?;
+                if commits.next().is_some()
+                    || original
+                        .commit()
+                        .is_none_or(|(site, header)| site != commit.site() || header.id != *output)
+                {
+                    return Err(pending(
+                        "staged constructor Commit changed its exact output",
+                    ));
+                }
+                let CarrierRole::CommitConstructor { destination } = commit.role() else {
+                    unreachable!()
+                };
+                let builder = self.builder.ins().stack_load(
+                    ir::types::I64,
+                    resource.carrier_builders[destination.index()],
+                    0,
+                );
+                let context = self.resource_context();
+                let bits = Leaf::CarrierCommit.output(
+                    self.module,
+                    self.builder,
+                    &[context, builder],
+                    resource.failure,
+                    8,
+                )?;
+                self.clear_slot(resource.carrier_builders[destination.index()]);
+                self.carrier_store(*destination, bits)?;
+                let target = resource.carrier_local_slot(*output)?.ok_or_else(|| {
+                    pending("staged constructor output has no exact parent holder")
+                })?;
+                let mut transfers = operations.iter().copied().filter(|row| matches!(row.role(),CarrierRole::Transfer { source, destination:to } if source == destination && *to == target));
+                let transfer = transfers.next().ok_or_else(|| {
+                    pending("staged constructor Commit did not migrate its output before End")
+                })?;
+                if transfers.next().is_some() {
+                    return Err(pending("staged constructor output migration is ambiguous"));
+                }
+                let bits = self.carrier_transfer(transfer)?;
+                self.define_local(*output, LoweredValue::Scalar(bits), span)?;
+            }
+            Node::End { outcome, .. } => {
+                let mut completions = wrappers.iter().copied().filter(
+                    |row| matches!(row.role(),Role::Complete { outcome:found } if found == outcome),
+                );
+                let complete = completions
+                    .next()
+                    .ok_or_else(|| pending("staged constructor has no exact completion"))?;
+                if completions.next().is_some()
+                    || !original.exits().contains(&(complete.site(), *outcome))
+                {
+                    return Err(pending(
+                        "staged constructor End changed its reached exact prefix",
+                    ));
+                }
+                // Core already owns every acquired ticket. Clear compiler storage
+                // before fallible cleanup, including an incomplete builder prefix.
+                for slot in resource
+                    .carrier_plan()?
+                    .slots()
+                    .iter()
+                    .filter(|slot| slot.frame() == complete.frame())
+                {
+                    self.clear_slot(resource.carrier_owners[slot.id().index()]);
+                    self.clear_slot(resource.carrier_builders[slot.id().index()]);
+                }
+                self.resource_finish_operation(&wrappers, complete.frame())?;
+            }
+        }
+        Ok(())
+    }
+
+    fn carrier_stage_child(
+        &mut self,
+        destination: SlotId,
+        child: CarrierValue,
+        arrival: usize,
+        actual: &Expression,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let resource = self
+            .resource
+            .ok_or_else(|| pending("carrier Child has no selected family"))?;
+        let evaluated = self.expression(actual)?;
+        let value = match child {
+            CarrierValue::Ordinary { ty } if ty == actual.ty => {
+                if is_copy_owned(self.types, ty) || is_linear(self.types, ty) {
+                    self.own_copy_value(evaluated, ty, span)?
+                } else {
+                    evaluated
+                }
+            }
+            CarrierValue::Ordinary { .. } => {
+                return Err(pending("carrier Child changed its exact ordinary type"));
+            }
+            _ => evaluated,
+        };
+        let bits = match child {
+            CarrierValue::Owned { slot } => self.carrier_owner(slot)?,
+            CarrierValue::LeafOwned { slot } => self.resource_owner(slot)?,
+            CarrierValue::Ordinary { .. } => self.payload_bits(value).0,
+            _ => return Err(pending("carrier Child cannot adopt a borrowed endpoint")),
+        };
+        let builder = self.builder.ins().stack_load(
+            ir::types::I64,
+            resource.carrier_builders[destination.index()],
+            0,
+        );
+        let context = self.resource_context();
+        let arrival = u32::try_from(arrival)
+            .map_err(|_| pending("carrier lexical arrival exceeds wire width"))?;
+        let arrival = self
+            .builder
+            .ins()
+            .iconst(ir::types::I32, i64::from(arrival));
+        Leaf::CarrierChild.checked(
+            self.module,
+            self.builder,
+            &[context, builder, arrival, bits],
+            resource.failure,
+        )?;
+        match child {
+            CarrierValue::Owned { slot } => self.clear_slot(resource.carrier_owners[slot.index()]),
+            CarrierValue::LeafOwned { slot } => self.clear_slot(resource.owners[slot.index()]),
+            CarrierValue::Ordinary { .. } => {
+                if let LoweredValue::Owned(_, slot) = value {
+                    self.clear_slot(slot);
+                }
+            }
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
     fn carrier_operation(
         &mut self,
         operation: &Operation,
@@ -804,6 +1021,10 @@ impl Translator<'_, '_> {
         };
         if resource.function_plan()?.carriers().is_none() {
             return Ok(false);
+        }
+        if let StatementKind::ResourceConstructor(node) = &statement.kind {
+            self.carrier_staged_constructor(node, statement.span)?;
+            return Ok(true);
         }
         let operations = resource.carrier_at_site()?;
         let mut claimed = false;

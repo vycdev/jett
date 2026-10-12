@@ -11,6 +11,11 @@ use crate::{
     discard_panic_payload,
 };
 
+#[path = "resource_custody/carrier_holders.rs"]
+mod carrier_holders;
+use carrier_holders::CarrierHolderRoot;
+pub(crate) use carrier_holders::{CarrierRootToken, RegisteredCarrierSlot};
+
 static NEXT_CUSTODY: AtomicU64 = AtomicU64::new(1);
 
 #[path = "resource_custody/registration.rs"]
@@ -97,9 +102,15 @@ pub(crate) struct ResourceFrameToken {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HolderAddress {
+    Slot(usize),
+    Carrier { root: usize, path: usize },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Holder {
     frame: usize,
-    slot: usize,
+    address: HolderAddress,
 }
 
 #[derive(Debug)]
@@ -279,6 +290,7 @@ pub(crate) struct ResourceCustody {
     frame_reservation_fault: Option<FrameReservationSite>,
     #[cfg(test)]
     frame_reservation_observations: [(usize, usize); 2],
+    carrier_roots: Vec<CarrierHolderRoot>,
 }
 
 impl ResourceCustody {
@@ -308,6 +320,7 @@ impl ResourceCustody {
             frame_reservation_fault: None,
             #[cfg(test)]
             frame_reservation_observations: [(0, 0); 2],
+            carrier_roots: Vec::new(),
         })
     }
 
@@ -339,11 +352,7 @@ impl ResourceCustody {
             return Err(CustodyError::WrongProgram);
         }
         self.frame(token.holder.frame)?;
-        self.program
-            .0
-            .slots
-            .get(token.holder.slot)
-            .ok_or(CustodyError::UnknownSlot)?;
+        self.holder_kind(token.holder)?;
         Ok(token.holder)
     }
 
@@ -424,7 +433,10 @@ impl ResourceCustody {
             if self.frame(*parent)?.purpose != purpose {
                 return Err(CustodyError::WrongPurpose);
             }
-        } else if self.live_owners() != 0 || self.live_loans() != 0 {
+        } else if self.live_owners() != 0
+            || self.live_loans() != 0
+            || self.live_carrier_roots() != 0
+        {
             return Err(CustodyError::InvalidFrame);
         }
         #[cfg(test)]
@@ -476,14 +488,14 @@ impl ResourceCustody {
             core: self.id,
             holder: Holder {
                 frame,
-                slot: slot.index,
+                address: HolderAddress::Slot(slot.index),
             },
         })
     }
 
     fn acquisition_storage(&mut self, holder: Holder, kind: usize) -> Result<(), CustodyError> {
         self.runtime_frame(holder.frame)?;
-        if self.program.0.slots.get(holder.slot) != Some(&kind) {
+        if self.holder_kind(holder)? != kind {
             return Err(CustodyError::WrongKind);
         }
         self.available(holder)?;
@@ -609,7 +621,7 @@ impl ResourceCustody {
             return Err(CustodyError::StaleHolderGeneration);
         }
         self.frame(owner.holder.frame)?;
-        if self.program.0.slots.get(owner.holder.slot) != Some(&owner.kind) {
+        if self.holder_kind(owner.holder)? != owner.kind {
             return Err(CustodyError::WrongKind);
         }
         Ok(owner)
@@ -667,7 +679,7 @@ impl ResourceCustody {
         if self.borrowed(token.owner) {
             return Err(CustodyError::ActiveBorrow);
         }
-        if self.program.0.slots.get(holder.slot) != Some(&owner.kind) {
+        if self.holder_kind(holder)? != owner.kind {
             return Err(CustodyError::WrongKind);
         }
         self.available(holder)?;
@@ -701,7 +713,7 @@ impl ResourceCustody {
         if self.borrowed(old.owner) || self.borrowed(replacement.owner) {
             return Err(CustodyError::ActiveBorrow);
         }
-        if self.program.0.slots.get(holder.slot) != Some(&replacement_owner.kind) {
+        if self.holder_kind(holder)? != replacement_owner.kind {
             return Err(CustodyError::WrongKind);
         }
         if self

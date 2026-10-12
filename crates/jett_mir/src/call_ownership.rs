@@ -9,7 +9,8 @@ use jett_typecheck::{CheckedCallerEffect, CheckedOwnershipContext};
 use jett_types::{Type, TypeId, TypeInterner};
 
 use crate::{
-    BlockId, Function, Program, ResourceCallNode, StatementKind as S, TerminatorKind as T,
+    BlockId, Function, Program, ResourceCallNode, ResourceConstructorNode, StatementKind as S,
+    TerminatorKind as T,
 };
 
 #[cfg(test)]
@@ -371,6 +372,9 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                 return Err("call ownership block IDs are not dense".into());
             }
             for (index, statement) in block.statements.iter().enumerate() {
+                if let S::ResourceConstructor(node) = &statement.kind {
+                    function.resource_constructor(node.constructor())?;
+                }
                 let site = Site {
                     block: block.id,
                     statement: index,
@@ -421,6 +425,10 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                         define(*target, site, statement.span, definition);
                     }
                     S::ResourceCall(ResourceCallNode::Invoke { output: local, .. })
+                    | S::ResourceConstructor(ResourceConstructorNode::Commit {
+                        output: local,
+                        ..
+                    })
                     | S::CheckRefinement { local, .. }
                     | S::SequenceLength { target: local, .. }
                     | S::SequenceGet { target: local, .. }
@@ -2993,6 +3001,7 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
     ) -> Result<(), String> {
         match statement {
             S::ResourceCall(ResourceCallNode::Stage { value, .. })
+            | S::ResourceConstructor(ResourceConstructorNode::Stage { value, .. })
             | S::Let { value, .. }
             | S::BeginCallView { value, .. }
             | S::Evaluate(value)

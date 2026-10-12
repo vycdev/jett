@@ -5,6 +5,9 @@ mod assignment;
 #[path = "interpreter_transport/absent_generated.rs"]
 mod absent_generated;
 
+#[path = "interpreter_transport/owned_struct.rs"]
+mod owned_struct;
+
 use super::*;
 use crate::resource_execution::FunctionInvocation;
 use crate::resource_execution::{
@@ -236,6 +239,15 @@ impl Interpreter {
         if !transport.checked_source_active {
             return Ok(None);
         }
+        if matches!(expression, Expr::Call(..)) {
+            if let Some(flow) = self.eval_resource_owned_struct(expression)? {
+                return Ok(Some(flow));
+            }
+        }
+        let transport = self
+            .resource_transport
+            .as_ref()
+            .ok_or("missing checked Resource transport")?;
         match expression {
             Expr::Ident(identifier) => {
                 let definition = transport

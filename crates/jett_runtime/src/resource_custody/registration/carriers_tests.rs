@@ -231,6 +231,82 @@ fn fixture() -> WireLayout {
     }
 }
 
+#[test]
+fn carrier_registration_leaf_owner_has_distinct_wire_tag_and_exact_resource_slot() {
+    let mut layout = fixture();
+    let node = u32::try_from(layout.carriers.nodes.len()).unwrap();
+    layout.carriers.nodes.push(NativeCarrierNode::Struct {
+        identity: b"app.OwnedEnvelope".to_vec(),
+        arguments: vec![],
+        fields: vec![field("token", RESOURCE_NODE), field("marker", 0)],
+    });
+    let destination = u32::try_from(layout.carriers.slots.len()).unwrap();
+    layout
+        .carriers
+        .slots
+        .push(NativeCarrierSlot { frame: 1, node });
+    layout.slots.push(NativeSlot {
+        ordinal: 2,
+        frame: 1,
+        shape: RESOURCE_SHAPE,
+        path: vec![],
+    });
+    operation(
+        &mut layout,
+        NativeCarrierOperation::Construct {
+            frame: 1,
+            destination,
+            selector: 0,
+            children: vec![
+                NativeCarrierChild {
+                    index: 0,
+                    node: RESOURCE_NODE,
+                    source: NativeCarrierChildSource::LeafOwner { slot: 2 },
+                },
+                ordinary_child(1, 0, INTEGER),
+            ],
+        },
+    );
+    assert_eq!(
+        parsed(&layout).unwrap(),
+        layout,
+        "real encoder/decoder must preserve distinct LeafOwner tag4"
+    );
+    for mutation in 0..5 {
+        let mut forged = layout.clone();
+        match mutation {
+            0 => forged.slots[2].shape = OPTIONAL_SHAPE,
+            1 => forged.slots[2].path = vec![NativePayloadStep::Some],
+            2 => {
+                let NativeCarrierOperation::Construct { children, .. } =
+                    &mut forged.carriers.operations.last_mut().unwrap().operation
+                else {
+                    unreachable!()
+                };
+                children[0].source = NativeCarrierChildSource::LeafSum { slot: 2 };
+            }
+            3 => {
+                let NativeCarrierOperation::Construct { children, .. } =
+                    &mut forged.carriers.operations.last_mut().unwrap().operation
+                else {
+                    unreachable!()
+                };
+                children[0].node = OPTIONAL_NODE;
+            }
+            4 => {
+                let NativeCarrierOperation::Construct { children, .. } =
+                    &mut forged.carriers.operations.last_mut().unwrap().operation
+                else {
+                    unreachable!()
+                };
+                children[1].index = 0;
+            }
+            _ => unreachable!(),
+        }
+        assert!(parsed(&forged).is_err(), "LeafOwner mismatch {mutation}");
+    }
+}
+
 fn legacy(version: u32) -> WireLayout {
     let mut layout = fixture();
     layout.version = version;

@@ -381,6 +381,10 @@ fn definitions(function: &Function, id: LocalId) -> usize {
     for block in &function.blocks {
         for statement in &block.statements {
             count += usize::from(match &statement.kind {
+                StatementKind::ResourceConstructor(crate::ResourceConstructorNode::Commit {
+                    output,
+                    ..
+                }) => *output == id,
                 StatementKind::ResourceCall(
                     ResourceCallNode::Stage {
                         ordinary: Some(local),

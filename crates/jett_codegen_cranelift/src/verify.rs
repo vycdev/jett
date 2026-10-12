@@ -998,6 +998,96 @@ impl Verifier<'_> {
         )
         .map_err(|message| self.contract_error(function, statement.span, message))?;
         match &statement.kind {
+            StatementKind::ResourceConstructor(node) => {
+                use jett_mir::ResourceConstructorNode as Node;
+                let original = function
+                    .resource_constructor(node.constructor())
+                    .map_err(|message| self.contract_error(function, statement.span, message))?;
+                let family = self
+                    .resource
+                    .and_then(|p| p.function(function.id))
+                    .ok_or_else(|| {
+                        self.contract_error(
+                            function,
+                            statement.span,
+                            "Resource constructor has no fresh carrier family",
+                        )
+                    })?;
+                let plan = family.carriers().ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "Resource constructor has no fresh carrier family",
+                    )
+                })?;
+                let position = jett_mir::ResourcePosition::Statement(index);
+                let planned = match node {
+                    Node::End { outcome, .. } => {
+                        let begin = plan.operations().iter().find(|operation| {
+                            operation.site() == original.begin()
+                                && matches!(
+                                    operation.role(),
+                                    jett_mir::ResourceCarrierOperationRole::BeginConstructor { .. }
+                                )
+                        });
+                        begin.is_some_and(|begin| {
+                            family.operations().iter().filter(|operation| {
+                                operation.site().block() == block
+                                    && operation.site().position() == position
+                                    && operation.frame() == begin.frame()
+                                    && matches!(operation.role(), jett_mir::ResourceOperationRole::Complete { outcome: found } if found == outcome)
+                                    && original.exits().contains(&(operation.site(), *outcome))
+                            }).count() == 1
+                        })
+                    }
+                    _ => plan.operations().iter().any(|operation| {
+                        operation.site().block() == block && operation.site().position() == position
+                    }),
+                };
+                if !planned {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "Resource constructor has no exact planned occurrence",
+                    ));
+                }
+                match node {
+                    Node::Stage {
+                        source_index,
+                        field,
+                        value,
+                        ..
+                    } => {
+                        if original.fields().get(*source_index).is_none_or(|f| {
+                            f.field() != *field
+                                || f.stage().block() != block
+                                || f.stage().position() != position
+                        }) {
+                            return Err(self.contract_error(
+                                function,
+                                statement.span,
+                                "Resource constructor changed its exact field site",
+                            ));
+                        }
+                        self.expression(function, value)?;
+                    }
+                    Node::Commit { output, .. }
+                        if original.commit().is_none_or(|(site, header)| {
+                            site.block() != block
+                                || site.position() != position
+                                || header.id != *output
+                        }) =>
+                    {
+                        return Err(self.contract_error(
+                            function,
+                            statement.span,
+                            "Resource constructor changed its exact Commit site",
+                        ));
+                    }
+                    _ => {}
+                }
+                Ok(())
+            }
             StatementKind::ResourceLexicalExit(_) => {
                 let position = jett_mir::ResourcePosition::Statement(index);
                 let ownership = self.resource.ok_or_else(|| {

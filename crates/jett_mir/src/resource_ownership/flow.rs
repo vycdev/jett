@@ -1028,7 +1028,8 @@ impl<'p> Analysis<'p> {
             self.record_execution_frame()?;
             match &statement.kind {
                 StatementKind::ResourceLexicalExit(_) => self.lexical_exit(&mut state)?,
-                StatementKind::ResourceCall(node) => self.normalized_node(&mut state, node)?,
+                StatementKind::ResourceConstructor(_) => return Err("occupied constructor requires its authenticated carrier flow".into()),
+            StatementKind::ResourceCall(node) => self.normalized_node(&mut state, node)?,
                 StatementKind::Let { local, value } => {
                     let named = self.named_binding(&state, *local, value);
                     let descriptor = self.descriptor_value(&state, value);

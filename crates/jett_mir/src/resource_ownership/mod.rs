@@ -22,6 +22,7 @@ pub use lexical_borrows::{
 };
 #[cfg(test)]
 mod borrowed_sums_tests;
+pub(crate) mod constructors;
 #[cfg(test)]
 mod execution_frames_tests;
 #[cfg(test)]
@@ -29,6 +30,10 @@ mod lexical_borrows_tests;
 mod normalized_calls;
 pub(crate) use borrowed_sums::BorrowedSumSeed;
 pub use borrowed_sums::{ResourceBorrowedSumProjection, ResourceSumPayloadPath};
+pub use constructors::{
+    ResourceConstructorField, ResourceConstructorId, ResourceConstructorNode,
+    ResourceConstructorRegion,
+};
 #[cfg(test)]
 mod normalized_calls_tests;
 pub use normalized_calls::{
@@ -773,6 +778,8 @@ pub(super) struct ResourceLoweringWitness {
     original: hir::Function,
     calls: Vec<OriginalCallAssociation>,
     regions: Vec<ResourceCallRegion>,
+    constructors: Vec<ResourceConstructorRegion>,
+    constructor_seal: std::sync::Arc<[ResourceConstructorRegion]>,
     reflected_fields: Vec<reflected_fields::FieldDispatch>,
     reflected_seal: Vec<reflected_fields::FieldDispatch>,
     borrowed_sums: Vec<ResourceBorrowedSumProjection>,
@@ -831,6 +838,8 @@ impl Capture {
                 original: function.clone(),
                 calls: Vec::new(),
                 regions: Vec::new(),
+                constructors: Vec::new(),
+                constructor_seal: std::sync::Arc::from([]),
                 reflected_fields: Vec::new(),
                 reflected_seal: Vec::new(),
                 borrowed_sums: Vec::new(),
@@ -997,12 +1006,14 @@ impl Capture {
         function: &Function,
     ) -> Result<Option<ResourceLoweringWitness>, String> {
         if let Some(witness) = &mut self.witness {
+            witness.constructor_seal = witness.constructors.clone().into();
             lexical_borrows::seal(witness);
             borrowed_sums::seal(witness);
             reflected_fields::seal(witness);
         }
         if let Some(witness) = &mut self.witness
-            && (!witness.borrowed_sums.is_empty()
+            && (!witness.constructors.is_empty()
+                || !witness.borrowed_sums.is_empty()
                 || entry_scope::capture_needed(&witness.original, &witness.source))
         {
             witness.descriptors.seal_body(function);
@@ -1015,6 +1026,7 @@ impl Capture {
                 .source
                 .required_only_function_ids()
                 .contains(&function.id)
+                || !witness.constructors.is_empty()
                 || !witness.borrowed_sums.is_empty()
                 || entry_scope::capture_needed(&witness.original, &witness.source)
                 || witness
@@ -1047,11 +1059,32 @@ impl ResourceLoweringWitness {
             return Err("Resource ownership differs from its initially authenticated Source or constructor-emitted graph".into());
         }
         self.descriptors.current(function)?;
-        if (!self.borrowed_sums.is_empty()
+        if (!self.constructors.is_empty()
+            || !self.borrowed_sums.is_empty()
             || entry_scope::capture_needed(&self.original, &self.source))
             && !self.descriptors.has_body()
         {
             return Err("Resource Source proof lost its independent constructor body seal".into());
+        }
+        if !constructors::records_equal(&self.constructors, &self.constructor_seal) {
+            return Err(
+                "Resource constructor lost its independent original/current occurrence seal".into(),
+            );
+        }
+        for constructor in &self.constructors {
+            constructor.current(function)?;
+            let mut occurrences = 0;
+            walk::hir_block(&self.original.body, &mut |value| {
+                occurrences += usize::from(crate::breakpoint_regions::expressions_equal(
+                    value,
+                    constructor.original(),
+                ))
+            });
+            if occurrences != 1 {
+                return Err(
+                    "Resource constructor lost its unique original checked occurrence".into(),
+                );
+            }
         }
         borrowed_sums::current(self, function)?;
         lexical_borrows::current(self, function)?;
@@ -1125,6 +1158,8 @@ impl ResourceLoweringWitness {
                 .all(|(left, right)| left.same(right))
             && self.reflected_fields == other.reflected_fields
             && self.reflected_seal == other.reflected_seal
+            && constructors::records_equal(&self.constructors, &other.constructors)
+            && std::sync::Arc::ptr_eq(&self.constructor_seal, &other.constructor_seal)
             && self.regions.len() == other.regions.len()
             && self.borrowed_sums == other.borrowed_sums
             && self.borrowed_seal == other.borrowed_seal
@@ -1560,6 +1595,14 @@ pub(super) fn remap_blocks(
     for region in &mut witness.regions {
         region.remap_blocks(map)?;
     }
+    for constructor in &mut witness.constructors {
+        constructor.remap_blocks(map)?;
+    }
+    let mut constructor_seal = witness.constructor_seal.to_vec();
+    for constructor in &mut constructor_seal {
+        constructor.remap_blocks(map)?;
+    }
+    witness.constructor_seal = constructor_seal.into();
     borrowed_sums::remap_blocks(&mut witness.borrowed_sums, map)?;
     borrowed_sums::seal(witness);
     lexical_borrows::remap_blocks(witness, map)?;
@@ -1623,6 +1666,14 @@ pub(super) fn remap_locals(
     for region in &mut witness.regions {
         region.remap_locals(&mut remap);
     }
+    for constructor in &mut witness.constructors {
+        constructor.remap_locals(&mut remap);
+    }
+    let mut constructor_seal = witness.constructor_seal.to_vec();
+    for constructor in &mut constructor_seal {
+        constructor.remap_locals(&mut remap);
+    }
+    witness.constructor_seal = constructor_seal.into();
     borrowed_sums::remap_locals(&mut witness.borrowed_sums, &mut remap);
     borrowed_sums::seal(witness);
     named_callables::remap_locals(&mut witness.named_callables, &mut remap);

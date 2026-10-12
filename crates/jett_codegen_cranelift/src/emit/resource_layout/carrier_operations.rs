@@ -58,7 +58,8 @@ pub(super) fn alias<'a>(
                 .next()
                 .ok_or_else(|| pending("carrier activation has no constructor begin"))?;
             if starts.next().is_some()
-                || start.site() != current.site()
+                || (start.site() != current.site()
+                    && (start.is_expression_operation() || current.is_expression_operation()))
                 || start.frame() != current.frame()
                 || start.id().index() >= current.id().index()
             {
@@ -363,7 +364,9 @@ impl Rows<'_, '_> {
                             destination: target,
                             child,
                         } if target == destination => {
-                            if candidate.site() != operation.site()
+                            if (candidate.site() != operation.site()
+                                && (candidate.is_expression_operation()
+                                    || operation.is_expression_operation()))
                                 || candidate.frame() != operation.frame()
                                 || committed
                             {
@@ -376,7 +379,9 @@ impl Rows<'_, '_> {
                         CarrierRole::CommitConstructor {
                             destination: target,
                         } if target == destination => {
-                            if candidate.site() != operation.site()
+                            if (candidate.site() != operation.site()
+                                && (candidate.is_expression_operation()
+                                    || operation.is_expression_operation()))
                                 || candidate.frame() != operation.frame()
                                 || committed
                             {
@@ -405,7 +410,19 @@ impl Rows<'_, '_> {
                             words(&mut row, &[2, slot(self, source)?])
                         }
                         CarrierValue::LeafOwned { slot: source } => {
-                            words(&mut row, &[3, self.slot(function.function(), source)?])
+                            let tag = match function
+                                .owner_slots()
+                                .get(source.index())
+                                .ok_or_else(|| {
+                                    pending("constructor child lost its exact leaf slot")
+                                })?
+                                .shape()
+                            {
+                                custody::ResourceShape::Plain { .. } => 4,
+                                custody::ResourceShape::Optional { .. }
+                                | custody::ResourceShape::Result { .. } => 3,
+                            };
+                            words(&mut row, &[tag, self.slot(function.function(), source)?])
                         }
                         CarrierValue::Borrowed { .. } | CarrierValue::LeafBorrowed { .. } => {
                             return Err(pending(

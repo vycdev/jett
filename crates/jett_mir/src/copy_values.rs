@@ -242,6 +242,24 @@ impl CopyValuePlan {
                         }
                         None
                     }
+                    StatementKind::ResourceConstructor(node) => {
+                        if program.is_none() {
+                            return Err(
+                                "Resource constructor requires its fresh companion plan".into()
+                            );
+                        }
+                        function.resource_constructor(node.constructor())?;
+                        match node {
+                            crate::ResourceConstructorNode::Stage { value, .. } => {
+                                visit(value, &mut reads, &mut temporaries, types, program, false)?;
+                                None
+                            }
+                            crate::ResourceConstructorNode::Commit { output, .. } => {
+                                Some(output.index() as usize)
+                            }
+                            _ => None,
+                        }
+                    }
                     StatementKind::ResourceLexicalExit(_) => {
                         if program.is_none() {
                             return Err(

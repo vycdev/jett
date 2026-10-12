@@ -122,6 +122,7 @@ fn operation(r: &mut Reader<'_>) -> Result<NativeCarrierOperation, ResourceLayou
                     1 => NativeCarrierChildSource::Ordinary { shape: r.word()? },
                     2 => NativeCarrierChildSource::Move { slot: r.word()? },
                     3 => NativeCarrierChildSource::LeafSum { slot: r.word()? },
+                    4 => NativeCarrierChildSource::LeafOwner { slot: r.word()? },
                     _ => return Err(ResourceLayoutError::UnknownTag),
                 };
                 children.push(NativeCarrierChild {
@@ -553,6 +554,10 @@ pub(super) fn encode(g: &NativeCarrierLayout) -> Vec<u8> {
                         }
                         NativeCarrierChildSource::Move { slot } => {
                             word(&mut v, 2);
+                            word(&mut v, slot);
+                        }
+                        NativeCarrierChildSource::LeafOwner { slot } => {
+                            word(&mut v, 4);
                             word(&mut v, slot);
                         }
                         NativeCarrierChildSource::LeafSum { slot } => {

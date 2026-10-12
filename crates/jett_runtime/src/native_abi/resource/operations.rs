@@ -93,11 +93,13 @@ impl NativeResourceState {
         };
         self.frame_shells_unborrowed(frame)?;
         let view_retirement = self.retire_sum_views(frame);
-        if self.layout.wire_version() == 3 {
+        let carrier_retirement = if self.layout.wire_version() == 3 {
             view_retirement?;
-            // Carrier parent generations remain available until all child leases end.
-            self.retire_carrier_frame(ordinary, frame)?;
-        }
+            // End metadata leases and reserve companion cleanup while generations live.
+            Some(self.prepare_carrier_frame(ordinary, frame)?)
+        } else {
+            None
+        };
         let Some(NativeResourceEntry::Frame(header)) = self.handles.get(&frame) else {
             return Err(NativeResourceError::WrongFrame);
         };
@@ -106,6 +108,12 @@ impl NativeResourceState {
             // A refused cleanup has not retired this frame. Keep its tokens available.
             return self.cleanup(cleanup);
         }
+        let core_result = self.cleanup(cleanup);
+        let carrier_result = if let Some(prepared) = carrier_retirement {
+            self.retire_carrier_frame_prepared(ordinary, prepared)
+        } else {
+            Ok(())
+        };
         let mut ordinary_failed = false;
         self.handles.retain(|_, entry| match entry {
             NativeResourceEntry::Frame(_) => true,
@@ -132,7 +140,8 @@ impl NativeResourceState {
         if ordinary_failed {
             ordinary.cleanup_failed = true;
         }
-        self.cleanup(cleanup)?;
+        core_result?;
+        carrier_result?;
         view_retirement
     }
     pub(super) fn runtime_purpose(&self) -> ResourceResult<()> {

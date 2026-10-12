@@ -1037,8 +1037,9 @@ impl NativeResourceState {
                     caller_argument_slot,
                     callee_parameter_slot,
                 } => self
-                    .carrier_move_reserved(
+                    .carrier_move_reserved_with_registry(
                         ordinary,
+                        registry,
                         ResourceHandleId::new(actual)?,
                         caller_argument_slot,
                         callee_parameter_slot,
@@ -1506,8 +1507,9 @@ impl NativeResourceState {
         // Publication remains provisional until the exact Return frame retires.
         let mut ids = self.reserve(1)?;
         let output = next_handle(&mut ids)?;
-        let output = self.carrier_move_reserved(
+        let output = self.carrier_move_reserved_with_registry(
             ordinary,
+            registry,
             provisional,
             source,
             caller_destination_slot,

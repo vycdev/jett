@@ -224,3 +224,22 @@ Broader ordinary parity and fixes remain open. Occupied custody/replacement, bro
 generic/nested reflected lifetimes, wider language parity and the successor's
 exact-revision CI remain open. The rough **87%** estimate, fixed **207/182**
 inventories and full 100% goal do not change.
+
+## Occupied named struct checkpoint
+
+Fresh local MSVC static-CRT acceptance on 2026-10-12 passes the three valid
+occupied-struct entry Sources on both measured runtime profiles. The two gates
+cover partial prefix retirement, reversed named arguments, cleanup failure and
+same-context reentry: 44 native executions/66 entries. The original twelve
+predecessor gates pass 604/728, and additional pipeline/control-flow subset
+gates pass 106/106 against the same archives. All sixteen Resource gates pass
+754 executions/900 entries overall. All 2,314 workspace library tests and the
+six-object gate also pass.
+
+The discarded historical raw-artifact packet is not evidence for this integration.
+Current Rust gates check decoded reports and exact Source oracles; Source and
+compiled-artifact guards pass. Broader occupied collection, recursive/generic,
+projection/replacement, reflected and captured lifetime compositions, GNU and
+installed-distribution acceptance remain required. The rough 87% estimate and
+fixed 207/182 inventories stay unchanged. See the
+[occupied struct note](native_resource_occupied_structs.md) for scope and limits.

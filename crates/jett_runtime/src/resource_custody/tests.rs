@@ -825,3 +825,6 @@ fn custody_replacement_preflight_generation_capacity_refuses_before_old_finaliza
     assert_eq!(*events.lock().unwrap(), [61, 62]);
     clean(&core, &registry);
 }
+
+#[path = "carrier_holder_tests.rs"]
+mod carrier_holder_tests;

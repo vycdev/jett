@@ -211,6 +211,10 @@ fn collect_function_references(function: &Function, references: &mut References<
             match &statement.kind {
                 StatementKind::ResourceCall(jett_mir::ResourceCallNode::Stage {
                     value, ..
+                })
+                | StatementKind::ResourceConstructor(jett_mir::ResourceConstructorNode::Stage {
+                    value,
+                    ..
                 }) => {
                     collect_expression_references(value, references);
                 }
@@ -223,6 +227,7 @@ fn collect_function_references(function: &Function, references: &mut References<
                     }
                 }
                 StatementKind::ResourceCall(jett_mir::ResourceCallNode::End { .. }) => {}
+                StatementKind::ResourceConstructor(_) => {}
                 StatementKind::Let { value, .. }
                 | StatementKind::BeginCallView { value, .. }
                 | StatementKind::CheckRefinement { call: value, .. }

@@ -21,6 +21,9 @@ struct Planner<'p> {
     iteration_slots: BTreeMap<u32, ResourceCarrierSlotId>,
     edge: Option<ResourceCarrierEdge>,
     ended_loans: BTreeSet<ResourceCarrierLoanId>,
+    constructor_frames: BTreeMap<ResourceConstructorId, ResourceFrameId>,
+    constructor_slots: BTreeMap<ResourceConstructorId, ResourceCarrierSlotId>,
+    incoming_frames: Vec<(ResourceSite, ResourceFrameId)>,
 }
 impl Planner<'_> {
     fn shape_id(&self, ty: TypeId) -> Result<ResourceCarrierShapeId, String> {
@@ -1161,7 +1164,6 @@ impl Planner<'_> {
         self.operation(ResourceOperationRole::Complete { outcome });
     }
     fn block(&mut self, block: &BasicBlock) -> Result<(), String> {
-        self.frame = ResourceFrameId(0);
         for (index, statement) in block.statements.iter().enumerate() {
             self.site = ResourceSite {
                 function: self.function.id,
@@ -1170,8 +1172,45 @@ impl Planner<'_> {
             };
             self.ordinal = 0;
             self.expression = None;
+            self.frame = self
+                .incoming_frames
+                .iter()
+                .find(|(site, _)| *site == self.site)
+                .map(|(_, frame)| *frame)
+                .ok_or("carrier statement has no authenticated incoming constructor prefix")?;
             self.plan.execution_frames.push((self.site, self.frame));
             match &statement.kind {
+                StatementKind::ResourceConstructor(node) => {
+                    let region = self.function.resource_constructor(node.constructor())?;
+                    let frame = *self.constructor_frames.get(&region.id()).ok_or("carrier constructor lost its private Operation frame")?;
+                    let destination = *self.constructor_slots.get(&region.id()).ok_or("carrier constructor lost its private building root")?;
+                    match node {
+                        ResourceConstructorNode::Begin { .. } => {
+                            self.frame = frame;
+                            self.carrier_operation(ResourceCarrierOperationRole::BeginConstructor { destination, constructor: ResourceCarrierConstructor::Struct });
+                        }
+                        ResourceConstructorNode::Stage { source_index, field, value, .. } => {
+                            if self.frame != frame || region.fields().get(*source_index).is_none_or(|f| f.stage() != self.site || f.field() != *field) {
+                                return Err("carrier constructor Stage differs from its exact current field occurrence".into());
+                            }
+                            let input = self.expression(value, true)?;
+                            self.child(destination, *field, region.field_types()[*field], input)?;
+                        }
+                        ResourceConstructorNode::Commit { output, .. } => {
+                            if self.frame != frame || region.commit().is_none_or(|(site, header)| site != self.site || header.id != *output) {
+                                return Err("carrier constructor Commit differs from its exact output occurrence".into());
+                            }
+                            self.carrier_operation(ResourceCarrierOperationRole::CommitConstructor { destination });
+                            self.store(*output, ResourceCarrierValue::Owned { slot: destination }, region.original().ty)?;
+                        }
+                        ResourceConstructorNode::End { outcome, .. } => {
+                            if self.frame != frame || !region.exits().contains(&(self.site, *outcome)) {
+                                return Err("carrier constructor End differs from its exact reached prefix".into());
+                            }
+                            self.finish(*outcome);
+                        }
+                    }
+                }
                 StatementKind::Let { local, value } => {
                     let input = self.expression(value, !self.function.is_view_local(*local))?;
                     self.store(*local, input, value.ty)?;
@@ -1185,7 +1224,7 @@ impl Planner<'_> {
                     let input = self.expression(value, true)?;
                     match input {
                         ResourceCarrierValue::Owned { slot } => { self.carrier_operation(ResourceCarrierOperationRole::Retire { source: slot }); }
-                        ResourceCarrierValue::LeafOwned { slot } => self.operation(ResourceOperationRole::Drop { source: slot, occupancy: ResourceOccupancy::Empty }),
+                        ResourceCarrierValue::LeafOwned { slot } => self.operation(ResourceOperationRole::Drop { source: slot, occupancy: if matches!(self.plan.slots[slot.index()].shape,ResourceShape::Plain { .. }) { ResourceOccupancy::Occupied } else { ResourceOccupancy::Empty } }),
                         ResourceCarrierValue::Borrowed { .. } | ResourceCarrierValue::LeafBorrowed { .. } => return Err("carrier borrowed result cannot be discarded as an owning endpoint".into()),
                         ResourceCarrierValue::Ordinary { .. } => {}
                     }
@@ -1253,6 +1292,12 @@ impl Planner<'_> {
         };
         self.ordinal = 0;
         self.expression = None;
+        self.frame = self
+            .incoming_frames
+            .iter()
+            .find(|(site, _)| *site == self.site)
+            .map(|(_, frame)| *frame)
+            .ok_or("carrier terminator has no authenticated incoming constructor prefix")?;
         self.plan.execution_frames.push((self.site, self.frame));
         match &block.terminator.kind {
             TerminatorKind::Return(value) => {
@@ -1435,7 +1480,32 @@ pub(super) fn analyze(
         iteration_slots: BTreeMap::new(),
         edge: None,
         ended_loans: BTreeSet::new(),
+        constructor_frames: BTreeMap::new(),
+        constructor_slots: BTreeMap::new(),
+        incoming_frames: Vec::new(),
     };
+    for region in &witness.constructors {
+        let parent = match region.parent() {
+            None => ResourceFrameId(0),
+            Some(constructors::ResourceOperationRegion::Constructor(parent)) => *planner.constructor_frames.get(&parent)
+                .ok_or("carrier constructor has a missing exact parent Operation")?,
+            Some(constructors::ResourceOperationRegion::Call(_)) => return Err("pending Resource carrier: constructor under a staged Source call needs its authenticated mixed-prefix transport".into()),
+        };
+        planner.site = region.begin();
+        planner.frame = parent;
+        let frame = planner.frame(ResourceFrameRole::Operation);
+        planner.constructor_frames.insert(region.id(), frame);
+        let slot = planner.slot(
+            region.original().ty,
+            ResourceSlotStorage::Expression {
+                site: region.begin(),
+                ordinal: 0,
+            },
+            frame,
+        )?;
+        planner.constructor_slots.insert(region.id(), slot);
+    }
+    planner.incoming_frames = constructor_frames(function, &cfg, &planner.constructor_frames)?;
     for local in &function.locals {
         let index = usize::try_from(local.id.index())
             .map_err(|_| "carrier local index is not representable")?;
@@ -1543,4 +1613,114 @@ pub(super) fn analyze(
     flow::validate(function, types, &planner.plan, &planner.carriers)?;
     planner.plan.carriers = Some(planner.carriers);
     Ok(planner.plan)
+}
+
+/// Reconstruct active constructor prefixes through actual CFG edges. Numeric
+/// block order and a public marker are never frame authority.
+fn constructor_frames(
+    function: &Function,
+    cfg: &ControlFlowGraph,
+    frames: &BTreeMap<ResourceConstructorId, ResourceFrameId>,
+) -> Result<Vec<(ResourceSite, ResourceFrameId)>, String> {
+    let mut incoming: Vec<Option<Vec<ResourceConstructorId>>> = vec![None; function.blocks.len()];
+    incoming[function.entry.index() as usize] = Some(Vec::new());
+    let mut queue = std::collections::VecDeque::from([function.entry]);
+    let mut sites = Vec::new();
+    while let Some(id) = queue.pop_front() {
+        let block = function
+            .blocks
+            .get(id.index() as usize)
+            .filter(|b| b.id == id)
+            .ok_or("carrier constructor CFG selected a foreign block")?;
+        let mut active = incoming[id.index() as usize]
+            .clone()
+            .ok_or("carrier constructor CFG lost its incoming prefix")?;
+        let frame = |active: &[ResourceConstructorId]| -> Result<ResourceFrameId, String> {
+            active
+                .last()
+                .map(|id| {
+                    frames
+                        .get(id)
+                        .copied()
+                        .ok_or_else(|| "carrier constructor prefix lost its private frame".into())
+                })
+                .unwrap_or(Ok(ResourceFrameId(0)))
+        };
+        for (index, statement) in block.statements.iter().enumerate() {
+            let site = ResourceSite {
+                function: function.id,
+                block: id,
+                position: ResourcePosition::Statement(index),
+            };
+            sites.push((site, frame(&active)?));
+            if let StatementKind::ResourceConstructor(node) = &statement.kind {
+                let region = function.resource_constructor(node.constructor())?;
+                match node {
+                    ResourceConstructorNode::Begin { constructor } => {
+                        let expected = active
+                            .last()
+                            .copied()
+                            .map(constructors::ResourceOperationRegion::Constructor);
+                        if region.begin() != site
+                            || region.parent() != expected
+                            || active.contains(constructor)
+                        {
+                            return Err("carrier constructor Begin differs from its exact active parent prefix".into());
+                        }
+                        active.push(*constructor);
+                    }
+                    ResourceConstructorNode::End {
+                        constructor,
+                        outcome,
+                    } => {
+                        if active.pop() != Some(*constructor)
+                            || !region.exits().contains(&(site, *outcome))
+                        {
+                            return Err(
+                                "carrier constructor End is not the exact active suffix".into()
+                            );
+                        }
+                    }
+                    _ if active.last().copied() != Some(node.constructor()) => {
+                        return Err(
+                            "carrier constructor field or Commit has no reached exact prefix"
+                                .into(),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+        sites.push((
+            ResourceSite {
+                function: function.id,
+                block: id,
+                position: ResourcePosition::Terminator,
+            },
+            frame(&active)?,
+        ));
+        if matches!(
+            block.terminator.kind,
+            TerminatorKind::Return(_) | TerminatorKind::Unreachable
+        ) && !active.is_empty()
+        {
+            return Err("carrier terminal path leaves an uncompleted constructor prefix".into());
+        }
+        for successor in cfg.successors(id) {
+            let next = incoming
+                .get_mut(successor.index() as usize)
+                .ok_or("carrier constructor CFG has a foreign successor")?;
+            match next {
+                Some(previous) if *previous != active => {
+                    return Err("carrier constructor CFG joins different operation prefixes".into());
+                }
+                Some(_) => {}
+                None => {
+                    *next = Some(active.clone());
+                    queue.push_back(*successor);
+                }
+            }
+        }
+    }
+    Ok(sites)
 }

@@ -1049,7 +1049,11 @@ fn block_equal(left: &BasicBlock, right: &BasicBlock) -> bool {
 fn float_block(block: &mut BasicBlock, bits: &mut Vec<u64>) {
     for statement in &mut block.statements {
         match &mut statement.kind {
-            StatementKind::ResourceCall(ResourceCallNode::Stage { value, .. })
+            StatementKind::ResourceConstructor(crate::ResourceConstructorNode::Stage {
+                value,
+                ..
+            })
+            | StatementKind::ResourceCall(ResourceCallNode::Stage { value, .. })
             | StatementKind::Let { value, .. }
             | StatementKind::BeginCallView { value, .. }
             | StatementKind::CheckRefinement { call: value, .. }
@@ -1074,6 +1078,11 @@ fn float_block(block: &mut BasicBlock, bits: &mut Vec<u64>) {
                 ResourceCallNode::Begin { .. }
                 | ResourceCallNode::Invoke { .. }
                 | ResourceCallNode::End { .. },
+            )
+            | StatementKind::ResourceConstructor(
+                crate::ResourceConstructorNode::Begin { .. }
+                | crate::ResourceConstructorNode::Commit { .. }
+                | crate::ResourceConstructorNode::End { .. },
             )
             | StatementKind::ResourceLexicalExit(_)
             | StatementKind::OpenCallOwnerGeneration { .. }

@@ -4841,3 +4841,28 @@ The local actor suite passes on Debug and Release runtime archives after Source
 deletion, including production output with Jett optimization enabled. See the
 [actor identity verification note](active/actor_identity_equality.md) for scope
 and remaining native codegen acceptance work.
+
+### Checked occupied Resource struct constructors
+
+MIR retains authenticated Begin/Stage/Commit/End constructor operations and
+their exact original HIR fields, written permutation, scope and companion
+completion roles. Original/current body checks run before pruning; public
+node edits cannot mint the retained constructor proof. The carrier plan and
+codegen validator join each operation to the same checked family.
+
+Runtime ownership transfers transactionally between slot and carrier holders.
+A unified acquisition ledger retires ownership before invoking finalizers,
+including partial constructor cleanup and same-context reentry. Fresh local
+MSVC Debug/Release ABI1/wire3/static-CRT acceptance on 2026-10-12 passes 754
+Source-deleted native executions / 900 entries across all sixteen Resource gates:
+the original twelve predecessor gates, two occupied gates and two additional
+pipeline/control-flow subset gates. Executed Rust gates decode each completion and check
+the exact Source event, message, status and exit oracles, eight zero custody counts
+and empty ordinary storage before one destruction. Compiler and Source inputs,
+measured archives, compiled gate and dep-info guards pass after execution. The
+current integration also passes all 2,314 workspace library tests, including
+308 runtime, 577 interpreter, 317 MIR and 120 code generator unit tests, plus
+six occupied-struct object emissions. Private
+double-cfg archive measurement is separate from ordinary runtime unit execution.
+Owning strings/nested occupied carriers, broader aggregate families, public Driver
+provider admission, GNU and installed-distribution acceptance remain pending. See [the occupied struct checkpoint](active/native_resource_occupied_structs.md).

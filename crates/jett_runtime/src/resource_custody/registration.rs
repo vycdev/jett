@@ -1,8 +1,8 @@
 //! Sole native core metadata issuer. Registration never installs a provider or owner.
 
 use super::{
-    CustodyError, ProgramLayout, RegisteredOwnerSlot, RegisteredResourceKind,
-    RegisteredResourceProgram,
+    CustodyError, ProgramLayout, RegisteredCarrierSlot, RegisteredOwnerSlot,
+    RegisteredResourceKind, RegisteredResourceProgram,
 };
 use crate::{ResourceRegistry, ResourceTypeId};
 use std::sync::Arc;
@@ -86,6 +86,18 @@ pub(crate) struct RegisteredNativeLayout {
     wire: schema::WireLayout,
 }
 impl RegisteredNativeLayout {
+    pub(crate) fn carrier_slot(&self, ordinal: u32) -> Result<RegisteredCarrierSlot, CustodyError> {
+        self.wire
+            .carriers
+            .slots
+            .get(ordinal as usize)
+            .ok_or(CustodyError::UnknownSlot)?;
+        Ok(RegisteredCarrierSlot {
+            program: self.core.0.clone(),
+            graph: Arc::new(self.wire.carriers.clone()),
+            index: ordinal as usize,
+        })
+    }
     pub(crate) fn carriers(&self) -> &NativeCarrierLayout {
         &self.wire.carriers
     }

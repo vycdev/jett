@@ -4,6 +4,29 @@ mod cases;
 use super::*;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+#[path = "../../../../jett_driver/tests/native_conformance/resource_occupied_struct_cases.rs"]
+mod occupied_struct_cases;
+#[path = "native_source_oracles/occupied_struct_reentry.rs"]
+mod occupied_struct_reentry;
+
+#[test]
+fn native_resource_occupied_struct_shared_scripts_match_real_reference() {
+    assert_eq!(occupied_struct_cases::CASES.len(), 11);
+    run_reference_cases(occupied_struct_cases::CASES);
+}
+#[test]
+fn native_resource_occupied_struct_shared_reentry_inputs_match_real_reference() {
+    for release in [false, true] {
+        for first in occupied_struct_cases::CASES {
+            occupied_struct_reentry::original_then_ready(
+                first,
+                occupied_struct_cases::ready_for(first),
+                release,
+            );
+        }
+    }
+}
+
 fn checked_case(case: &cases::Case, release: bool) -> Arc<CheckedResourceProgram> {
     let stdlib = FileId::new(10_000);
     let primary = FileId::new(0);

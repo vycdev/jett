@@ -4,6 +4,9 @@
 use super::*;
 
 pub(crate) fn unreachable(function: &mut Function) -> bool {
+    if crate::resource_ownership::constructors::validate_nodes(function).is_err() {
+        return false;
+    }
     let before = (!function.breakpoint_regions.is_empty()
         || crate::call_owner_generations::has_records(function)
         || crate::resource_ownership::has_records(function)
@@ -68,6 +71,9 @@ pub(crate) fn unreachable(function: &mut Function) -> bool {
 /// Remove absent frame slots without changing any original control-flow block.
 /// Every parameter, binding, read, capture and debug or loan reference survives.
 pub(crate) fn unused_locals(function: &mut Function) -> bool {
+    if crate::resource_ownership::constructors::validate_nodes(function).is_err() {
+        return false;
+    }
     let before = (!function.breakpoint_regions.is_empty()
         || crate::call_owner_generations::has_records(function)
         || crate::resource_ownership::has_records(function)
@@ -230,6 +236,13 @@ fn visit_block_locals(
     for statement in &mut block.statements {
         match &mut statement.kind {
             StatementKind::ResourceLexicalExit(_) => {}
+            StatementKind::ResourceConstructor(node) => match node {
+                crate::ResourceConstructorNode::Stage { value, .. } => {
+                    expression(value, visit, floor, metadata)
+                }
+                crate::ResourceConstructorNode::Commit { output, .. } => visit(output),
+                _ => {}
+            },
             StatementKind::ResourceCall(node) => match node {
                 ResourceCallNode::Stage {
                     value, ordinary, ..

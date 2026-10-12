@@ -4,6 +4,9 @@ mod assignment;
 #[path = "runtime/absent_generated.rs"]
 mod absent_generated;
 
+#[path = "runtime/owned_struct.rs"]
+mod owned_struct;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -663,6 +666,14 @@ impl ResourceTransport {
                     out.push((path.clone(), carrier));
                     return Ok(());
                 }
+                Value::Struct { fields, .. } => {
+                    for (ordinal, (_, child)) in fields.iter().enumerate() {
+                        path.push(PayloadStep::Field(ordinal));
+                        positions(child, path, out)?;
+                        path.pop();
+                    }
+                    return Ok(());
+                }
                 Value::Typed { value, .. } => (PayloadStep::Typed, value.as_ref()),
                 Value::ResultOk(value) => (PayloadStep::Ok, value.as_ref()),
                 Value::ResultFail(value) => (PayloadStep::Fail, value.as_ref()),
@@ -698,6 +709,40 @@ impl ResourceTransport {
                     if Arc::ptr_eq(&carrier.program, checked.program())
                         && carrier.resource.checked_type == ty =>
                 {
+                    Ok(())
+                }
+                (
+                    Value::Struct {
+                        type_name,
+                        concrete_type,
+                        fields,
+                    },
+                    Type::Struct(owner),
+                ) if checked.type_contains_resource(ty)? => {
+                    let definition = types.resolve_struct(*owner);
+                    if type_name != &definition.name
+                        || concrete_type
+                            .as_ref()
+                            .is_some_and(|name| name != &definition.name)
+                        || !types.nominal_type_arguments(ty).is_empty()
+                        || fields.len() != definition.fields.len()
+                    {
+                        return Err(ResourceExecutionError::InvalidPayloadPath);
+                    }
+                    for ((name, value), (expected_name, field_type)) in
+                        fields.iter().zip(&definition.fields)
+                    {
+                        if name != expected_name {
+                            return Err(ResourceExecutionError::InvalidPayloadPath);
+                        }
+                        match types.resolve(*field_type) {
+                            Type::Resource(_) => shape(value, *field_type, checked)?,
+                            Type::Int64 | Type::String | Type::Bool | Type::Nothing => {
+                                absent_generated::absent_shape(value, *field_type, checked)?;
+                            }
+                            _ => return Err(ResourceExecutionError::InvalidPayloadPath),
+                        }
+                    }
                     Ok(())
                 }
                 (Value::GrantedNetwork(_), Type::Capability(CapabilityKind::Network)) => Ok(()),

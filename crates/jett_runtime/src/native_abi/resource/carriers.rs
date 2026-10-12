@@ -1,5 +1,8 @@
 //! Opaque v3 zero-leaf trees. Live leaf custody is deliberately not synthesized.
 use super::*;
+use crate::resource_custody::{CarrierRootToken, OwnedResourceToken};
+#[path = "carriers/occupied.rs"]
+mod occupied;
 use crate::resource_custody::{
     NativeCarrierChildSource as ChildSource, NativeCarrierDestination as Destination,
     NativeCarrierLoanSource as LoanSource, NativeCarrierNode as Node,
@@ -11,6 +14,7 @@ pub(super) struct NativeCarrierTree {
     pub(super) node: u32,
     pub(super) selector: u32,
     pub(super) ordinary: Option<(u32, u64)>,
+    pub(super) owner: Option<OwnedResourceToken>,
     pub(super) children: Vec<Option<NativeCarrierTree>>,
     pub(super) acquisition: Vec<usize>,
 }
@@ -19,6 +23,7 @@ pub(super) struct NativeCarrierRoot {
     pub(super) slot: u32,
     pub(super) generation: u64,
     pub(super) tree: NativeCarrierTree,
+    pub(super) custody: Option<CarrierRootToken>,
 }
 pub(super) struct NativeCarrierLoan {
     pub(super) frame: ResourceHandleId,
@@ -37,6 +42,7 @@ pub(super) struct NativeCarrierBuilder {
     pub(super) children: Vec<Option<NativeCarrierTree>>,
     pub(super) acquisition: Vec<usize>,
     pub(super) next: usize,
+    pub(super) custody: Option<CarrierRootToken>,
 }
 pub(super) struct NativeCarrierSumOrigin {
     pub(super) loan: ResourceHandleId,
@@ -184,9 +190,31 @@ impl NativeResourceState {
         pending.push(tree);
         while let Some(t) = pending.pop() {
             let n = self.layout.carriers().node(t.node)?;
+            if !matches!(n, Node::Resource { .. }) && t.owner.is_some() {
+                return Err(NativeResourceError::WrongFamily);
+            }
+            if t.acquisition
+                .iter()
+                .enumerate()
+                .any(|(i, p)| *p >= t.children.len() || t.acquisition[..i].contains(p))
+                || t.children
+                    .iter()
+                    .enumerate()
+                    .any(|(i, c)| c.is_some() && !t.acquisition.contains(&i))
+            {
+                return Err(NativeResourceError::WrongOperation);
+            }
             match n {
                 Node::Resource { .. } => {
-                    return Err(NativeResourceError::UnsupportedCarrierCustody);
+                    if t.selector != 0
+                        || t.owner.is_none()
+                        || t.ordinary.is_some()
+                        || !t.children.is_empty()
+                        || !t.acquisition.is_empty()
+                    {
+                        return Err(NativeResourceError::WrongFamily);
+                    }
+                    continue;
                 }
                 Node::Refinement { .. } => {
                     return Err(NativeResourceError::UnprovedCarrierRefinement);
@@ -294,6 +322,15 @@ impl NativeResourceState {
         }
         self.frame(root.frame)?;
         self.validate_tree(ordinary, &root.tree)?;
+        self.validate_carrier_ownership(root.custody.as_ref(), &root.tree)?;
+        if let Some(token) = &root.custody {
+            self.custody.validate_carrier_location(
+                token,
+                &self.frame(root.frame)?.token,
+                &self.layout.carrier_slot(slot)?,
+                false,
+            )?;
+        }
         Ok(root)
     }
     pub(super) fn carrier_loan(
@@ -314,6 +351,16 @@ impl NativeResourceState {
             return Err(NativeResourceError::InvalidHandle);
         }
         self.frame(root.frame)?;
+        self.validate_tree(ordinary, &root.tree)?;
+        self.validate_carrier_ownership(root.custody.as_ref(), &root.tree)?;
+        if let Some(token) = &root.custody {
+            self.custody.validate_carrier_location(
+                token,
+                &self.frame(root.frame)?.token,
+                &self.layout.carrier_slot(root.slot)?,
+                false,
+            )?;
+        }
         self.validate_tree(ordinary, selected(&root.tree, &loan.path)?)?;
         if let Some(parent) = loan.parent {
             let Some(NativeResourceEntry::CarrierLoan(parent_loan)) = self.handles.get(&parent)
@@ -431,6 +478,7 @@ impl NativeResourceState {
                 children: values,
                 acquisition,
                 next: 0,
+                custody: None,
             }),
         );
         Ok(handle)
@@ -472,6 +520,7 @@ impl NativeResourceState {
                     node: child.node,
                     selector: 0,
                     ordinary: Some((shape, bits)),
+                    owner: None,
                     children: Vec::new(),
                     acquisition: Vec::new(),
                 }
@@ -481,10 +530,16 @@ impl NativeResourceState {
                 let root = self.carrier_root(ordinary, frame, handle, slot)?;
                 self.validate_complete_tree(ordinary, &root.tree)?;
                 self.carrier_unborrowed(handle)?;
+                if root.custody.is_some() {
+                    return Err(NativeResourceError::UnsupportedCarrierCustody);
+                }
                 let Some(NativeResourceEntry::CarrierRoot(r)) = self.handles.remove(&handle) else {
                     return Err(NativeResourceError::WrongFamily);
                 };
                 r.tree
+            }
+            ChildSource::LeafOwner { .. } => {
+                return Err(NativeResourceError::UnsupportedCarrierCustody);
             }
             ChildSource::LeafSum { slot } => self.carrier_take_leaf_sum(
                 ordinary,
@@ -518,6 +573,7 @@ impl NativeResourceState {
         let Op::Construct { children, .. } = self.carrier_operation(b.operation, b.frame)? else {
             return Err(NativeResourceError::WrongOperation);
         };
+        self.validate_carrier_builder(ordinary, b)?;
         if b.next != children.len() || b.children.iter().any(Option::is_none) {
             return Err(NativeResourceError::WrongOperation);
         }
@@ -531,6 +587,13 @@ impl NativeResourceState {
         let Some(NativeResourceEntry::CarrierBuilder(mut b)) = self.handles.remove(&builder) else {
             return Err(NativeResourceError::WrongFamily);
         };
+        if let Some(root) = &b.custody {
+            if let Err(error) = self.custody.complete_carrier_root(root) {
+                self.handles
+                    .insert(builder, NativeResourceEntry::CarrierBuilder(b));
+                return Err(error.into());
+            }
+        }
         let tree = if is_ordinary {
             b.children
                 .get_mut(0)
@@ -541,6 +604,7 @@ impl NativeResourceState {
                 node,
                 selector: b.selector,
                 ordinary: None,
+                owner: None,
                 children: b.children,
                 acquisition: b.acquisition,
             }
@@ -551,6 +615,7 @@ impl NativeResourceState {
                 frame: b.frame,
                 slot: b.destination,
                 generation: output.raw(),
+                custody: b.custody,
                 tree,
             }),
         );
@@ -567,6 +632,9 @@ impl NativeResourceState {
         output: ResourceHandleId,
     ) -> ResourceResult<ResourceHandleId> {
         let root = self.carrier_root(ordinary, source_frame, handle, source)?;
+        if root.custody.is_some() {
+            return Err(NativeResourceError::UnsupportedCarrierCustody);
+        }
         self.validate_complete_tree(ordinary, &root.tree)?;
         self.carrier_unborrowed(handle)?;
         self.carrier_slot_empty(frame, destination)?;
@@ -632,6 +700,9 @@ impl NativeResourceState {
         let root = self.carrier_root(ordinary, frame, handle, source)?;
         self.validate_complete_tree(ordinary, &root.tree)?;
         self.carrier_unborrowed(handle)?;
+        if root.custody.is_some() {
+            return Err(NativeResourceError::UnsupportedCarrierCustody);
+        }
         if root.tree.selector != state
             || self.layout.carriers().node(root.tree.node)?
                 != &(Node::MachineState { machine, state })
@@ -840,6 +911,9 @@ impl NativeResourceState {
         let Some(NativeResourceEntry::CarrierRoot(root)) = self.handles.get(&handle) else {
             return Err(NativeResourceError::WrongFamily);
         };
+        if root.custody.is_some() {
+            return Err(NativeResourceError::UnsupportedCarrierCustody);
+        }
         let projected = selected(&root.tree, &path)?;
         self.validate_complete_tree(ordinary, projected)?;
         match destination {
@@ -878,6 +952,7 @@ impl NativeResourceState {
                     frame: target,
                     slot,
                     generation: out.raw(),
+                    custody: None,
                     tree,
                 }),
             );
@@ -928,6 +1003,7 @@ impl NativeResourceState {
                         node: *fail,
                         selector: 0,
                         ordinary: Some((shape, string)),
+                        owner: None,
                         children: Vec::new(),
                         acquisition: Vec::new(),
                     }),
@@ -952,6 +1028,7 @@ impl NativeResourceState {
             node,
             selector,
             ordinary: None,
+            owner: None,
             children,
             acquisition,
         })
@@ -1016,6 +1093,9 @@ impl NativeResourceState {
             return Err(NativeResourceError::WrongOperation);
         };
         let root = self.carrier_root(ordinary, frame, handle, source)?;
+        if root.custody.is_some() {
+            return Err(NativeResourceError::UnsupportedCarrierCustody);
+        }
         let pending = self.prepare_carrier_cleanup(std::iter::once(&root.tree))?;
         self.carrier_unborrowed(handle)?;
         let Some(NativeResourceEntry::CarrierRoot(root)) = self.handles.remove(&handle) else {
@@ -1056,6 +1136,9 @@ impl NativeResourceState {
             }) {
                 let root = self.carrier_root(ordinary, frame, id, slot)?;
                 self.carrier_unborrowed(id)?;
+                if root.custody.is_some() {
+                    return Err(NativeResourceError::UnsupportedCarrierCustody);
+                }
                 holders.push((
                     id,
                     Some(self.prepare_carrier_cleanup(std::iter::once(&root.tree))?),
@@ -1105,82 +1188,6 @@ impl NativeResourceState {
         }
         first.map_or(Ok(()), Err)
     }
-    pub(super) fn retire_carrier_frame(
-        &mut self,
-        ordinary: &mut values::NativeValues,
-        frame: ResourceHandleId,
-    ) -> ResourceResult<()> {
-        if self.handles.values().any(|e|matches!(e,NativeResourceEntry::CarrierLoan(l) if l.frame!=frame && matches!(self.handles.get(&l.root),Some(NativeResourceEntry::CarrierRoot(r)) if r.frame==frame))){return Err(CustodyError::ActiveBorrow.into());}
-        loop {
-            let next = self.handles.iter().find_map(|(id, e)| {
-                if matches!(e,NativeResourceEntry::CarrierLoan(l) if l.frame==frame)
-                    && !self.handles.values().any(
-                        |e| matches!(e,NativeResourceEntry::CarrierLoan(l) if l.parent==Some(*id)),
-                    )
-                {
-                    Some(*id)
-                } else {
-                    None
-                }
-            });
-            let Some(id) = next else {
-                break;
-            };
-            self.carrier_end_loan(frame, id)?;
-        }
-        if self
-            .handles
-            .values()
-            .any(|e| matches!(e,NativeResourceEntry::CarrierLoan(l) if l.frame==frame))
-        {
-            return Err(CustodyError::ActiveBorrow.into());
-        }
-        let mut holders = Vec::new();
-        holders
-            .try_reserve(self.handles.len())
-            .map_err(|_| NativeResourceError::Capacity)?;
-        holders.extend(self.handles.iter().filter_map(|(id, e)| {
-            if matches!(e,NativeResourceEntry::CarrierRoot(r) if r.frame==frame)
-                || matches!(e,NativeResourceEntry::CarrierBuilder(b) if b.frame==frame)
-            {
-                Some(*id)
-            } else {
-                None
-            }
-        }));
-        holders.sort_by_key(|id| std::cmp::Reverse(id.raw()));
-        let mut first = None;
-        for id in holders {
-            let pending = match self.handles.get(&id) {
-                Some(NativeResourceEntry::CarrierRoot(r)) => {
-                    self.prepare_carrier_cleanup(std::iter::once(&r.tree))?
-                }
-                Some(NativeResourceEntry::CarrierBuilder(b)) => {
-                    let mut pending = self.prepare_carrier_cleanup(b.children.iter().flatten())?;
-                    pending
-                        .try_reserve(1)
-                        .map_err(|_| NativeResourceError::Capacity)?;
-                    pending
-                }
-                _ => continue,
-            };
-            let tree = match self.handles.remove(&id) {
-                Some(NativeResourceEntry::CarrierRoot(r)) => r.tree,
-                Some(NativeResourceEntry::CarrierBuilder(b)) => NativeCarrierTree {
-                    node: 0,
-                    selector: b.selector,
-                    ordinary: None,
-                    children: b.children,
-                    acquisition: b.acquisition,
-                },
-                _ => continue,
-            };
-            if let Err(e) = self.drop_carrier_tree_prepared(ordinary, tree, pending) {
-                first.get_or_insert(e);
-            }
-        }
-        first.map_or(Ok(()), Err)
-    }
     pub(super) fn safety_retire_carriers(
         &mut self,
         ordinary: &mut values::NativeValues,
@@ -1217,17 +1224,32 @@ impl NativeResourceState {
                 }
                 _ => continue,
             };
-            let tree = match self.handles.remove(&id) {
-                Some(NativeResourceEntry::CarrierRoot(root)) => root.tree,
-                Some(NativeResourceEntry::CarrierBuilder(builder)) => NativeCarrierTree {
-                    node: 0,
-                    selector: builder.selector,
-                    ordinary: None,
-                    children: builder.children,
-                    acquisition: builder.acquisition,
-                },
+            let (tree, custody) = match self.handles.remove(&id) {
+                Some(NativeResourceEntry::CarrierRoot(root)) => (root.tree, root.custody),
+                Some(NativeResourceEntry::CarrierBuilder(builder)) => (
+                    NativeCarrierTree {
+                        node: self
+                            .layout
+                            .carriers()
+                            .slots
+                            .get(builder.destination as usize)
+                            .ok_or(NativeResourceError::WrongOperation)?
+                            .node,
+                        selector: builder.selector,
+                        ordinary: None,
+                        owner: None,
+                        children: builder.children,
+                        acquisition: builder.acquisition,
+                    },
+                    builder.custody,
+                ),
                 _ => continue,
             };
+            if let Some(token) = custody.as_ref() {
+                if let Err(error) = self.custody.retire_carrier_metadata(token) {
+                    first.get_or_insert(NativeResourceError::Custody(error));
+                }
+            }
             if let Err(error) = self.drop_carrier_tree_prepared(ordinary, tree, pending) {
                 first.get_or_insert(error);
             }

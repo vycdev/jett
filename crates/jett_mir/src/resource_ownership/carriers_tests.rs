@@ -917,14 +917,39 @@ fn resource_carrier_constructor_children_keep_lexical_order_and_exact_current_oc
             ResourceCarrierOperationRole::CommitConstructor { destination: actual } if *actual == destination
         )).unwrap();
         assert!(began < committed);
-        let expression = constructor(function(&program, "absent_envelope"), |value| {
-            matches!(value.kind, hir::ExpressionKind::StructConstruct { .. })
-        })
-        .unwrap();
-        assert!(graph.operations_for_expression(expression).any(|operation| matches!(
+        let current = function(&program, "absent_envelope");
+        let region = staged_constructor(current);
+        assert_eq!(region.evaluation_order(), [0, 1, 2]);
+        assert!(matches!(
+            region.original().kind,
+            hir::ExpressionKind::StructConstruct { .. }
+        ));
+        let (commit, _) = region.commit().unwrap();
+        assert!(graph.operations_at(commit).any(|operation| matches!(
             operation.role(), ResourceCarrierOperationRole::CommitConstructor { destination: actual }
                 if *actual == destination
         )));
+        for field in region.fields() {
+            assert!(graph.operations_at(field.stage()).any(|operation| matches!(
+                operation.role(), ResourceCarrierOperationRole::ConstructorChild { destination: actual, child }
+                    if *actual == destination && child.index == field.field()
+            )));
+        }
+        let first = &region.fields()[0];
+        let ResourcePosition::Statement(index) = first.stage().position() else {
+            unreachable!()
+        };
+        let StatementKind::ResourceConstructor(ResourceConstructorNode::Stage {
+            value: expression,
+            ..
+        }) = &current.blocks[first.stage().block().index() as usize].statements[index].kind
+        else {
+            unreachable!()
+        };
+        assert!(
+            graph.operations_for_expression(expression).next().is_some(),
+            "the exact current list field retains its constructor-issued expression occurrence"
+        );
         let copied = (*expression).clone();
         assert_eq!(
             graph.operations_for_expression(&copied).count(),
@@ -941,6 +966,24 @@ fn resource_carrier_constructor_children_keep_lexical_order_and_exact_current_oc
             assert_eq!(operation.site().function(), envelope.function());
         }
     }
+}
+
+fn staged_constructor(function: &Function) -> &ResourceConstructorRegion {
+    let ids = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .filter_map(|statement| match &statement.kind {
+            StatementKind::ResourceConstructor(ResourceConstructorNode::Begin { constructor }) => {
+                Some(*constructor)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [id] = ids.as_slice() else {
+        panic!("one exact staged struct constructor")
+    };
+    function.resource_constructor(*id).unwrap()
 }
 
 #[test]
@@ -1146,24 +1189,48 @@ fn resource_carrier_public_mir_field_tag_type_return_and_local_changes_cannot_is
             match mutation {
                 0 | 1 | 2 => {
                     let other_type = function(&changed, "absent_box").return_type;
-                    let value =
-                        constructor_mut(function_mut(&mut changed, "absent_envelope"), |value| {
-                            matches!(value.kind, hir::ExpressionKind::StructConstruct { .. })
-                        });
-                    let hir::ExpressionKind::StructConstruct {
-                        struct_type,
-                        fields,
-                        evaluation_order,
-                        ..
-                    } = &mut value.kind
-                    else {
-                        unreachable!()
-                    };
-                    match mutation {
-                        0 => fields.swap(0, 1),
-                        1 => evaluation_order.swap(0, 2),
-                        2 => *struct_type = other_type,
-                        _ => unreachable!(),
+                    let current = function_mut(&mut changed, "absent_envelope");
+                    let (commit, output) = staged_constructor(current).commit().unwrap();
+                    let output = output.id;
+                    if mutation == 2 {
+                        current.locals[output.index() as usize].ty = other_type;
+                        let ResourcePosition::Statement(index) = commit.position() else {
+                            unreachable!()
+                        };
+                        assert!(
+                            matches!(current.blocks[commit.block().index() as usize].statements[index].kind,
+                            StatementKind::ResourceConstructor(ResourceConstructorNode::Commit { output: id, .. }) if id == output)
+                        );
+                    } else {
+                        let mut altered = 0;
+                        for node in current
+                            .blocks
+                            .iter_mut()
+                            .flat_map(|block| &mut block.statements)
+                        {
+                            if let StatementKind::ResourceConstructor(
+                                ResourceConstructorNode::Stage {
+                                    source_index,
+                                    field,
+                                    ..
+                                },
+                            ) = &mut node.kind
+                            {
+                                let (selected, second) = if mutation == 0 {
+                                    (field, 1)
+                                } else {
+                                    (source_index, 2)
+                                };
+                                if *selected == 0 {
+                                    *selected = second;
+                                    altered += 1;
+                                } else if *selected == second {
+                                    *selected = 0;
+                                    altered += 1;
+                                }
+                            }
+                        }
+                        assert_eq!(altered, 2, "exact staged field/order permutation");
                     }
                 }
                 3 => {

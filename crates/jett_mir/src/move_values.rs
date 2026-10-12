@@ -769,6 +769,21 @@ impl Flow<'_> {
                         return Err("Resource call region requires its fresh companion plan".into());
                     }
                 }
+                StatementKind::ResourceConstructor(node) => {
+                    if self.companion.is_none() {
+                        return Err("Resource constructor requires its fresh companion plan".into());
+                    }
+                    self.function.resource_constructor(node.constructor())?;
+                    match node {
+                        crate::ResourceConstructorNode::Stage { value, .. } => {
+                            self.expr(value, false)?
+                        }
+                        crate::ResourceConstructorNode::Commit { output, .. } => {
+                            self.state.insert(output.index() as usize);
+                        }
+                        _ => {}
+                    }
+                }
                 StatementKind::Evaluate(value) => self.expr(value, false)?,
                 StatementKind::Assert { condition, message } => {
                     self.expr(condition, false)?;
