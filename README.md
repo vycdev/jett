@@ -196,6 +196,25 @@ cargo test -p jett_comptime
 
 Compile-fail fixtures live in `tests/compile_fail` and assert specific diagnostics. Run-pass fixtures live in `tests/run_pass` and exercise interpreter behavior.
 
+### Private Resource native gates
+
+The archive measurement helper builds fresh compiler-test runtimes and runs
+pinned Source execution gates. On Linux GNU, its default target measures the
+dynamic CRT. On Windows MSVC, use an x64 Visual Studio Developer PowerShell
+with `link.exe` on PATH and LLVM's `llvm-nm` and `llvm-readobj` installed:
+
+```powershell
+python tools/measure_resource_native_archives.py prepare --target x86_64-pc-windows-msvc --nm llvm-nm --readobj llvm-readobj --linker link.exe --output target/native/private-resource
+python tools/measure_resource_native_archives.py run --target x86_64-pc-windows-msvc --suite occupied-structs --reuse-target-dir --receipt RECEIPT_PATH --expected-sha256 MEASURED_DIGEST --target-dir target/native
+```
+
+Preparation returns the receipt path and measured digest. The MSVC path checks
+static CRT, exact runtime exports, compiler and linker identity, and the SDK LIB
+environment. The two occupied-struct gates use both fresh archive profiles;
+ordinary Runtime test counts do not establish their linked Source execution.
+Reusing the MSVC test target requires a newly compiled gate with that receipt
+pin. The default `original` suite retains the complete shared Source gate.
+
 The language intentionally enforces function complexity limits. The current checker caps functions at 100 statements, nesting depth 4, and cyclomatic complexity 10.
 
 ## License
