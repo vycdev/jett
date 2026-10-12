@@ -1447,6 +1447,22 @@ impl Translator<'_, '_> {
                 )?;
                 Ok(())
             }
+            StatementKind::ReflectedValueReady {
+                source,
+                inspect_pending,
+            } => {
+                if !*inspect_pending {
+                    return Ok(());
+                }
+                let ty = self.local_types[source.index() as usize].ty;
+                let expression = Expression {
+                    kind: ExpressionKind::Local(*source),
+                    ty,
+                    span: statement.span,
+                };
+                let value = self.argument(&expression, true)?;
+                self.reflected_value_ready(value, ty, statement.span)
+            }
             StatementKind::IterationBorrow { .. } => Ok(()),
             StatementKind::SequenceLength { source, target }
             | StatementKind::SequenceGet { source, target, .. } => {
@@ -2606,6 +2622,7 @@ impl Translator<'_, '_> {
                 intrinsic,
                 type_arguments,
                 reflection_arguments,
+                field_validation,
                 args,
                 evaluation_order,
                 ..
@@ -2613,6 +2630,7 @@ impl Translator<'_, '_> {
                 *intrinsic,
                 type_arguments,
                 reflection_arguments,
+                field_validation.as_ref(),
                 args,
                 evaluation_order,
                 expression.ty,

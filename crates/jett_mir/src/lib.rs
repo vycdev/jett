@@ -39,6 +39,8 @@ pub use call_ownership::{CallerAcquisitions, SourceAcquisition};
 mod call_views;
 pub mod copy_values;
 mod generated_functions;
+mod reflected_callable;
+pub use reflected_callable::validate_reflected_callable_plans;
 mod handlers;
 mod iteration_views;
 pub use generated_functions::prepare_native_generated_functions;
@@ -92,6 +94,7 @@ pub struct Function {
     call_owner_generations: Vec<call_owner_generations::CallOwnerGeneration>,
     resource_lowering: Option<resource_ownership::ResourceLoweringWitness>,
     ordinary_borrowed_sums: Option<ordinary_borrowed_sums::Witness>,
+    reflected_callable: Option<reflected_callable::Witness>,
 }
 
 impl Function {
@@ -239,6 +242,11 @@ pub enum StatementKind {
     ReflectedContainerReady {
         source: LocalId,
         kind: ReflectedContainerKind,
+    },
+    /// Private produced-return preflight, authenticated by its callable witness.
+    ReflectedValueReady {
+        source: LocalId,
+        inspect_pending: bool,
     },
     SequenceLength {
         source: SequenceSource,
@@ -461,6 +469,7 @@ pub fn validate_call_ownership(
     types: &TypeInterner,
 ) -> Result<(), Vec<ValidationError>> {
     validate(program)?;
+    validate_reflected_callable_plans(program, types)?;
     let mut errors = Vec::new();
     if let Err(message) = program.resource_manifest.validate(types) {
         // Type bounds are a prerequisite for custody and invocation queries.
@@ -735,7 +744,8 @@ impl FunctionValidator<'_, '_> {
                 self.check_local(*rhs_owner, statement.span, "generation acquired RHS");
             }
             StatementKind::CloseCallOwnerGeneration { .. } => {}
-            StatementKind::ReflectedContainerReady { source, .. } => {
+            StatementKind::ReflectedContainerReady { source, .. }
+            | StatementKind::ReflectedValueReady { source, .. } => {
                 self.check_local(*source, statement.span, "reflected container source");
             }
             StatementKind::SequenceLength { source, target } => {
@@ -1143,7 +1153,9 @@ impl FunctionValidator<'_, '_> {
                     hir::is_reflected_field_intrinsic(*intrinsic),
                     field_validation,
                 ) {
-                    (true, Some(hir::ReflectedFieldValidation::Read)) | (false, None) => {}
+                    (true, Some(hir::ReflectedFieldValidation::Read))
+                    | (true, Some(hir::ReflectedFieldValidation::ReadCallable(_)))
+                    | (false, None) => {}
                     _ => self.error(
                         expression.span,
                         "reflected selector proof plans were not lowered",
@@ -1337,7 +1349,7 @@ pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Ve
             )
         })
         .collect();
-    let lowered = Program {
+    let mut lowered = Program {
         resource_manifest: program.resource_manifest.clone(),
         equality_methods: program.equality_methods.clone(),
         functions: program
@@ -1356,6 +1368,23 @@ pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Ve
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| vec![error])?,
     };
+    reflected_callable::capture(
+        &mut lowered,
+        program,
+        &function_param_modes,
+        &resource_execution,
+    )
+    .map_err(|message| {
+        vec![LowerError {
+            span: program
+                .functions
+                .first()
+                .map_or(Span::new(jett_common::FileId::new(0), 0, 0), |function| {
+                    function.span
+                }),
+            message,
+        }]
+    })?;
     validate_call_ownership(&lowered, types).map_err(|errors| {
         errors
             .into_iter()
@@ -1369,6 +1398,24 @@ pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Ve
 }
 
 fn lower_function(
+    function: &hir::Function,
+    types: &TypeInterner,
+    function_param_modes: &std::collections::HashMap<FunctionId, Vec<ParamMode>>,
+    resource_manifest: &hir::ResourceManifest,
+    resource_source: &hir::ResourceSourceArchive,
+    resource_execution: &resource_ownership::ResourceExecutionClosure,
+) -> Result<Function, LowerError> {
+    lower_function_body(
+        function,
+        types,
+        function_param_modes,
+        resource_manifest,
+        resource_source,
+        resource_execution,
+    )
+}
+
+fn lower_function_body(
     function: &hir::Function,
     types: &TypeInterner,
     function_param_modes: &std::collections::HashMap<FunctionId, Vec<ParamMode>>,
@@ -1433,6 +1480,7 @@ fn lower_function(
         call_owner_generations: Vec::new(),
         resource_lowering: None,
         ordinary_borrowed_sums: None,
+        reflected_callable: None,
     };
     lowered.breakpoint_regions =
         breakpoint_capture
@@ -1487,6 +1535,7 @@ struct Builder<'a> {
     generation_capture: call_owner_generations::Capture,
     resource_capture: resource_ownership::Capture,
     ordinary_sum_capture: ordinary_borrowed_sums::Capture,
+    reflected_produced_return: bool,
 }
 
 impl<'a> Builder<'a> {
@@ -1522,6 +1571,7 @@ impl<'a> Builder<'a> {
             generation_capture: call_owner_generations::Capture::default(),
             resource_capture: resource_ownership::Capture::default(),
             ordinary_sum_capture: ordinary_borrowed_sums::Capture::default(),
+            reflected_produced_return: false,
         }
     }
 

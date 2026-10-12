@@ -107,6 +107,7 @@ pub fn prepare_native_uninhabited_sums(program: &mut Program, types: &TypeIntern
     };
     for (function, (absent_plans, present_plans)) in program.functions.iter_mut().zip(plans) {
         let before = (crate::resource_ownership::has_records(function)
+            || function.reflected_callable.is_some()
             || crate::ordinary_borrowed_sums::has_records(function)
             || !function.breakpoint_regions.is_empty()
             || crate::call_owner_generations::has_records(function))
@@ -194,6 +195,10 @@ pub fn prepare_native_uninhabited_sums(program: &mut Program, types: &TypeIntern
                 || !sequences::prune::unreachable(function)
             {
                 if let Some(before) = before {
+                    *function = before;
+                }
+            } else if let Some(before) = before {
+                if crate::reflected_callable::prepared(function, &before).is_err() {
                     *function = before;
                 }
             }

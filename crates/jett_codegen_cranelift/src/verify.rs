@@ -211,6 +211,8 @@ fn verify_descriptor_bodies_inner<'a>(
     resource: Option<&'a jett_mir::ResourceOwnershipPlan<'a>>,
 ) -> Result<(), CodegenError> {
     jett_mir::validate_call_ownership(program, types).map_err(CodegenError::InvalidMir)?;
+    jett_mir::validate_reflected_callable_plans(program, types)
+        .map_err(CodegenError::InvalidMir)?;
     // Shared inline tables and impossible sum arms contain valid Never metadata
     // that need not allocate a native frame slot. Validate original type shapes
     // without demanding a carrier for an absent function result; every surviving
@@ -350,6 +352,8 @@ pub(crate) fn verify_program(
     types: &TypeInterner,
 ) -> Result<VerifiedProgram, CodegenError> {
     jett_mir::validate_call_ownership(program, types).map_err(CodegenError::InvalidMir)?;
+    jett_mir::validate_reflected_callable_plans(program, types)
+        .map_err(CodegenError::InvalidMir)?;
 
     // Reachability may omit lifted bodies, but malformed source metadata must
     // not disappear with an unused descriptor.
@@ -1238,6 +1242,17 @@ impl Verifier<'_> {
                     ));
                 }
                 // Diagnostic text is canonical to the typed enum, never a source operand.
+                Ok(())
+            }
+            StatementKind::ReflectedValueReady { source, .. } => {
+                let source = function.local(*source).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "missing reflected callback result place",
+                    )
+                })?;
+                self.value_kind(function, source.ty, "reflected callback result")?;
                 Ok(())
             }
             StatementKind::SequenceLength { source, target }
@@ -2469,7 +2484,8 @@ impl Verifier<'_> {
                 if jett_hir::is_reflected_field_intrinsic(*intrinsic) {
                     if !matches!(
                         field_validation,
-                        Some(jett_hir::ReflectedFieldValidation::Read)
+                        Some(jett_hir::ReflectedFieldValidation::Read
+                            | jett_hir::ReflectedFieldValidation::ReadCallable(_))
                     ) {
                         return Err(self.contract_error(
                             function,

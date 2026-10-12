@@ -644,6 +644,20 @@ pub(super) fn value_expression(
         (Type::String, Value::String(text)) => ExpressionKind::String(text.clone()),
         (Type::Bool, Value::Bool(flag)) => ExpressionKind::Bool(*flag),
         (Type::Nothing, Value::Nothing) => ExpressionKind::Nothing,
+        (Type::Function { .. }, Value::ReflectedCallable(adapter)) => {
+            if ty != adapter.requested_type()
+                || !std::ptr::eq(types, &adapter.checked_program().checked().interner)
+                || !adapter
+                    .checked_plan()
+                    .validate(adapter.checked_program().checked())
+            {
+                return Err(
+                    "generated reflected callback belongs to another checked type context".into(),
+                );
+            }
+            let source = value_expression(adapter.source(), adapter.source_type(), span, context)?;
+            return jett_hir::lower_reflected_callable_value(source, adapter, span);
+        }
         (Type::Function { .. }, Value::NamedFunction(_) | Value::Function { .. }) => {
             return function_value_expression(value, ty, span, context);
         }

@@ -107,6 +107,7 @@ pub(crate) struct Materialized {
 pub struct ResourceSourceArchive {
     data: Option<Arc<Original>>,
     execution: Option<Arc<Materialized>>,
+    pub(crate) reflected_values: Option<Arc<super::reflected_callable::baked::Transition>>,
 }
 impl std::fmt::Debug for ResourceSourceArchive {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -121,6 +122,11 @@ impl PartialEq for ResourceSourceArchive {
             (None, None) => true,
             (Some(a), Some(b)) => {
                 Arc::ptr_eq(a, b)
+                    && match (&self.reflected_values, &other.reflected_values) {
+                        (None, None) => true,
+                        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                        _ => false,
+                    }
                     && match (&self.execution, &other.execution) {
                         (None, None) => true,
                         (Some(a), Some(b)) => Arc::ptr_eq(a, b),
@@ -162,13 +168,18 @@ impl ResourceSourceArchive {
                 reflected_fields: super::reflected_field_sources::capture(program, checked),
             })),
             execution: None,
+            reflected_values: None,
         }
     }
     /// Original checked functions stay immutable; this view contains only checked replacements.
     pub fn execution_functions(&self) -> &[Function] {
-        self.execution
-            .as_ref()
-            .map_or_else(|| self.functions(), |view| view.functions.as_slice())
+        if let Some(view) = &self.execution {
+            return view.functions.as_slice();
+        }
+        self.reflected_values.as_ref().map_or_else(
+            || self.functions(),
+            |transition| transition.current_functions(),
+        )
     }
     /// Exact checked session identity; equal source text cannot replace it.
     pub fn belongs_to(&self, checked: &Arc<CheckedResourceProgram>) -> bool {

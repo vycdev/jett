@@ -171,7 +171,7 @@ pub(super) fn hir_block(block: &hir::Block, visit: &mut impl FnMut(&Expression))
         }
     }
 }
-pub(super) fn mir_block(block: &BasicBlock, visit: &mut impl FnMut(&Expression)) {
+pub(crate) fn mir_block(block: &BasicBlock, visit: &mut impl FnMut(&Expression)) {
     for statement in &block.statements {
         match &statement.kind {
             StatementKind::ResourceConstructor(ResourceConstructorNode::Stage {
@@ -214,6 +214,7 @@ pub(super) fn mir_block(block: &BasicBlock, visit: &mut impl FnMut(&Expression))
             | StatementKind::CloseCallOwnerGeneration { .. }
             | StatementKind::EndCallView { .. }
             | StatementKind::ReflectedContainerReady { .. }
+            | StatementKind::ReflectedValueReady { .. }
             | StatementKind::SequenceLength { .. }
             | StatementKind::SequenceGet { .. }
             | StatementKind::IterationBorrow { .. }
@@ -402,6 +403,7 @@ pub(super) fn mir_site(block: &BasicBlock, position: usize, visit: &mut impl FnM
             | StatementKind::CloseCallOwnerGeneration { .. }
             | StatementKind::EndCallView { .. }
             | StatementKind::ReflectedContainerReady { .. }
+            | StatementKind::ReflectedValueReady { .. }
             | StatementKind::SequenceLength { .. }
             | StatementKind::SequenceGet { .. }
             | StatementKind::IterationBorrow { .. }

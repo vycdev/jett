@@ -8,18 +8,25 @@ enum Pass {
     Predicates,
 }
 
-fn needed(plan: &hir::ReflectedFieldPlan, pass: Pass) -> bool {
+fn needed(plan: &hir::ReflectedFieldPlan, pass: Pass, produced: bool) -> bool {
     use hir::ReflectedFieldAction as A;
     match (&plan.action, pass) {
         (A::Exact, _) => false,
-        (A::Predicates(_), Pass::Preflight) => false,
+        (A::CallableReturn(_), _) => false,
+        (A::Predicates(predicates), Pass::Preflight) => produced && !predicates.is_empty(),
         (A::Unsupported(_), Pass::Predicates) => false,
-        (A::Refine { base, .. }, Pass::Preflight) => needed(base, pass),
-        (A::List(child) | A::Set(child) | A::Optional(child), Pass::Predicates) => {
-            needed(child, pass)
+        (A::Refine { base, predicates }, Pass::Preflight) => {
+            needed(base, pass, produced) || (produced && !predicates.is_empty())
         }
-        (A::Map { key, value }, Pass::Predicates) => needed(key, pass) || needed(value, pass),
-        (A::Result { ok, error }, Pass::Predicates) => needed(ok, pass) || needed(error, pass),
+        (A::List(child) | A::Set(child) | A::Optional(child), Pass::Predicates) => {
+            needed(child, pass, produced)
+        }
+        (A::Map { key, value }, Pass::Predicates) => {
+            needed(key, pass, produced) || needed(value, pass, produced)
+        }
+        (A::Result { ok, error }, Pass::Predicates) => {
+            needed(ok, pass, produced) || needed(error, pass, produced)
+        }
         _ => true,
     }
 }
@@ -53,12 +60,13 @@ impl Builder<'_> {
         pass: Pass,
         span: Span,
     ) {
-        if !self.open() || !needed(plan, pass) {
+        if !self.open() || !needed(plan, pass, self.reflected_produced_return) {
             return;
         }
         use hir::ReflectedFieldAction as A;
         match &plan.action {
             A::Exact => {}
+            A::CallableReturn(_) => {}
             A::Unsupported(reason) => {
                 self.push(
                     StatementKind::Evaluate(Expression {
@@ -71,11 +79,48 @@ impl Builder<'_> {
                 self.terminate(TerminatorKind::Unreachable, span);
             }
             A::Predicates(predicates) => {
-                self.reflected_predicates(source, plan.requested_type, predicates, span);
+                if matches!(pass, Pass::Preflight) {
+                    self.push(
+                        StatementKind::ReflectedValueReady {
+                            source,
+                            inspect_pending: true,
+                        },
+                        span,
+                    );
+                } else {
+                    let source_type = if self.reflected_produced_return {
+                        self.locals[source.index() as usize].ty
+                    } else {
+                        plan.requested_type
+                    };
+                    self.reflected_predicates(source, source_type, predicates, span);
+                }
             }
             A::Refine { base, predicates } => {
-                if needed(base, pass) {
-                    let snapshot = self.temporary(base.requested_type, span);
+                if self.reflected_produced_return
+                    && matches!(pass, Pass::Preflight)
+                    && !predicates.is_empty()
+                {
+                    self.push(
+                        StatementKind::ReflectedValueReady {
+                            source,
+                            inspect_pending: true,
+                        },
+                        span,
+                    );
+                }
+                if needed(base, pass, self.reflected_produced_return) {
+                    let source_type = if self.reflected_produced_return {
+                        self.locals[source.index() as usize].ty
+                    } else {
+                        plan.requested_type
+                    };
+                    let base_type = if self.reflected_produced_return {
+                        base.source_type
+                    } else {
+                        base.requested_type
+                    };
+                    let snapshot = self.temporary(base_type, span);
                     self.push(
                         StatementKind::Let {
                             local: snapshot,
@@ -83,13 +128,13 @@ impl Builder<'_> {
                                 kind: ExpressionKind::Coarsen(Box::new(Expression {
                                     kind: ExpressionKind::Clone(Box::new(local(
                                         source,
-                                        plan.requested_type,
+                                        source_type,
                                         span,
                                     ))),
-                                    ty: plan.requested_type,
+                                    ty: source_type,
                                     span,
                                 })),
-                                ty: base.requested_type,
+                                ty: base_type,
                                 span,
                             },
                         },
@@ -98,7 +143,12 @@ impl Builder<'_> {
                     self.reflected_pass(snapshot, base, pass, span);
                 }
                 if self.open() && matches!(pass, Pass::Predicates) {
-                    self.reflected_predicates(source, plan.requested_type, predicates, span);
+                    let source_type = if self.reflected_produced_return {
+                        self.locals[source.index() as usize].ty
+                    } else {
+                        plan.requested_type
+                    };
+                    self.reflected_predicates(source, source_type, predicates, span);
                 }
             }
             A::List(child) => self.reflected_sequence(
@@ -158,7 +208,10 @@ impl Builder<'_> {
                 span,
             );
         }
-        if !children.iter().any(|(_, plan)| needed(plan, pass)) {
+        if !children
+            .iter()
+            .any(|(_, plan)| needed(plan, pass, self.reflected_produced_return))
+        {
             return;
         }
         let cursor = self.temporary(TypeInterner::INT64, span);
@@ -204,10 +257,15 @@ impl Builder<'_> {
         );
         self.current = body;
         for (part, plan) in children {
-            if !self.open() || !needed(plan, pass) {
+            if !self.open() || !needed(plan, pass, self.reflected_produced_return) {
                 continue;
             }
-            let child = self.temporary(plan.requested_type, span);
+            let child_type = if self.reflected_produced_return {
+                plan.source_type
+            } else {
+                plan.requested_type
+            };
+            let child = self.temporary(child_type, span);
             self.push(
                 StatementKind::SequenceGet {
                     consume: false,
@@ -260,7 +318,9 @@ impl Builder<'_> {
                 span,
             );
         }
-        if !needed(ok, pass) && !error.is_some_and(|plan| needed(plan, pass)) {
+        if !needed(ok, pass, self.reflected_produced_return)
+            && !error.is_some_and(|plan| needed(plan, pass, self.reflected_produced_return))
+        {
             return;
         }
         let present = self.temporary(TypeInterner::BOOL, span);
@@ -284,7 +344,9 @@ impl Builder<'_> {
         );
         for (block, child, success) in [(accepted, Some(ok), true), (failed, error, false)] {
             self.current = block;
-            if let Some(child) = child.filter(|plan| needed(plan, pass)) {
+            if let Some(child) =
+                child.filter(|plan| needed(plan, pass, self.reflected_produced_return))
+            {
                 let source_type = self.locals[source.index() as usize].ty;
                 let snapshot = self.temporary(source_type, span);
                 self.push(
@@ -298,7 +360,12 @@ impl Builder<'_> {
                     },
                     span,
                 );
-                let payload = self.temporary(child.requested_type, span);
+                let child_type = if self.reflected_produced_return {
+                    child.source_type
+                } else {
+                    child.requested_type
+                };
+                let payload = self.temporary(child_type, span);
                 self.push(
                     StatementKind::SumTake {
                         source: snapshot,

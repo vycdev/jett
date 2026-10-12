@@ -4884,3 +4884,73 @@ Local MSVC Debug/Release Source-deleted gates pass, including optimized producti
 matching/mismatched cases. See
 [exact concrete argument verification](active/native_erased_same_owner_arguments.md)
 for scope, helper-level limits and remaining platform acceptance.
+
+### Selected lazy reflected callable return validation
+
+A checked reflected callable request may establish supported new return
+refinements through an owned lazy adapter. Exact owner, member, field ordinal,
+pending-selector and declared-schema checks precede construction. The adapter
+retains the original stored signature, source body, captures, debug identity
+and pending state; constructing or reading it invokes neither callback nor
+predicate. Requested parameter, view and capability contracts must satisfy the
+existing ordinary callable adapter relation. A descriptor or requested type
+annotation grants no proof, effect authority or nominal conversion.
+
+Each invocation evaluates its actuals once, invokes the retained source once
+under the original signature, and preserves the source's ordinary validation.
+Only after the source result exists does the supported typed produced-refinement
+conversion establish the unproved requested return suffix. Failed validation
+uses the existing terminal refinement-boundary error and publishes no trusted
+target result. Exact established prefixes are reused. The adapter never joins
+implicitly or inspects pending payload; a pending result requiring a new check
+reaches the existing pending-inspection refusal before predicates or consumers,
+while exact already-proved pending transport remains unchanged.
+
+On 2026-10-12 the managed integration passes all eighteen original Sources,
+including the byte-exact wider/exact probes, named/captured callbacks, lazy reads,
+repeated calls, invalid results, selector precedence, optional results and
+Nothing/refined-unit pending transport. Their thirty-six Source-deleted native
+executions pass against normal MSVC Debug/Release Main archives, with the
+original release=false Source/debug policy and unoptimized objects preserved.
+Three additive canonical Stdout controls pass six objects and twelve executions
+across both Jett optimization settings and both runtime profiles: lazy repeated
+calls preserve the source descriptor; invalid returns suppress the consumer;
+wrong selector ownership refuses before callback body output. The four Driver
+gates compare exact stdout, stderr and exit status. The ordinary public launcher
+does not expose context-retirement counters.
+
+The current fourteen focused reference controls preserve every original thirteen
+test body and add a factory/primitive-call origin-restoration control. Original
+closure body and typed capture/context witnesses are constructed at the trusted
+capture site. Admission and invocation compare against retained witnesses;
+mutating the body, checked context, signature, ordinal, Source owner or predicate
+cannot mint proof. Ordinary required constants/refinements and already-proved
+ancestor transport retain their existing path.
+
+Capture-origin preparation now skips an unused checked-root projection only when
+the exhaustive named-body scan finds no possible inline capture origin. Inline
+setup stays inside its function-value arm; InlineFn, Comptime, Error and
+ComptimeTypeBind remain conservative positive shapes. Reflected authentication
+and pending capture snapshots remain unchanged. One isolated, unchanged native
+reflection control takes 295.06 seconds before and 64.86 seconds after this
+change; this measures that gate's wall time rather than general native throughput.
+
+After this performance change, all 2,359 workspace library tests across 22 result
+groups pass, together with the four callable Driver gates (48 native executions),
+27 broader interface, 10 erased-owner and nine actor native regression tests.
+Fresh current compiler/source/binary/dep-info guards also accept all sixteen
+private Resource gates: 754 Source-deleted executions and 900 entry completions.
+Only the unchanged, independently measured v4 Debug/Release ABI1/wire3 static-CRT
+runtime archives are reused, with compiled receipt pin
+`bc2ad54743380441f074d8d5d212048ecf440669817c0cb69ce2fd0810ba1c95`.
+The fresh post-change gate and complete source guard supply current acceptance;
+old v4 execution records do not. Each Rust gate checks its existing exact
+completion, script/event, message and cleanup oracles before one teardown.
+
+This is bounded local MSVC integration acceptance. Full coherent-workspace and
+native conformance gates, exact-revision supported-host CI, GNU and installed
+distribution remain pending. New nominal/secret proof establishment, protected
+secret observation, broader generic/reflected forms and authenticated generated
+verify/property-suite transitions remain full-goal obligations. No Source
+exclusion or broad language-completion claim follows: the rough 87% estimate,
+fixed 207-fixture/182-object inventory and full 100% goal remain unchanged.

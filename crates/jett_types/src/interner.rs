@@ -91,6 +91,22 @@ impl TypeInterner {
 }
 
 impl TypeInterner {
+    /// Copy all type metadata into an independent owned table with the same IDs.
+    /// This preserves lookup meanings, not checked Source or witness authority.
+    pub fn snapshot(&self) -> Self {
+        Self {
+            map: self.map.clone(),
+            types: self.types.clone(),
+            structs: self.structs.clone(),
+            bitfields: self.bitfields.clone(),
+            enums: self.enums.clone(),
+            interfaces: self.interfaces.clone(),
+            actors: self.actors.clone(),
+            machines: self.machines.clone(),
+            nominal_type_arguments: self.nominal_type_arguments.clone(),
+        }
+    }
+
     /// Creates a new interner with all compiler-known leaf types pre-registered.
     pub fn new() -> Self {
         let builtins = vec![
@@ -422,6 +438,133 @@ impl Default for TypeInterner {
 mod tests {
     use super::*;
     use crate::defs::{MachineDef, MachineStateDef, MachineTransitionDef, VariantDef};
+
+    #[test]
+    fn snapshot_preserves_nominal_refinement_instantiation_lookups_and_is_independent() {
+        let mut original = TypeInterner::new();
+        let positive = original.intern(Type::Refinement {
+            name: "models.Positive".into(),
+            base: TypeInterner::INT64,
+        });
+        let record = original.add_struct(StructDef {
+            name: "models.Record[models.Positive]".into(),
+            fields: vec![("value".into(), positive)],
+            methods: Vec::new(),
+        });
+        let record_type = original.intern(Type::Struct(record));
+        original
+            .register_nominal_type_arguments(record_type, vec![positive])
+            .unwrap();
+        let bits = original.add_bitfield(BitfieldDef {
+            name: "models.Bits".into(),
+            network_order: true,
+            fields: vec![crate::defs::BitfieldFieldDef {
+                name: "flag".into(),
+                ty: TypeInterner::UINT8,
+                kind: crate::defs::BitfieldFieldKind::Bits { width: 8 },
+            }],
+        });
+        original.intern(Type::Bitfield(bits));
+        let choice = original.add_enum(EnumDef {
+            name: "models.Choice".into(),
+            variants: vec![VariantDef {
+                name: "value".into(),
+                fields: vec![("record".into(), record_type)],
+                discriminant: 3,
+            }],
+        });
+        original.intern(Type::Enum(choice));
+        let interface = original.add_interface(InterfaceDef {
+            name: "models.Reader".into(),
+            methods: vec![crate::defs::FunctionSig {
+                name: "read".into(),
+                params: vec![("value".into(), positive, true)],
+                return_type: record_type,
+                is_pure: true,
+            }],
+        });
+        original.intern(Type::Interface(interface));
+        let actor = original.add_actor(ActorDef {
+            name: "models.Worker".into(),
+            capability_params: vec![("network".into(), TypeInterner::NETWORK)],
+            state_fields: vec![("record".into(), record_type)],
+            messages: vec![crate::defs::ActorMessageDef {
+                name: "read".into(),
+                params: vec![("value".into(), positive)],
+                responds: record_type,
+            }],
+        });
+        original.intern(Type::Actor(actor));
+        let machine = original.add_machine(MachineDef {
+            name: "models.Session".into(),
+            states: vec![MachineStateDef {
+                name: "ready".into(),
+                fields: vec![("value".into(), positive)],
+            }],
+            transitions: vec![MachineTransitionDef {
+                from: crate::defs::MachineStateId::new(0),
+                to: crate::defs::MachineStateId::new(0),
+            }],
+        });
+        original.intern(Type::Machine(machine));
+        original.intern(Type::MachineState {
+            machine,
+            state: crate::defs::MachineStateId::new(0),
+        });
+        let callable = original.intern(Type::Function {
+            params: vec![record_type],
+            view_params: vec![true],
+            return_type: positive,
+        });
+
+        let mut snapshot = original.snapshot();
+        assert_eq!(snapshot.len(), original.len());
+        for ty in original.type_ids() {
+            assert_eq!(snapshot.resolve(ty), original.resolve(ty));
+            assert_eq!(snapshot.intern(original.resolve(ty).clone()), ty);
+            assert_eq!(
+                snapshot.nominal_type_arguments(ty),
+                original.nominal_type_arguments(ty)
+            );
+            assert!(snapshot.contains_nominal_definition(original.resolve(ty)));
+        }
+        assert_eq!(
+            snapshot.resolve_struct(record),
+            original.resolve_struct(record)
+        );
+        assert_eq!(
+            snapshot.resolve_bitfield(bits),
+            original.resolve_bitfield(bits)
+        );
+        assert_eq!(snapshot.resolve_enum(choice), original.resolve_enum(choice));
+        assert_eq!(
+            snapshot.resolve_interface(interface),
+            original.resolve_interface(interface)
+        );
+        assert_eq!(snapshot.resolve_actor(actor), original.resolve_actor(actor));
+        assert_eq!(
+            snapshot.resolve_machine(machine),
+            original.resolve_machine(machine)
+        );
+        assert_eq!(snapshot.type_name(callable), original.type_name(callable));
+        assert_eq!(snapshot.nominal_type_arguments(record_type), &[positive]);
+
+        let original_length = original.len();
+        let added = snapshot.intern(Type::List(TypeInterner::BOOL));
+        assert_eq!(added.index() as usize, original_length);
+        assert_eq!(original.len(), original_length);
+        let mut changed = snapshot.resolve_struct(record).clone();
+        changed.fields[0].1 = TypeInterner::STRING;
+        snapshot.update_struct(record, changed);
+        assert_eq!(original.resolve_struct(record).fields[0].1, positive);
+        let mut changed = original.resolve_machine(machine).clone();
+        changed.states[0].fields[0].1 = TypeInterner::INT64;
+        original.update_machine(machine, changed);
+        assert_eq!(
+            snapshot.resolve_machine(machine).states[0].fields[0].1,
+            positive
+        );
+    }
 
     // -- Primitive constant IDs -----------------------------------------------
 

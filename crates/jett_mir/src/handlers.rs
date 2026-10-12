@@ -29,7 +29,11 @@ fn expression_needs_lowering(expression: &Expression, requirement: LoweringRequi
     let includes_call_ownership = requirement == LoweringRequirement::HandlersAndCallOwnership;
     match &expression.kind {
         ExpressionKind::Handle {
-            kind: HandleKind::Result | HandleKind::Optional | HandleKind::Refinement { .. },
+            kind:
+                HandleKind::Result
+                | HandleKind::Optional
+                | HandleKind::Refinement { .. }
+                | HandleKind::ReflectedReturn { .. },
             ..
         } => true,
         ExpressionKind::View(value) | ExpressionKind::FunctionAdapter { value, .. } => needs(value),
@@ -1517,6 +1521,63 @@ impl Builder<'_> {
     fn try_lower_value_refinement(&mut self, expression: &Expression) -> Option<Expression> {
         if let ExpressionKind::Handle {
             target,
+            kind: HandleKind::ReflectedReturn { plan, .. },
+            ..
+        } = &expression.kind
+        {
+            let value = self.lower_value(target);
+            let source = self.temporary(target.ty, expression.span);
+            self.push(
+                StatementKind::Let {
+                    local: source,
+                    value,
+                },
+                expression.span,
+            );
+            self.push(
+                StatementKind::ReflectedValueReady {
+                    source,
+                    inspect_pending: false,
+                },
+                expression.span,
+            );
+            let previous = self.reflected_produced_return;
+            self.reflected_produced_return = true;
+            self.lower_reflected_plan(source, plan, expression.span);
+            self.reflected_produced_return = previous;
+            let value = Expression {
+                kind: ExpressionKind::Local(source),
+                ty: target.ty,
+                span: expression.span,
+            };
+            let mut ancestor = target.ty;
+            let mut coarsens = false;
+            while let Type::Refinement { base, .. } = self.types.resolve(ancestor) {
+                ancestor = *base;
+                if ancestor == expression.ty {
+                    coarsens = true;
+                    break;
+                }
+            }
+            return Some(Expression {
+                kind: if expression.ty == target.ty {
+                    value.kind
+                } else if coarsens && matches!(&plan.action, hir::ReflectedFieldAction::Exact) {
+                    ExpressionKind::Coarsen(Box::new(value))
+                } else if matches!(self.types.resolve(expression.ty), Type::Refinement { .. }) {
+                    ExpressionKind::RefinementValidated(Box::new(value))
+                } else {
+                    ExpressionKind::InterfaceCoerce {
+                        value: Box::new(value),
+                        adapters: Vec::new(),
+                    }
+                },
+                ty: expression.ty,
+                span: expression.span,
+            });
+        }
+        if let ExpressionKind::Handle {
+            target,
             kind: HandleKind::Refinement { predicates, .. },
             error_local,
             failure,
@@ -2402,7 +2463,16 @@ impl Builder<'_> {
             ..
         } = &mut raw.kind
         {
-            *field_validation = Some(hir::ReflectedFieldValidation::Read);
+            *field_validation = Some(
+                if plans
+                    .iter()
+                    .any(|plan| matches!(plan.action, hir::ReflectedFieldAction::CallableReturn(_)))
+                {
+                    hir::ReflectedFieldValidation::ReadCallable(plans.to_vec())
+                } else {
+                    hir::ReflectedFieldValidation::Read
+                },
+            );
             *raw_args = args.clone();
             *raw_ownership = ownership;
         }

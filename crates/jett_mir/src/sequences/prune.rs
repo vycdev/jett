@@ -263,7 +263,8 @@ fn visit_block_locals(
                 visit(rhs_owner);
             }
             StatementKind::CloseCallOwnerGeneration { .. } => {}
-            StatementKind::ReflectedContainerReady { source, .. } => visit(source),
+            StatementKind::ReflectedContainerReady { source, .. }
+            | StatementKind::ReflectedValueReady { source, .. } => visit(source),
             StatementKind::SequenceLength { source, target } => {
                 source_local(source, visit);
                 visit(target);

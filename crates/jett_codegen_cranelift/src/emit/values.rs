@@ -1,5 +1,8 @@
 use super::*;
-use jett_hir::{InterfaceFunctionAdapter, IntrinsicId, MapEntry, StringSegment};
+use jett_hir::{
+    InterfaceFunctionAdapter, IntrinsicId, MapEntry, ReflectedFieldAction,
+    ReflectedFieldValidation, StringSegment,
+};
 use jett_mir::move_values::is_erased_interface;
 use jett_runtime::native_abi::values::interface_conversion::NativeInterfaceConversion;
 use jett_types::BitfieldFieldKind;
@@ -2215,9 +2218,30 @@ impl Translator<'_, '_> {
         index: Value,
         result_type: TypeId,
         conversion: Option<ReflectedFieldConversion>,
+        callable: Option<Value>,
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
         let bits = self.leaf(NativeLeaf::StructField, &[owner, index], true)?;
+        if let Some(address) = callable {
+            // The selector has completed its original metadata, schema and
+            // pending checks. Both leaves borrow the stored descriptor and
+            // create exactly one owned result; neither invokes its body.
+            let adapt = self.builder.create_block();
+            let exact = self.builder.create_block();
+            let joined = self.builder.create_block();
+            self.builder.append_block_param(joined, ir::types::I64);
+            let changed = self.builder.ins().icmp_imm(IntCC::NotEqual, address, 0);
+            self.builder.ins().brif(changed, adapt, &[], exact, &[]);
+            self.builder.switch_to_block(adapt);
+            let adapted = self.leaf(NativeLeaf::FunctionAdapter, &[bits, address], true)?;
+            self.builder.ins().jump(joined, &[adapted.into()]);
+            self.builder.switch_to_block(exact);
+            let cloned = self.leaf(NativeLeaf::StructClone, &[bits], true)?;
+            self.builder.ins().jump(joined, &[cloned.into()]);
+            self.builder.switch_to_block(joined);
+            let owned = self.builder.block_params(joined)[0];
+            return self.own(owned);
+        }
         if let Some(conversion) = conversion {
             // InterfaceConvert borrows and clones the stored owner. A nominal
             // interface-backed refinement needs its own outer identity box;
@@ -2249,11 +2273,114 @@ impl Translator<'_, '_> {
         }
     }
 
+    fn select_reflected_callable(
+        &mut self,
+        selected: &mut Option<Value>,
+        matches: Value,
+        ordinal: usize,
+        actual: TypeId,
+        requested: TypeId,
+        validation: Option<&ReflectedFieldValidation>,
+        span: Span,
+    ) -> Result<bool, CodegenError> {
+        let Some(ReflectedFieldValidation::ReadCallable(plans)) = validation else {
+            return Ok(false);
+        };
+        let row = plans.get(ordinal).ok_or_else(|| {
+            contract_error(
+                self.symbol,
+                span,
+                "reflected callable field ordinal is absent",
+            )
+        })?;
+        if row.source_type != actual || row.requested_type != requested {
+            return Err(contract_error(
+                self.symbol,
+                span,
+                "reflected callable field tuple changed",
+            ));
+        }
+        let ReflectedFieldAction::CallableReturn(plan) = &row.action else {
+            return Ok(false);
+        };
+        plan.validate_types(self.types)
+            .map_err(|message| contract_error(self.symbol, span, message))?;
+        if !plan.validate_original() || plan.is_materialized() {
+            return Err(contract_error(
+                self.symbol,
+                span,
+                "reflected getter has no exact callable constructor proof",
+            ));
+        }
+        let declared = self.declarations.get(plan.function()).ok_or_else(|| {
+            contract_error(
+                self.symbol,
+                span,
+                "reflected callable adapter is not reachable",
+            )
+        })?;
+        let reference = self
+            .module
+            .declare_func_in_func(declared.native_id, self.builder.func);
+        let pointer_type = self.module.target_config().pointer_type();
+        let address = self.builder.ins().func_addr(pointer_type, reference);
+        let address = if pointer_type == ir::types::I64 {
+            address
+        } else {
+            self.builder.ins().uextend(ir::types::I64, address)
+        };
+        let previous = selected.unwrap_or_else(|| self.builder.ins().iconst(ir::types::I64, 0));
+        *selected = Some(self.builder.ins().select(matches, address, previous));
+        Ok(true)
+    }
+
+    pub(super) fn reflected_value_ready(
+        &mut self,
+        value: LoweredValue,
+        ty: TypeId,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let message = "reflected callback return: expected a ready value";
+        if is_task_scalar(self.types, ty)? {
+            return self.reject_pending_scalars(&[value], message);
+        }
+        let kind = match scalar_kind(self.types, ty, "reflected callback return")? {
+            ScalarKind::Nothing => {
+                // Unit's I64 value is already its Pending depth, unlike the
+                // separate depth lane used by numeric and boolean scalars.
+                let depth = self.scalar(value, span)?;
+                let zero = self.builder.ins().iconst(ir::types::I64, 0);
+                let (pointer, length) = self.static_bytes(message)?;
+                self.leaf(
+                    NativeLeaf::RejectPendingScalars,
+                    &[depth, zero, zero, pointer, length],
+                    true,
+                )?;
+                return Ok(());
+            }
+            ScalarKind::String => 0,
+            ScalarKind::Bytes => 1,
+            ScalarKind::List => 2,
+            ScalarKind::Set => 5,
+            ScalarKind::Map => 6,
+            ScalarKind::Sum => 7,
+            ScalarKind::Struct
+            | ScalarKind::Enum
+            | ScalarKind::Machine
+            | ScalarKind::Bitfield
+            | ScalarKind::Function
+            | ScalarKind::Construction => 4,
+            _ => return Err(self.unsupported(span, "reflected callback return readiness carrier")),
+        };
+        self.reject_pending_handle(value, kind, message, span)
+    }
+
     pub(super) fn intrinsic(
         &mut self,
         id: IntrinsicId,
         type_arguments: &[TypeId],
         reflection_arguments: &[ReflectionTypeInfo],
+        field_validation: Option<&ReflectedFieldValidation>,
         args: &[Expression],
         order: &[usize],
         result_type: TypeId,
@@ -2523,8 +2650,10 @@ impl Translator<'_, '_> {
             let mut expected = zero;
             let mut compatible = zero;
             let mut conversion = None;
+            let mut callable = None;
             for (index, field_ty) in field_types.iter().enumerate() {
                 let candidate = self.scalar(evaluated[index + 2], span)?;
+                let ordinal = index;
                 let index = i64::try_from(index)
                     .map_err(|_| self.unsupported(span, "reflected field index"))?;
                 let matches = self
@@ -2532,7 +2661,16 @@ impl Translator<'_, '_> {
                     .ins()
                     .icmp_imm(IntCC::Equal, requested_index, index);
                 expected = self.builder.ins().select(matches, candidate, expected);
-                if reflected_field_types_compatible(self.types, *field_ty, result_type) {
+                let adapted = self.select_reflected_callable(
+                    &mut callable,
+                    matches,
+                    ordinal,
+                    *field_ty,
+                    result_type,
+                    field_validation,
+                    span,
+                )?;
+                if adapted || reflected_field_types_compatible(self.types, *field_ty, result_type) {
                     compatible = self.builder.ins().select(matches, candidate, compatible);
                 }
                 self.select_reflected_field_conversion(
@@ -2562,7 +2700,14 @@ impl Translator<'_, '_> {
             )?;
             let owner = self.scalar(evaluated[0], span)?;
             self.check_reflected_owner_pending(owner, args[0].ty, &owner_name, 2)?;
-            return self.reflected_field_value(owner, checked_index, result_type, conversion, span);
+            return self.reflected_field_value(
+                owner,
+                checked_index,
+                result_type,
+                conversion,
+                callable,
+                span,
+            );
         }
         if matches!(
             id,
@@ -2656,9 +2801,11 @@ impl Translator<'_, '_> {
             let mut expected = zero;
             let mut compatible = zero;
             let mut conversion = None;
+            let mut callable = None;
             let mut argument_index = 2;
             for (variant_index, fields) in field_groups.iter().enumerate() {
                 for (field_index, field_ty) in fields.iter().enumerate() {
+                    let ordinal = argument_index - 2;
                     let candidate = self.scalar(evaluated[argument_index], span)?;
                     argument_index += 1;
                     let variant_index = i64::try_from(variant_index)
@@ -2675,7 +2822,18 @@ impl Translator<'_, '_> {
                             .icmp_imm(IntCC::Equal, requested_index, field_index);
                     let matches = self.builder.ins().band(variant_matches, field_matches);
                     expected = self.builder.ins().select(matches, candidate, expected);
-                    if reflected_field_types_compatible(self.types, *field_ty, result_type) {
+                    let adapted = self.select_reflected_callable(
+                        &mut callable,
+                        matches,
+                        ordinal,
+                        *field_ty,
+                        result_type,
+                        field_validation,
+                        span,
+                    )?;
+                    if adapted
+                        || reflected_field_types_compatible(self.types, *field_ty, result_type)
+                    {
                         compatible = self.builder.ins().select(matches, candidate, compatible);
                     }
                     self.select_reflected_field_conversion(
@@ -2711,7 +2869,14 @@ impl Translator<'_, '_> {
             )?;
             let one = self.builder.ins().iconst(ir::types::I64, 1);
             let slot = self.builder.ins().iadd(checked_index, one);
-            return self.reflected_field_value(owner, slot, result_type, conversion, span);
+            return self.reflected_field_value(
+                owner,
+                slot,
+                result_type,
+                conversion,
+                callable,
+                span,
+            );
         }
         if id == IntrinsicId::Range {
             self.check_index_count_arguments(id, &evaluated, span)?;

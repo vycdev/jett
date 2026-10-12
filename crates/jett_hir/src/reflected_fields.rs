@@ -7,6 +7,8 @@ pub enum ReflectedFieldValidation {
     Validate(Vec<ReflectedFieldPlan>),
     /// Internal MIR stage: execute only the original selector checks and read.
     Read,
+    /// Internal MIR stage: strict original read followed by a lazy adapter.
+    ReadCallable(Vec<ReflectedFieldPlan>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +23,7 @@ pub enum ReflectedFieldAction {
     Exact,
     Predicates(Vec<RefinementPredicate>),
     Unsupported(ReflectedFieldUnsupported),
+    CallableReturn(ReflectedCallablePlan),
     Refine {
         base: Box<ReflectedFieldPlan>,
         predicates: Vec<RefinementPredicate>,
@@ -50,6 +53,9 @@ impl ReflectedFieldPlan {
         match &self.action {
             ReflectedFieldAction::Exact | ReflectedFieldAction::Unsupported(_) => {}
             ReflectedFieldAction::Predicates(predicates) => result.extend(predicates),
+            ReflectedFieldAction::CallableReturn(plan) => {
+                plan.return_plan().collect_predicates(result)
+            }
             ReflectedFieldAction::Refine { base, predicates } => {
                 base.collect_predicates(result);
                 result.extend(predicates);
@@ -69,57 +75,11 @@ impl ReflectedFieldPlan {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReflectedFieldUnsupported {
-    Nested,
-    Secret,
-    CallableOrNominal,
-}
-
-impl ReflectedFieldUnsupported {
-    pub fn message(self) -> &'static str {
-        match self {
-            Self::Nested => {
-                "reflected field refinement: native nested refinement validation is not implemented"
-            }
-            Self::Secret => {
-                "reflected field refinement: cannot establish new invariants beneath secret"
-            }
-            Self::CallableOrNominal => {
-                "reflected field refinement: unsupported callable or nominal refinement conversion"
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ReflectedFieldRequirement {
-    Exact,
-    Predicates(Vec<TypeId>),
-    Unsupported(ReflectedFieldUnsupported),
-    Refine {
-        base: Box<ReflectedFieldRequirementPlan>,
-        predicates: Vec<TypeId>,
-    },
-    List(Box<ReflectedFieldRequirementPlan>),
-    Set(Box<ReflectedFieldRequirementPlan>),
-    Map {
-        key: Box<ReflectedFieldRequirementPlan>,
-        value: Box<ReflectedFieldRequirementPlan>,
-    },
-    Optional(Box<ReflectedFieldRequirementPlan>),
-    Result {
-        ok: Box<ReflectedFieldRequirementPlan>,
-        error: Box<ReflectedFieldRequirementPlan>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReflectedFieldRequirementPlan {
-    pub source_type: TypeId,
-    pub requested_type: TypeId,
-    pub requirement: ReflectedFieldRequirement,
-}
+pub use jett_typecheck::{
+    ProducedRefinementRequirement as ReflectedFieldRequirement,
+    ProducedRefinementRequirementPlan as ReflectedFieldRequirementPlan,
+    ProducedRefinementUnsupported as ReflectedFieldUnsupported,
+};
 
 pub fn is_reflected_field_intrinsic(id: IntrinsicId) -> bool {
     matches!(
@@ -268,7 +228,10 @@ fn contains_refinement(types: &TypeInterner, ty: TypeId, seen: &mut HashSet<Type
         .any(|child| contains_refinement(types, child, seen))
 }
 
-fn refinement_chain(types: &TypeInterner, mut ty: TypeId) -> Option<(TypeId, Vec<TypeId>)> {
+pub(crate) fn refinement_chain(
+    types: &TypeInterner,
+    mut ty: TypeId,
+) -> Option<(TypeId, Vec<TypeId>)> {
     let mut chain = Vec::new();
     for _ in 0..types.len() {
         if ty.index() as usize >= types.len() {
@@ -293,7 +256,7 @@ pub fn reflected_field_requirement(
     actual: TypeId,
     requested: TypeId,
 ) -> Option<ReflectedFieldRequirement> {
-    requirement_node(types, actual, requested, types.len()).map(|node| node.requirement)
+    jett_typecheck::produced_refinement_requirement(types, actual, requested)
 }
 
 fn requirement_node(
@@ -401,6 +364,15 @@ pub fn validate_reflected_field_plans(
         if plan.source_type != *actual || plan.requested_type != requested {
             return Err("reflected validation types disagree with declared field and request");
         }
+        if let ReflectedFieldAction::CallableReturn(callable) = &plan.action {
+            if callable.source_type() != plan.source_type
+                || callable.requested_type() != plan.requested_type
+            {
+                return Err("reflected callable action differs from its selected field types");
+            }
+            callable.validate_types(types)?;
+            continue;
+        }
         let requirement = requirement_node(types, *actual, requested, types.len())
             .ok_or("invalid reflected validation type")?;
         validate_requirement_node(types, &requirement, plan)?;
@@ -408,7 +380,7 @@ pub fn validate_reflected_field_plans(
     Ok(())
 }
 
-fn validate_requirement_node(
+pub(crate) fn validate_requirement_node(
     types: &TypeInterner,
     expected: &ReflectedFieldRequirementPlan,
     plan: &ReflectedFieldPlan,
@@ -691,7 +663,36 @@ impl BodyLowerer<'_, '_> {
             return None;
         };
         let mut plans = Vec::with_capacity(layout.len());
-        for (_, _, source_type) in layout {
+        for (ordinal, (_, _, source_type)) in layout.into_iter().enumerate() {
+            if source_type != *requested {
+                if let Some(checked) = self.parent.reflected_checked_program.clone() {
+                    if let Some(callable) = checked
+                        .checked()
+                        .reflected_callable_plan(source_type, *requested)
+                    {
+                        let child = ReflectedFieldRequirementPlan {
+                            source_type: callable.source_return(),
+                            requested_type: callable.requested_return(),
+                            requirement: callable.return_requirement().clone(),
+                        };
+                        let return_plan = self.lower_reflected_requirement(child, span)?;
+                        plans.push(ReflectedFieldPlan {
+                            source_type,
+                            requested_type: *requested,
+                            action: ReflectedFieldAction::CallableReturn(
+                                ReflectedCallablePlan::new(
+                                    checked,
+                                    callable,
+                                    return_plan,
+                                    span,
+                                    Some(ordinal),
+                                ),
+                            ),
+                        });
+                        continue;
+                    }
+                }
+            }
             let Some(requirement) = requirement_node(
                 &self.parent.check.interner,
                 source_type,

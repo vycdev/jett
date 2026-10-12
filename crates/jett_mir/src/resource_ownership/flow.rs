@@ -1143,7 +1143,7 @@ impl<'p> Analysis<'p> {
                     control_flow::sequence_get(self.function, self.types, *consume, source, *index, *target, *part)?;
                     self.clear(&mut state, *target);
                 }
-                StatementKind::ReflectedContainerReady { .. } | StatementKind::IterationBorrow { .. } => return Err("pending ResourceOwnershipPlan: sequence or aggregate custody needs its dedicated normalization".into()),
+                StatementKind::ReflectedContainerReady { .. } | StatementKind::ReflectedValueReady { .. } | StatementKind::IterationBorrow { .. } => return Err("pending ResourceOwnershipPlan: sequence or aggregate custody needs its dedicated normalization".into()),
             }
         }
         self.site = ResourceSite {

@@ -16,6 +16,8 @@ pub struct ClosureTypeContext {
     pub checked_function: Option<Arc<CheckedFunctionTypes>>,
     pub bindings: HashMap<String, TypeExpr>,
     pub arguments: Vec<ClosureTypeArgument>,
+    /// Constructor-owned source witness; ordinary closure values need none.
+    pub(crate) reflected_capture: Option<Arc<closure_capture::CheckedClosureCapture>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -31,6 +33,14 @@ pub struct ClosureTypeArgument {
     pub canonical_name: String,
     pub reflection: Option<ReflectionTypeInfo>,
 }
+
+#[path = "value/reflected_callable.rs"]
+mod reflected_callable;
+pub use reflected_callable::ReflectedCallableValue;
+pub(crate) use reflected_callable::original_source::body_may_mint_inline_function;
+
+#[path = "value/closure_capture.rs"]
+pub(crate) mod closure_capture;
 
 /// Runtime value for the compile-time interpreter.
 #[derive(Debug, Clone)]
@@ -112,6 +122,8 @@ pub enum Value {
     Set(Vec<Value>),
     /// A named function reference retaining its canonical declaration identity.
     NamedFunction(String),
+    /// Checked lazy adapter retaining the original evaluated callback.
+    ReflectedCallable(Box<ReflectedCallableValue>),
     /// A captured inline function expression (closure).
     Function {
         /// Keep generic metadata off the stack: inline storage enlarges every
@@ -150,6 +162,7 @@ impl Value {
             Self::TypeConstruction { fields, .. } => fields
                 .iter()
                 .any(|(_, _, _, value)| value.contains_live_resource_or_grant()),
+            Self::ReflectedCallable(value) => value.source().contains_live_resource_or_grant(),
             Self::Function { captures, .. } => {
                 captures.values().any(Self::contains_live_resource_or_grant)
             }
@@ -389,6 +402,7 @@ impl fmt::Display for Value {
                 Ok(())
             }
             Value::NamedFunction(name) => write!(f, "function({name})"),
+            Value::ReflectedCallable(value) => fmt::Display::fmt(value.source(), f),
             Value::Function { params, .. } => {
                 write!(f, "function(")?;
                 for (i, p) in params.iter().enumerate() {

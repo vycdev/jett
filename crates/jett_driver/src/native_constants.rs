@@ -27,6 +27,28 @@ pub(crate) fn bake_values(
         return jett_hir::materialize_checked_required_values(program, values, types);
     }
     let function_values = function_value_candidates(&program.functions, method_value_definitions);
+    if jett_hir::has_reflected_callable_plans(program) {
+        return jett_hir::materialize_checked_reflected_values(
+            program,
+            values,
+            types,
+            |value, ty, span, locals, bindings| {
+                value_expression(
+                    value,
+                    ty,
+                    span,
+                    &mut ValueContext {
+                        types,
+                        reflection,
+                        functions: &function_values,
+                        refinement_functions: None,
+                        locals,
+                        bindings,
+                    },
+                )
+            },
+        );
+    }
     let mut errors = Vec::new();
     for function in &mut program.functions {
         let specialization = &function.identity.specialization;

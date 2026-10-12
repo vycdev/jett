@@ -134,7 +134,8 @@ impl CopyValuePlan {
                         killed = Some(rhs_owner.index() as usize);
                         Some(root.index() as usize)
                     }
-                    StatementKind::ReflectedContainerReady { source, .. } => {
+                    StatementKind::ReflectedContainerReady { source, .. }
+                    | StatementKind::ReflectedValueReady { source, .. } => {
                         reads.insert(source.index() as usize);
                         None
                     }

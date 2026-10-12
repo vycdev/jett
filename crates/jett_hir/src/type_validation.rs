@@ -39,6 +39,16 @@ pub fn validate_backend_types(
     if let Err(message) = program.resource_manifest.validate(interner) {
         validator.error(Span::new(jett_common::FileId::new(0), 0, 0), message);
     }
+    if program.resource_source.checked_program().is_some()
+        && program
+            .functions
+            .iter()
+            .any(|function| !crate::reflected_callable_plans(function).is_empty())
+    {
+        if let Err(message) = program.resource_source.validate_types(interner) {
+            validator.error(Span::new(jett_common::FileId::new(0), 0, 0), message);
+        }
+    }
     for function in &program.functions {
         validator.function(function);
     }
@@ -625,6 +635,21 @@ impl BackendTypeValidator<'_> {
                         }
                     }
                     HandleKind::Result | HandleKind::Optional => {}
+                    HandleKind::ReflectedReturn { plan, .. } => {
+                        self.type_id(
+                            plan.source_type,
+                            expression.span,
+                            "reflected callable source return".into(),
+                        );
+                        self.type_id(
+                            plan.requested_type,
+                            expression.span,
+                            "reflected callable requested return".into(),
+                        );
+                        if plan.source_type != target.ty || plan.requested_type != expression.ty {
+                            self.error(expression.span, "reflected callable return types changed");
+                        }
+                    }
                 }
                 self.block(failure, function_name);
             }

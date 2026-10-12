@@ -93,6 +93,9 @@ mod refinement_sum;
 #[path = "native_conformance/reflected_producers.rs"]
 mod reflected_producers;
 
+#[path = "native_conformance/reflected_callables.rs"]
+mod reflected_callables;
+
 #[path = "native_conformance/suite_options.rs"]
 mod suite_options;
 

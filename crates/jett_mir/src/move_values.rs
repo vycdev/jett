@@ -503,7 +503,8 @@ impl Flow<'_> {
                     self.state.remove(&(rhs_owner.index() as usize));
                     self.state.insert(root.index() as usize);
                 }
-                StatementKind::ReflectedContainerReady { source, .. } => {
+                StatementKind::ReflectedContainerReady { source, .. }
+                | StatementKind::ReflectedValueReady { source, .. } => {
                     self.read(*source, "reflected container source")?;
                 }
                 StatementKind::IterationBorrow {

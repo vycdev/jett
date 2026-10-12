@@ -1314,7 +1314,9 @@ fn remap_generated_operation_locals<E>(
     operation: &mut GeneratedOperation,
     map: &mut impl FnMut(LocalId) -> Result<LocalId, E>,
 ) -> Result<(), E> {
-    if let GeneratedOperation::FunctionAdapter { callee, .. } = operation {
+    if let GeneratedOperation::FunctionAdapter { callee, .. }
+    | GeneratedOperation::ReflectedCallableAdapter { callee, .. } = operation
+    {
         *callee = map(*callee)?;
     }
     Ok(())
@@ -1428,6 +1430,10 @@ pub enum GeneratedOperation {
         source_type: TypeId,
         target_type: TypeId,
     },
+    ReflectedCallableAdapter {
+        callee: LocalId,
+        plan: jett_typecheck::CheckedReflectedCallablePlan,
+    },
     JsonBridge {
         intrinsic: IntrinsicId,
     },
@@ -1540,6 +1546,10 @@ impl CallOwnership {
                     } => {
                         visit(source_type);
                         visit(target_type);
+                    }
+                    GeneratedOperation::ReflectedCallableAdapter { ref plan, .. } => {
+                        visit(plan.source_type());
+                        visit(plan.requested_type());
                     }
                     _ => {}
                 }
@@ -1812,7 +1822,10 @@ impl CallOwnership {
                 }
             }
             Self::Generated(generated) => {
-                if let GeneratedOperation::FunctionAdapter { callee, .. } = generated.operation {
+                if let GeneratedOperation::FunctionAdapter { callee, .. }
+                | GeneratedOperation::ReflectedCallableAdapter { callee, .. } =
+                    generated.operation
+                {
                     visit(callee);
                 }
                 for operand in &generated.arguments {
@@ -2602,6 +2615,18 @@ pub fn validate_operand_ownership(
             {
                 if require_local(callee, &local)?.ty != source_type {
                     return Err("generated callable adapter capture differs from its sealed source signature".into());
+                }
+            }
+            if let GeneratedOperation::ReflectedCallableAdapter { callee, ref plan } =
+                generated.operation
+            {
+                if !plan.validate_types(types) {
+                    return Err("reflected callable checked signature meaning changed".into());
+                }
+                if require_local(callee, &local)?.ty != plan.source_type() {
+                    return Err(
+                        "reflected callable capture differs from its checked signature".into(),
+                    );
                 }
             }
         }
@@ -4295,6 +4320,23 @@ pub fn validate_invocation_target(
                         || !matches!(types.resolve(*target_type), Type::Function { .. })
                     {
                         return Err("generated callable adapter ownership types are invalid".into());
+                    }
+                }
+                (
+                    GeneratedOperation::ReflectedCallableAdapter {
+                        callee: expected,
+                        plan,
+                    },
+                    ExpressionKind::IndirectCall { callee, .. },
+                ) => {
+                    if !plan.validate_types(types) {
+                        return Err("reflected callable checked signature meaning changed".into());
+                    }
+                    if !matches!(callee.kind, ExpressionKind::Local(local) if local == *expected)
+                        || callee.ty != plan.source_type()
+                        || expression.ty != plan.source_return()
+                    {
+                        return Err("reflected callable invocation differs from its actual checked signature".into());
                     }
                 }
                 (

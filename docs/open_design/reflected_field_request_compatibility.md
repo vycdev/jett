@@ -86,14 +86,62 @@ establishment without rendering the value, while retaining exact qualified
 reads. Keep the hidden-observer policy in
 [debug_print_hidden_secrets.md](debug_print_hidden_secrets.md) open.
 
-Changed callable results need a selected adapter contract; inspecting a
-descriptor cannot prove its future result. Changed nominal generic instances
-need a selected conversion contract; walking builtin wrappers does not validate
-arbitrary nominal fields. Refuse proof establishment for those requests when
-they introduce refinements. These remain explicit feature gaps, rather than
-newly supported casts or a claim that reflected reads are fully covered.
+Changed callable results now have the selected lazy return-validation adapter
+contract below. A descriptor alone still cannot prove a future result. Changed
+nominal generic instances need a separate selected conversion contract; walking
+builtin wrappers does not validate arbitrary nominal fields. Their unsupported
+proof establishment remains an explicit feature gap, not a claim of complete
+reflected read coverage.
 
 The same observer concern applies to a successful summation fallback whose
 selected type is one or more secret qualifiers around a refinement. Refusing
 that unsupported proof does not define the still-open summation domain, add
 container-valued summation, or change existing arithmetic and shape errors.
+
+### Selected lazy reflected callable return validation
+
+A checked reflected callable request may establish supported new return
+refinements through an owned lazy adapter. Exact owner, member, field ordinal,
+pending-selector and declared-schema checks precede construction. The adapter
+retains the original stored signature, source body, captures, debug identity
+and pending state; constructing or reading it invokes neither callback nor
+predicate. Requested parameter, view and capability contracts must satisfy the
+existing ordinary callable adapter relation. A descriptor or requested type
+annotation grants no proof, effect authority or nominal conversion.
+
+Each invocation evaluates its actuals once, invokes the retained source once
+under the original signature, and preserves the source's ordinary validation.
+Only after the source result exists does the supported typed produced-refinement
+conversion establish the unproved requested return suffix. Failed validation
+uses the existing terminal refinement-boundary error and publishes no trusted
+target result. Exact established prefixes are reused. The adapter never joins
+implicitly or inspects pending payload; a pending result requiring a new check
+reaches the existing pending-inspection refusal before predicates or consumers,
+while exact already-proved pending transport remains unchanged.
+
+The selected contract now has an isolated checked/reference/HIR/MIR/native
+prototype. Eighteen genuine Sources include the two byte-exact original wider
+and exact callback probes, named and captured callbacks, lazy reads, repeated
+calls, invalid results, selector precedence, recursive optional results and
+ready, pending, exact and ancestor Nothing/refined-unit returns. All eighteen
+reference entries and host objects pass; all thirty-six Source-deleted linked
+executions pass against freshly built normal MSVC Debug/Release Main archives.
+Source checking uses release=false independently of runtime artifact profile.
+The native assertions compare exact stdout, stderr and exit status. The public
+ordinary launcher does not expose context-retirement counters.
+
+Current isolated authentication gates also pass thirteen reference, five HIR
+and six MIR tests. Original closure body and typed capture/context witnesses
+are constructed at the trusted capture site. Admission and invocation compare
+against those retained witnesses; mutating a same-span body, checked context,
+signature, field ordinal, Source owner or predicate cannot mint a replacement
+proof. Ordinary required constants and refinements retain their original
+checking and materialization path; ancestor return transport uses the already
+proved type relation without a new pending inspection or predicate.
+
+This is target-only acceptance of the exact saved candidate. Managed
+integration, broad workspace and successor CI checks remain pending. New
+nominal/secret proof establishment, protected secret observation, generic and
+other reflected forms, and authenticated generated verify/property-suite
+transitions remain full-goal obligations. No Source exclusion, fixture
+denominator change or broad language-completion claim follows from this gate.

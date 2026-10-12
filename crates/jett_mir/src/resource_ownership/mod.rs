@@ -73,7 +73,7 @@ pub(super) use execution_closure::ResourceExecutionClosure;
 mod original_calls_tests;
 #[cfg(test)]
 mod tests;
-mod walk;
+pub(crate) mod walk;
 
 identity!(ResourceFrameId);
 identity!(ResourceOwnerSlotId);

@@ -258,6 +258,7 @@ fn collect_function_references(function: &Function, references: &mut References<
                 | StatementKind::EndCallView { .. }
                 | StatementKind::ResourceLexicalExit(_)
                 | StatementKind::ReflectedContainerReady { .. }
+                | StatementKind::ReflectedValueReady { .. }
                 | StatementKind::IterationBorrow { .. }
                 | StatementKind::SequenceLength { .. }
                 | StatementKind::SequenceGet { .. }
@@ -432,11 +433,19 @@ fn collect_expression_references(expression: &Expression, references: &mut Refer
             type_arguments: _,
             reflection_arguments: _,
             refinement_predicates: _,
-            field_validation: _,
+            field_validation,
             args,
             evaluation_order: _,
             ..
         } => {
+            if let Some(jett_hir::ReflectedFieldValidation::ReadCallable(plans)) = field_validation
+            {
+                for plan in plans {
+                    if let jett_hir::ReflectedFieldAction::CallableReturn(callable) = &plan.action {
+                        references.push((callable.function(), expression.span));
+                    }
+                }
+            }
             for argument in args {
                 collect_expression_references(argument, references);
             }

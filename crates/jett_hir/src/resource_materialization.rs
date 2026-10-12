@@ -126,7 +126,7 @@ pub fn materialize_checked_required_values(
     }
 }
 
-fn proof_matches(
+pub(crate) fn proof_matches(
     proof: &CheckedRequiredValue,
     function: &Function,
     expression: &Expression,

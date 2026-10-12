@@ -47,7 +47,12 @@ mod interface_values;
 #[cfg(test)]
 mod local_view_tests;
 mod local_views;
+mod reflected_callable;
 mod reflected_fields;
+pub use reflected_callable::{
+    ReflectedCallablePlan, has_reflected_callable_plans, lower_reflected_callable_value,
+    materialize_checked_reflected_values, reflected_callable_plans,
+};
 mod type_validation;
 
 pub use call_ownership::{
@@ -566,11 +571,13 @@ pub enum ExpressionKind {
 }
 
 /// Generated callback conversion required inside a container conversion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterfaceFunctionAdapter {
     pub source: TypeId,
     pub target: TypeId,
     pub function: FunctionId,
+    /// Present only while completing a checked reflected callable value.
+    pub reflected: Option<ReflectedCallablePlan>,
 }
 
 impl ExpressionKind {
@@ -589,6 +596,11 @@ pub enum HandleKind {
     Refinement {
         refined_type: TypeId,
         predicates: Vec<RefinementPredicate>,
+    },
+    /// Private callable adapter boundary; never admitted as a source handler.
+    ReflectedReturn {
+        plan: Box<ReflectedFieldPlan>,
+        callable: Option<ReflectedCallablePlan>,
     },
 }
 
@@ -658,6 +670,7 @@ pub struct ValidationError {
 
 /// Validate backend-facing HIR invariants after lowering and before MIR.
 pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
+    reflected_callable::validate_program(program)?;
     let mut validator = Validator {
         program,
         errors: Vec::new(),
@@ -1254,6 +1267,40 @@ pub fn lower_with_test_bodies(
     Lowerer::new(module, resolve, check, origins, true).lower()
 }
 
+/// Preserve ordinary lowering policy while retaining one immutable checked
+/// session for genuine reflected callable constructors and required values.
+pub fn lower_checked_ordinary_program(
+    original: &Arc<jett_typecheck::CheckedResourceProgram>,
+) -> Result<Program, Vec<LowerError>> {
+    lower_ordinary_program(original, false)
+}
+
+pub fn lower_checked_ordinary_program_with_test_bodies(
+    original: &Arc<jett_typecheck::CheckedResourceProgram>,
+) -> Result<Program, Vec<LowerError>> {
+    lower_ordinary_program(original, true)
+}
+
+fn lower_ordinary_program(
+    original: &Arc<jett_typecheck::CheckedResourceProgram>,
+    tests: bool,
+) -> Result<Program, Vec<LowerError>> {
+    let mut lowerer = Lowerer::new(
+        original.module(),
+        original.resolved(),
+        original.checked(),
+        original.source_origins(),
+        tests,
+    );
+    lowerer.reflected_checked_program = Some(original.clone());
+    let mut program = lowerer.lower()?;
+    if has_reflected_callable_plans(&program) {
+        program.resource_source =
+            ResourceSourceArchive::checked(&program, original, &original.checked().interner);
+    }
+    Ok(program)
+}
+
 /// Lower the original immutable checked Resource envelope, including unused hooks.
 pub fn lower_checked_resource_program(
     original: &Arc<jett_typecheck::CheckedResourceProgram>,
@@ -1284,6 +1331,7 @@ fn lower_resource_program(
     );
     lowerer.resource_manifest = manifest;
     lowerer.authenticated_resource_lowering = true;
+    lowerer.reflected_checked_program = Some(original.clone());
     let mut program = lowerer.lower()?;
     program.resource_source =
         ResourceSourceArchive::checked(&program, original, &original.checked().interner);
@@ -1339,6 +1387,7 @@ enum FunctionKey {
 struct Lowerer<'a> {
     resource_manifest: ResourceManifest,
     authenticated_resource_lowering: bool,
+    reflected_checked_program: Option<Arc<jett_typecheck::CheckedResourceProgram>>,
     module: &'a Module,
     resolve: &'a ResolveResult,
     check: &'a CheckResult,
@@ -1385,6 +1434,7 @@ impl<'a> Lowerer<'a> {
         Self {
             resource_manifest: ResourceManifest::empty(),
             authenticated_resource_lowering: false,
+            reflected_checked_program: None,
             module,
             resolve,
             check,
@@ -1502,6 +1552,7 @@ impl<'a> Lowerer<'a> {
                 equality_methods,
             };
             interface_values::coerce_program(&mut program, &self.check.interner);
+            reflected_callable::seal_program(&mut program)?;
             validate(&program).map_err(|errors| {
                 errors
                     .into_iter()

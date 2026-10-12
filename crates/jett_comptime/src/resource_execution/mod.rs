@@ -63,6 +63,12 @@ impl fmt::Debug for ResourceHookDescriptor {
     }
 }
 
+impl ResourceHookDescriptor {
+    pub(crate) fn same_descriptor(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.program, &other.program) && self.definition == other.definition
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ResourceExecutionError {
     InvalidCheckedProgram,

@@ -269,6 +269,8 @@ pub struct CheckedStructConstruction {
 /// The result of type checking.
 #[derive(Debug)]
 pub struct CheckResult {
+    // Original checked implementation identities for readonly conversion admission.
+    ordinary_interface_implementations: HashSet<(TypeId, TypeId)>,
     pub release: bool,
     /// Source bindings unavailable for observation after checked consumption.
     pub breakpoint_exclusions: HashMap<Span, HashSet<String>>,
@@ -331,6 +333,105 @@ pub struct CheckResult {
     pub reflection_metadata: Arc<ReflectionMetadata>,
 }
 
+impl CheckResult {
+    /// The ordinary checked conversion relation; this grants no new return proof.
+    pub fn ordinary_types_compatible(&self, expected: TypeId, got: TypeId) -> bool {
+        ordinary_types_compatible(
+            &self.interner,
+            &|pair| self.ordinary_interface_implementations.contains(pair),
+            expected,
+            got,
+        )
+    }
+
+    /// Contravariant input admission, retaining exact view and capability types.
+    /// Return strengthening is independently selected by the reflected plan.
+    pub fn ordinary_callable_parameters_compatible(
+        &self,
+        actual: TypeId,
+        requested: TypeId,
+    ) -> bool {
+        if actual.index() as usize >= self.interner.len()
+            || requested.index() as usize >= self.interner.len()
+        {
+            return false;
+        }
+        let (
+            Type::Function {
+                params: source,
+                view_params: source_views,
+                ..
+            },
+            Type::Function {
+                params: target,
+                view_params: target_views,
+                ..
+            },
+        ) = (
+            self.interner.resolve(actual),
+            self.interner.resolve(requested),
+        )
+        else {
+            return false;
+        };
+        source.len() == target.len()
+            && source_views == target_views
+            && source
+                .iter()
+                .zip(target)
+                .all(|(source, target)| self.ordinary_types_compatible(*source, *target))
+    }
+}
+
+fn ordinary_types_compatible(
+    types: &TypeInterner,
+    has_implementation: &impl Fn(&(TypeId, TypeId)) -> bool,
+    expected: TypeId,
+    got: TypeId,
+) -> bool {
+    if expected.index() as usize >= types.len() || got.index() as usize >= types.len() {
+        return false;
+    }
+    if expected == got
+        || expected == TypeInterner::ERROR
+        || got == TypeInterner::ERROR
+        || got == TypeInterner::NEVER
+    {
+        return true;
+    }
+    let compatible = |a, b| ordinary_types_compatible(types, has_implementation, a, b);
+    match (types.resolve(expected), types.resolve(got)) {
+        (Type::Interface(_), Type::Interface(_)) => expected == got,
+        (Type::Interface(_), _) => has_implementation(&(expected, got)),
+        (Type::Secret(a), Type::Secret(b)) => compatible(*a, *b),
+        (Type::Secret(a), _) => compatible(*a, got),
+        (Type::List(a), Type::List(b))
+        | (Type::Optional(a), Type::Optional(b))
+        | (Type::Set(a), Type::Set(b)) => compatible(*a, *b),
+        (Type::Map(a, b), Type::Map(c, d)) | (Type::Result(a, b), Type::Result(c, d)) => {
+            compatible(*a, *c) && compatible(*b, *d)
+        }
+        (
+            Type::Function {
+                params: a,
+                view_params: av,
+                return_type: ar,
+            },
+            Type::Function {
+                params: b,
+                view_params: bv,
+                return_type: br,
+            },
+        ) => {
+            a.len() == b.len()
+                && av == bv
+                && a.iter().zip(b).all(|(a, b)| compatible(*b, *a))
+                && compatible(*ar, *br)
+        }
+        (Type::Machine(a), Type::MachineState { machine: b, .. }) => a == b,
+        _ => false,
+    }
+}
 /// Mode-specific policy applied while type checking.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CheckOptions {
@@ -471,6 +572,7 @@ fn finish_check(
         .collect();
 
     CheckResult {
+        ordinary_interface_implementations: checker.interface_impls.keys().copied().collect(),
         release: options.release,
         breakpoint_exclusions,
         diagnostics,
@@ -3813,66 +3915,13 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn types_compatible(&self, expected: TypeId, got: TypeId) -> bool {
-        // Bottom flows into a contextual type, but an inhabited value cannot
-        // flow into bottom. Otherwise a default, call or constructor can create
-        // a runtime payload in a checked `never` place.
-        if expected == got
-            || expected == TypeInterner::ERROR
-            || got == TypeInterner::ERROR
-            || got == TypeInterner::NEVER
-        {
-            return true;
-        }
-
-        match (self.interner.resolve(expected), self.interner.resolve(got)) {
-            (Type::Interface(_), Type::Interface(_)) => expected == got,
-            (Type::Interface(_), _) => self.interface_impls.contains_key(&(expected, got)),
-            (Type::Secret(expected_inner), Type::Secret(got_inner)) => {
-                self.types_compatible(*expected_inner, *got_inner)
-            }
-            (Type::Secret(expected_inner), _) => self.types_compatible(*expected_inner, got),
-            (Type::List(expected_inner), Type::List(got_inner))
-            | (Type::Optional(expected_inner), Type::Optional(got_inner)) => {
-                self.types_compatible(*expected_inner, *got_inner)
-            }
-            (Type::Set(expected_inner), Type::Set(got_inner)) => {
-                self.types_compatible(*expected_inner, *got_inner)
-            }
-            (Type::Map(expected_key, expected_val), Type::Map(got_key, got_val))
-            | (Type::Result(expected_key, expected_val), Type::Result(got_key, got_val)) => {
-                self.types_compatible(*expected_key, *got_key)
-                    && self.types_compatible(*expected_val, *got_val)
-            }
-            (
-                Type::Function {
-                    params: expected_params,
-                    view_params: expected_views,
-                    return_type: expected_return,
-                },
-                Type::Function {
-                    params: got_params,
-                    view_params: got_views,
-                    return_type: got_return,
-                },
-            ) => {
-                expected_params.len() == got_params.len()
-                    && expected_views == got_views
-                    && expected_params
-                        .iter()
-                        .zip(got_params.iter())
-                        .all(|(expected, got)| self.types_compatible(*got, *expected))
-                    && self.types_compatible(*expected_return, *got_return)
-            }
-            // This compatibility is intentionally one-way. Crossing a bare
-            // machine boundary erases exact state; recovering it requires an
-            // explicit `at` guard rather than remembered caller provenance.
-            (Type::Machine(expected_machine), Type::MachineState { machine, .. }) => {
-                expected_machine == machine
-            }
-            _ => false,
-        }
+        ordinary_types_compatible(
+            &self.interner,
+            &|pair| self.interface_impls.contains_key(pair),
+            expected,
+            got,
+        )
     }
-
     /// Fill only absent inferred slots. Existing concrete widths and nominal
     /// owners must match; this is not a promotion or refinement coarsening.
     /// Function parameters reverse the direction because callable substitution

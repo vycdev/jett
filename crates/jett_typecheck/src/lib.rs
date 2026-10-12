@@ -6,8 +6,14 @@ pub mod checker;
 pub mod complexity;
 pub mod errors;
 pub mod ownership;
+mod reflected_return;
 pub mod resource_hooks;
 mod resource_program;
+
+pub use reflected_return::{
+    CheckedReflectedCallablePlan, ProducedRefinementRequirement, ProducedRefinementRequirementPlan,
+    ProducedRefinementUnsupported, produced_refinement_requirement,
+};
 
 pub use checker::{
     CheckOptions, CheckResult, CheckedBindingMode, CheckedBodyFacts, CheckedCallArgumentOrder,

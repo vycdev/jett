@@ -311,7 +311,7 @@ fn never_slots_compatible(types: &TypeInterner, source: TypeId, target: TypeId) 
     }
 }
 
-fn coerce(value: &mut Expression, expected: TypeId, types: &TypeInterner) {
+pub(crate) fn coerce(value: &mut Expression, expected: TypeId, types: &TypeInterner) {
     if value.ty == expected
         || value.ty == TypeInterner::NEVER
         // Pure calls retain secret arguments so their result stays tainted.
@@ -373,6 +373,7 @@ pub(super) fn coerce_program(program: &mut Program, types: &TypeInterner) {
     });
     let mut index = 0;
     while index < program.functions.len() {
+        let original_functions = program.functions.clone();
         let function = &mut program.functions[index];
         let locals = function
             .locals
@@ -386,6 +387,7 @@ pub(super) fn coerce_program(program: &mut Program, types: &TypeInterner) {
             return_type: function.return_type,
             identity: &function.identity,
             adapters: &adapters,
+            functions: &original_functions,
         };
         pass.block(&mut function.body, None);
         let pending = std::mem::take(&mut adapters.borrow_mut().pending);
@@ -408,7 +410,11 @@ pub fn complete_value_conversions(
     program: &mut Program,
     types: &TypeInterner,
 ) -> Result<(), Vec<LowerError>> {
+    let before = program.clone();
+    super::reflected_callable::baked::validate_conversion_input(&before)?;
     coerce_program(program, types);
+    super::reflected_callable::baked::complete_conversion(program, &before)?;
+    super::reflected_callable::seal_program(program)?;
     validate(program)
         .and_then(|()| validate_backend_types(program, types))
         .map_err(|errors| {
@@ -573,6 +579,7 @@ struct Coercions<'a> {
     return_type: TypeId,
     identity: &'a FunctionIdentity,
     adapters: &'a std::cell::RefCell<Adapters>,
+    functions: &'a [Function],
 }
 
 impl Coercions<'_> {
@@ -582,6 +589,46 @@ impl Coercions<'_> {
         self.adapt(value);
     }
     fn adapt(&self, expression: &mut Expression) {
+        if let ExpressionKind::InterfaceCoerce { value, adapters } = &mut expression.kind {
+            if let Some(callable) = adapters
+                .iter_mut()
+                .find_map(|entry| entry.reflected.as_mut())
+            {
+                if callable.resolve_return(self.functions).is_err() {
+                    return;
+                }
+                let next = FunctionId(self.adapters.borrow().next);
+                if let Some(mut function) =
+                    super::reflected_callable::adapter(callable, next, self.identity, self.types)
+                {
+                    let id = function.id;
+                    callable.bind(id, self.identity);
+                    if let StatementKind::Return(Some(Expression {
+                        kind:
+                            ExpressionKind::Handle {
+                                kind:
+                                    HandleKind::ReflectedReturn {
+                                        callable: stored, ..
+                                    },
+                                ..
+                            },
+                        ..
+                    })) = &mut function.body.statements[0].kind
+                    {
+                        *stored = Some(callable.clone());
+                    }
+                    let mut pending = self.adapters.borrow_mut();
+                    pending.next += 1;
+                    pending.pending.push(function);
+                    expression.kind = ExpressionKind::FunctionAdapter {
+                        value: value.clone(),
+                        function: id,
+                    };
+                    return;
+                }
+                return;
+            }
+        }
         let ExpressionKind::InterfaceCoerce { value, .. } = &expression.kind else {
             return;
         };
@@ -632,6 +679,7 @@ impl Coercions<'_> {
                         source,
                         target,
                         function,
+                        reflected: None,
                     });
                 }
             }
@@ -948,6 +996,30 @@ impl Coercions<'_> {
             _ => {}
         }
         self.adapt(expression);
+        if let ExpressionKind::Intrinsic {
+            field_validation: Some(ReflectedFieldValidation::Validate(plans)),
+            ..
+        } = &mut expression.kind
+        {
+            for plan in plans {
+                if let ReflectedFieldAction::CallableReturn(callable) = &mut plan.action {
+                    if callable.canonical_adapter().is_none() {
+                        let mut adapters = self.adapters.borrow_mut();
+                        let id = FunctionId(adapters.next);
+                        if let Some(function) = super::reflected_callable::adapter(
+                            callable,
+                            id,
+                            self.identity,
+                            self.types,
+                        ) {
+                            adapters.next += 1;
+                            adapters.pending.push(function);
+                            callable.bind(id, self.identity);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

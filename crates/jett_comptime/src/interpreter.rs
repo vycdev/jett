@@ -55,6 +55,7 @@ mod generic_inference;
 mod graphics;
 mod interface_arguments;
 mod nominal_types;
+mod reflected_callables;
 
 use graphics::GraphicsProvider;
 pub use graphics::{GraphicsTestEvent, GraphicsTestObservation};
@@ -693,6 +694,7 @@ pub struct Interpreter {
     checked_expression_types: Option<Arc<CheckedExpressionTypes>>,
     active_checked_function: Option<Arc<CheckedFunctionTypes>>,
     active_checked_scope: Option<Arc<CheckedScopedTypes>>,
+    active_reflected_capture_origin: Option<crate::value::closure_capture::OriginalClosureOwner>,
     /// Checked source identities prove invariants only in checked invocation trees.
     /// Raw callers may supply aggregate payloads with stale refined children.
     allow_checked_refinement_proofs: bool,
@@ -774,6 +776,7 @@ impl Interpreter {
             checked_expression_types: None,
             active_checked_function: None,
             active_checked_scope: None,
+            active_reflected_capture_origin: None,
             allow_checked_refinement_proofs: true,
             breakpoint_exclusions: Arc::new(HashMap::new()),
             explicit_comptime_values: None,
@@ -3200,7 +3203,7 @@ impl Interpreter {
             .collect();
         let type_arguments = self.current_type_arguments.clone();
         let captured_arguments = self.captured_type_arguments(&type_arguments);
-        Ok(Value::Function {
+        let mut value = Value::Function {
             type_context: Box::new(ClosureTypeContext {
                 return_type: return_type.cloned(),
                 checked_scope: self.active_checked_scope.clone(),
@@ -3213,6 +3216,7 @@ impl Interpreter {
                     .map(|(name, ty)| (name.clone(), self.resolve_installed_type_expr(ty)))
                     .collect(),
                 arguments: captured_arguments,
+                reflected_capture: None,
             }),
             params: params.to_vec(),
             body: body.clone(),
@@ -3220,7 +3224,14 @@ impl Interpreter {
             capture_types,
             namespace_aliases: self.visible_namespace_aliases(),
             namespace: self.current_namespace.clone(),
-        })
+        };
+        if let Some(origin) = &self.active_reflected_capture_origin {
+            let proof = crate::value::closure_capture::CheckedClosureCapture::seal(origin, &value);
+            if let Value::Function { type_context, .. } = &mut value {
+                type_context.reflected_capture = proof;
+            }
+        }
+        Ok(value)
     }
 
     fn eval_negation_flow(&mut self, operand: &Expr) -> Result<ExprFlow, String> {
@@ -8528,7 +8539,11 @@ impl Interpreter {
         };
 
         let expected_type_name = type_expr_display(expected_field_ty);
-        if !self.reflection_type_name_matches_expr(&actual_type_name, expected_field_ty) {
+        if !self.reflection_type_name_matches_expr(&actual_type_name, expected_field_ty)
+            && !(checked_producer
+                && self.allow_checked_refinement_proofs
+                && self.has_checked_reflected_callable_plan(&actual_type_name, expected_field_ty))
+        {
             return Err(format!(
                 "type.field_value: field '{}' has type '{}', requested '{}'",
                 metadata.name, actual_type_name, expected_type_name
@@ -8977,6 +8992,10 @@ impl Interpreter {
         let requested = self.concrete_resolved_type_expr(requested, &mut HashSet::new());
         if !self.producer_type_has_refinement(&requested) {
             return Ok(value);
+        }
+        if matches!(requested, TypeExpr::Function(..)) {
+            // New callable result proof is lazy; retain its original descriptor.
+            return self.prepare_reflected_callable(value, &requested, actual_type_name);
         }
         let actual = Self::simple_type_expr_from_name(actual_type_name, requested.span())
             .map(|actual| self.concrete_resolved_type_expr(&actual, &mut HashSet::new()));
@@ -12671,7 +12690,7 @@ impl Interpreter {
         if let Some(fn_val) = self.get_variable(name).cloned() {
             if matches!(
                 fn_val.payload(),
-                Value::Function { .. } | Value::NamedFunction(_)
+                Value::Function { .. } | Value::NamedFunction(_) | Value::ReflectedCallable(_)
             ) {
                 return self.call_fn_value_from_source(fn_val, args, source_types);
             }
@@ -12726,6 +12745,26 @@ impl Interpreter {
                 format!("undefined function '{name}'")
             })?
             .clone();
+        let original_capture_origin =
+            if crate::value::body_may_mint_inline_function(&registered.definition.body) {
+                self.checked_expression_types
+                    .as_ref()
+                    .and_then(|types| {
+                        types.resource_program.as_ref().filter(|program| {
+                            crate::value::closure_capture::original_root_types(program, types)
+                        })
+                    })
+                    .and_then(|program| {
+                        crate::value::closure_capture::OriginalClosureOwner::registered(
+                            program,
+                            &resolved_name,
+                            &registered.definition,
+                            &registered.namespace,
+                        )
+                    })
+            } else {
+                None
+            };
         let func = registered.definition;
 
         if args.len() != func.params.len() {
@@ -12764,6 +12803,10 @@ impl Interpreter {
         let saved_type_arguments = std::mem::replace(&mut self.current_type_arguments, arguments);
         let saved_scoped_types = std::mem::take(&mut self.scoped_type_bindings);
         let saved_checked_scope = self.active_checked_scope.take();
+        let saved_capture_origin = std::mem::replace(
+            &mut self.active_reflected_capture_origin,
+            original_capture_origin,
+        );
         // Resolve arguments above in the caller, then keep its type bindings
         // out of the callee's lexical scope, including non-generic callees.
         let saved_type_scopes = std::mem::replace(&mut self.type_arg_scopes, vec![type_scope]);
@@ -12838,6 +12881,7 @@ impl Interpreter {
         self.active_checked_function = saved_expression_types;
         self.current_namespace = saved_namespace;
         self.current_function_trusted_stdlib = saved_trusted_stdlib;
+        self.active_reflected_capture_origin = saved_capture_origin;
         call_result
     }
 
@@ -13123,18 +13167,44 @@ impl Interpreter {
         source_types: Option<&[Option<String>]>,
     ) -> Result<Value, String> {
         match fn_val.into_payload() {
+            Value::ReflectedCallable(adapter) => {
+                self.call_reflected_callable(*adapter, args, source_types)
+            }
             Value::NamedFunction(name) => {
                 self.call_registered_function_from_source(&name, &[], args, source_types)
             }
-            Value::Function {
-                type_context,
-                params,
-                body,
-                captures,
-                capture_types,
-                namespace_aliases,
-                namespace,
-            } => {
+            source @ Value::Function { .. } => {
+                let original_capture_origin = match &source {
+                    Value::Function { body, .. }
+                        if crate::value::body_may_mint_inline_function(body) =>
+                    {
+                        self.checked_expression_types
+                            .as_ref()
+                            .and_then(|types| {
+                                types.resource_program.as_ref().filter(|program| {
+                                    crate::value::closure_capture::original_root_types(
+                                        program, types,
+                                    )
+                                })
+                            })
+                            .and_then(|program| {
+                                crate::value::closure_capture::invocation_origin(&source, program)
+                            })
+                    }
+                    _ => None,
+                };
+                let Value::Function {
+                    type_context,
+                    params,
+                    body,
+                    captures,
+                    capture_types,
+                    namespace_aliases,
+                    namespace,
+                } = source
+                else {
+                    unreachable!("inline call matched its function value above");
+                };
                 if args.len() != params.len() {
                     return Err(format!(
                         "inline function expects {} argument(s), got {}",
@@ -13142,6 +13212,10 @@ impl Interpreter {
                         args.len()
                     ));
                 }
+                let saved_capture_origin = std::mem::replace(
+                    &mut self.active_reflected_capture_origin,
+                    original_capture_origin,
+                );
                 let saved_expression_types = std::mem::replace(
                     &mut self.active_checked_function,
                     type_context.checked_function,
@@ -13243,6 +13317,7 @@ impl Interpreter {
                 self.type_arg_scopes = saved_type_scopes;
                 self.current_type_arguments = saved_type_arguments;
                 self.active_checked_function = saved_expression_types;
+                self.active_reflected_capture_origin = saved_capture_origin;
                 result
             }
             other => Err(format!("expected function value, got {other}")),
@@ -14407,7 +14482,9 @@ fn runtime_type_name(value: &Value) -> Option<String> {
         Value::Pending(_) => Some("pending".to_string()),
         Value::Map(_) => Some("map".to_string()),
         Value::Set(_) => Some("set".to_string()),
-        Value::Function { .. } | Value::NamedFunction(_) => Some("function".to_string()),
+        Value::Function { .. } | Value::NamedFunction(_) | Value::ReflectedCallable(_) => {
+            Some("function".to_string())
+        }
     }
 }
 
@@ -23569,6 +23646,7 @@ function joined(candidate: result[int64, string]) returns int64:
                 checked_function: None,
                 bindings: HashMap::from([("T".into(), type_named("int8"))]),
                 arguments: Vec::new(),
+                reflected_capture: None,
             }),
             params: vec![Param {
                 view: false,

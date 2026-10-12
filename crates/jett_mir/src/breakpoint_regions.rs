@@ -1090,6 +1090,7 @@ fn float_block(block: &mut BasicBlock, bits: &mut Vec<u64>) {
             | StatementKind::CloseCallOwnerGeneration { .. }
             | StatementKind::EndCallView { .. }
             | StatementKind::ReflectedContainerReady { .. }
+            | StatementKind::ReflectedValueReady { .. }
             | StatementKind::SequenceLength { .. }
             | StatementKind::SequenceGet { .. }
             | StatementKind::IterationBorrow { .. }

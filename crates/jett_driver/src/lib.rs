@@ -24,7 +24,6 @@ use jett_query::{QueryDatabase, SourceOrigin};
 use jett_resolve::resolve;
 use jett_typecheck::{
     CheckOptions, CheckResult, CheckedResourceProgram, ResourceProgramError, check,
-    check_with_options,
 };
 use jett_types::ReflectionMetadata;
 pub use native_property_cases::NativePropertyPlan;
@@ -2935,28 +2934,46 @@ fn lower_file_for_backend_inner(
     source_origins.extend(support_modules.origins);
     prepend_support_modules(&mut parse_result.module, support_modules.modules);
 
-    let resolve_result = resolve(&parse_result.module);
-    diagnostics.extend(resolve_result.diagnostics.clone());
-    if has_error_diagnostics(&diagnostics) {
-        return Err(build_failure(diagnostics, None, None, None, Vec::new()));
-    }
-
-    let check_result = check_with_options(
-        &parse_result.module,
-        &resolve_result,
+    let primary_span = parse_result.module.span;
+    parse_result.errors = diagnostics;
+    let checked_program = match CheckedResourceProgram::prepare(
+        parse_result,
+        source_origins,
+        &[],
         CheckOptions {
             release: options.release,
         },
-    );
-    diagnostics.extend(check_result.diagnostics.clone());
-    if has_error_diagnostics(&diagnostics) {
-        return Err(build_failure(diagnostics, None, None, None, Vec::new()));
-    }
+    ) {
+        Ok(program) => Arc::new(program),
+        Err(error) => {
+            let mut diagnostics = error.diagnostics().unwrap_or(&[]).to_vec();
+            if matches!(
+                &error,
+                ResourceProgramError::ResolveMetadata { .. }
+                    | ResourceProgramError::CheckMetadata { .. }
+            ) {
+                diagnostics.push(Diagnostic::error(0, error.to_string(), primary_span));
+            }
+            return Err(build_failure(diagnostics, None, None, None, Vec::new()));
+        }
+    };
+    let module = checked_program.module();
+    let resolve_result = checked_program.resolved();
+    let check_result = checked_program.checked();
+    let mut diagnostics = checked_program
+        .parse_diagnostics()
+        .iter()
+        .chain(&resolve_result.diagnostics)
+        .chain(&check_result.diagnostics)
+        .cloned()
+        .collect::<Vec<_>>();
 
     let reflection_metadata = check_result.reflection_metadata.clone();
-    let checked_expression_types = Arc::new(expression_type_names(&check_result, &resolve_result));
+    let mut checked_type_names = expression_type_names(check_result, resolve_result);
+    checked_type_names.resource_program = Some(checked_program.clone());
+    let checked_expression_types = Arc::new(checked_type_names);
     let evaluation = evaluate_explicit_comptime_expressions_capture(
-        &parse_result.module,
+        module,
         reflection_metadata.clone(),
         checked_expression_types.clone(),
         Arc::new(check_result.breakpoint_exclusions.clone()),
@@ -2971,7 +2988,7 @@ fn lower_file_for_backend_inner(
     let explicit_comptime_values = Arc::new(evaluation.values);
     if !has_error_diagnostics(&diagnostics) {
         let results = run_verify_blocks_detailed_with_checked_values(
-            &parse_result.module,
+            module,
             reflection_metadata.clone(),
             checked_expression_types.clone(),
             Arc::new(check_result.breakpoint_exclusions.clone()),
@@ -2997,19 +3014,9 @@ fn lower_file_for_backend_inner(
     }
 
     let mut hir = if mode != BackendLoweringMode::Program {
-        jett_hir::lower_with_test_bodies(
-            &parse_result.module,
-            &resolve_result,
-            &check_result,
-            &source_origins,
-        )
+        jett_hir::lower_checked_ordinary_program_with_test_bodies(&checked_program)
     } else {
-        jett_hir::lower(
-            &parse_result.module,
-            &resolve_result,
-            &check_result,
-            &source_origins,
-        )
+        jett_hir::lower_checked_ordinary_program(&checked_program)
     }
     .map_err(|errors| {
         BackendLoweringError::Hir(errors).with_debug_observations(&debug_observations)
@@ -3025,19 +3032,14 @@ fn lower_file_for_backend_inner(
         BackendLoweringError::Hir(errors).with_debug_observations(&debug_observations)
     })?;
     let native_verify_entry = if mode == BackendLoweringMode::VerifySuite {
-        append_native_verify_suite(
-            &mut hir,
-            &parse_result.module,
-            entry_file,
-            &check_result.interner,
-        )
-        .map_err(|error| error.with_debug_observations(&debug_observations))?
+        append_native_verify_suite(&mut hir, module, entry_file, &check_result.interner)
+            .map_err(|error| error.with_debug_observations(&debug_observations))?
     } else {
         None
     };
     let native_property_plan = if mode == BackendLoweringMode::PropertySuite {
         let cases = collect_property_cases_with_checked_values(
-            &parse_result.module,
+            module,
             reflection_metadata.clone(),
             checked_expression_types.clone(),
             Arc::new(check_result.breakpoint_exclusions.clone()),
@@ -3045,7 +3047,7 @@ fn lower_file_for_backend_inner(
         );
         native_property_cases::append_property_suite(
             &mut hir,
-            &parse_result.module,
+            module,
             entry_file,
             &cases,
             &check_result.interner,
@@ -3080,8 +3082,8 @@ fn lower_file_for_backend_inner(
         native_verify_entry,
         native_property_entry,
         native_property_plan,
-        interner: check_result.interner,
-        source_origins,
+        interner: check_result.interner.snapshot(),
+        source_origins: checked_program.source_origins().clone(),
         reflection_metadata,
         checked_expression_types,
         explicit_comptime_values,
@@ -5325,6 +5327,32 @@ mod tests {
             .expect("system time should be after epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("{name}_{nanos}"))
+    }
+
+    #[test]
+    fn backend_checked_ordinary_constants_and_refinements_keep_their_unsealed_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("main.jett");
+        fs::write(
+            &source,
+            "namespace app\ntype Positive = int64 where value > 0\nfunction positive() returns Positive:\n    return 5\nint64 cached = comptime 5\nfunction main(stdout: Stdout) returns nothing:\n    Positive refined = comptime positive()\n    int64 ordinary = comptime 7\n    int64 total = cached + coarsen refined + ordinary\n    Stdout.write(view stdout, \"{total}\\n\")\n    return nothing\n",
+        )
+        .unwrap();
+        for release in [false, true] {
+            let lowered = lower_file_for_backend_with_options(&source, BuildOptions { release })
+                .expect("ordinary constants and raw refinement lowering");
+            assert!(!jett_hir::has_reflected_callable_plans(&lowered.hir));
+            assert!(lowered.hir.resource_source.manifest().is_none());
+            assert!(lowered.hir.resource_source.functions().is_empty());
+            assert!(lowered.mir.resource_manifest.kinds().is_empty());
+            jett_codegen_cranelift::emit_host_program_object_with_options(
+                &lowered.mir,
+                &lowered.interner,
+                lowered.program_entry.expect("ordinary main"),
+                jett_codegen_cranelift::CodegenOptions { optimize: release },
+            )
+            .expect("ordinary constants and raw refinements still emit an object");
+        }
     }
 
     const DEBUG_PHASE_SOURCE: &str = r#"namespace app

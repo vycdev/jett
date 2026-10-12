@@ -72,6 +72,7 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
     }
     for function in &mut program.functions {
         let before_pass = (crate::resource_ownership::has_records(function)
+            || function.reflected_callable.is_some()
             || crate::ordinary_borrowed_sums::has_records(function)
             || !function.breakpoint_regions.is_empty()
             || crate::call_owner_generations::has_records(function))
@@ -471,6 +472,10 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             || (removed_uninhabited_body && !prune::unreachable(function))
         {
             if let Some(before_pass) = before_pass {
+                *function = before_pass;
+            }
+        } else if let Some(before_pass) = before_pass {
+            if crate::reflected_callable::prepared(function, &before_pass).is_err() {
                 *function = before_pass;
             }
         }
