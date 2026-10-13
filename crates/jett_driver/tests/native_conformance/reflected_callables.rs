@@ -299,15 +299,19 @@ fn native_reflected_callable_sources_delete_source_in_both_normal_runtime_profil
             let executable = directory
                 .path()
                 .join(format!("callback_{runtime_release}.exe"));
-            let launcher = measured.as_ref().map(|root| {
-                jett_driver::native::NativeLauncherBundle::from_manifest(
-                    &root.join(format!("{profile}-bundle/launcher.json")),
-                    runtime_release,
-                )
-                .expect("exact measured normal runtime profile manifest")
-            });
-            let launcher = launcher
+            let supplied_launcher = measured_launcher::supplied(runtime_release);
+            let launcher = measured
                 .as_ref()
+                .filter(|_| supplied_launcher.is_none())
+                .map(|root| {
+                    jett_driver::native::NativeLauncherBundle::from_manifest(
+                        &root.join(format!("{profile}-bundle/launcher.json")),
+                        runtime_release,
+                    )
+                    .expect("exact measured normal runtime profile manifest")
+                });
+            let launcher = supplied_launcher
+                .or(launcher.as_ref())
                 .unwrap_or_else(|| suite_options::launcher_for_options(runtime_release));
             jett_driver::native::link_host_object(&object, launcher, &executable)
                 .unwrap_or_else(|error| panic!("{}: {error}", case.name));
@@ -418,15 +422,19 @@ fn native_reflected_callable_production_output_matches_with_optimized_objects_wi
                 let executable = directory.path().join(format!(
                     "callback_production_{optimize}_{runtime_release}.exe"
                 ));
-                let measured_launcher = measured.as_ref().map(|root| {
-                    jett_driver::native::NativeLauncherBundle::from_manifest(
-                        &root.join(format!("{profile}-bundle/launcher.json")),
-                        runtime_release,
-                    )
-                    .expect("exact measured normal runtime profile manifest")
-                });
-                let launcher = measured_launcher
+                let supplied_launcher = measured_launcher::supplied(runtime_release);
+                let measured_launcher = measured
                     .as_ref()
+                    .filter(|_| supplied_launcher.is_none())
+                    .map(|root| {
+                        jett_driver::native::NativeLauncherBundle::from_manifest(
+                            &root.join(format!("{profile}-bundle/launcher.json")),
+                            runtime_release,
+                        )
+                        .expect("exact measured normal runtime profile manifest")
+                    });
+                let launcher = supplied_launcher
+                    .or(measured_launcher.as_ref())
                     .unwrap_or_else(|| suite_options::launcher_for_options(runtime_release));
                 jett_driver::native::link_host_object(&object, launcher, &executable)
                     .unwrap_or_else(|error| {

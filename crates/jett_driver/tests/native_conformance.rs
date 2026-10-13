@@ -96,6 +96,9 @@ mod reflected_producers;
 #[path = "native_conformance/reflected_callables.rs"]
 mod reflected_callables;
 
+#[path = "native_conformance/measured_launcher.rs"]
+mod measured_launcher;
+
 #[path = "native_conformance/suite_options.rs"]
 mod suite_options;
 
@@ -172,6 +175,9 @@ fn debug_trace_lines(events: &[jett_driver::DebugEvent]) -> Vec<String> {
 }
 
 fn launcher() -> &'static NativeLauncherBundle {
+    if let Some(bundle) = measured_launcher::supplied(!cfg!(debug_assertions)) {
+        return bundle;
+    }
     static LAUNCHER: OnceLock<Launcher> = OnceLock::new();
     &LAUNCHER
         .get_or_init(|| {

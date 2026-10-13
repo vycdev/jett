@@ -56,6 +56,9 @@ struct ProfileLauncher {
 /// Suite options select Jett source/optimization policy. The caller separately
 /// supplies an archive compiled for that runtime profile, as the public API requires.
 pub(super) fn launcher_for_options(release: bool) -> &'static NativeLauncherBundle {
+    if let Some(bundle) = super::measured_launcher::supplied(release) {
+        return bundle;
+    }
     static DEBUG: OnceLock<ProfileLauncher> = OnceLock::new();
     static RELEASE: OnceLock<ProfileLauncher> = OnceLock::new();
     let slot = if release { &RELEASE } else { &DEBUG };
