@@ -991,7 +991,7 @@ fn container_callback_adapters_reject_missing_or_invalid_checked_metadata() {
             0 => adapters.clear(),
             1 => adapters[0].function = convert.id,
             2 => adapters[0].target = adapters[0].source,
-            _ => adapters.push(adapters[0]),
+            _ => adapters.push(adapters[0].clone()),
         }
         let error = emit_host_object(&program, &types).expect_err("malformed callback conversion");
         assert!(
