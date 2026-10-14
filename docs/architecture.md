@@ -1749,6 +1749,19 @@ The collector carries visible block-local `use` aliases as name bindings for
 each expression, including shadowing in nested blocks. Each evaluation has an
 isolated alias scope, so aliases cannot leak between baked expressions.
 
+A native verify audit entry is constructed from the retained checked primary
+file, selecting exact original Verify identities and their current protected
+bodies in source order. For an authenticated ordinary archive, the private HIR
+factory first checks the exact checked session, original type meanings and
+whole current function table. It appends only generated zero-argument Verify
+calls with `nothing` results and validates each call's ownership and target
+signature before renewing the existing reflected and Graph transitions.
+Original Source, constructor recipes, required values and ABI metadata remain
+unchanged. No caller-provided function or target list can renew that custody;
+edited existing bodies or edited appended suites fail the next conversion
+gate. Ordinary lowering without a protected archive retains its existing
+suite path and cannot gain Resource or Graph authority.
+
 ### What Runs at Comptime
 
 1. **`verify` blocks** — All assertions are evaluated. Any failure stops compilation.

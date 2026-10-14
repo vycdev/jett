@@ -2964,3 +2964,34 @@ distribution remain required. Known deterministic CI failures remain a separate
 repair obligation; this slice claims no exact-revision CI acceptance. Other
 incomplete language parity compositions remain full-goal obligations. The rough
 87% estimate and fixed 207/182 inventory denominators remain unchanged.
+
+#### Canonical native Verify-suite construction
+
+The native audit now appends a suite through an authenticated HIR factory when
+required values retain a protected checked table. It preserves all existing
+functions and selects only original zero-argument Verify bodies in source order.
+Foreign archives, edited old bodies, extra table entries, and changed generated
+calls or headers cannot renew the protected table. Source syntax, compile-time
+eligibility, Resource authority and ABI remain unchanged.
+
+Focused checks pass nine tests: four ordinary/Graph factory controls, one Driver
+control over the four original failing fixtures in both checking modes, and
+four existing Graph/reflected forgery controls. Receipt:
+`target/native/verify-factory-focused-v3/focused-results.json`, SHA-256
+`9b3e7afeb67e12afad4bb9f5474a8b51036f9df2193d6ef6e4496a4bae880cb6`.
+The four previously failing fixtures pass sixteen Source-deleted native
+executions across both checking modes and both normal MSVC runtime profiles.
+Receipt `target/native/verify-four-current-v1/after.json`, SHA-256
+`bcad338942b98cd538e6d435cb110cbaa83d6a1d925528dac7f4e577e4a19bbd`.
+
+The unchanged complete native Verify audit passes 155/155 fixtures, with the
+Debug runtime, default Jett source mode and original Sources present. This is
+separate from the sixteen Source-deleted executions above. Receipt:
+`target/native/verify-fixture155-current-v1/after.json`, SHA-256
+`cbf5d51341bcce173027afb9181ab07b57c4045b022c2b3a605b118c09c5227e`.
+Current source, dependency and archive guards remain unchanged in both native
+runs; measured Runtime sources and artifacts are reused without modification.
+These results resolve the local Verify-suite regression. The two required-owner
+CI failures, exact-head supported-host/installed acceptance and broader language
+parity remain open. The rough 87% estimate and fixed 207/182 denominators remain
+unchanged; this does not complete the native-codegen goal.

@@ -3047,8 +3047,14 @@ fn lower_file_for_backend_inner(
         BackendLoweringError::Hir(errors).with_debug_observations(&debug_observations)
     })?;
     let native_verify_entry = if mode == BackendLoweringMode::VerifySuite {
-        append_native_verify_suite(&mut hir, module, entry_file, &check_result.interner)
-            .map_err(|error| error.with_debug_observations(&debug_observations))?
+        append_native_verify_suite(
+            &mut hir,
+            module,
+            entry_file,
+            &check_result.interner,
+            &checked_program,
+        )
+        .map_err(|error| error.with_debug_observations(&debug_observations))?
     } else {
         None
     };
@@ -3595,7 +3601,12 @@ fn append_native_verify_suite(
     module: &Module,
     entry_file: FileId,
     types: &jett_types::TypeInterner,
+    checked: &Arc<CheckedResourceProgram>,
 ) -> Result<Option<jett_hir::FunctionId>, BackendLoweringError> {
+    if hir.resource_source.manifest().is_some() {
+        return jett_hir::append_checked_native_verify_suite(hir, checked, entry_file)
+            .map_err(BackendLoweringError::Hir);
+    }
     let mut verifies = Vec::new();
     let mut suite_namespace = None;
     for item in &module.items {
@@ -5334,6 +5345,90 @@ pub fn bundle_project_detailed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backend_native_verify_suite_preserves_checked_actor_fixture_tables() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/run_pass");
+        for fixture in [
+            "actor_named_arguments.jett",
+            "namespace_duplicate_leaf_actors.jett",
+            "namespace_qualified_actors.jett",
+            "numeric_literal_contexts.jett",
+        ] {
+            for release in [false, true] {
+                let lowered = lower_file_for_native_verify_suite_with_options(
+                    &root.join(fixture),
+                    BuildOptions { release },
+                )
+                .unwrap_or_else(|error| panic!("{fixture} release={release}: {error}"));
+                let entry = lowered
+                    .native_verify_entry
+                    .expect("original checked fixture verifies");
+                let suite = &lowered.hir.functions[entry.index() as usize];
+                assert!(suite.params.is_empty() && suite.locals.is_empty());
+                assert_eq!(suite.capture_count, 0);
+                assert_eq!(suite.return_type, jett_types::TypeInterner::NOTHING);
+                let checked = lowered
+                    .checked_expression_types
+                    .resource_program
+                    .as_ref()
+                    .unwrap();
+                assert!(lowered.hir.resource_source.belongs_to(checked));
+                let expected = checked
+                    .module()
+                    .items
+                    .iter()
+                    .filter_map(|item| {
+                        let Item::Verify(verify) = item else {
+                            return None;
+                        };
+                        (verify.span.file == FileId::new(0)).then_some(verify.span)
+                    })
+                    .collect::<Vec<_>>();
+                let actual = suite
+                    .body
+                    .statements
+                    .iter()
+                    .map(|statement| {
+                        let jett_hir::StatementKind::Expression(jett_hir::Expression {
+                            kind:
+                                jett_hir::ExpressionKind::Call {
+                                    function,
+                                    args,
+                                    evaluation_order,
+                                    ..
+                                },
+                            ty,
+                            span,
+                        }) = &statement.kind
+                        else {
+                            panic!("canonical zero-argument verify call");
+                        };
+                        assert!(args.is_empty() && evaluation_order.is_empty());
+                        assert_eq!(*ty, jett_types::TypeInterner::NOTHING);
+                        let target = &lowered.hir.functions[function.index() as usize];
+                        assert_eq!(target.span, *span);
+                        assert_eq!(
+                            target.identity.declaration.kind,
+                            jett_hir::DeclarationKind::Verify
+                        );
+                        assert_eq!(target.return_type, jett_types::TypeInterner::NOTHING);
+                        *span
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(actual, expected, "{fixture} release={release}");
+                jett_hir::validate(&lowered.hir).unwrap();
+                jett_hir::validate_backend_types(&lowered.hir, &lowered.interner).unwrap();
+                lowered
+                    .hir
+                    .resource_source
+                    .validate_current(&lowered.hir, &lowered.interner)
+                    .unwrap();
+                jett_mir::validate(&lowered.mir).unwrap();
+            }
+        }
+    }
+
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_test_dir(name: &str) -> PathBuf {

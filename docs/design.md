@@ -3045,6 +3045,13 @@ The word `test` implies something optional — something you run separately, may
 
 `verify` blocks are not regular tests that run at runtime. They are executed by the **comptime engine** (Rule Set 10) during compilation. If any assertion in a `verify` block fails, the program **does not compile**.
 
+The native verification audit additionally executes the primary file's checked
+verify bodies through one generated suite in declaration order. Its entry
+contains only zero-argument calls returning `nothing`; it does not change
+compile-time eligibility or admit additional source bodies. When required
+values retain a protected checked table, suite construction preserves every
+existing body and renews custody only for that canonical appended entry.
+
 **What happens during compilation:**
 
 ```

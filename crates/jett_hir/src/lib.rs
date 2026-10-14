@@ -27,6 +27,8 @@ use jett_types::{
 
 mod ordinary_required_values;
 pub use ordinary_required_values::bake_required_values;
+mod native_verify_suite;
+pub use native_verify_suite::append_checked_native_verify_suite;
 mod actor_graph;
 pub use actor_graph::{
     ActorGraphCaptureBinding, ActorGraphInstruction, ActorGraphOperation, ActorGraphPlan,
