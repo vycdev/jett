@@ -233,6 +233,14 @@ impl NativeResourceState {
     ) -> ResourceResult<ResourceHandleId> {
         self.running(ordinary)?;
         self.runtime_purpose()?;
+        // Graph boxes have a distinct ordinary-owned family. Only this exact
+        // indirect row may resolve published metadata to its original scalar.
+        let descriptor = match descriptor {
+            Some(handle) if ordinary.published_checked_graph_hook(handle.raw()).is_ok() => {
+                Some(self.graph_descriptor_scalar(ordinary, operation, handle)?)
+            }
+            descriptor => descriptor,
+        };
         let (target, hook) = match (self.operation(operation)?, descriptor) {
             (
                 NativeOperation::Acquire { hook, .. }

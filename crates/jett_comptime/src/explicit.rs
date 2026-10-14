@@ -7,10 +7,12 @@ use jett_diagnostics::Diagnostic;
 use jett_parser::ast::{Block, Expr, Item, Module, Stmt, StringPart};
 use jett_types::{ReflectionMetadata, ReflectionTypeInfo};
 
-use crate::resource_execution::{CheckedAttemptKey, PreparedRequiredExpression};
+use crate::interpreter::actor_graph::ActorGraphTemplate;
 pub use crate::resource_execution::{
-    CheckedRequiredOwner, CheckedRequiredResourceHook, CheckedRequiredScope, CheckedRequiredValue,
+    ActorGraphHookRoot, CheckedActorGraphHook, CheckedRequiredOwner, CheckedRequiredResourceHook,
+    CheckedRequiredScope, CheckedRequiredValue,
 };
+use crate::resource_execution::{CheckedAttemptKey, PreparedRequiredExpression};
 use crate::value::ClosureScopedTypeBinding;
 use crate::{DebugEvent, Interpreter, Value};
 
@@ -50,9 +52,15 @@ pub struct ExplicitComptimeValues {
     // mirrors the value into values or constants in that same branch, so the
     // existing public collection views count reusable values once.
     checked_values: HashMap<CheckedAttemptKey, Value>,
+    // Private associations, never minted by a public span/context insertion.
+    actor_graphs: HashMap<(Span, ComptimeContext), Arc<ActorGraphTemplate>>,
+    checked_actor_graphs: HashMap<CheckedAttemptKey, Arc<ActorGraphTemplate>>,
 }
 
 impl ExplicitComptimeValues {
+    pub fn has_actor_graphs(&self) -> bool {
+        !self.checked_actor_graphs.is_empty()
+    }
     pub fn len(&self) -> usize {
         self.values.len() + self.constants.len()
     }
@@ -70,7 +78,22 @@ impl ExplicitComptimeValues {
     }
 
     pub fn insert(&mut self, span: Span, context: ComptimeContext, value: Value) {
+        // Public mirrors cannot replace a privately captured frozen graph.
         self.values.insert((span, context), value);
+    }
+
+    pub fn actor_graph(
+        &self,
+        span: Span,
+        context: &ComptimeContext,
+    ) -> Option<&Arc<ActorGraphTemplate>> {
+        self.actor_graphs.get(&(span, context.clone()))
+    }
+    pub(crate) fn checked_actor_graph(
+        &self,
+        key: &CheckedAttemptKey,
+    ) -> Option<&Arc<ActorGraphTemplate>> {
+        self.checked_actor_graphs.get(key)
     }
 
     /// Authenticate successful private required entries for this exact checked
@@ -106,6 +129,7 @@ impl ExplicitComptimeValues {
                 "required value cannot cache runtime authority or Resource custody".to_string(),
             );
         }
+        self.checked_actor_graphs.remove(&key);
         self.checked_values.insert(key, value);
         Ok(())
     }
@@ -366,12 +390,18 @@ fn evaluate_collected_expressions(
             };
             match evaluated {
                 Ok(value) => {
+                    let graph = match interpreter.freeze_actor_graph(&value, context.required.as_ref()) {
+                        Ok(graph) => graph,
+                        Err(error) => { diagnostics.push(Diagnostic::error(9001, error, collected.span)); continue; }
+                    };
                     if let Some(identity) = checked_key {
-                        if let Err(error) = values.checked_insert(identity, value.clone()) {
+                        if let Err(error) = values.checked_insert(identity.clone(), value.clone()) {
                             diagnostics.push(Diagnostic::error(9001, error, collected.span)); continue;
                         }
+                        if let Some(graph) = &graph { values.checked_actor_graphs.insert(identity, graph.clone()); }
                     }
-                    values.insert(collected.span, key, value);
+                    values.insert(collected.span, key.clone(), value);
+                    if let Some(graph) = graph { values.actor_graphs.insert((collected.span, key), graph); }
                 }
                 Err(error) => diagnostics.push(Diagnostic::error(
                     9001,
@@ -895,6 +925,10 @@ fn collect_expr<'a>(
         | Expr::Error(_) => {}
     }
 }
+
+#[cfg(test)]
+#[path = "explicit/checked_constant_tests.rs"]
+mod checked_constant_tests;
 
 #[cfg(test)]
 mod debug_capture_tests {

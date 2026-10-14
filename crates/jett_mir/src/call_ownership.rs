@@ -3067,10 +3067,17 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
         }
         self.invocation(expression, site, context)?;
         match &expression.kind {
+            E::ActorGraphImport(_) => {
+                return Err(
+                    "actor graph import was not expanded before MIR call ownership validation"
+                        .into(),
+                );
+            }
             E::Call { args, .. }
             | E::ResourceInvoke { args, .. }
             | E::Intrinsic { args, .. }
-            | E::ActorSpawn { args, .. } => {
+            | E::ActorSpawn { args, .. }
+            | E::ActorGraphStep { args, .. } => {
                 for value in args {
                     self.expression(value, site, context)?;
                 }

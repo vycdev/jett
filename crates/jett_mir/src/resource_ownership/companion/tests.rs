@@ -15,6 +15,7 @@ fn resource_companions_keep_ordinary_failure_storage_and_public_custody_refusals
             assert_eq!(companion.function(), current.id);
             for local in &current.locals {
                 if resource_type_pending(types, local.ty) {
+                    assert!(crate::native_graph_storage_for_local(current, types, local).is_none());
                     assert!(
                         !companion
                             .storage()
@@ -128,10 +129,12 @@ fn resource_companion_function_selection_cannot_adopt_an_unrelated_ordinary_body
             .iter()
             .find(|function| ownership.function(function.id).is_none())
             .expect("unused ordinary support function");
-        assert!(
-            ResourceCompanionPlan::analyze(&ownership, outside.id)
-                .unwrap_err()
-                .contains("exact fresh function plan")
-        );
+        assert!(!crate::native_graph_storage_has_records(
+            outside,
+            &checked.checked().interner
+        ));
+        let error = ResourceCompanionPlan::analyze(&ownership, outside.id).unwrap_err();
+        assert!(error.contains("exact fresh function plan"), "{error}");
+        assert!(error.contains("nor protected graph storage"), "{error}");
     }
 }

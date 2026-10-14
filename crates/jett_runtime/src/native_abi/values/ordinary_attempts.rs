@@ -214,6 +214,18 @@ impl NativeValues {
         })
     }
 
+    pub(in crate::native_abi) fn retire_resource_actors(
+        &mut self,
+        owner: ResourceOrdinaryOwner,
+    ) -> LeafResult<()> {
+        self.validate_resource_ordinary_attempt(owner)?;
+        if let Err(error) = self.release_actors() {
+            self.cleanup_failed = true;
+            self.record_ordinary_failure(error);
+        }
+        Ok(())
+    }
+
     pub(in crate::native_abi) fn validate_resource_ordinary_attempt(
         &self,
         owner: ResourceOrdinaryOwner,

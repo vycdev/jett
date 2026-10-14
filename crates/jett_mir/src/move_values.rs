@@ -1033,6 +1033,19 @@ impl Flow<'_> {
                 }
                 self.loans = saved;
             }
+            ExpressionKind::ActorGraphImport(_) => return Err("unexpanded actor graph import has no move plan".into()),
+            ExpressionKind::ActorGraphStep { instruction, args } => {
+                for (index, arg) in args.iter().enumerate() {
+                    let previous = self.taking_binding;
+                    if (index == 2 && matches!(instruction.operation(), jett_hir::ActorGraphOperation::Fill { .. }))
+                        || (index == 1 && matches!(instruction.operation(),jett_hir::ActorGraphOperation::RootFill {..})) {
+                        if let ExpressionKind::Local(local) = arg.kind { self.taking_binding = Some(local); }
+                    }
+                    let result = self.expr(arg, false);
+                    self.taking_binding = previous;
+                    result?;
+                }
+            }
             ExpressionKind::ActorSpawn {
                 args,
                 evaluation_order,

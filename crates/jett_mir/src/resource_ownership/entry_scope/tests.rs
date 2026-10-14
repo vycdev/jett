@@ -797,7 +797,8 @@ fn ordinary_entry_raw_body_only_resource_descriptor_retains_mandatory_custody_ca
             &no_archive,
             types,
             &execution,
-        );
+        )
+        .unwrap();
         assert!(
             capture.witness.is_some(),
             "raw body-only custody must not be made ordinary"
@@ -909,4 +910,132 @@ fn function_span(program: &Program, id: FunctionId) -> jett_common::Span {
         .find(|function| function.id == id)
         .unwrap()
         .span
+}
+
+#[test]
+fn ordinary_scope_interface_sequence_preserves_role_and_refuses_custody_or_edits() {
+    const SOURCE: &str = "namespace app\ninterface Named:\n    function name(view self: Named) returns string\nactor Counter:\n    mutable int64 count = 1\nimplement Named for Counter:\n    function name(view self: Counter) returns string:\n        return \"counter\"\nfunction main() returns nothing:\n    Counter worker = spawn Counter()\n    list[Named] items = list(worker)\n    for item in items:\n        println(Named.name(view item))\n    return nothing\n";
+    let file = FileId::new(0);
+    let checked = Arc::new(
+        CheckedResourceProgram::prepare(
+            parse(SOURCE, file),
+            HashMap::from([(file, SourceOrigin::Project)]),
+            &[],
+            jett_typecheck::CheckOptions { release: false },
+        )
+        .unwrap(),
+    );
+    let hir = hir::lower_checked_ordinary_program(&checked).unwrap();
+    let types = &checked.checked().interner;
+    let baseline = crate::lower(&hir, types).unwrap();
+    let before = named(&baseline, "main");
+    assert!(before.resource_lowering.is_some());
+    assert!(!has_execution_records(before, types));
+    let header = before
+        .blocks
+        .iter()
+        .find(|block| matches!(block.terminator.kind, TerminatorKind::ForEach { .. }))
+        .unwrap();
+    let TerminatorKind::ForEach { body, .. } = header.terminator.kind else {
+        unreachable!()
+    };
+    let mut prepared = baseline.clone();
+    crate::prepare_native_sequences(&mut prepared, types);
+    let after = named(&prepared, "main");
+    assert!(
+        after
+            .blocks
+            .iter()
+            .all(|block| !matches!(block.terminator.kind, TerminatorKind::ForEach { .. }))
+    );
+    assert!(!has_execution_records(after, types));
+    validate_resource_ownership(&prepared, types).unwrap();
+    let preheader = before
+        .blocks
+        .iter()
+        .find(|block| {
+            after.blocks[block.id.index() as usize].statements.len() > block.statements.len()
+        })
+        .unwrap();
+    let edit = crate::breakpoint_regions::SequenceEdit {
+        header: header.id,
+        before: header.terminator.clone(),
+        after: after.blocks[header.id.index() as usize].terminator.clone(),
+        append: vec![(
+            preheader.id,
+            after.blocks[preheader.id.index() as usize].statements[preheader.statements.len()..]
+                .to_vec(),
+        )],
+        prefix: Some((
+            body,
+            after.blocks[body.index() as usize].statements[..2].to_vec(),
+        )),
+        redirects: Vec::new(),
+        blocks: Vec::new(),
+    };
+    for forgery in 0..5 {
+        let mut changed = baseline.clone();
+        let function = named_mut(&mut changed, "main");
+        match forgery {
+            0 => {
+                let TerminatorKind::ForEach { iterable, .. } =
+                    &mut function.blocks[header.id.index() as usize].terminator.kind
+                else {
+                    unreachable!()
+                };
+                iterable.span.end += 1;
+            }
+            1 => function.locals[0].span.end += 1,
+            2 => function.blocks[function.entry.index() as usize]
+                .statements
+                .clear(),
+            3 => {
+                function
+                    .resource_lowering
+                    .as_mut()
+                    .unwrap()
+                    .original
+                    .span
+                    .end += 1
+            }
+            4 => {
+                function.resource_lowering.as_mut().unwrap().source =
+                    hir::ResourceSourceArchive::empty()
+            }
+            _ => unreachable!(),
+        }
+        let before_changed = named(&changed, "main").clone();
+        assert!(
+            reflected_fields::ordinary_sequence_transition(
+                named_mut(&mut changed, "main"),
+                &before_changed,
+                &edit,
+                types
+            )
+            .is_err(),
+            "accepted ordinary Scope forgery {forgery}"
+        );
+    }
+    const CUSTODY: &str = "namespace app\nfunction real_owner(view net: Network) returns nothing:\n    resource_probe.TestHandle token = resource_probe.create(view net, 1) handle error:\n        return nothing\n    resource_probe.close(token)\n    return nothing\nfunction relay(view net: Network) returns nothing:\n    real_owner(view net)\n    return nothing\n";
+    let custody_checked = super::super::tests::checked(CUSTODY, false);
+    let custody_types = &custody_checked.checked().interner;
+    let custody = lowered(&custody_checked);
+    for name in ["real_owner", "relay"] {
+        let before = named(&custody, name);
+        assert!(entry_scope::capture_needed(
+            &before.resource_lowering.as_ref().unwrap().original,
+            &before.resource_lowering.as_ref().unwrap().source
+        ));
+        assert!(has_execution_records(before, custody_types));
+        assert!(
+            reflected_fields::ordinary_sequence_transition(
+                &mut before.clone(),
+                before,
+                &edit,
+                custody_types
+            )
+            .is_err(),
+            "actual Resource family entered ordinary route"
+        );
+    }
 }

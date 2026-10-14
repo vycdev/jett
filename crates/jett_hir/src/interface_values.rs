@@ -412,9 +412,39 @@ pub fn complete_value_conversions(
 ) -> Result<(), Vec<LowerError>> {
     let before = program.clone();
     super::reflected_callable::baked::validate_conversion_input(&before)?;
+    super::actor_graph::validate_conversion_input(&before)?;
+    let archive = before.resource_source.clone();
+    let graphs = archive
+        .required_materializations()
+        .iter()
+        .any(|row| row.proof.actor_graph().is_some());
+    if graphs {
+        archive
+            .validate_current(program, types)
+            .map_err(|message| {
+                vec![LowerError {
+                    span: program.functions[0].span,
+                    message,
+                }]
+            })?;
+    }
     coerce_program(program, types);
+    // Each private transition authenticates the same unchanged archive and
+    // exact post-conversion functions before their renewed views are joined.
+    let mut graph_converted = program.clone();
+    super::actor_graph::complete_conversion(&mut graph_converted, &before)?;
     super::reflected_callable::baked::complete_conversion(program, &before)?;
+    program.resource_source.graph_values = graph_converted.resource_source.graph_values;
     super::reflected_callable::seal_program(program)?;
+    if graphs {
+        program
+            .resource_source
+            .install_materialized(crate::resource_source::Materialized {
+                functions: program.functions.clone(),
+                values: archive.required_materializations().to_vec(),
+                required_only: archive.required_only_function_ids().to_vec(),
+            });
+    }
     validate(program)
         .and_then(|()| validate_backend_types(program, types))
         .map_err(|errors| {
@@ -426,6 +456,15 @@ pub fn complete_value_conversions(
                 })
                 .collect()
         })
+}
+
+// The private Graph factory binds its exact checked recipe transition before
+// conversion. Empty archives supply no callback construction authority.
+pub(crate) fn complete_graph_value_conversions(
+    program: &mut Program,
+    types: &TypeInterner,
+) -> Result<(), Vec<LowerError>> {
+    complete_value_conversions(program, types)
 }
 
 struct Adapters {

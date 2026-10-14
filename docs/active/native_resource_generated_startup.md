@@ -3,10 +3,18 @@
 This restored bounded implementation connects the selected Resource ownership
 contract to the normal launcher. It changes no public Source policy and supplies
 no production I/O provider. Authoring was based on published GNU f4/v25. The
-current Actor/Resource/Owner/reuse/Callback compiler passes local MSVC focused
-controls, the existing private Resource gates and the complete bounded 80-row
-startup matrix. Full-workspace/native conformance, exact-revision CI, GNU,
-installed distribution and public-provider acceptance remain pending. Earlier
+preceding Actor/Resource/Owner/reuse/Callback compiler passed local MSVC focused
+controls, private Resource gates and the complete bounded 80-row startup matrix.
+Startup80v2, Resource16 compiler2 and Native32v5 are predecessor compiler
+proofs after the ordinary required-value HIR repair. Normal v4 and private v8
+Runtime archives remain current; current compiler Resource and startup gates passed after the retained-archive
+and ordinary wrapper-sequence repairs. The four affected libraries passed;
+other library results remain separately pinned predecessor evidence. Wrapper-only entry-Scope authentication does not qualify Resource
+execution: ordinary sequence transport separately excludes graph and custody
+records and retains exact original/current headers and the finite body edit.
+Native conformance, exact-revision CI, GNU and installed distribution remain
+current parity obligations. Absent production-provider APIs are separate future
+feature work. Earlier
 isolated results below are historical handoff claims; they do not validate the
 current restored compiler or its archives.
 
@@ -31,7 +39,12 @@ Network-only/Nothing entry boundary is retained for this prerequisite; supportin
 mixed ordinary capabilities such as Stdout is still a required subsequent step.
 
 After successful begin, every generated body/refusal return goes through normal
-completion once. The core retains the original body status, first ordinary and
+completion once. Resource companions first release their borrowed actor references;
+the runtime then retires actor state and unfinished graph imports for the exact
+Running ordinary attempt, before emptiness checks and terminal sealing. Wrong
+or sealed attempt owners cannot retire that state. Actor release failure retains
+the first ordinary diagnostic, marks cleanup poison and blocks clean reentry.
+Later context destruction observes the actor table already drained. The core retains the original body status, first ordinary and
 Resource diagnostics, first cleanup status and independent selected kind. A
 separate private terminal-status field covers recorded first errors even when the
 original body status is zero, without changing the existing completion record
@@ -63,7 +76,7 @@ also includes byte-for-byte predecessor private receipts, a normal Resource obje
 against ordinary debug/release launcher archives, ordinary non-Resource objects,
 original body/cleanup outcomes and copied messages, source deletion and context
 retirement observations. Those initial host controls supply no native execution or percentage credit.
-Current linked observations are recorded below.
+Current linked observations are recorded below. The current sixteen original private Resource gates passed 754 Source-deleted native executions and 900 observed entries, using the fresh compiled receipt pin and unchanged compiler/source guards. The bounded startup matrix passed all 80 selected executions with Source absent, unchanged inputs and no retained case executables.
 
 The standalone archive contract retains 37 ordinary leaves, 13 carrier leaves
 and eight private hooks, and adds exactly five normal startup exports from the
@@ -178,7 +191,7 @@ Actual object/manifest observations resolve the earlier wire3 assumption. The
 76 linked Resource-object observations contain wire2 layouts; 36 runtime C
 manifest checks observe wire2 at execution. The four ordinary controls contain
 no Resource manifest. `actual-manifest-wires.json` in the current full80 packet
-records the exact observed wire bytes. A separate occupied Source33 object
+records the exact observed wire bytes. A separate occupied Source 33 object
 contains wire3, but that supplemental object-only observation receives no linked
 startup execution credit. The Runtime's current wire constant remains 3 with its
 existing legacy wire1/wire2 acceptance; these observations require no schema
@@ -192,3 +205,27 @@ and installed/relocated distribution. The socket behavior contract is selected;
 Endpoint public representation and malformed dynamic `Network.allow` failure
 policy need focused notes before implementation. Disabled cannot satisfy any of
 those production provider requirements.
+
+## Graph follow-on candidate
+
+The current standalone startup inventory above remains its own 55-export
+contract. The next actor graph composition adds exactly
+`jett_rt_v1_resource_graph_descriptor_box`, bringing the composed Resource
+inventory to 56 production exports while retaining the original 50 leaves, five
+startup exports and eight separately gated private hooks. Its private checked
+proof binds descriptor metadata to the exact context/program/layout and
+operation/hook/signature; it supplies no Scope, Network grant or Resource owner.
+
+The generated entry's manifest, Runtime-only attempt ownership, single completion
+gate, retained first-error/cleanup observations and private borrowed-attempt
+handoff remain unchanged. The graph addition requires fresh source guards,
+normal/private Debug/Release archives, exact 56-plus-eight inventories and
+source-deleted linked execution. Existing Startup or Resource receipts do not
+authenticate the changed graph compiler or archives. The current MSVC and GNU
+measurement checks, actual compiler/linker/CRT evidence, immutable receipt pins
+and compile-time pin freshness checks must remain intact.
+
+The recovered graph measurement successor adds six Python controls to the current
+68-method suite, for a prospective 74. These are parser/receipt controls, not
+graph native acceptance. Current combined graph execution remains pending. See
+[the graph integration note](native_comptime_actor_graph.md).

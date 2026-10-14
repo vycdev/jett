@@ -7,7 +7,8 @@ use crate::value::ClosureScopedTypeBinding;
 use std::hash::{Hash, Hasher};
 
 pub use value_proof::{
-    CheckedRequiredOwner, CheckedRequiredResourceHook, CheckedRequiredScope, CheckedRequiredValue,
+    ActorGraphHookRoot, CheckedActorGraphHook, CheckedRequiredOwner, CheckedRequiredResourceHook,
+    CheckedRequiredScope, CheckedRequiredValue,
 };
 #[path = "required/value_proof.rs"]
 mod value_proof;
@@ -57,6 +58,7 @@ pub(crate) struct PreparedRequiredExpression {
     reference: CheckedBodyReference,
     purpose: ExecutionPurpose,
     key: CheckedAttemptKey,
+    result_type: TypeId,
     function: Option<Arc<CheckedFunctionTypes>>,
     scope: Option<Arc<CheckedScopedTypes>>,
     bindings: Vec<ClosureScopedTypeBinding>,
@@ -68,6 +70,12 @@ impl PreparedRequiredExpression {
     }
     pub(crate) fn key(&self) -> CheckedAttemptKey {
         self.key.clone()
+    }
+    pub(crate) fn result_type(&self) -> TypeId {
+        self.result_type
+    }
+    pub(crate) fn checked_program(&self) -> &Arc<CheckedResourceProgram> {
+        &self.key.program
     }
     pub(crate) fn function_projection(&self) -> Option<Arc<CheckedFunctionTypes>> {
         self.function.clone()
@@ -148,6 +156,11 @@ impl CheckedExecution {
             .path
             .push(RegionStep::Expression(index));
         let key = self.attempt_key(&cursor)?;
+        let result_type = *self
+            .facts(&cursor)?
+            .types
+            .get(&expression.span())
+            .ok_or(ResourceExecutionError::MissingCheckedBody)?;
         let function = match cursor.root {
             BodyRoot::Ordinary => None,
             BodyRoot::Generic(index) => Some(function_projection(self, index)?),
@@ -178,6 +191,7 @@ impl CheckedExecution {
             reference: CheckedBodyReference { cursor },
             purpose: self.purpose,
             key,
+            result_type,
             function,
             scope,
             bindings,

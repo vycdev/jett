@@ -280,6 +280,32 @@ pub unsafe extern "C" fn jett_rt_v1_resource_descriptor(
 }
 
 /// # Safety
+/// Context and output satisfy the existing stationary/exclusive output contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_resource_graph_descriptor_box(
+    context: *const JettRuntimeContextV1,
+    ticket: u64,
+    descriptor_operation: u32,
+    descriptor: u64,
+    out_box: *mut u64,
+) -> JettRuntimeStatusV1 {
+    unsafe {
+        output(context, out_box, |s, v, _| {
+            match id(descriptor).and_then(|descriptor| {
+                s.graph_descriptor_box(v, ticket, descriptor_operation, descriptor)
+            }) {
+                Ok(boxed) => Ok(boxed),
+                Err(error) => {
+                    // Preserve the native failure before rolling back this factory.
+                    v.rollback_graph_hook_failure((error.status(), REFUSED));
+                    Err(error)
+                }
+            }
+        })
+    }
+}
+
+/// # Safety
 /// Context and outputs satisfy the stationary-context and exclusive output contracts.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn jett_rt_v1_resource_transfer(

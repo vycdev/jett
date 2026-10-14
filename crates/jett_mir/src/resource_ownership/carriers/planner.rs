@@ -1437,6 +1437,7 @@ pub(super) fn analyze(
         });
     }
     let plan = ResourceFunctionPlan {
+        graph_descriptors: Vec::new(),
         function: function.id,
         identity: function.identity.clone(),
         parameters: function.params.clone(),

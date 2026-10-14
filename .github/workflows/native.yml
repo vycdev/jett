@@ -39,8 +39,42 @@ jobs:
       - name: Install tested Rust toolchain
         run: rustup toolchain install 1.97.1 --profile minimal
       - run: rustup override set 1.97.1
+      - name: Package release compiler and both runtime profiles
+        run: python tools/package_native.py --output dist/package
       - name: Check compiler and native conformance
+        env:
+          JETT_ACTOR_GRAPH_BUNDLE_MANIFEST: ${{ github.workspace }}/dist/package/lib/jett/runtime/${{ matrix.target }}/debug/launcher.json
+          JETT_ACTOR_GRAPH_EVIDENCE_DIR: ${{ github.workspace }}/target/native-actor-graph
         run: cargo test --locked --workspace --no-fail-fast --target ${{ matrix.target }}
+      - name: Check public graph execution with the Release runtime
+        env:
+          JETT_ACTOR_GRAPH_BUNDLE_MANIFEST: ${{ github.workspace }}/dist/package/lib/jett/runtime/${{ matrix.target }}/release/launcher.json
+          JETT_ACTOR_GRAPH_EVIDENCE_DIR: ${{ github.workspace }}/target/native-actor-graph
+        run: >-
+          cargo test --locked --release -p jett_driver --test actor_graph_native
+          --target ${{ matrix.target }}
+          actor_graph_public_driver_reference_and_native_without_source
+          -- --exact
+      - name: Check protected graph hooks with the Release runtime
+        env:
+          JETT_ACTOR_GRAPH_BUNDLE_MANIFEST: ${{ github.workspace }}/dist/package/lib/jett/runtime/${{ matrix.target }}/release/launcher.json
+          JETT_ACTOR_GRAPH_EVIDENCE_DIR: ${{ github.workspace }}/target/native-actor-graph
+        run: >-
+          cargo test --locked --release -p jett_driver --lib
+          --target ${{ matrix.target }}
+          native::actor_graph_hooks_tests::actor_graph_checked_hook_original_initializer_and_capture_native
+          -- --exact
+      - name: Retain compact graph execution evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-actor-graph-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            target/native-actor-graph/*.json
+            target/native-actor-graph/**/*.stdout
+            target/native-actor-graph/**/*.stderr
+          if-no-files-found: warn
+          retention-days: 7
       - name: Check GNU Resource measurement controls
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python -m unittest tools.tests.test_measure_resource_native_archives
@@ -72,8 +106,6 @@ jobs:
             target/native-resource-gnu/*-build/x86_64-unknown-linux-gnu/*/libjett_runtime.a
           if-no-files-found: warn
           retention-days: 7
-      - name: Package release compiler and both runtime profiles
-        run: python tools/package_native.py --output dist/package
       - name: Check installed compiler
         run: python tools/smoke_native_package.py dist/package
       - name: Archive package with executable permissions

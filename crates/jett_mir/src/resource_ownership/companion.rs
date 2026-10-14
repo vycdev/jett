@@ -60,15 +60,21 @@ pub(crate) struct CompanionContext<'p> {
 }
 impl<'p> CompanionContext<'p> {
     fn new(ownership: &ResourceOwnershipPlan<'p>, function: FunctionId) -> Result<Self, String> {
-        let plan = ownership
-            .function(function)
-            .ok_or("Resource companion has no exact fresh function plan")?;
+        let plan = ownership.function(function);
         let current = ownership
             .program
             .functions
             .get(function.index() as usize)
             .filter(|current| current.id == function)
             .ok_or("Resource companion lost its current function")?;
+        if plan.is_none()
+            && !current
+                .resource_lowering
+                .as_ref()
+                .is_some_and(|parent| graph_metadata::has_records(parent, current, ownership.types))
+        {
+            return Err("Resource companion has neither an exact fresh function plan nor protected graph storage".into());
+        }
         let mut expressions = BTreeSet::new();
         let mut remember = |value: &Expression| {
             walk::expression(value, &mut |value| {
@@ -122,7 +128,9 @@ impl<'p> CompanionContext<'p> {
             }
         }
         let mut carrier_expressions = BTreeSet::new();
-        if let Some(carriers) = plan.carriers() {
+        if let Some(plan) = plan
+            && let Some(carriers) = plan.carriers()
+        {
             for block in &current.blocks {
                 walk::mir_block(block, &mut |value| {
                     let direct = carriers.operations_for_expression(value).next().is_some()
@@ -149,14 +157,16 @@ impl<'p> CompanionContext<'p> {
                 });
             }
         }
-        let carrier_types = plan.carriers().map_or_else(HashSet::new, |carriers| {
-            carriers
-                .shapes()
-                .iter()
-                .filter(|shape| shape.contains_resource())
-                .map(ResourceCarrierShape::ty)
-                .collect()
-        });
+        let carrier_types =
+            plan.and_then(|plan| plan.carriers())
+                .map_or_else(HashSet::new, |carriers| {
+                    carriers
+                        .shapes()
+                        .iter()
+                        .filter(|shape| shape.contains_resource())
+                        .map(ResourceCarrierShape::ty)
+                        .collect()
+                });
         Ok(Self {
             carrier_expressions,
             carrier_types,
@@ -164,16 +174,18 @@ impl<'p> CompanionContext<'p> {
             function: current,
             types: ownership.types,
             expressions,
-            descriptor_values: plan
-                .descriptor_values
-                .iter()
-                .map(|(address, _)| *address)
-                .collect(),
-            named_values: plan
-                .named_callable_values
-                .iter()
-                .map(|(address, _)| *address)
-                .collect(),
+            descriptor_values: plan.map_or_else(BTreeSet::new, |plan| {
+                plan.descriptor_values
+                    .iter()
+                    .map(|(address, _)| *address)
+                    .collect()
+            }),
+            named_values: plan.map_or_else(BTreeSet::new, |plan| {
+                plan.named_callable_values
+                    .iter()
+                    .map(|(address, _)| *address)
+                    .collect()
+            }),
             named_locals: current
                 .resource_lowering
                 .as_ref()
@@ -199,17 +211,31 @@ impl<'p> CompanionContext<'p> {
     pub(crate) fn resource_type(&self, ty: TypeId) -> bool {
         resource_type_pending(self.types, ty)
     }
+    pub(crate) fn graph_return(&self) -> bool {
+        crate::native_graph_storage_for_return(self.function, self.types).is_some()
+    }
+    pub(crate) fn graph_local(&self, local: &Local) -> bool {
+        crate::native_graph_storage_for_local(self.function, self.types, local).is_some()
+    }
+    pub(crate) fn graph_expression(&self, value: &Expression) -> bool {
+        crate::native_graph_storage_for_expression(self.function, self.types, value).is_some()
+    }
     pub(crate) fn descriptor_expression(&self, value: &Expression) -> bool {
-        self.descriptor_values
-            .contains(&std::ptr::from_ref(value).addr())
+        !crate::native_graph_storage_for_expression(self.function, self.types, value).is_some()
+            && self
+                .descriptor_values
+                .contains(&std::ptr::from_ref(value).addr())
     }
     pub(crate) fn resource_expression(&self, value: &Expression) -> bool {
-        self.resource_type(value.ty)
+        crate::native_graph_storage_for_expression(self.function, self.types, value).is_none()
+            && self.resource_type(value.ty)
             && !self
                 .named_values
                 .contains(&std::ptr::from_ref(value).addr())
     }
     pub(crate) fn resource_local(&self, local: &Local) -> bool {
-        self.resource_type(local.ty) && !self.named_locals.contains(&local.id)
+        crate::native_graph_storage_for_local(self.function, self.types, local).is_none()
+            && self.resource_type(local.ty)
+            && !self.named_locals.contains(&local.id)
     }
 }

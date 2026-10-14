@@ -55,7 +55,7 @@ separate from parity for existing accepted behavior.
 
 The following semantic and implementation gaps prevent a full parity claim:
 
-- [Actor handles escaping comptime](../open_design/comptime_actor_values.md): reject escaping handles versus materializing a defined actor graph.
+- [Comptime actor graph materialization](native_comptime_actor_graph.md) implements the selected frozen-graph contract. Current bounded MSVC acceptance passes 32 Source-deleted executions; wider admitted compositions and coherent-revision release gates remain required. Actor closure capture remains rejected with E0402.
 - [Erased interface equality](../open_design/interface_value_equality.md): explicit comparison versus a defined dynamic equality contract.
 - [Secrets hidden in debug print values](../open_design/debug_print_hidden_secrets.md): extend redaction to erased/builder payloads versus reject potentially secret values.
 - [Projected field assignment](../open_design/projected_field_assignment.md):
@@ -98,11 +98,12 @@ denominators unchanged.
 live-instance contract in the reference evaluator and native backend. Direct
 comparisons require the same exact checked nominal actor type; recursive enum
 payload comparison checks identity and per-handle pending depth without reading
-state. Local MSVC static-CRT acceptance on 2026-10-12 passes nine Source-deleted
-executables per Debug/Release runtime profile, including production output with
-both Jett optimization settings. Escaping comptime actor graph import, full
-predecessor, GNU, installed-distribution and coherent-revision acceptance remain
-open. This bounded acceptance does not change the rough 87% planning estimate,
+state. The predecessor MSVC static-CRT checkpoint on 2026-10-12 passed nine
+Source-deleted executables per Debug/Release runtime profile, including
+production output with both Jett optimization settings. That checkpoint did not
+establish escaping comptime actor graph import. Current bounded graph import
+acceptance is recorded below and in the active graph note; full predecessor,
+GNU, installed-distribution and coherent-revision acceptance remain open. This bounded acceptance does not change the rough 87% planning estimate,
 the fixed inventory denominators or the whole-language completion requirement.
 
 The [inferred uninhabited JSON parser repair](native_json_uninhabited_parse_slots.md)
@@ -2840,3 +2841,68 @@ generic/nested reflection, aggregate live custody, fresh-archive predecessor
 compatibility and coherent-workspace/exact-revision CI remain full-goal
 obligations under unchanged Source semantics. The rough87% estimate and fixed
 207/182 inventory denominators remain unchanged.
+
+
+#### Current comptime actor graph MSVC acceptance
+
+Actor handles retained by an admitted pure `comptime` expression now form an
+immutable graph template. Each evaluation imports fresh actors while preserving
+aliases, sharing, evaluated state and authenticated callback/hook metadata.
+Graph producer and iterator proofs preserve list/map behavior. Ordinary required
+replacements preserve their checked archives; ordinary actor/interface wrappers
+retain original entry metadata through canonical sequence iteration. These paths
+keep ordinary heap ownership without Resource custody or capability authority.
+Entry completion retires its actors, and required constants use one checked
+attempt. The negative graph fast path leaves positive admission proofs intact.
+
+The current four affected libraries pass **793 tests across four groups**, with
+zero failures or ignored tests: codegen 133, Driver 95, HIR 220 and MIR 345. The actual
+log is `target/native/graph-affected-libraries-current-v6.log`, SHA256
+`6b16b29fa296b6955587a123ad9c206544ff80c660f0876467481c8a0a84436d`.
+The terminal source-freeze record binds all 947 unchanged compiler/Source inputs:
+`native-codegen-recovery-2026-10-09/graph-affected-libraries-acceptance-v6.json`,
+SHA256 `58e25727552b941da02784f323039011fe0515c45b5735ccd4007ed5fd2f3a3f`.
+A pinned predecessor command contributes **1,673 passing tests across 18 other
+package result groups**, excluding its codegen, Driver and HIR rows. That log's
+SHA256 is `7d27eecec6261eb2d28d6fc0d945ca9fcf587672aa78c69839cb2a07e3b693e6`.
+These historical results remain separate. The mixed 2,466 count does not establish
+a fresh full workspace library or integration run.
+
+Two focused HIR controls and one MIR control pass the required-value and ordinary
+wrapper-sequence repairs, including foreign/pre/post-edit and builder transcript
+refusals, five iterator/header/body/Source alterations and real Resource-owner/
+direct-call refusals. All three original interface native regression tests pass
+with Source present. Their unchanged-input receipt is
+`target/native/interface-archive-native-controls-v2/after.json`, SHA256
+`04b66bd7b53c564f6983ff35799d8aeb0dd517b64aa3034e41b1466167d1619b`.
+These tests provide no Source-deleted execution credit.
+
+The current normal MSVC Debug/Release bundles pass **32 Source-deleted graph
+executions: 24 public and eight protected hook cases**. Original ordinary fixtures
+and the adapted callback use Debug Source. The production Stdout callback and both
+hook Sources cover both Jett optimization choices. Independent reference/stream
+oracles, object hashes, successful terminal/reap records and absent Source/case
+executables pass with all 947 compiler/Source inputs and used-launcher guards
+unchanged. The receipt is `target/native/actor-graph-native-acceptance-v6/after.json`,
+SHA256 `ecbba9f7539f250d8c48be4ee9ef9256e918bf95ab2d1731c39ee10460366d76`.
+
+Normal v4 and private v8 Runtime/Launcher archives retain the 56-export production
+Resource catalog, static CRT and separate private hooks. Actual compiler native
+library notes and the canonical manifest vector remain distinct records; linked
+acceptance establishes the selected vector. Archive receipt pins are
+`e7f818891a707382ae9066bed5f26079a3da93dda0aa7d29124abe7e21e56a9d`
+and `f40be801d5f609b0010a747ebc3a428d5ccc10e4e20989c83c3555dbde7595b9`.
+
+The current bounded startup matrix passes **80 Source-deleted executions**: 48 normal and 32 private, with 40 decoded private entries, 60 successful exits and 20 expected exit71 refusals. Source, terminal reaping, original case oracles and artifact guards pass; no case executables remain. Source33 wire3 is object-only and supplies no linked execution credit. The receipt is `target/native/startup80-current-graph-v3/after.json`, SHA256 `467f5b21d331f568543cdadec9390a05038d305e70b16d56976786a9219a4596`.
+
+The current interface compatibility subset passes **25 native tests** with unchanged inputs: all 21 original `native_interface_` tests plus four generic, deep-conversion and reflected-interface controls. Its receipt is `target/native/graph-interface-regressions-current-compiler3/after.json`, SHA256 `766080cb513147f87c056a9452457f6ba07ff40443a16a05f33310b953731607`. This selection does not establish all normal callback, Owner or Actor regression acceptance; their earlier 17-test result retains its predecessor revision. The current Source-deleted Graph gate independently covers its joint Graph/callback cases.
+
+All **16 current Resource gates pass**, covering **754 Source-deleted executions and 900 entries** on the freshly compiled compiler 3 test artifact. The whole lifecycle gate reports 382 executions and 246 observed builds. The occupied two, predecessor twelve and clean-reentry two gates retain exact selectors, current compile-time archive pins and unchanged compiler/Source guards. The counts receipt is `target/native/resource-msvc-v8-current-compiler3/current-gate-counts.json`, SHA256 `4d9409982e937fa19dcdfa9c1c8a7cb9467569988b5df9050005888152ce813e`.
+
+Broader normal native regressions and a complete workspace run remain pending. Predecessor receipts retain their original revision and scope. The
+published helper revision 0eb3ce5f passed four CI jobs, which does not establish
+acceptance for the current Graph revision. Exact-head supported-host CI, GNU and
+clean installed distribution remain separate obligations. The rough **87%**
+estimate and fixed **207/182** inventory are unchanged. Existing sequential
+reference parity remains required; absent scheduler/provider APIs remain separate
+feature work.

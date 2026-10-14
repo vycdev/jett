@@ -276,6 +276,8 @@ struct GeneratedProducerShape {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum GeneratedProducerIdentity {
+    ActorGraphImport(crate::ActorGraphPlan),
+    ActorGraphStep(crate::ActorGraphInstruction),
     ResourceHook(crate::ResourceHookRef),
     ResourceInvoke {
         hook: crate::ResourceHookRef,
@@ -510,6 +512,8 @@ impl<'a> GeneratedHandleShape<'a> {
 fn generated_backing_values(value: &Expression) -> Vec<&Expression> {
     use ExpressionKind as E;
     match &value.kind {
+        // The exact opaque plan identity seals its immutable body separately.
+        E::ActorGraphImport(_) => Vec::new(),
         E::IndirectCall { callee, .. } => vec![callee],
         E::Field { base, .. } => vec![base],
         E::Handle { target, .. } => vec![target],
@@ -555,7 +559,7 @@ fn generated_backing_values(value: &Expression) -> Vec<&Expression> {
                 _ => None,
             })
             .collect(),
-        E::ActorSpawn { args, .. } => args.iter().collect(),
+        E::ActorSpawn { args, .. } | E::ActorGraphStep { args, .. } => args.iter().collect(),
         E::ActorMessage { actor, args, .. } => {
             std::iter::once(actor.as_ref()).chain(args).collect()
         }
@@ -587,6 +591,13 @@ impl GeneratedProducerShape {
         let mut backing = Vec::new();
         let mut add = |value: &Expression| backing.push(Self::from_expression(value));
         let identity = match &value.kind {
+            E::ActorGraphImport(plan) => GeneratedProducerIdentity::ActorGraphImport(plan.clone()),
+            E::ActorGraphStep { instruction, args } => {
+                for value in args {
+                    add(value);
+                }
+                GeneratedProducerIdentity::ActorGraphStep(instruction.clone())
+            }
             E::Local(local) => GeneratedProducerIdentity::Local(*local),
             E::Constant { declaration } => GeneratedProducerIdentity::Constant(*declaration),
             E::FunctionRef(function) => GeneratedProducerIdentity::Function(*function),

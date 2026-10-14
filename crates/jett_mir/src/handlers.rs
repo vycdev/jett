@@ -28,6 +28,8 @@ fn expression_needs_lowering(expression: &Expression, requirement: LoweringRequi
     let needs = |value: &Expression| expression_needs_lowering(value, requirement);
     let includes_call_ownership = requirement == LoweringRequirement::HandlersAndCallOwnership;
     match &expression.kind {
+        ExpressionKind::ActorGraphImport(_) => true,
+        ExpressionKind::ActorGraphStep { args, .. } => args.iter().any(needs),
         ExpressionKind::Handle {
             kind:
                 HandleKind::Result
@@ -1173,6 +1175,14 @@ impl Builder<'_> {
     }
 
     pub(super) fn lower_value(&mut self, expression: &Expression) -> Expression {
+        if let ExpressionKind::ActorGraphImport(plan) = &expression.kind {
+            self.lower_block(plan.body());
+            return Expression {
+                kind: ExpressionKind::Local(plan.output()),
+                ty: plan.output_type(),
+                span: expression.span,
+            };
+        }
         if self
             .resource_capture
             .constructor_needed(expression, self.types)

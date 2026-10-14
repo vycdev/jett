@@ -986,3 +986,6 @@ mod ordinary_error_reentry;
 
 #[path = "ordinary_reservation_failure_tests.rs"]
 mod ordinary_reservation_failures;
+
+#[path = "graph_descriptors/tests.rs"]
+mod graph_descriptor_tests;

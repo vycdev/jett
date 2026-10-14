@@ -16,6 +16,7 @@ pub(crate) use absent_generated::PreparedAbsentBindings;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ExecutableOrigin {
     Function { definition: DefId, item: usize },
+    ActorInitializer { item: usize, field: usize },
     NamespaceInitializer { item: usize },
     Verify { item: usize },
     Property { item: usize },
@@ -42,10 +43,11 @@ enum OriginalRegion<'a> {
 
 #[path = "body_reference/required.rs"]
 mod required;
-pub(crate) use required::{CheckedAttemptKey, PreparedRequiredExpression};
 pub use required::{
-    CheckedRequiredOwner, CheckedRequiredResourceHook, CheckedRequiredScope, CheckedRequiredValue,
+    ActorGraphHookRoot, CheckedActorGraphHook, CheckedRequiredOwner, CheckedRequiredResourceHook,
+    CheckedRequiredScope, CheckedRequiredValue,
 };
+pub(crate) use required::{CheckedAttemptKey, PreparedRequiredExpression};
 #[path = "body_reference/pipeline.rs"]
 mod pipeline;
 pub(crate) use pipeline::PreparedPipelineStep;
@@ -104,6 +106,18 @@ impl CheckedBodyReference {
                     _ => return Err(ResourceExecutionError::MissingCheckedBody),
                 }
             }
+            ExecutableOrigin::ActorInitializer { item, field } => {
+                match identity.program.module().items.get(item) {
+                    Some(Item::Actor(actor)) => OriginalRegion::Expression(
+                        &actor
+                            .state_fields
+                            .get(field)
+                            .ok_or(ResourceExecutionError::MissingCheckedBody)?
+                            .value,
+                    ),
+                    _ => return Err(ResourceExecutionError::MissingCheckedBody),
+                }
+            }
             ExecutableOrigin::Verify { item } => match identity.program.module().items.get(item) {
                 Some(Item::Verify(value)) => OriginalRegion::Block(&value.body),
                 _ => return Err(ResourceExecutionError::MissingCheckedBody),
@@ -134,6 +148,12 @@ impl CheckedBodyReference {
             OriginalRegion::Expression(_) => Err(ResourceExecutionError::MissingCheckedBody),
         }
     }
+    pub(crate) fn original_expression(&self) -> Result<&Expr, ResourceExecutionError> {
+        match self.region()? {
+            OriginalRegion::Expression(value) => Ok(value),
+            _ => Err(ResourceExecutionError::MissingCheckedBody),
+        }
+    }
 }
 
 impl PreparedDirectScope {
@@ -152,6 +172,72 @@ impl PreparedDirectScope {
 }
 
 impl CheckedExecution {
+    /// Retain original actor initializer nodes before interpreter scope mutation.
+    /// Registration clones and equal spans never supply executable call authority.
+    pub(crate) fn prepare_actor_initializers(
+        &self,
+        actor: &jett_parser::ast::ActorDef,
+    ) -> Result<Vec<CheckedBodyReference>, ResourceExecutionError> {
+        let matches = self
+            .program
+            .module()
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(item, value)| match value {
+                Item::Actor(original)
+                    if original.span == actor.span && original.name.span == actor.name.span =>
+                {
+                    Some((item, original))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [(item, original)] = matches.as_slice() else {
+            return Err(ResourceExecutionError::MissingCheckedBody);
+        };
+        let declarations = self
+            .program
+            .resolved()
+            .scope_table
+            .definitions
+            .iter()
+            .filter(|definition| {
+                definition.kind == jett_resolve::DefKind::Actor
+                    && definition.span == original.name.span
+            })
+            .collect::<Vec<_>>();
+        let [declaration] = declarations.as_slice() else {
+            return Err(ResourceExecutionError::MissingCheckedBody);
+        };
+        let mut registered = (*original).clone();
+        registered.name.name = declaration.name.clone();
+        if format!("{registered:?}") != format!("{actor:?}") {
+            return Err(ResourceExecutionError::MissingCheckedBody);
+        }
+        let mut references = Vec::new();
+        for field in 0..original.state_fields.len() {
+            let reference = CheckedBodyReference {
+                cursor: CheckedBodyCursor {
+                    root: BodyRoot::Ordinary,
+                    scopes: Vec::new(),
+                    executable: Some(ExecutableIdentity {
+                        program: self.program.clone(),
+                        origin: ExecutableOrigin::ActorInitializer { item: *item, field },
+                        path: Vec::new(),
+                    }),
+                },
+            };
+            self.validate_executable_cursor(&reference.cursor)?;
+            let expression = reference.original_expression()?;
+            self.facts(&reference.cursor)?
+                .types
+                .get(&expression.span())
+                .ok_or(ResourceExecutionError::MissingCheckedBody)?;
+            references.push(reference);
+        }
+        Ok(references)
+    }
     pub(crate) fn prepare_function_body(
         &self,
         invocation: &FunctionInvocation,

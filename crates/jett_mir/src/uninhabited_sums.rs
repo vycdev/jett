@@ -88,6 +88,9 @@ mod tests;
 /// Select the inhabited arm of a checked optional/result handler. The final
 /// `SumTag` still evaluates the sum and rejects pending values at runtime.
 pub fn prepare_native_uninhabited_sums(program: &mut Program, types: &TypeInterner) {
+    if crate::actor_graph::validate_native_actor_graphs(program).is_err() {
+        return;
+    }
     // Never hide an invalid ID in an arm that compaction would otherwise erase.
     if validate_call_ownership(program, types).is_err() {
         return;
@@ -203,5 +206,8 @@ pub fn prepare_native_uninhabited_sums(program: &mut Program, types: &TypeIntern
                 }
             }
         }
+    }
+    for function in &mut program.functions {
+        crate::actor_graph::refresh(function);
     }
 }

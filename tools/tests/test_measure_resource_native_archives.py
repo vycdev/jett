@@ -16,7 +16,7 @@ from tools import measure_resource_native_archives as measure
 def copy_resource_export_fixture(root: Path) -> tuple[Path, Path]:
     resource = root / "crates/jett_runtime/src/native_abi/resource"
     (resource / "leaves").mkdir(parents=True)
-    for relative in ("leaves.rs", "test_archive_api.rs", "program_entry.rs"):
+    for relative in ("leaves.rs", "test_archive_api.rs", "program_entry.rs", "graph_descriptors.rs"):
         original = measure.ROOT / "crates/jett_runtime/src/native_abi/resource" / relative
         (resource / relative).write_bytes(original.read_bytes())
     owner = resource.with_suffix(".rs")
@@ -108,10 +108,11 @@ class SymbolAndFingerprintTests(unittest.TestCase):
             f"{name} T 0 10" for name in sorted(self.leaves | self.private | {"main"}))
 
     def test_complete_current_source_export_contract(self) -> None:
-        self.assertEqual((len(self.leaves), len(self.private)), (55, 8))
+        self.assertEqual((len(self.leaves), len(self.private)), (56, 8))
         self.assertTrue(measure.CARRIER_EXPORTS <= self.leaves)
         self.assertTrue(measure.STARTUP_EXPORTS <= self.leaves)
-        self.assertEqual(len(self.leaves - measure.STARTUP_EXPORTS), 50)
+        self.assertEqual(len(self.leaves - measure.STARTUP_EXPORTS), 51)
+        self.assertEqual(len(self.leaves - measure.STARTUP_EXPORTS - {measure.GRAPH_DESCRIPTOR_EXPORT}), 50)
         measure.check_symbols(self.symbols, self.leaves, self.private)
 
     def test_each_startup_symbol_must_have_one_text_definition(self) -> None:
@@ -347,7 +348,7 @@ class CarrierContractTests(unittest.TestCase):
             self.fixture(root)
             measure.checked_layout_wire(root)
             leaves, private = measure.export_names(root)
-            self.assertEqual((len(leaves), len(private)), (55, 8))
+            self.assertEqual((len(leaves), len(private)), (56, 8))
             self.assertTrue(measure.CARRIER_EXPORTS <= leaves)
             self.assertEqual(leaves & measure.STARTUP_EXPORTS, measure.STARTUP_EXPORTS)
 
@@ -412,7 +413,8 @@ class CarrierContractTests(unittest.TestCase):
                 measure.checked_measurement_source(root)
 
     def test_guards_are_bound_to_the_source_snapshot_before_output_or_build(self) -> None:
-        for changed in ("wire", "exports", "startup_module", "startup_signature", "startup_exports"):
+        for changed in ("wire", "exports", "startup_module", "startup_signature", "startup_exports",
+                        "graph_module", "graph_proof", "graph_signature", "graph_exports"):
             with self.subTest(changed=changed), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 registration, carriers = self.fixture(root)
@@ -429,6 +431,25 @@ class CarrierContractTests(unittest.TestCase):
                         owner = carriers.parent.parent.with_suffix(".rs")
                         owner.write_text(owner.read_text(encoding="utf-8").replace(
                             "mod program_entry;", "#[cfg(test)]\nmod program_entry;"), encoding="utf-8")
+                    elif changed.startswith("graph_"):
+                        directory = carriers.parent.parent
+                        if changed == "graph_module":
+                            owner = directory.with_suffix(".rs")
+                            owner.write_text(owner.read_text(encoding="utf-8").replace(
+                                "mod graph_descriptors;", "#[cfg(test)]\nmod graph_descriptors;"), encoding="utf-8")
+                        elif changed == "graph_proof":
+                            child = directory / "graph_descriptors.rs"
+                            child.write_text(child.read_text(encoding="utf-8").replace(
+                                "context: ContextRegistryKey,", "scope: ResourceHandleId,"), encoding="utf-8")
+                        else:
+                            leaf = directory / "leaves.rs"
+                            text = leaf.read_text(encoding="utf-8")
+                            if changed == "graph_signature":
+                                text = text.replace("out_box: *mut u64,", "out_box: *mut u32,")
+                            else:
+                                text = text.replace(measure.GRAPH_DESCRIPTOR_EXPORT + "(",
+                                                    "jett_rt_v1_resource_foreign_graph(")
+                            leaf.write_text(text, encoding="utf-8")
                     else:
                         child = carriers.parent.parent / "program_entry.rs"
                         text = child.read_text(encoding="utf-8")
@@ -447,6 +468,113 @@ class CarrierContractTests(unittest.TestCase):
                     measure.prepare(root, output, "unused-cc", "unused-nm", "unused-readelf")
                 toolchain.assert_not_called()
                 self.assertFalse(output.exists())
+
+
+class GraphDescriptorContractTests(unittest.TestCase):
+    def test_exact_graph_symbol_joins_only_the_original_fifty_and_startup_five(self) -> None:
+        leaves, private = measure.export_names(measure.ROOT)
+        self.assertEqual((len(leaves), len(private)), (56, 8))
+        self.assertEqual(len(leaves - {measure.GRAPH_DESCRIPTOR_EXPORT} - measure.STARTUP_EXPORTS), 50)
+        self.assertEqual(measure.graph_descriptor_export(
+            measure.ROOT / "crates/jett_runtime/src/native_abi/resource"), {measure.GRAPH_DESCRIPTOR_EXPORT})
+        symbols = "\n".join(f"{name} T 0 10" for name in sorted(leaves | private | {"main"}))
+        measure.check_symbols(symbols, leaves, private)
+        for invalid in (symbols.replace(measure.GRAPH_DESCRIPTOR_EXPORT + " T 0 10", ""),
+                        symbols + "\n" + measure.GRAPH_DESCRIPTOR_EXPORT + " T 0 10",
+                        symbols + "\njett_rt_v1_resource_foreign_graph T 0 10"):
+            with self.subTest(symbols=invalid), self.assertRaises(measure.MeasurementError):
+                measure.check_symbols(invalid, leaves, private)
+
+    def test_missing_duplicate_conditional_public_and_redirected_proof_module_refuse(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            owner, child = copy_resource_export_fixture(root)
+            original = owner.read_text(encoding="utf-8")
+            for replacement in ("", "mod graph_descriptors;\nmod graph_descriptors;",
+                                "#[cfg(test)]\nmod graph_descriptors;",
+                                '#[path = "other.rs"]\nmod graph_descriptors;',
+                                "pub mod graph_descriptors;"):
+                owner.write_text(original.replace("mod graph_descriptors;", replacement), encoding="utf-8")
+                with self.subTest(module=replacement), self.assertRaises(measure.MeasurementError):
+                    measure.export_names(root)
+            owner.write_text(original, encoding="utf-8")
+            (child.parent / "graph_descriptors.rs").unlink()
+            with self.assertRaises(measure.MeasurementError):
+                measure.export_names(root)
+
+    def test_private_proof_cannot_be_public_conditional_or_acquire_scope_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, startup = copy_resource_export_fixture(root)
+            child = startup.parent / "graph_descriptors.rs"
+            original = child.read_text(encoding="utf-8")
+            for invalid in (
+                original.replace("pub(in crate::native_abi) struct CheckedGraphHookProof", "pub struct CheckedGraphHookProof"),
+                original.replace("#[derive(Clone)]", "#[cfg(test)]\n#[derive(Clone)]", 1),
+                "#![cfg(test)]\n" + original,
+                original.replace("context: ContextRegistryKey,", "context: usize,"),
+                original.replace("signature: u32,", "signature: u32,\n    scope: ResourceHandleId,", 1),
+            ):
+                child.write_text(invalid, encoding="utf-8")
+                with self.subTest(proof=invalid), self.assertRaises(measure.MeasurementError):
+                    measure.export_names(root)
+
+    def test_missing_duplicate_foreign_conditional_mangled_and_non_c_graph_export_refuse(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, startup = copy_resource_export_fixture(root)
+            leaf = startup.parent / "leaves.rs"
+            original = leaf.read_text(encoding="utf-8")
+            prefix = f'pub unsafe extern "C" fn {measure.GRAPH_DESCRIPTOR_EXPORT}('
+            start, end = original.index(prefix), original.index("{", original.index(prefix))
+            header = original[start:end]
+            for invalid in (
+                original.replace(prefix, prefix.removeprefix("pub "), 1),
+                original + '\n#[unsafe(no_mangle)]\n' + header + '{}\n',
+                original.replace(measure.GRAPH_DESCRIPTOR_EXPORT + "(", "jett_rt_v1_resource_foreign_graph(", 1),
+                original.replace(prefix, "#[cfg(test)]\n" + prefix, 1),
+                original[:start].removesuffix("#[unsafe(no_mangle)]\n") + original[start:],
+                original.replace(prefix, prefix.replace('extern "C"', 'extern "Rust"'), 1),
+            ):
+                leaf.write_text(invalid, encoding="utf-8")
+                with self.subTest(source=invalid), self.assertRaises(measure.MeasurementError):
+                    measure.export_names(root)
+
+    def test_every_graph_argument_and_return_type_is_exact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, startup = copy_resource_export_fixture(root)
+            leaf = startup.parent / "leaves.rs"
+            original = leaf.read_text(encoding="utf-8")
+            start = original.index(f'pub unsafe extern "C" fn {measure.GRAPH_DESCRIPTOR_EXPORT}(')
+            end = original.index("{", start)
+            lines = original[start:end].splitlines(keepends=True)
+            for index, line in enumerate(lines):
+                if ": " not in line and "-> JettRuntimeStatusV1" not in line:
+                    continue
+                changed = list(lines)
+                changed[index] = (line.split(": ", 1)[0] + ": usize,\n" if ": " in line
+                                  else line.replace("JettRuntimeStatusV1", "u32"))
+                leaf.write_text(original[:start] + "".join(changed) + original[end:], encoding="utf-8")
+                with self.subTest(parameter=index), self.assertRaises(measure.MeasurementError):
+                    measure.export_names(root)
+
+    def test_graph_declaration_cannot_move_to_startup_or_private_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, startup = copy_resource_export_fixture(root)
+            leaf = startup.parent / "leaves.rs"
+            original = leaf.read_text(encoding="utf-8")
+            prefix = f'pub unsafe extern "C" fn {measure.GRAPH_DESCRIPTOR_EXPORT}('
+            start, end = original.index(prefix), original.index("{", original.index(prefix))
+            header = original[start:end]
+            for destination in (startup, startup.parent / "test_archive_api.rs"):
+                prior = destination.read_text(encoding="utf-8")
+                leaf.write_text(original.replace(prefix, prefix.removeprefix("pub "), 1), encoding="utf-8")
+                destination.write_text(prior + '\n#[unsafe(no_mangle)]\n' + header + '{}\n', encoding="utf-8")
+                with self.subTest(destination=destination), self.assertRaises(measure.MeasurementError):
+                    measure.export_names(root)
+                destination.write_text(prior, encoding="utf-8")
 
 
 class StartupContractTests(unittest.TestCase):
@@ -806,7 +934,6 @@ class MsvcReceiptTests(unittest.TestCase):
         copy_resource_export_fixture(root)
         leaves, private = measure.export_names(measure.ROOT)
         for path, names in (
-            (resource / "leaves.rs", leaves - measure.CARRIER_EXPORTS - measure.STARTUP_EXPORTS),
             (resource / "leaves/carriers.rs", measure.CARRIER_EXPORTS),
             (resource / "test_archive_api.rs", private),
         ):
@@ -914,9 +1041,11 @@ class MsvcReceiptTests(unittest.TestCase):
             self.assertEqual([row["profile"] for row in self.rows(receipt)], ["debug", "release"])
             self.assertEqual(self.rows(receipt)[0]["native_library_args"], MsvcObservationTests.libraries)
             leaves, private = measure.export_names(root)
-            self.assertEqual((len(leaves - measure.CARRIER_EXPORTS - measure.STARTUP_EXPORTS),
-                              len(measure.CARRIER_EXPORTS), len(leaves & measure.STARTUP_EXPORTS), len(private)),
-                             (37, 13, 5, 8))
+            self.assertEqual((len(leaves - measure.CARRIER_EXPORTS - measure.STARTUP_EXPORTS
+                                  - {measure.GRAPH_DESCRIPTOR_EXPORT}),
+                              len(measure.CARRIER_EXPORTS), len(leaves & measure.STARTUP_EXPORTS),
+                              int(measure.GRAPH_DESCRIPTOR_EXPORT in leaves), len(private)),
+                             (37, 13, 5, 1, 8))
 
     def test_receipt_pin_and_actual_runtime_or_helper_source_changes_are_refused(self) -> None:
         for changed in ("Cargo.lock", "tools/measure_resource_native_archives.py",

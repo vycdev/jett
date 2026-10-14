@@ -448,14 +448,20 @@ pub(super) fn carrier_type(types: &TypeInterner, ty: TypeId) -> bool {
     }
 }
 pub(super) fn required(function: &Function, types: &TypeInterner) -> bool {
-    carrier_type(types, function.return_type)
-        || function
-            .locals
-            .iter()
-            .any(|local| carrier_type(types, local.ty))
+    (carrier_type(types, function.return_type)
+        && crate::native_graph_storage_for_return(function, types).is_none())
+        || function.locals.iter().any(|local| {
+            carrier_type(types, local.ty)
+                && !crate::actor_graph::native_graph_metadata_local(function, types, local)
+                && crate::native_graph_storage_for_local(function, types, local).is_none()
+        })
         || function.blocks.iter().any(|block| {
             let mut found = false;
-            walk::mir_block(block, &mut |value| found |= carrier_type(types, value.ty));
+            walk::mir_block(block, &mut |value| {
+                found |= carrier_type(types, value.ty)
+                    && !crate::actor_graph::native_graph_metadata_expression(function, types, value)
+                    && crate::native_graph_storage_for_expression(function, types, value).is_none()
+            });
             found
         })
 }

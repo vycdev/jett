@@ -2325,3 +2325,14 @@ verify checking:
 ))]
 #[path = "native_property_tests.rs"]
 mod property_tests;
+
+#[cfg(all(
+    test,
+    target_arch = "x86_64",
+    any(
+        all(target_os = "windows", target_env = "msvc"),
+        all(target_os = "linux", target_env = "gnu")
+    )
+))]
+#[path = "native/actor_graph_hooks_tests.rs"]
+mod actor_graph_hooks_tests;

@@ -4,13 +4,14 @@ pub(crate) use assignment::CheckedAssignment;
 
 #[path = "checked/body_reference.rs"]
 mod body_reference;
+pub use body_reference::{
+    ActorGraphHookRoot, CheckedActorGraphHook, CheckedRequiredOwner, CheckedRequiredResourceHook,
+    CheckedRequiredScope, CheckedRequiredValue,
+};
 pub(crate) use body_reference::{
     CheckedAttemptKey, CheckedBodyReference, PreparedAbsentBindings, PreparedDirectScope,
     PreparedIntrinsicArguments, PreparedNamedCallable, PreparedOwnedStruct, PreparedPipelineStep,
     PreparedReflectedFieldIteration, PreparedReflectedFieldLoop, PreparedRequiredExpression,
-};
-pub use body_reference::{
-    CheckedRequiredOwner, CheckedRequiredResourceHook, CheckedRequiredScope, CheckedRequiredValue,
 };
 use std::collections::HashMap;
 use std::sync::Arc;

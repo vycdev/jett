@@ -7,7 +7,111 @@ use jett_diagnostics::Severity;
 use jett_parser::parse;
 use jett_resolve::ResourceKernelSpec;
 use jett_typecheck::CheckOptions;
-use jett_types::{ResourceHookKind, ResourceKernelRecipe};
+use jett_types::{ResourceHookKind, ResourceKernelRecipe, TypeInterner};
+
+#[test]
+fn actor_graph_hook_projection_retains_exact_cache_program_field_and_signature() {
+    let source = "namespace app\nactor Keeper:\n    mutable list[function(resource_probe.TestHandle) returns nothing] hooks = list(resource_probe.close_descriptor())\n    receive alive responds bool:\n        respond true\nfunction main() returns nothing:\n    Keeper keeper = comptime spawn Keeper()\n    return nothing\n";
+    let program = actor_program(source, false);
+    let values = successful(&program);
+    let proof = values.checked_required_values(&program).unwrap().remove(0);
+    let graph = proof.actor_graph().unwrap();
+    let field = &graph.nodes()[0].state()[0];
+    let Type::List(signature) = program.checked().interner.resolve(field.ty()) else {
+        panic!("typed hook list")
+    };
+    let Value::List(items) = field.value() else {
+        panic!("frozen hook list")
+    };
+    let projected = proof
+        .project_actor_graph_hook(&items[0], *signature)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        projected.root(),
+        ActorGraphHookRoot::Field { node: 0, field: 0 }
+    );
+    assert_eq!(projected.path(), &[0]);
+    assert_eq!(
+        projected.checked_hook(&program).unwrap().kind,
+        ResourceHookKind::Close
+    );
+    assert_eq!(projected.required().owner(), proof.owner());
+    assert!(
+        proof
+            .project_actor_graph_hook(&items[0].clone(), *signature)
+            .is_err(),
+        "a caller clone cannot mint a protected leaf projection"
+    );
+    assert!(
+        proof
+            .project_actor_graph_hook(&items[0], TypeInterner::BOOL)
+            .is_err()
+    );
+    let foreign = actor_program(source, false);
+    assert!(projected.checked_hook(&foreign).is_err());
+    let mut mirror = values.clone();
+    mirror.insert(
+        proof.source_span(),
+        ComptimeContext::default(),
+        Value::Actor(999),
+    );
+    assert_eq!(
+        projected.checked_hook(&program).unwrap().kind,
+        ResourceHookKind::Close
+    );
+}
+
+#[test]
+fn actor_graph_initializer_uses_original_body_and_refuses_forged_actor_registration() {
+    let source = "namespace app\nactor Keeper:\n    mutable function(resource_probe.TestHandle) returns nothing dispose = resource_probe.close_descriptor()\nfunction fresh() returns Keeper:\n    return spawn Keeper()\nfunction main() returns nothing:\n    Keeper keeper = comptime fresh()\n    return nothing\n";
+    let program = actor_program(source, false);
+    let values = successful(&program);
+    let graph = values
+        .checked_required_values(&program)
+        .unwrap()
+        .remove(0)
+        .actor_graph()
+        .unwrap()
+        .clone();
+    assert_eq!(graph.nodes().len(), 1);
+    let mut interpreter = crate::Interpreter::new();
+    interpreter
+        .install_checked_resource_program(program.clone(), ExecutionPurpose::ReferenceRuntime)
+        .unwrap();
+    interpreter.register_module(program.module());
+    let mut changed = program
+        .module()
+        .items
+        .iter()
+        .find_map(|item| {
+            if let Item::Actor(actor) = item {
+                Some(actor.clone())
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    changed.state_fields[0].value = Expr::Nothing(changed.state_fields[0].value.span());
+    interpreter.register_actor_in_namespace(Some("app"), &changed);
+    let definition = program
+        .resolved()
+        .scope_table
+        .definitions
+        .iter()
+        .find(|definition| {
+            definition.kind == jett_resolve::DefKind::Function && definition.name == "app.fresh"
+        })
+        .unwrap()
+        .id;
+    assert!(
+        interpreter
+            .call_checked_program_entry(definition, vec![])
+            .unwrap_err()
+            .contains("no exact checked body")
+    );
+    assert!(interpreter.take_debug_events().is_empty());
+}
 
 const SOURCE: &str = include_str!("../../../../fixtures/26_original_required_regions.jett");
 const GENERIC_SCOPED: &str =
@@ -46,10 +150,26 @@ fn successful(program: &Arc<CheckedResourceProgram>) -> ExplicitComptimeValues {
     evaluated.values
 }
 
+fn actor_program(source: &str, release: bool) -> Arc<CheckedResourceProgram> {
+    shared_program_with_support(
+        source,
+        release,
+        include_str!("../../../../fixtures/resource_probe.jett"),
+    )
+}
+
 fn shared_program(source: &str, release: bool) -> Arc<CheckedResourceProgram> {
+    shared_program_with_support(source, release, SHARED_SUPPORT)
+}
+
+fn shared_program_with_support(
+    source: &str,
+    release: bool,
+    support: &str,
+) -> Arc<CheckedResourceProgram> {
     let stdlib = FileId::new(10_000);
     let project = FileId::new(0);
-    let mut parsed = parse(SHARED_SUPPORT, stdlib);
+    let mut parsed = parse(support, stdlib);
     let application = parse(source, project);
     assert!(
         !parsed

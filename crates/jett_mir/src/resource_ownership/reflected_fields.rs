@@ -227,8 +227,9 @@ pub(super) fn admits(witness: &ResourceLoweringWitness, block: BlockId) -> bool 
         .any(|row| row.dispatches.contains(&block))
 }
 
-/// Ordinary proof-only helpers retain the established ordinary sequence edit.
-/// The finite edit cannot introduce Resource data or a runtime execution role.
+/// Ordinary reflected helpers and exact wrapper-only Scope bodies retain the
+/// established ordinary sequence edit. The finite edit cannot introduce
+/// Resource data, graph storage, constructor custody or runtime execution.
 pub(super) fn ordinary_sequence_transition(
     function: &mut Function,
     before: &Function,
@@ -241,7 +242,11 @@ pub(super) fn ordinary_sequence_transition(
         .ok_or("Ordinary reflected sequence lost its original Source proof")?;
     original.current(before)?;
     if has_execution_records(before, types)
-        || original.reflected_fields.is_empty()
+        || (original.reflected_fields.is_empty()
+            && !entry_scope::capture_needed(&original.original, &original.source))
+        || original.graph_metadata.needed()
+        || !original.constructors.is_empty()
+        || !original.constructor_seal.is_empty()
         || !original.calls.is_empty()
         || !original.regions.is_empty()
         || !original.borrowed_sums.is_empty()

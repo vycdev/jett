@@ -8820,3 +8820,53 @@ secret observation, broader generic/reflected forms and authenticated generated
 verify/property-suite transitions remain full-goal obligations. No Source
 exclusion or broad language-completion claim follows: the rough 87% estimate,
 fixed 207-fixture/182-object inventory and full 100% goal remain unchanged.
+
+### Selected explicit comptime actor graph templates
+
+A pure closed explicit `comptime` result may retain actor handles. The compiler
+freezes the reachable actor graph at successful required-expression completion
+as an immutable template. Each runtime evaluation of that explicit expression
+instantiates a fresh graph, including each call or loop activation. Ordinary
+reads and aliases of the resulting bound value retain those imported actor
+instances. Sharing within the exported root graph is preserved, while distinct
+seed actors remain distinct.
+
+Import restores the evaluated state and typed captures without rerunning source
+initializers, handlers, the original expression, source predicates or compiler
+observations. It introduces no process-global mutable actor state and clones no
+capability authority or Resource custody. Exact nominal actor, interface,
+refinement and callback identities remain checked. Unpublished partial imports
+must retire completely before any root or actor becomes observable. This
+contract describes the current sequential evaluator; future asynchronous
+scheduling requires a separate design.
+
+Existing Source admission remains unchanged. A closure cannot capture a move-only
+Actor; the existing E0402 rejection remains required. Admitted primitive closure
+captures retain their original typed context and capture witnesses. Reflected
+callable adapters retain their checked plan and authenticated source; graph
+transport cannot clear, reset or manufacture those proofs. No Actor-capture
+resealing policy is introduced by this integration.
+
+The current compiler implements this contract alongside Actor identity, Resource
+ownership, Owner preflight, Callback authentication and generated startup.
+Protected graph producers retain their exact constructor lifecycle and ordinary
+heap ownership without gaining Resource custody or capability authority. Graph
+programs with no Resource kinds retain this checked ordinary storage plan without
+a Resource layout or hidden Scope. Collection iteration preserves each exact
+producer's storage proof. Generated Resource completion retires its actors
+after companions release references and before terminal sealing, retaining
+first-error and cleanup priority. Focused checks and 32 linked MSVC executions
+passed; broader native and supported-host acceptance remain pending.
+Namespace initializers and explicit-expression collection retain one checked
+evaluation attempt per original occurrence, including failures. Observations
+are retained once and baked reads do not replay them. This creates no runtime
+initializer or global storage and changes no constant admission rule.
+Ordinary required replacements preserve the retained checked archive through
+its authenticated original-owner/context transition. Admitted TypeConstruction
+values retain the sole evaluated-builder producer and its complete typed
+transcript; this repair adds no new builder domain or fallback.
+Ordinary actor/interface wrappers also retain their authenticated original
+entry-Scope metadata through canonical collection iteration without gaining
+Resource custody. Graph transport and real Resource execution still require
+their separate exact proofs.
+See [the graph integration note](active/native_comptime_actor_graph.md).

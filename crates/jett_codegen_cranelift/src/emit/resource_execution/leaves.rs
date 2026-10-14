@@ -21,6 +21,7 @@ pub(super) enum Leaf {
     Close,
     DescriptorClose,
     Descriptor,
+    GraphDescriptorBox,
     Transfer,
     DestinationFrame,
     SumAdopt,
@@ -97,6 +98,10 @@ impl Leaf {
             Close => ("jett_rt_v1_resource_close", &[I64, I64, I32, I64]),
             DescriptorClose => ("jett_rt_v1_resource_descriptor_close", &[I64, I64, I64]),
             Descriptor => ("jett_rt_v1_resource_descriptor", &[I64, I32, I64]),
+            GraphDescriptorBox => (
+                "jett_rt_v1_resource_graph_descriptor_box",
+                &[I64, I64, I32, I64, I64],
+            ),
             Transfer => (
                 "jett_rt_v1_resource_transfer",
                 &[I64, I64, I32, I64, I64, I64],

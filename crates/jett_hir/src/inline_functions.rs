@@ -259,6 +259,8 @@ impl Extractor<'_> {
             return;
         }
         match &mut expression.kind {
+            // A sealed import is rewritten only by its dedicated constructor.
+            ExpressionKind::ActorGraphImport(_) => {}
             ExpressionKind::Binary { left, right, .. } => {
                 self.expression(left, parent);
                 self.expression(right, parent);
@@ -298,7 +300,8 @@ impl Extractor<'_> {
                 }
                 ownership.apply_generated_inline_extractions(&self.generated_shape_rewrites);
             }
-            ExpressionKind::ActorSpawn { args, .. } => {
+            ExpressionKind::ActorSpawn { args, .. }
+            | ExpressionKind::ActorGraphStep { args, .. } => {
                 for argument in args {
                     self.expression(argument, parent);
                 }
@@ -481,6 +484,9 @@ fn expression_mentions_local(expression: &Expression, target: u32, include_bindi
         }
     }
     match &expression.kind {
+        ExpressionKind::ActorGraphImport(plan) => {
+            block_mentions_local(plan.body(), target, include_bindings)
+        }
         ExpressionKind::Local(local) => local.index() == target,
         ExpressionKind::Binary { left, right, .. } => {
             expression_mentions_local(left, target, include_bindings)
@@ -512,7 +518,8 @@ fn expression_mentions_local(expression: &Expression, target: u32, include_bindi
         ExpressionKind::Call { args, .. }
         | ExpressionKind::ResourceInvoke { args, .. }
         | ExpressionKind::Intrinsic { args, .. }
-        | ExpressionKind::ActorSpawn { args, .. } => args
+        | ExpressionKind::ActorSpawn { args, .. }
+        | ExpressionKind::ActorGraphStep { args, .. } => args
             .iter()
             .any(|arg| expression_mentions_local(arg, target, include_bindings)),
         ExpressionKind::IndirectCall { callee, args, .. } => {

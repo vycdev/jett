@@ -5,7 +5,7 @@ use jett_types::{Type, TypeId, TypeInterner};
 
 use crate::values::list_sort_kind;
 
-enum DebugNode {
+pub(super) enum DebugNode {
     Primitive(u32),
     Nothing,
     Bytes,
@@ -27,16 +27,16 @@ enum DebugNode {
     Alias(u32),
 }
 
-struct DebugGraph<'a> {
-    types: &'a TypeInterner,
-    equality_methods: Option<&'a HashMap<TypeId, jett_hir::FunctionId>>,
-    custom: Vec<(u32, jett_hir::FunctionId)>,
-    indexes: HashMap<TypeId, u32>,
-    nodes: Vec<Option<DebugNode>>,
+pub(super) struct DebugGraph<'a> {
+    pub(super) types: &'a TypeInterner,
+    pub(super) equality_methods: Option<&'a HashMap<TypeId, jett_hir::FunctionId>>,
+    pub(super) custom: Vec<(u32, jett_hir::FunctionId)>,
+    pub(super) indexes: HashMap<TypeId, u32>,
+    pub(super) nodes: Vec<Option<DebugNode>>,
 }
 
 impl DebugGraph<'_> {
-    fn node(&mut self, ty: TypeId) -> Option<u32> {
+    pub(super) fn node(&mut self, ty: TypeId) -> Option<u32> {
         if let Some(&index) = self.indexes.get(&ty) {
             return Some(index);
         }
@@ -145,7 +145,7 @@ fn name(bytes: &mut Vec<u8>, value: &str) -> Option<()> {
     Some(())
 }
 
-fn encode_node(bytes: &mut Vec<u8>, node: DebugNode) -> Option<()> {
+pub(super) fn encode_node(bytes: &mut Vec<u8>, node: DebugNode) -> Option<()> {
     match node {
         DebugNode::Primitive(kind) => {
             bytes.push(NativeDebugTag::Primitive as u8);

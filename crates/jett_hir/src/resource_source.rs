@@ -69,6 +69,7 @@ pub struct RequiredMaterialization {
     pub(crate) current: Expression,
     pub(crate) hook: Option<ResourceHookRef>,
     pub(crate) proof: CheckedRequiredValue,
+    pub(crate) projection: Option<jett_comptime::CheckedActorGraphHook>,
 }
 impl std::fmt::Debug for RequiredMaterialization {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -93,6 +94,17 @@ impl RequiredMaterialization {
         &self.current
     }
     pub fn hook(&self) -> Option<&ResourceHookRef> {
+        if let Some(projection) = &self.projection {
+            let hook = self.hook.as_ref()?;
+            let original = projection
+                .checked_hook(&projection.required().checked_program())
+                .ok()?;
+            if hook.definition() != original.definition
+                || hook.function_type() != projection.signature()
+            {
+                return None;
+            }
+        }
         self.hook.as_ref()
     }
 }
@@ -108,6 +120,7 @@ pub struct ResourceSourceArchive {
     data: Option<Arc<Original>>,
     execution: Option<Arc<Materialized>>,
     pub(crate) reflected_values: Option<Arc<super::reflected_callable::baked::Transition>>,
+    pub(crate) graph_values: Option<Arc<super::actor_graph::Transition>>,
 }
 impl std::fmt::Debug for ResourceSourceArchive {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -123,6 +136,11 @@ impl PartialEq for ResourceSourceArchive {
             (Some(a), Some(b)) => {
                 Arc::ptr_eq(a, b)
                     && match (&self.reflected_values, &other.reflected_values) {
+                        (None, None) => true,
+                        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                        _ => false,
+                    }
+                    && match (&self.graph_values, &other.graph_values) {
                         (None, None) => true,
                         (Some(a), Some(b)) => Arc::ptr_eq(a, b),
                         _ => false,
@@ -169,6 +187,7 @@ impl ResourceSourceArchive {
             })),
             execution: None,
             reflected_values: None,
+            graph_values: None,
         }
     }
     /// Original checked functions stay immutable; this view contains only checked replacements.
@@ -191,6 +210,53 @@ impl ResourceSourceArchive {
         self.execution
             .as_ref()
             .map_or(&[], |view| view.values.as_slice())
+    }
+    /// Graph metadata handlers are selected through the retained constructor's
+    /// actor declaration and handler spans, never a current callable type/name.
+    pub fn graph_metadata_actor_handlers(&self) -> Vec<FunctionId> {
+        let Some(data) = &self.data else {
+            return Vec::new();
+        };
+        let mut spans = Vec::new();
+        for row in self.required_materializations() {
+            let Some(graph) = row.proof.actor_graph() else {
+                continue;
+            };
+            if !row.proof.belongs_to(&data.checked) || !graph.belongs_to(&data.checked) {
+                continue;
+            }
+            for node in graph.nodes() {
+                let name = data.checked.checked().interner.type_name(node.ty());
+                for item in &data.checked.module().items {
+                    let jett_parser::ast::Item::Actor(actor) = item else {
+                        continue;
+                    };
+                    let declarations = data
+                        .checked
+                        .resolved()
+                        .scope_table
+                        .definitions
+                        .iter()
+                        .filter(|definition| {
+                            definition.kind == jett_resolve::DefKind::Actor
+                                && definition.span == actor.name.span
+                                && definition.name == name
+                        })
+                        .count();
+                    if declarations == 1 {
+                        spans.extend(actor.handlers.iter().map(|handler| handler.span));
+                    }
+                }
+            }
+        }
+        self.execution_functions()
+            .iter()
+            .filter(|function| {
+                function.identity.declaration.kind == crate::DeclarationKind::ActorHandler
+                    && spans.contains(&function.span)
+            })
+            .map(|function| function.id)
+            .collect()
     }
     pub fn required_only_function_ids(&self) -> &[FunctionId] {
         self.execution

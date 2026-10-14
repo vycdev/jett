@@ -16,6 +16,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use subtle::ConstantTimeEq;
 use unicode_segmentation::UnicodeSegmentation;
 
+mod actor_graph_import;
+mod checked_graph_hooks;
 mod debug_equal;
 mod debug_format;
 mod graphics_decode;
@@ -905,6 +907,10 @@ pub(super) struct NativeValues {
     structs: HashMap<NativeHandle, NativeStruct>,
     equalities: HashMap<NativeHandle, debug_equal::EqualityCursor>,
     actors: HashMap<NativeHandle, NativeActorIdentity>,
+    actor_graph_imports: HashMap<NativeHandle, actor_graph_import::Import>,
+    checked_graph_hooks: HashMap<NativeHandle, checked_graph_hooks::CheckedGraphHook>,
+    checked_graph_hooks_created: u64,
+    checked_graph_hooks_destroyed: u64,
     capability_tasks: HashMap<NativeHandle, (u64, u64)>,
     opaque_capabilities: HashMap<&'static str, u64>,
     next_actor_ordinal: u64,
@@ -1057,6 +1063,9 @@ impl NativeValues {
         self.structs.is_empty()
             && self.equalities.is_empty()
             && self.actors.is_empty()
+            && self.actor_graph_imports.is_empty()
+            && self.checked_graph_hooks.is_empty()
+            && self.checked_graph_hooks_created == self.checked_graph_hooks_destroyed
             && self.builders.is_empty()
             && self.structs_created == self.structs_destroyed
             && self.strings.is_empty()
@@ -3006,6 +3015,9 @@ impl NativeValues {
     // Interface boxes store task depth on the box, so running and joining an
     // erased value behave exactly like running and joining its concrete value.
     fn owned_pending_depth(&self, value: u64) -> LeafResult<u64> {
+        if let Some(value) = self.checked_graph_hooks.get(&value) {
+            return Ok(value.pending_depth);
+        }
         if let Some(value) = self.strings.get(&value) {
             return Ok(value.pending_depth);
         }
@@ -3028,6 +3040,9 @@ impl NativeValues {
     }
 
     fn clone_with_pending_depth(&mut self, value: u64, depth: u64) -> LeafResult<u64> {
+        if self.checked_graph_hooks.contains_key(&value) {
+            return self.clone_checked_graph_hook(value, Some(depth));
+        }
         // Strings share storage when cloned. Changing their metadata would also
         // change the original binding, so make a separate string here.
         if let Some(value) = self.strings.get(&value) {
@@ -3332,10 +3347,13 @@ impl NativeValues {
         Ok(0)
     }
     pub(super) fn release_actors(&mut self) -> LeafResult<()> {
+        let mut first_failure = self.abort_unfinished_actor_graphs().err();
         for (id, _) in std::mem::take(&mut self.actors) {
-            self.drop_value(id)?;
+            if let Err(error) = self.drop_value(id) {
+                first_failure.get_or_insert(error);
+            }
         }
-        Ok(())
+        first_failure.map_or(Ok(()), Err)
     }
 
     fn graphics_validate_scene(&mut self, width: i64, height: i64, value: u64) -> LeafResult<u64> {
@@ -4583,6 +4601,10 @@ impl NativeValues {
             .ok_or(INVALID_STRUCT)
     }
     fn clone_struct(&mut self, id: u64) -> LeafResult<u64> {
+        // Function value copies may carry protected metadata without a struct ABI.
+        if self.checked_graph_hooks.contains_key(&id) {
+            return self.clone_checked_graph_hook(id, None);
+        }
         let source = self.structs.get(&id).ok_or(INVALID_STRUCT)?;
         let (fields, pending_depth) = (source.fields.clone(), source.pending_depth);
         let builder = self.builders.get(&id).cloned();
@@ -4612,6 +4634,10 @@ impl NativeValues {
         Ok(output)
     }
     fn run_record(&mut self, id: u64) -> LeafResult<u64> {
+        if let Some(value) = self.checked_graph_hooks.get(&id) {
+            let depth = value.pending_depth.checked_add(1).ok_or(EXHAUSTED)?;
+            return self.clone_checked_graph_hook(id, Some(depth));
+        }
         let depth = self
             .structs
             .get(&id)
@@ -4627,6 +4653,10 @@ impl NativeValues {
         Ok(pending)
     }
     fn join_record(&mut self, id: u64) -> LeafResult<u64> {
+        if let Some(value) = self.checked_graph_hooks.get(&id) {
+            let depth = value.pending_depth.saturating_sub(1);
+            return self.clone_checked_graph_hook(id, Some(depth));
+        }
         let depth = self
             .structs
             .get(&id)
@@ -4667,6 +4697,9 @@ impl NativeValues {
         Ok(joined)
     }
     fn clone_value(&mut self, id: u64) -> LeafResult<u64> {
+        if self.checked_graph_hooks.contains_key(&id) {
+            return self.clone_checked_graph_hook(id, None);
+        }
         if self.structs.contains_key(&id) {
             return self.clone_struct(id);
         }
@@ -4709,6 +4742,10 @@ impl NativeValues {
         self.retain(id)
     }
     fn drop_value(&mut self, id: u64) -> LeafResult<u32> {
+        if self.checked_graph_hooks.remove(&id).is_some() {
+            self.checked_graph_hooks_destroyed += 1;
+            return Ok(0);
+        }
         if let Some(cursor) = self.equalities.remove(&id) {
             return self.equality_drop(cursor);
         }
@@ -5271,6 +5308,13 @@ fn leaf<T: FailureDefault>(
             };
             state.values.cleanup_failed |= cleanup;
             state.values.record_ordinary_failure(error);
+            // Native status failure ends an unfinished compiler graph factory.
+            // Roll back while this same context state mutex is still held;
+            // callers may capture the first error and continue the context.
+            if let Err(abort_error) = state.values.abort_unfinished_actor_graphs() {
+                state.values.cleanup_failed = true;
+                state.values.record_ordinary_failure(abort_error);
+            }
             T::failure_default()
         }
     }
@@ -5584,6 +5628,26 @@ leaves! {
         |s| Ok(s.struct_field(value, index)?.pending_depth);
     ActorRegister, jett_rt_v1_actor_register, false, (value: u64 => I64), u64 => I64,
         |s| s.register_actor(value);
+    ActorGraphBegin, jett_rt_v1_actor_graph_begin, false, (), u64 => I64,
+        |s| s.begin_actor_graph();
+    ActorGraphReserveBase, jett_rt_v1_actor_graph_reserve_base, false, (ticket: u64 => I64, field_count: u64 => I64), u64 => I64,
+        |s| s.reserve_actor_graph_base(ticket, field_count);
+    ActorGraphReservePending, jett_rt_v1_actor_graph_reserve_pending, false, (ticket: u64 => I64, base: u64 => I64, depth: u64 => I64), u64 => I64,
+        |s| s.reserve_actor_graph_pending(ticket, base, depth);
+    ActorGraphFill, jett_rt_v1_actor_graph_fill, false, (ticket: u64 => I64, base: u64 => I64, index: u64 => I64, bits: u64 => I64, owned: u32 => I32, depth: u64 => I64, layout: *const u8 => Pointer, layout_length: u64 => I64), u32 => I32,
+        |s| { let length = usize::try_from(layout_length).map_err(|_| actor_graph_import::INVALID_IMPORT)?;
+            if owned > 1 || length > isize::MAX as usize || layout.is_null() { return Err(actor_graph_import::INVALID_IMPORT); }
+            let bytes = unsafe { std::slice::from_raw_parts(layout, length) };
+            s.fill_actor_graph(ticket, base, index, NativeField { bits, owned: owned != 0, pending_depth: depth }, bytes) };
+    ActorGraphCommit, jett_rt_v1_actor_graph_commit, false, (ticket: u64 => I64), u32 => I32,
+        |s| s.commit_actor_graph(ticket);
+    ActorGraphRootFill, jett_rt_v1_actor_graph_root_fill, false, (ticket: u64 => I64, bits: u64 => I64, owned: u32 => I32, depth: u64 => I64, layout: *const u8 => Pointer, layout_length: u64 => I64), u32 => I32,
+        |s| { let length = usize::try_from(layout_length).map_err(|_| actor_graph_import::INVALID_IMPORT)?;
+            if owned > 1 || length > isize::MAX as usize || layout.is_null() { return Err(actor_graph_import::INVALID_IMPORT); }
+            let bytes = unsafe { std::slice::from_raw_parts(layout, length) };
+            s.fill_actor_graph_root(ticket, NativeField { bits, owned: owned != 0, pending_depth: depth }, bytes) };
+    ActorGraphAbort, jett_rt_v1_actor_graph_abort, true, (ticket: u64 => I64), u32 => I32,
+        |s| s.abort_actor_graph(ticket);
     ActorIdentityEqual, jett_rt_v1_actor_identity_equal, false, (left: u64 => I64, right: u64 => I64, not_equal: u32 => I32), u32 => I32,
         |s| s.equal_actor_identity(left, right, not_equal);
     ActorRun, jett_rt_v1_actor_run, false, (value: u64 => I64), u64 => I64,

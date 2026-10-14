@@ -332,6 +332,15 @@ pub(super) fn capture(
         }
     }
     walk::hir_block(&function.body, &mut |value| {
+        if let E::ActorGraphStep { instruction, .. } = &value.kind
+            && matches!(
+                instruction.operation(),
+                hir::ActorGraphOperation::HookBox { .. }
+            )
+            && let Some(hook) = required_hook(function, archive, value)
+        {
+            remember(&mut witness.values, value, hook, function, archive);
+        }
         if let E::IndirectCall {
             callee,
             ownership: hir::CallOwnership::Source(source),

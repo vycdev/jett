@@ -21,6 +21,8 @@ pub fn materialize_checked_required_values(
     values: &ExplicitComptimeValues,
     types: &TypeInterner,
 ) -> Result<(), Vec<LowerError>> {
+    let before = program.clone();
+    crate::actor_graph::validate_conversion_input(&before)?;
     let archive = program.resource_source.clone();
     let span = program
         .functions
@@ -43,7 +45,6 @@ pub fn materialize_checked_required_values(
         let proofs = values.checked_required_values(checked)?;
         let mut functions = program.functions.clone();
         let mut rows = archive.required_materializations().to_vec();
-        let mut candidates = HashSet::new();
         for function in &mut functions {
             let owner = function.clone();
             walk_block(&mut function.body, &mut |expression| {
@@ -58,9 +59,6 @@ pub fn materialize_checked_required_values(
                 let [proof] = selected.as_slice() else {
                     return Err("required expression has no unique original checked value and complete context".into());
                 };
-                if let E::Comptime { value, .. } = &original.kind {
-                    references(value, &mut candidates);
-                }
                 let (kind, hook) = derive_value(
                     proof,
                     expression.ty,
@@ -76,40 +74,12 @@ pub fn materialize_checked_required_values(
                     current: expression.clone(),
                     hook,
                     proof: (*proof).clone(),
+                    projection: None,
                 });
                 Ok(())
             })?;
         }
-        // Include transitive helpers of the removed required operands. They are
-        // excluded only if no preserved runtime root can still reach them.
-        for row in &rows {
-            if let E::Comptime { value, .. } = &row.original.kind {
-                references(value, &mut candidates);
-            }
-            if !row.proof.belongs_to(checked) {
-                return Err("required execution view has foreign proof".into());
-            }
-        }
-        let original_edges = call_graph(archive.functions());
-        closure(&mut candidates, &original_edges);
-        let exports = archive
-            .exported_function_ids()
-            .iter()
-            .copied()
-            .collect::<HashSet<_>>();
-        let mut live = functions
-            .iter()
-            .filter(|f| {
-                !candidates.contains(&f.id)
-                    || exports.contains(&f.id)
-                    || f.identity.declaration.name == "main"
-                    || f.identity.declaration.kind != DeclarationKind::Function
-            })
-            .map(|f| f.id)
-            .collect::<HashSet<_>>();
-        closure(&mut live, &call_graph(&functions));
-        let mut required_only = candidates.difference(&live).copied().collect::<Vec<_>>();
-        required_only.sort_by_key(|id| id.index());
+        let required_only = required_only_functions(&archive, &functions, &rows)?;
         Ok(Materialized {
             functions,
             values: rows,
@@ -118,12 +88,60 @@ pub fn materialize_checked_required_values(
     })();
     match result {
         Ok(view) => {
-            program.functions = view.functions.clone();
-            program.resource_source.install_materialized(view);
+            let mut candidate = program.clone();
+            candidate.functions = view.functions.clone();
+            crate::actor_graph::complete_conversion(&mut candidate, &before)?;
+            candidate.resource_source.install_materialized(view);
+            *program = candidate;
             Ok(())
         }
         Err(message) => Err(vec![LowerError { span, message }]),
     }
+}
+
+/// Shared by scalar and graph required-value producers. Candidates originate
+/// only in successfully replaced checked operands; current runtime edges,
+/// exports and actor handlers keep their complete original callable bodies.
+pub(crate) fn required_only_functions(
+    archive: &crate::ResourceSourceArchive,
+    functions: &[Function],
+    rows: &[RequiredMaterialization],
+) -> Result<Vec<FunctionId>, String> {
+    let checked = archive
+        .checked_program()
+        .ok_or("required closure has no checked program")?;
+    let mut candidates = HashSet::new();
+    for row in rows {
+        if !row.proof.belongs_to(checked) {
+            return Err("required execution view has foreign proof".into());
+        }
+        if let E::Comptime { value, .. } = &row.original.kind {
+            references(value, &mut candidates);
+        }
+    }
+    closure(&mut candidates, &call_graph(archive.functions()));
+    let exports = archive
+        .exported_function_ids()
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>();
+    let mut live = functions
+        .iter()
+        .filter(|function| {
+            !candidates.contains(&function.id)
+                || exports.contains(&function.id)
+                || function.identity.declaration.name == "main"
+                || !matches!(
+                    function.identity.declaration.kind,
+                    DeclarationKind::Function | DeclarationKind::ActorConstructor
+                )
+        })
+        .map(|function| function.id)
+        .collect::<HashSet<_>>();
+    closure(&mut live, &call_graph(functions));
+    let mut required_only = candidates.difference(&live).copied().collect::<Vec<_>>();
+    required_only.sort_by_key(|id| id.index());
+    Ok(required_only)
 }
 
 pub(crate) fn proof_matches(
@@ -488,6 +506,16 @@ fn walk_expression(
 ) -> Result<(), String> {
     visit(expression)?;
     match &mut expression.kind {
+        E::ActorGraphImport(plan) => {
+            let mut body = plan.body().clone();
+            walk_block(&mut body, visit)?;
+            if !hir_blocks_equal(&body, plan.body()) {
+                return Err(
+                    "sealed actor graph body was rewritten outside its checked producer".into(),
+                );
+            }
+        }
+
         E::Binary { left, right, .. } => {
             walk_expression(left, visit)?;
             walk_expression(right, visit)?;
@@ -516,7 +544,8 @@ fn walk_expression(
         E::Call { args, .. }
         | E::Intrinsic { args, .. }
         | E::ResourceInvoke { args, .. }
-        | E::ActorSpawn { args, .. } => {
+        | E::ActorSpawn { args, .. }
+        | E::ActorGraphStep { args, .. } => {
             for value in args {
                 walk_expression(value, visit)?;
             }
@@ -596,3 +625,11 @@ fn walk_expression(
 #[cfg(test)]
 #[path = "resource_materialization_tests.rs"]
 mod tests;
+
+fn hir_blocks_equal(left: &Block, right: &Block) -> bool {
+    let mut left = left.clone();
+    let mut right = right.clone();
+    let l = clear_floats(&mut left);
+    let r = clear_floats(&mut right);
+    l == r && left == right
+}

@@ -14,14 +14,15 @@ use jett_typecheck::CheckedResourceProgram;
 use jett_types::TypeId;
 
 pub use checked::ExecutionPurpose;
+pub use checked::{
+    ActorGraphHookRoot, CheckedActorGraphHook, CheckedRequiredOwner, CheckedRequiredResourceHook,
+    CheckedRequiredScope, CheckedRequiredValue,
+};
 pub(crate) use checked::{
     CheckedAttemptKey, CheckedBodyCursor, CheckedBodyReference, CheckedExecution,
     CheckedInvocation, FunctionInvocation, PreparedAbsentBindings, PreparedIntrinsicArguments,
     PreparedPipelineStep, PreparedReflectedFieldIteration, PreparedReflectedFieldLoop,
     PreparedRequiredExpression,
-};
-pub use checked::{
-    CheckedRequiredOwner, CheckedRequiredResourceHook, CheckedRequiredScope, CheckedRequiredValue,
 };
 pub(crate) use custody::{
     EvaluatedValue, FrameId, OwnerHolder, OwnerLedger, PayloadStep, ValueCustody,
@@ -55,6 +56,22 @@ impl fmt::Debug for ResourceCarrier {
 pub struct ResourceHookDescriptor {
     program: Arc<CheckedResourceProgram>,
     definition: DefId,
+}
+
+impl ResourceHookDescriptor {
+    pub(crate) fn matches_type(
+        &self,
+        program: &Arc<CheckedResourceProgram>,
+        ty: jett_types::TypeId,
+    ) -> bool {
+        Arc::ptr_eq(&self.program, program)
+            && self
+                .program
+                .checked()
+                .resource_hooks
+                .get(&self.definition)
+                .is_some_and(|hook| hook.function_type == ty)
+    }
 }
 
 impl fmt::Debug for ResourceHookDescriptor {

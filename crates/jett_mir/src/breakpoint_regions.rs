@@ -1125,6 +1125,8 @@ fn float_block(block: &mut BasicBlock, bits: &mut Vec<u64>) {
 fn float_expression(value: &mut Expression, bits: &mut Vec<u64>) {
     use hir::ExpressionKind as E;
     match &mut value.kind {
+        // Arc identity already compares the immutable sealed plan exactly.
+        E::ActorGraphImport(_) => {}
         E::Float(value) => {
             bits.push(value.to_bits());
             *value = 0.0;
@@ -1158,6 +1160,7 @@ fn float_expression(value: &mut Expression, bits: &mut Vec<u64>) {
         | E::ResourceInvoke { args, .. }
         | E::Intrinsic { args, .. }
         | E::ActorSpawn { args, .. }
+        | E::ActorGraphStep { args, .. }
         | E::StructConstruct { fields: args, .. }
         | E::BitfieldConstruct { fields: args, .. }
         | E::MachineConstruct { payloads: args, .. }

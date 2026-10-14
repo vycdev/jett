@@ -1,0 +1,23 @@
+namespace app
+function left() returns function() returns string:
+    string text = "left"
+    return function() returns string: return text
+function right() returns function() returns string:
+    string text = "right"
+    return function() returns string: return text
+function callbacks() returns list[function() returns string]:
+    return list(left(), right())
+function read_callbacks(view items: list[function() returns string]) returns string:
+    function() returns string first = list.get[function() returns string](view items, 0) handle:
+        return "missing first"
+    function() returns string second = list.get[function() returns string](view items, 1) handle:
+        return "missing second"
+    return "{first()} {second()}"
+actor Keeper:
+    mutable list[function() returns string] callbacks = callbacks()
+    receive read responds string:
+        respond read_callbacks(view callbacks)
+function main() returns nothing:
+    Keeper worker = comptime spawn Keeper()
+    println(ask worker.read)
+    return nothing

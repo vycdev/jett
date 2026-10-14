@@ -210,6 +210,7 @@ fn verify_descriptor_bodies_inner<'a>(
     types: &'a TypeInterner,
     resource: Option<&'a jett_mir::ResourceOwnershipPlan<'a>>,
 ) -> Result<(), CodegenError> {
+    jett_mir::validate_native_actor_graphs(program).map_err(CodegenError::Backend)?;
     jett_mir::validate_call_ownership(program, types).map_err(CodegenError::InvalidMir)?;
     jett_mir::validate_reflected_callable_plans(program, types)
         .map_err(CodegenError::InvalidMir)?;
@@ -223,13 +224,23 @@ fn verify_descriptor_bodies_inner<'a>(
                 if !resource.is_some_and(|plan| plan.type_requires_custody(ty))
                     && !exact_uninhabited_metadata_type(types, ty)
                 {
-                    scalar_kind_inner(
-                        types,
-                        ty,
-                        format!("original {role} `{}`", local.name),
-                        &mut HashSet::new(),
-                        TypeValidationPhase::OriginalMetadata,
-                    )?;
+                    if let Some(proof) =
+                        jett_mir::native_graph_storage_for_local(function, types, local)
+                    {
+                        graph_storage_kind(
+                            types,
+                            &proof,
+                            format!("original {role} `{}`", local.name),
+                        )?;
+                    } else {
+                        scalar_kind_inner(
+                            types,
+                            ty,
+                            format!("original {role} `{}`", local.name),
+                            &mut HashSet::new(),
+                            TypeValidationPhase::OriginalMetadata,
+                        )?;
+                    }
                 }
             }
         }
@@ -351,6 +362,7 @@ pub(crate) fn verify_program(
     program: &Program,
     types: &TypeInterner,
 ) -> Result<VerifiedProgram, CodegenError> {
+    jett_mir::validate_native_actor_graphs(program).map_err(CodegenError::Backend)?;
     jett_mir::validate_call_ownership(program, types).map_err(CodegenError::InvalidMir)?;
     jett_mir::validate_reflected_callable_plans(program, types)
         .map_err(CodegenError::InvalidMir)?;
@@ -488,13 +500,19 @@ pub(crate) fn verify_resource_program(
         for local in &function.locals {
             for ty in [local.ty, local.debug_ty] {
                 if !plan.type_requires_custody(ty) && !exact_uninhabited_metadata_type(types, ty) {
-                    scalar_kind_inner(
-                        types,
-                        ty,
-                        "original ordinary companion local".into(),
-                        &mut HashSet::new(),
-                        TypeValidationPhase::OriginalMetadata,
-                    )?;
+                    if let Some(proof) =
+                        jett_mir::native_graph_storage_for_local(function, types, local)
+                    {
+                        graph_storage_kind(types, &proof, "original ordinary companion local")?;
+                    } else {
+                        scalar_kind_inner(
+                            types,
+                            ty,
+                            "original ordinary companion local".into(),
+                            &mut HashSet::new(),
+                            TypeValidationPhase::OriginalMetadata,
+                        )?;
+                    }
                 }
             }
         }
@@ -545,6 +563,9 @@ fn exact_uninhabited_metadata_type(types: &TypeInterner, ty: TypeId) -> bool {
 enum TypeValidationPhase {
     OriginalMetadata,
     NativeValue,
+    // Machine representation only, after the strict verifier and any private
+    // occurrence-selected graph storage proof have authenticated execution.
+    NativeStorage,
 }
 
 pub(crate) fn scalar_kind(
@@ -560,6 +581,32 @@ pub(crate) fn scalar_kind(
         TypeValidationPhase::NativeValue,
     )
 }
+/// Machine storage mapping is independent of recursive Source type admission.
+/// Emission consumes a VerifiedProgram/fresh Resource plan; this helper cannot
+/// create either and is never used as the default verifier type visitor.
+pub(crate) fn native_storage_kind(
+    types: &TypeInterner,
+    ty: TypeId,
+    context: impl Into<String>,
+) -> Result<ScalarKind, CodegenError> {
+    scalar_kind_inner(
+        types,
+        ty,
+        context.into(),
+        &mut HashSet::new(),
+        TypeValidationPhase::NativeStorage,
+    )
+}
+
+/// Only an opaque exact occurrence/header proof selects graph metadata storage.
+fn graph_storage_kind(
+    types: &TypeInterner,
+    proof: &jett_mir::GraphStorageProof,
+    context: impl Into<String>,
+) -> Result<ScalarKind, CodegenError> {
+    native_storage_kind(types, proof.ty(), context)
+}
+
 fn scalar_kind_inner(
     types: &TypeInterner,
     ty: TypeId,
@@ -573,6 +620,28 @@ fn scalar_kind_inner(
             type_name: format!("<invalid type {}>", ty.index()),
             context,
         });
+    }
+    if phase == TypeValidationPhase::NativeStorage {
+        // Containers and actor/function handles have one fixed native scalar
+        // storage representation. Their payload/signature integrity was checked
+        // before emission; no runtime Resource leaf is admitted here.
+        let opaque = match types.resolve(ty) {
+            Type::Struct(_) | Type::Interface(_) => Some(ScalarKind::Struct),
+            Type::Enum(_) => Some(ScalarKind::Enum),
+            Type::Bitfield(_) => Some(ScalarKind::Bitfield),
+            Type::Machine(_) | Type::MachineState { .. } => Some(ScalarKind::Machine),
+            Type::Function { .. } => Some(ScalarKind::Function),
+            Type::Actor(_) => Some(ScalarKind::Actor),
+            Type::List(_) => Some(ScalarKind::List),
+            Type::Set(_) => Some(ScalarKind::Set),
+            Type::Map(_, _) => Some(ScalarKind::Map),
+            Type::Optional(_) | Type::Result(_, _) => Some(ScalarKind::Sum),
+            Type::TypeConstruction => Some(ScalarKind::Construction),
+            _ => None,
+        };
+        if let Some(kind) = opaque {
+            return Ok(kind);
+        }
     }
     let kind = match types.resolve(ty) {
         Type::Int8 => ScalarKind::SignedInteger(8),
@@ -855,6 +924,32 @@ impl Verifier<'_> {
         }
     }
 
+    fn local_kind(
+        &self,
+        function: &Function,
+        local: &jett_mir::Local,
+        context: impl Into<String>,
+    ) -> Result<ScalarKind, CodegenError> {
+        if let Some(proof) = jett_mir::native_graph_storage_for_local(function, self.types, local) {
+            graph_storage_kind(self.types, &proof, context)
+        } else {
+            self.value_kind(function, local.ty, context)
+        }
+    }
+    fn expression_kind(
+        &self,
+        function: &Function,
+        expression: &Expression,
+        context: impl Into<String>,
+    ) -> Result<ScalarKind, CodegenError> {
+        if let Some(proof) =
+            jett_mir::native_graph_storage_for_expression(function, self.types, expression)
+        {
+            graph_storage_kind(self.types, &proof, context)
+        } else {
+            self.value_kind(function, expression.ty, context)
+        }
+    }
     fn function(&self, function: &Function) -> Result<(), CodegenError> {
         if self.phase == VerifierPhase::DescriptorMetadata {
             super::emit::debug::function_label(function)
@@ -873,20 +968,31 @@ impl Verifier<'_> {
             }) {
                 continue;
             }
-            self.value_kind(
+            let header = function.local(param.local).ok_or_else(|| {
+                self.contract_error(
+                    function,
+                    param.span,
+                    "parameter has no exact current local header",
+                )
+            })?;
+            self.local_kind(
                 function,
-                param.ty,
+                header,
                 format!("parameter `{}` of `{name}`", param.name),
             )?;
         }
         if !(self.resource.is_some_and(|plan| {
             plan.function(function.id).is_some() && plan.type_requires_custody(function.return_type)
         })) {
-            self.value_kind(
-                function,
-                function.return_type,
-                format!("return type of `{name}`"),
-            )?;
+            if let Some(proof) = jett_mir::native_graph_storage_for_return(function, self.types) {
+                graph_storage_kind(self.types, &proof, format!("return type of `{name}`"))?;
+            } else {
+                self.value_kind(
+                    function,
+                    function.return_type,
+                    format!("return type of `{name}`"),
+                )?;
+            }
         }
         for local in &function.locals {
             if self.resource.is_some_and(|plan| {
@@ -894,9 +1000,9 @@ impl Verifier<'_> {
             }) {
                 continue;
             }
-            self.value_kind(
+            self.local_kind(
                 function,
-                local.ty,
+                local,
                 format!("local `{}` of `{name}`", local.name),
             )?;
             if self.phase == VerifierPhase::DescriptorMetadata {
@@ -918,10 +1024,10 @@ impl Verifier<'_> {
         // machine-code frame. Their caller still validates capture evaluation,
         // initialization, ownership and cleanup normally.
         if self.phase == VerifierPhase::CallableNative {
-            if let Some(plan) = self
-                .resource
-                .filter(|plan| plan.function(function.id).is_some())
-            {
+            if let Some(plan) = self.resource.filter(|plan| {
+                plan.function(function.id).is_some()
+                    || jett_mir::native_graph_storage_has_records(function, self.types)
+            }) {
                 jett_mir::ResourceCompanionPlan::analyze(plan, function.id)
                     .map_err(|message| self.contract_error(function, function.span, message))?;
             } else {
@@ -990,6 +1096,65 @@ impl Verifier<'_> {
         Ok(())
     }
 
+    fn graph_constructor_statement(
+        &self,
+        function: &Function,
+        node: &jett_mir::ResourceConstructorNode,
+        span: Span,
+    ) -> Result<bool, CodegenError> {
+        let Some(proof) =
+            jett_mir::native_graph_storage_for_constructor(function, self.types, node)
+        else {
+            return Ok(false);
+        };
+        let original = function
+            .resource_constructor(node.constructor())
+            .map_err(|message| self.contract_error(function, span, message))?;
+        if proof.ty() != original.original().ty {
+            return Err(self.contract_error(
+                function,
+                span,
+                "Graph constructor changed its exact output type",
+            ));
+        }
+        graph_storage_kind(self.types, &proof, "checked Graph constructor output")?;
+        match node {
+            jett_mir::ResourceConstructorNode::Stage { value, .. } => {
+                self.expression(function, value)?
+            }
+            jett_mir::ResourceConstructorNode::Commit { output, .. } => {
+                let (_, header) = original.commit().ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        span,
+                        "Graph constructor lost its exact Commit output",
+                    )
+                })?;
+                let current = function
+                    .local(*output)
+                    .filter(|current| *current == header)
+                    .ok_or_else(|| {
+                        self.contract_error(
+                            function,
+                            span,
+                            "Graph constructor changed its exact Commit output",
+                        )
+                    })?;
+                if header.id != *output {
+                    return Err(self.contract_error(
+                        function,
+                        span,
+                        "Graph constructor changed its exact Commit output",
+                    ));
+                }
+                self.local_kind(function, current, "checked Graph constructor Commit output")?;
+            }
+            jett_mir::ResourceConstructorNode::Begin { .. }
+            | jett_mir::ResourceConstructorNode::End { .. } => {}
+        }
+        Ok(true)
+    }
+
     fn statement(
         &self,
         function: &Function,
@@ -1003,6 +1168,9 @@ impl Verifier<'_> {
         .map_err(|message| self.contract_error(function, statement.span, message))?;
         match &statement.kind {
             StatementKind::ResourceConstructor(node) => {
+                if self.graph_constructor_statement(function, node, statement.span)? {
+                    return Ok(());
+                }
                 use jett_mir::ResourceConstructorNode as Node;
                 let original = function
                     .resource_constructor(node.constructor())
@@ -1908,7 +2076,9 @@ impl Verifier<'_> {
     }
 
     fn expression(&self, function: &Function, expression: &Expression) -> Result<(), CodegenError> {
-        if self.carrier_expression(function, expression)?.is_some() {
+        let graph_storage =
+            jett_mir::native_graph_storage_for_expression(function, self.types, expression);
+        if graph_storage.is_none() && self.carrier_expression(function, expression)?.is_some() {
             return Ok(());
         }
         let named_value = self
@@ -1997,6 +2167,7 @@ impl Verifier<'_> {
             });
             if invocation
                 || (named_value.is_none()
+                    && graph_storage.is_none()
                     && self
                         .resource
                         .is_some_and(|proof| proof.type_requires_custody(expression.ty)))
@@ -2141,9 +2312,9 @@ impl Verifier<'_> {
             }
             ScalarKind::Function
         } else {
-            self.value_kind(
+            self.expression_kind(
                 function,
-                expression.ty,
+                expression,
                 format!("expression in `{}`", self.function_name(function)),
             )?
         };
@@ -3714,6 +3885,12 @@ impl Verifier<'_> {
             ExpressionKind::InlineFunction { .. } => {
                 Err(self.unsupported(function, expression.span, "inline function"))
             }
+            ExpressionKind::ActorGraphImport(_) => Err(self.contract_error(function, expression.span, "actor graph import was not expanded before native verification")),
+            ExpressionKind::ActorGraphStep { instruction, args } => {
+                instruction.validate(function.id, &function.identity, args, expression.ty, self.types).map_err(|message| self.contract_error(function, expression.span, &message))?;
+                for arg in args { self.expression(function, arg)?; }
+                Ok(())
+            }
             ExpressionKind::ActorSpawn {
                 actor_type,
                 args,
@@ -3978,8 +4155,8 @@ impl Verifier<'_> {
     ) -> Result<(), CodegenError> {
         self.expression(function, left)?;
         self.expression(function, right)?;
-        let operand = self.value_kind(function, left.ty, "binary operand")?;
-        let right_operand = self.value_kind(function, right.ty, "binary operand")?;
+        let operand = self.expression_kind(function, left, "binary operand")?;
+        let right_operand = self.expression_kind(function, right, "binary operand")?;
         let left_type = self.secret_inner_type(left.ty).unwrap_or(left.ty);
         let right_type = self.secret_inner_type(right.ty).unwrap_or(right.ty);
         let refined_divisor = operand.is_integer()
@@ -3996,7 +4173,7 @@ impl Verifier<'_> {
                 "binary operand types differ",
             ));
         }
-        let result = self.value_kind(function, expression.ty, "binary result")?;
+        let result = self.expression_kind(function, expression, "binary result")?;
         if (self.secret_inner_type(left.ty).is_some() || self.secret_inner_type(right.ty).is_some())
             && self.secret_inner_type(expression.ty).is_none()
         {

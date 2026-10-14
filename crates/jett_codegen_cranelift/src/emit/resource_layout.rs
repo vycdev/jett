@@ -10,6 +10,8 @@ use std::collections::BTreeMap;
 pub(super) mod carrier_operations;
 #[path = "resource_layout/carriers.rs"]
 mod carriers;
+#[path = "resource_layout/graph_shapes.rs"]
+mod graph_shapes;
 
 const LIMIT: usize = 4096;
 const BYTE_LIMIT: usize = 1024 * 1024;
@@ -26,6 +28,7 @@ pub(super) struct EmittedResourceLayout<'p> {
     entry: SelectedEntry,
     entry_bridge_completion: Option<u32>,
     wire: Vec<u8>,
+    graph_hooks: Vec<(jett_hir::ResourceHookRef, u32)>,
     functions: BTreeMap<u32, u32>,
     frames: BTreeMap<(u32, usize), u32>,
     slots: BTreeMap<(u32, usize), u32>,
@@ -105,6 +108,12 @@ impl<'p> EmittedResourceLayout<'p> {
                 None,
             )
         };
+        let graph_hooks = rows
+            .hook_ids
+            .iter()
+            .cloned()
+            .zip(rows.hooks.iter().map(|hook| hook.2))
+            .collect();
         let wire = rows.encode()?;
         let functions = rows.functions.clone();
         let frames = rows.frame_ids.clone();
@@ -118,6 +127,7 @@ impl<'p> EmittedResourceLayout<'p> {
             entry,
             entry_bridge_completion,
             wire,
+            graph_hooks,
             functions,
             frames,
             slots,
@@ -125,6 +135,18 @@ impl<'p> EmittedResourceLayout<'p> {
             carrier_slots,
             carrier_operations,
         })
+    }
+    pub(super) fn graph_hook(&self, hook: &jett_hir::ResourceHookRef) -> Option<(u32, u32)> {
+        self.graph_hooks
+            .iter()
+            .enumerate()
+            .find_map(|(index, (current, signature))| {
+                if current == hook {
+                    Some((u32::try_from(index).ok()?, *signature))
+                } else {
+                    None
+                }
+            })
     }
     pub(super) fn entry(&self) -> SelectedEntry {
         self.entry
@@ -462,6 +484,13 @@ impl<'a, 'p> Rows<'a, 'p> {
                 },
             ));
         }
+        self.shaped_signature(parameters, result)
+    }
+    fn shaped_signature(
+        &mut self,
+        parameters: Vec<(u32, u32)>,
+        result: u32,
+    ) -> Result<u32, CodegenError> {
         let signature = Signature { result, parameters };
         if let Some(index) = self
             .signatures
@@ -641,7 +670,9 @@ impl<'a, 'p> Rows<'a, 'p> {
                 .iter()
                 .map(|parameter| (parameter.ty, parameter.mode))
                 .collect::<Vec<_>>();
-            let result = if matches!(
+            let result = if let Some(shape) = self.graph_function_result(function)? {
+                shape
+            } else if matches!(
                 plan.types().resolve(function.return_type()),
                 Type::Function { .. }
             ) {
@@ -662,9 +693,26 @@ impl<'a, 'p> Rows<'a, 'p> {
                     id
                 }
             } else {
-                self.shape(function.return_type())?
+                self.shape(function.return_type()).map_err(|error| {
+                    pending(&format!(
+                        "function {} result `{}`: {error}",
+                        function.function().index(),
+                        self.plan.types().type_name(function.return_type())
+                    ))
+                })?
             };
-            let signature = self.signature_result(&params, result)?;
+            let signature = self
+                .function_signature_result(function, result)
+                .map_err(|error| {
+                    pending(&format!(
+                        "function {} formal tuple {:?}: {error}",
+                        function.function().index(),
+                        params
+                            .iter()
+                            .map(|(ty, _)| self.plan.types().type_name(*ty))
+                            .collect::<Vec<_>>()
+                    ))
+                })?;
             self.functions
                 .insert(function.function().index(), signature);
             for frame in function.frames() {
@@ -1135,6 +1183,7 @@ impl<'a, 'p> Rows<'a, 'p> {
                 ..
             } => self.source_row(
                 function,
+                operation,
                 frame,
                 *callee,
                 formals,
@@ -1208,6 +1257,7 @@ impl<'a, 'p> Rows<'a, 'p> {
     fn source_row(
         &mut self,
         caller: &custody::ResourceFunctionPlan,
+        operation: &custody::ResourceOperation,
         frame: u32,
         target: FunctionId,
         formals: &[custody::ResourceCallFormal],
@@ -1275,19 +1325,6 @@ impl<'a, 'p> Rows<'a, 'p> {
                 custody::ResourceArgumentEffect::RetainBorrow => 4,
                 custody::ResourceArgumentEffect::ObserveData => 5,
             };
-            row.extend([
-                count(parameter)?,
-                count(fact.source_index())?,
-                self.shape(fact.actual_type())?,
-                self.shape(param.ty)?,
-                syntax,
-                effect,
-                if param.mode == jett_mir::ParamMode::View {
-                    2
-                } else {
-                    1
-                },
-            ]);
             let operand = operands
                 .iter()
                 .find(|operand| match operand {
@@ -1298,6 +1335,21 @@ impl<'a, 'p> Rows<'a, 'p> {
                     | Operand::CarrierBorrowed { parameter: p, .. } => *p == parameter,
                 })
                 .ok_or_else(|| pending("Source formal has no exact evaluated operand"))?;
+            let (actual_shape, formal_shape) =
+                self.source_shapes(caller, operation, callee, param, fact, operand, order)?;
+            row.extend([
+                count(parameter)?,
+                count(fact.source_index())?,
+                actual_shape,
+                formal_shape,
+                syntax,
+                effect,
+                if param.mode == jett_mir::ParamMode::View {
+                    2
+                } else {
+                    1
+                },
+            ]);
             match operand {
                 Operand::Ordinary { .. } => row.push(1),
                 Operand::CarrierOwned { slot, .. } => {

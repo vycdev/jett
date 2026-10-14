@@ -28,6 +28,55 @@ struct State {
     aborted: bool,
     calls: Vec<ActiveCall>,
 }
+
+fn expression_shape(
+    program: &Program,
+    function: &Function,
+    types: &TypeInterner,
+    value: &Expression,
+) -> Result<Option<ResourceShape>, String> {
+    if crate::native_graph_storage_for_expression(function, types, value).is_some() {
+        Ok(None)
+    } else {
+        shape(&program.resource_manifest, types, value.ty)
+    }
+}
+fn local_shape(
+    program: &Program,
+    function: &Function,
+    types: &TypeInterner,
+    local: &Local,
+) -> Result<Option<ResourceShape>, String> {
+    if crate::native_graph_storage_for_local(function, types, local).is_some() {
+        Ok(None)
+    } else {
+        shape(&program.resource_manifest, types, local.ty)
+    }
+}
+fn formal_shape(
+    program: &Program,
+    function: &Function,
+    types: &TypeInterner,
+    formal: &Param,
+) -> Result<Option<ResourceShape>, String> {
+    if crate::native_graph_storage_for_formal(function, types, formal).is_some() {
+        Ok(None)
+    } else {
+        shape(&program.resource_manifest, types, formal.ty)
+    }
+}
+fn return_shape(
+    program: &Program,
+    function: &Function,
+    types: &TypeInterner,
+) -> Result<Option<ResourceShape>, String> {
+    if crate::native_graph_storage_for_return(function, types).is_some() {
+        Ok(None)
+    } else {
+        shape(&program.resource_manifest, types, function.return_type)
+    }
+}
+
 type Key = (u32, u8, usize, usize);
 fn key(site: ResourceSite, ordinal: usize) -> Key {
     match site.position {
@@ -321,7 +370,7 @@ impl<'p> Analysis<'p> {
             .function
             .local(local)
             .ok_or("Resource read has no exact dense local header")?;
-        if shape(&self.program.resource_manifest, self.types, metadata.ty)?.is_none() {
+        if local_shape(self.program, self.function, self.types, metadata)?.is_none() {
             return Ok(None);
         }
         let value = state.values[index]
@@ -359,7 +408,7 @@ impl<'p> Analysis<'p> {
             .function
             .local(local)
             .ok_or("Resource destination has no exact local header")?;
-        let expected = shape(&self.program.resource_manifest, self.types, metadata.ty)?;
+        let expected = local_shape(self.program, self.function, self.types, metadata)?;
         let Some(expected) = expected else {
             if value.is_some() {
                 return Err("Resource custody cannot be stored in an ordinary destination".into());
@@ -584,7 +633,15 @@ impl<'p> Analysis<'p> {
         }
         self.ordinal += 1;
         let ordinal = self.ordinal;
-        let expected = shape(&self.program.resource_manifest, self.types, expression.ty)?;
+        let expected = if crate::actor_graph::native_graph_metadata_expression(
+            self.function,
+            self.types,
+            expression,
+        ) {
+            None
+        } else {
+            expression_shape(self.program, self.function, self.types, expression)?
+        };
         match &expression.kind {
             E::Local(local) => {
                 if self.plan.descriptor_value(expression).is_some() && self.descriptor_value(state, expression).is_none() {
@@ -599,6 +656,20 @@ impl<'p> Analysis<'p> {
             E::View(inner) => {
                 if taking && expected.is_some() { return Err("Resource View cannot be adopted as an owned result".into()); }
                 self.expression(state, inner, false)
+            }
+            E::ActorGraphStep {instruction,args} if matches!(instruction.operation(),hir::ActorGraphOperation::HookBox {..}) => {
+                let hir::ActorGraphOperation::HookBox {hook,..}=instruction.operation() else {unreachable!()};
+                if self.plan.descriptor_value(expression) != Some(hook)
+                    || !self.program.resource_manifest.contains_hook(hook) || expression.ty != hook.function_type() {
+                    return Err("graph metadata descriptor lost its exact required projection row".into());
+                }
+                self.operation(ResourceFrameId(0), ResourceOperationRole::Descriptor {hook:hook.clone()});
+                if self.emit {
+                    let id=self.plan.operations.last().ok_or("graph hook Descriptor row was not emitted")?.id;
+                    self.plan.graph_descriptors.push((instruction.clone(),id));
+                }
+                for arg in args { if self.expression(state,arg,false)?.is_some() {return Err("graph import ticket acquired Resource custody".into());} }
+                Ok(None)
             }
             E::ResourceHookValue { hook } => {
                 if !self.program.resource_manifest.contains_hook(hook) || expression.ty != hook.function_type() { return Err("Resource descriptor differs from its exact original manifest signature".into()); }
@@ -664,13 +735,29 @@ impl<'p> Analysis<'p> {
                 let mut has_resource = false;
                 walk::expression(expression, &mut |value| {
                     if !std::ptr::eq(value, expression) {
-                        has_resource |= resource_type_pending(self.types, value.ty) && !matches!(self.types.resolve(value.ty), Type::Function { .. });
+                        has_resource |= resource_type_pending(self.types, value.ty) && !matches!(self.types.resolve(value.ty), Type::Function { .. }) && !crate::actor_graph::native_graph_metadata_expression(self.function,self.types,value) && crate::native_graph_storage_for_expression(self.function,self.types,value).is_none();
                         if let E::Call { function, .. } = value.kind {
                             has_resource |= self.program.functions.get(function.index() as usize).is_some_and(|callee| callee.id == function && has_execution_records(callee, self.types));
                         }
                     }
                 });
                 if has_resource { return Err("pending ResourceOwnershipPlan: nested Resource evaluation requires exact source-order canonical staging".into()); }
+                let mut nested=Vec::new();
+                walk::expression(expression,&mut |value| {
+                    if !std::ptr::eq(value,expression)
+                        && let E::ActorGraphStep {instruction,..}=&value.kind
+                        && let hir::ActorGraphOperation::HookBox {hook,..}=instruction.operation() {
+                        nested.push((std::ptr::from_ref(value).addr(),instruction.clone(),hook.clone(),self.plan.descriptor_value(value).cloned()));
+                    }
+                });
+                for (address,instruction,hook,proof) in nested {
+                    if proof.as_ref()!=Some(&hook) {return Err("nested graph hook lost its exact protected Descriptor projection".into());}
+                    let saved=self.expression;self.expression=Some(address);self.ordinal+=1;
+                    self.operation(ResourceFrameId(0),ResourceOperationRole::Descriptor {hook});
+                    if self.emit {let id=self.plan.operations.last().ok_or("nested graph Descriptor was not emitted")?.id;self.plan.graph_descriptors.push((instruction,id));}
+                    self.expression=saved;
+                }
+
                 Ok(None)
             }
         }
@@ -696,9 +783,9 @@ impl<'p> Analysis<'p> {
                         callee.id == id && has_execution_records(callee, self.types)
                     })
             })
-            || shape(&self.program.resource_manifest, self.types, expression.ty)?.is_some()
+            || expression_shape(self.program, self.function, self.types, expression)?.is_some()
             || args.iter().any(|arg| {
-                shape(&self.program.resource_manifest, self.types, arg.ty)
+                expression_shape(self.program, self.function, self.types, arg)
                     .ok()
                     .flatten()
                     .is_some()
@@ -744,7 +831,7 @@ impl<'p> Analysis<'p> {
                 .iter()
                 .find(|fact| fact.parameter_index == parameter)
                 .ok_or("Resource actual has no exact original formal tuple")?;
-            let Some(_) = shape(&self.program.resource_manifest, self.types, arg.ty)? else {
+            let Some(_) = expression_shape(self.program, self.function, self.types, arg)? else {
                 self.expression(state, arg, true)?;
                 operands.push(ResourceCallOperand::Ordinary {
                     parameter,
@@ -883,7 +970,7 @@ impl<'p> Analysis<'p> {
                 );
             }
         }
-        let outcome_shape = shape(&self.program.resource_manifest, self.types, expression.ty)?;
+        let outcome_shape = expression_shape(self.program, self.function, self.types, expression)?;
         let output = outcome_shape
             .as_ref()
             .map(|shape| self.result_slot(ordinal, shape.clone(), parent));
@@ -1028,7 +1115,16 @@ impl<'p> Analysis<'p> {
             self.record_execution_frame()?;
             match &statement.kind {
                 StatementKind::ResourceLexicalExit(_) => self.lexical_exit(&mut state)?,
-                StatementKind::ResourceConstructor(_) => return Err("occupied constructor requires its authenticated carrier flow".into()),
+                StatementKind::ResourceConstructor(node) => {
+                    if crate::native_graph_storage_for_constructor(self.function, self.types, node).is_none() {
+                        return Err("occupied constructor requires its authenticated carrier flow".into());
+                    }
+                    if let ResourceConstructorNode::Stage { value, .. } = node {
+                        if self.expression(&mut state, value, true)?.is_some() {
+                            return Err("graph metadata constructor field acquired Resource custody".into());
+                        }
+                    }
+                }
             StatementKind::ResourceCall(node) => self.normalized_node(&mut state, node)?,
                 StatementKind::Let { local, value } => {
                     let named = self.named_binding(&state, *local, value);
@@ -1173,7 +1269,7 @@ impl<'p> Analysis<'p> {
                     }
                     if let Some(returned) = returned {
                         if returned.loan.is_some() { return Err("Resource resident lease cannot escape as an owning return".into()); }
-                        let expected = shape(&self.program.resource_manifest, self.types, self.function.return_type)?.ok_or("Resource return has an ordinary declared result")?;
+                        let expected = return_shape(self.program, self.function, self.types)?.ok_or("Resource return has an ordinary declared result")?;
                         if returned.shape != expected { return Err("Resource return changes its exact shape or kind".into()); }
                         if self.function.resource_lexical_exit(self.site.block, self.site.position)?.is_some() { self.lexical_exit(&mut state)?; }
                         let frame = self.return_frame.ok_or("Resource return lacks its initially selected provisional frame")?;
@@ -1181,7 +1277,7 @@ impl<'p> Analysis<'p> {
                         self.plan.slots[destination.0].storage = ResourceSlotStorage::Return { site: self.site };
                         if let Some(source) = returned.owner { self.operation(frame, ResourceOperationRole::Transfer { source, destination }); }
                         outgoing = Some(destination);
-                    } else if !state.aborted && shape(&self.program.resource_manifest, self.types, self.function.return_type)?.is_some() { return Err("Resource return has no exact owned output".into()); }
+                    } else if !state.aborted && return_shape(self.program, self.function, self.types)?.is_some() { return Err("Resource return has no exact owned output".into()); }
                 }
                 if outgoing.is_none() && !state.aborted && self.function.resource_lexical_exit(self.site.block, self.site.position)?.is_some() { self.lexical_exit(&mut state)?; }
                 let completion = if state.aborted { ResourceCompletion::Abort } else { ResourceCompletion::Return };
@@ -1208,12 +1304,17 @@ impl<'p> Analysis<'p> {
                 Ok(vec![(*then_block, yes), (*else_block, no)])
             }
             TerminatorKind::ForEach { key, value, by_view, iterable, body, exit } => {
-                control_flow::consuming_list(self.function, self.types, *key, *value, *by_view, iterable)?;
+                if crate::native_graph_storage_for_expression(self.function, self.types, iterable).is_some() {
+                    control_flow::graph_sequence(self.function, self.types, *key, *value, *by_view, iterable)?;
+                } else {
+                    control_flow::consuming_list(self.function, self.types, *key, *value, *by_view, iterable)?;
+                }
                 if self.expression(&mut state, iterable, true)?.is_some() {
                     return Err("Resource sequence cannot acquire or transport element custody".into());
                 }
                 if state.aborted { self.finish(&mut state, ResourceFrameId(0), ResourceCompletion::Abort); return Ok(Vec::new()); }
                 self.clear(&mut state, *key);
+                if let Some(value) = value { self.clear(&mut state, *value); }
                 Ok(vec![(*body, state.clone()), (*exit, state)])
             }
             TerminatorKind::Switch { scrutinee, variants, otherwise } => {
@@ -1317,8 +1418,7 @@ pub(super) fn analyze(
         block: function.entry,
         position: ResourcePosition::Terminator,
     };
-    let return_frame =
-        shape(&program.resource_manifest, types, function.return_type)?.map(|_| ResourceFrameId(1));
+    let return_frame = return_shape(program, function, types)?.map(|_| ResourceFrameId(1));
     let mut frames = vec![ResourceFrame {
         id: ResourceFrameId(0),
         role: ResourceFrameRole::Scope,
@@ -1336,6 +1436,7 @@ pub(super) fn analyze(
         });
     }
     let plan = ResourceFunctionPlan {
+        graph_descriptors: Vec::new(),
         carriers: None,
         function: function.id,
         identity: function.identity.clone(),
@@ -1407,7 +1508,7 @@ pub(super) fn analyze(
         calls: Vec::new(),
     };
     for local in &function.locals {
-        if let Some(shape) = shape(&program.resource_manifest, types, local.ty)?
+        if let Some(shape) = local_shape(program, function, types, local)?
             && !function.is_view_local(local.id)
         {
             let id = ResourceOwnerSlotId(analysis.plan.slots.len());
@@ -1423,7 +1524,7 @@ pub(super) fn analyze(
         }
     }
     for (parameter, param) in function.params.iter().enumerate() {
-        if let Some(shape) = shape(&program.resource_manifest, types, param.ty)? {
+        if let Some(shape) = formal_shape(program, function, types, param)? {
             let mut value = Value {
                 occupancy: if shape.conditional() {
                     ResourceOccupancy::Conditional

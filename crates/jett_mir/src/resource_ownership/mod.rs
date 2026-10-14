@@ -53,6 +53,8 @@ pub use carriers::{
 #[cfg(test)]
 mod carriers_tests;
 mod companion;
+mod graph_metadata;
+pub use graph_metadata::{GraphHookProjectionProof, GraphSourceEdgeProof, GraphStorageProof};
 mod control_flow;
 #[cfg(test)]
 mod control_flow_tests;
@@ -599,8 +601,20 @@ pub struct ResourceFunctionPlan {
     descriptor_return: Option<hir::ResourceHookRef>,
     descriptor_values: Vec<(usize, hir::ResourceHookRef)>,
     descriptor_locals: Vec<(LocalId, hir::ResourceHookRef)>,
+    graph_descriptors: Vec<(hir::ActorGraphInstruction, ResourceOperationId)>,
 }
 impl ResourceFunctionPlan {
+    pub fn graph_descriptor_operations(
+        &self,
+    ) -> impl Iterator<Item = (&hir::ActorGraphInstruction, &ResourceOperation)> {
+        self.graph_descriptors
+            .iter()
+            .filter_map(|(instruction, id)| {
+                self.operations
+                    .get(id.index())
+                    .map(|operation| (instruction, operation))
+            })
+    }
     pub fn carriers(&self) -> Option<&ResourceCarrierFunctionPlan> {
         self.carriers.as_ref()
     }
@@ -788,6 +802,7 @@ pub(super) struct ResourceLoweringWitness {
     lexical_seal: Vec<ResourceLexicalExit>,
     named_callables: Vec<named_callables::NamedCallableBinding>,
     descriptors: returned_descriptors::DescriptorWitness,
+    graph_metadata: graph_metadata::Witness,
     source: hir::ResourceSourceArchive,
     execution: ResourceExecutionClosure,
     manifest: hir::ResourceManifest,
@@ -819,21 +834,30 @@ impl Capture {
         source: &hir::ResourceSourceArchive,
         types: &TypeInterner,
         execution: &ResourceExecutionClosure,
-    ) -> Self {
+    ) -> Result<Self, String> {
+        let metadata = if source.execution_functions().is_empty() {
+            graph_metadata::Witness::default()
+        } else {
+            execution.original_graph(function, source, types)?.clone()
+        };
         // A raw ordinary predicate has no Resource archive authority.
         // Keep custody detection independent so malformed raw Resource bodies
         // still follow the existing mandatory refusal path.
         let needed = (source.manifest().is_some()
             && function.identity.declaration.kind == hir::DeclarationKind::RefinementPredicate)
             || source.has_reflected_field_dispatch(function.id)
-            || runtime_custody_needed(function, types, execution)
+            // Proof-only graph handlers still retain their exact original/current
+            // body seal even when their captured descriptor is immutable metadata.
+            || execution.metadata_handler(function.id)
+            || metadata.needed()
+            || runtime_custody_needed_with_metadata(function, types, execution, &metadata)
             || source.required_only_function_ids().contains(&function.id)
             || source
                 .required_materializations()
                 .iter()
                 .any(|row| row.function() == function.id)
             || entry_scope::capture_needed(function, source);
-        Self {
+        Ok(Self {
             witness: needed.then(|| ResourceLoweringWitness {
                 original: function.clone(),
                 calls: Vec::new(),
@@ -848,6 +872,7 @@ impl Capture {
                 lexical_seal: Vec::new(),
                 named_callables: named_callables::capture(function, source, types, execution),
                 descriptors: returned_descriptors::capture(function, source),
+                graph_metadata: metadata,
                 source: source.clone(),
                 execution: execution.clone(),
                 manifest: manifest.clone(),
@@ -863,7 +888,7 @@ impl Capture {
                 }],
                 entry: BlockId(0),
             }),
-        }
+        })
     }
     pub(super) fn preserve_original_call(
         &mut self,
@@ -892,6 +917,7 @@ impl Capture {
             && !args.iter().any(|value| occupied(value.ty))
             && !matches!(expression.kind, hir::ExpressionKind::ResourceInvoke { .. })
             && !witness.execution.direct_call(expression)
+            && !graph_metadata::preserve_original_call(&witness.graph_metadata, expression)
         {
             return Ok(false);
         }
@@ -934,7 +960,9 @@ impl Capture {
         }
         let mut candidates = Vec::new();
         walk::expression(expression, &mut |candidate| {
-            if source_custody_call(candidate, types, &witness.execution) {
+            if source_custody_call(candidate, types, &witness.execution)
+                || graph_metadata::preserve_original_call(&witness.graph_metadata, candidate)
+            {
                 candidates.push(candidate.clone());
             }
         });
@@ -1004,12 +1032,20 @@ impl Capture {
     pub(super) fn finish(
         mut self,
         function: &Function,
+        types: &TypeInterner,
     ) -> Result<Option<ResourceLoweringWitness>, String> {
         if let Some(witness) = &mut self.witness {
             witness.constructor_seal = witness.constructors.clone().into();
             lexical_borrows::seal(witness);
             borrowed_sums::seal(witness);
             reflected_fields::seal(witness);
+            graph_metadata::seal(
+                &mut witness.graph_metadata,
+                function,
+                &witness.calls,
+                &witness.constructor_seal,
+                types,
+            )?;
         }
         if let Some(witness) = &mut self.witness
             && (!witness.constructors.is_empty()
@@ -1059,6 +1095,7 @@ impl ResourceLoweringWitness {
             return Err("Resource ownership differs from its initially authenticated Source or constructor-emitted graph".into());
         }
         self.descriptors.current(function)?;
+        graph_metadata::current(&self.graph_metadata, function)?;
         if (!self.constructors.is_empty()
             || !self.borrowed_sums.is_empty()
             || entry_scope::capture_needed(&self.original, &self.source))
@@ -1172,6 +1209,7 @@ impl ResourceLoweringWitness {
                 .all(|(a, b)| a.same(b))
             && self.named_callables == other.named_callables
             && self.descriptors == other.descriptors
+            && self.graph_metadata == other.graph_metadata
             && self.source == other.source
             && self.execution == other.execution
             && self.manifest == other.manifest
@@ -1230,6 +1268,10 @@ pub(super) fn authenticate_original(
     ResourceExecutionClosure::from_archive(archive, types)
 }
 
+pub(super) fn visit_block(block: &BasicBlock, visit: &mut impl FnMut(&Expression)) {
+    walk::mir_block(block, visit);
+}
+
 pub(super) fn visit_expression(value: &Expression, visit: &mut impl FnMut(&Expression)) {
     walk::expression(value, visit);
 }
@@ -1243,28 +1285,49 @@ fn runtime_custody_needed(
     types: &TypeInterner,
     execution: &ResourceExecutionClosure,
 ) -> bool {
+    runtime_custody_needed_with_metadata(
+        function,
+        types,
+        execution,
+        &graph_metadata::Witness::default(),
+    )
+}
+fn runtime_custody_needed_with_metadata(
+    function: &hir::Function,
+    types: &TypeInterner,
+    execution: &ResourceExecutionClosure,
+    metadata: &graph_metadata::Witness,
+) -> bool {
     let mut needed = execution.contains(function.id)
-        || resource_type_pending(types, function.return_type)
-        || function
-            .locals
-            .iter()
-            .any(|local| resource_type_pending(types, local.ty));
+        || (resource_type_pending(types, function.return_type)
+            && metadata.original_storage_for_return().is_none())
+        || function.locals.iter().any(|local| {
+            resource_type_pending(types, local.ty)
+                && metadata.original_storage_for_local(local).is_none()
+        });
     walk::hir_block(&function.body, &mut |value| {
         needed |= matches!(
             value.kind,
             hir::ExpressionKind::ResourceHookValue { .. }
                 | hir::ExpressionKind::ResourceInvoke { .. }
-        ) || custody_type(types, value.ty);
+        ) || matches!(&value.kind,hir::ExpressionKind::ActorGraphStep {instruction,..}
+            if matches!(instruction.operation(),hir::ActorGraphOperation::HookBox {..}))
+            || (custody_type(types, value.ty)
+                && metadata.original_storage_for_expression(value).is_none());
     });
     needed
 }
 /// A proof-only required row seals a body without granting Resource execution.
 /// The immutable archived body and checked execution family select this role.
 pub(super) fn has_execution_records(function: &Function, types: &TypeInterner) -> bool {
-    function
-        .resource_lowering
-        .as_ref()
-        .is_some_and(|witness| runtime_custody_needed(&witness.original, types, &witness.execution))
+    function.resource_lowering.as_ref().is_some_and(|witness| {
+        runtime_custody_needed_with_metadata(
+            &witness.original,
+            types,
+            &witness.execution,
+            &witness.graph_metadata,
+        )
+    })
 }
 fn source_custody_call(
     value: &Expression,
@@ -1309,7 +1372,7 @@ pub(super) fn original_call_at(
         return Ok(false);
     }
     witness.source.validate_types(types)?;
-    if witness.execution != ResourceExecutionClosure::from_archive(&witness.source, types)? {
+    if witness.execution != witness.execution.reconstructed(&witness.source, types)? {
         return Err(
             "Resource call execution closure differs from its original checked bodies".into(),
         );
@@ -1381,7 +1444,7 @@ pub(super) fn validate_witnesses(
         .find_map(|function| function.resource_lowering.as_ref())
         .map(|witness| {
             witness.source.validate_types(types)?;
-            ResourceExecutionClosure::from_archive(&witness.source, types)
+            witness.execution.reconstructed(&witness.source, types)
         })
         .transpose()
         .map_err(|message| {
@@ -1456,6 +1519,7 @@ pub(super) fn validate_witnesses(
                             );
                         }
                         witness.current(function)?;
+                        graph_metadata::validate(witness,function,types)?;
                         named_callables::validate(witness, function, types)?;
                         returned_descriptors::validate(witness, function)
                     });
@@ -1564,6 +1628,90 @@ pub(super) fn validate_current(function: &Function) -> Result<(), String> {
 
 pub(super) use control_flow::sequence_transition;
 
+/// Readonly selection from the protected original graph and exact current
+/// occurrence/header. None of these queries constructs invocation or custody.
+pub fn native_graph_storage_has_records(function: &Function, types: &TypeInterner) -> bool {
+    function
+        .resource_lowering
+        .as_ref()
+        .is_some_and(|parent| graph_metadata::has_records(parent, function, types))
+}
+pub fn native_graph_storage_for_expression(
+    function: &Function,
+    types: &TypeInterner,
+    value: &Expression,
+) -> Option<GraphStorageProof> {
+    graph_metadata::storage_for_expression(
+        function.resource_lowering.as_ref()?,
+        function,
+        types,
+        value,
+    )
+}
+pub fn native_graph_storage_for_constructor(
+    function: &Function,
+    types: &TypeInterner,
+    node: &ResourceConstructorNode,
+) -> Option<GraphStorageProof> {
+    graph_metadata::storage_for_constructor(
+        function.resource_lowering.as_ref()?,
+        function,
+        types,
+        node,
+    )
+}
+pub fn native_graph_storage_for_local(
+    function: &Function,
+    types: &TypeInterner,
+    local: &Local,
+) -> Option<GraphStorageProof> {
+    graph_metadata::storage_for_local(function.resource_lowering.as_ref()?, function, types, local)
+}
+pub fn native_graph_storage_for_formal(
+    function: &Function,
+    types: &TypeInterner,
+    parameter: &Param,
+) -> Option<GraphStorageProof> {
+    graph_metadata::storage_for_formal(
+        function.resource_lowering.as_ref()?,
+        function,
+        types,
+        parameter,
+    )
+}
+pub fn native_graph_storage_for_return(
+    function: &Function,
+    types: &TypeInterner,
+) -> Option<GraphStorageProof> {
+    graph_metadata::storage_for_return(function.resource_lowering.as_ref()?, function, types)
+}
+pub fn native_graph_hook_projection(
+    function: &Function,
+    types: &TypeInterner,
+    value: &Expression,
+) -> Option<GraphHookProjectionProof> {
+    graph_metadata::projection_for_expression(
+        function.resource_lowering.as_ref()?,
+        function,
+        types,
+        value,
+    )
+}
+pub fn native_graph_source_edge(
+    function: &Function,
+    types: &TypeInterner,
+    value: &Expression,
+    parameter: usize,
+) -> Option<GraphSourceEdgeProof> {
+    graph_metadata::source_edge(
+        function.resource_lowering.as_ref()?,
+        function,
+        types,
+        value,
+        parameter,
+    )
+}
+
 /// Only the canonical unreachable-block deletion supplies this exact map.
 pub(super) fn remap_blocks(
     function: &mut Function,
@@ -1608,6 +1756,7 @@ pub(super) fn remap_blocks(
     lexical_borrows::remap_blocks(witness, map)?;
     reflected_fields::remap_blocks(witness, map)?;
     returned_descriptors::remap_blocks(&mut witness.descriptors, map)?;
+    graph_metadata::remap_blocks(&mut witness.graph_metadata, map)?;
     remap(&mut witness.entry);
     for block in &mut witness.blocks {
         remap(&mut block.id);
@@ -1679,6 +1828,7 @@ pub(super) fn remap_locals(
     named_callables::remap_locals(&mut witness.named_callables, &mut remap);
     reflected_fields::remap_locals(witness, &mut remap);
     returned_descriptors::remap_locals(&mut witness.descriptors, map, &mut remap);
+    graph_metadata::remap_locals(&mut witness.graph_metadata, map, &mut remap);
     for record in &mut witness.calls {
         let mut block = BasicBlock {
             id: BlockId(0),

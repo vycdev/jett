@@ -5,6 +5,7 @@ use hir::{ExpressionKind as E, StatementKind as H};
 pub(super) fn expression(value: &Expression, visit: &mut impl FnMut(&Expression)) {
     visit(value);
     match &value.kind {
+        E::ActorGraphImport(plan) => hir_block(plan.body(), visit),
         E::Binary { left, right, .. } => {
             expression(left, visit);
             expression(right, visit);
@@ -32,7 +33,8 @@ pub(super) fn expression(value: &Expression, visit: &mut impl FnMut(&Expression)
         E::Call { args, .. }
         | E::ResourceInvoke { args, .. }
         | E::Intrinsic { args, .. }
-        | E::ActorSpawn { args, .. } => {
+        | E::ActorSpawn { args, .. }
+        | E::ActorGraphStep { args, .. } => {
             for value in args {
                 expression(value, visit);
             }

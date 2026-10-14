@@ -68,6 +68,10 @@ STARTUP_SIGNATURES: dict[str, tuple[str, ...]] = {
     ),
 }
 STARTUP_EXPORTS = frozenset(STARTUP_SIGNATURES)
+GRAPH_DESCRIPTOR_EXPORT = "jett_rt_v1_resource_graph_descriptor_box"
+GRAPH_DESCRIPTOR_SIGNATURE = (
+    "*const JettRuntimeContextV1", "u64", "u32", "u64", "*mut u64",
+)
 PIN_ENV = "JETT_RESOURCE_NATIVE_TEST_ARCHIVE_EXPECTED_SHA256_V1"
 RECEIPT_ENV = "JETT_RESOURCE_NATIVE_TEST_ARCHIVE_RECEIPT_V1"
 TEST = ("resource_execution::"
@@ -524,25 +528,70 @@ def startup_exports(directory: Path) -> set[str]:
     return set(names)
 
 
+def graph_descriptor_export(directory: Path) -> set[str]:
+    owner, child = directory.with_suffix(".rs"), directory / "graph_descriptors.rs"
+    require(owner.is_file() and child.is_file(), "checked graph descriptor proof module is required")
+    owner_text = owner.read_text(encoding="utf-8")
+    module_pattern = r'(?m)^[ \t]*((?:#\[[^\n]*\][ \t]*\n[ \t]*)*)mod[ \t]+graph_descriptors[ \t]*;'
+    require(len(re.findall(r"\bmod\s+graph_descriptors\b", owner_text)) == 1
+            and re.findall(module_pattern, owner_text) == [""],
+            "checked graph descriptor must have one unconditional canonical private module")
+    proof_text = child.read_text(encoding="utf-8")
+    require("#![" not in proof_text, "checked graph descriptor proof module cannot be conditional")
+    proof_pattern = (r'(?m)^[ \t]*((?:#\[[^\n]*\][ \t]*\n[ \t]*)*)'
+                     r'pub\(in crate::native_abi\) struct CheckedGraphHookProof\s*\{([^}]*)\}')
+    proof = re.findall(proof_pattern, proof_text)
+    require(len(proof) == len(re.findall(r"\bstruct\s+CheckedGraphHookProof\b", proof_text)) == 1
+            and proof[0][0].strip() == "#[derive(Clone)]",
+            "checked graph descriptor proof must retain its unconditional private metadata owner")
+    fields = [" ".join(field.split()) for field in proof[0][1].split(",") if field.strip()]
+    require(fields == ["context: ContextRegistryKey", "program: ResourceHandleId",
+                       "layout: Arc<RegisteredNativeLayout>", "descriptor: ResourceHandleId",
+                       "descriptor_operation: u32", "hook: u32", "signature: u32"],
+            "checked graph descriptor proof cannot acquire Scope, grant or owner fields")
+    pattern = (r'(?m)^[ \t]*((?:#\[[^\n]*\][ \t]*\n[ \t]*)*)'
+               r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+(jett_rt_v1_resource_graph_descriptor_box)'
+               r'\s*\(([^)]*)\)\s*->\s*([A-Za-z_][A-Za-z0-9_]*)\s*\{')
+    declarations = re.findall(pattern, (directory / "leaves.rs").read_text(encoding="utf-8"))
+    require(len(declarations) == 1, "one exact canonical graph descriptor export is required")
+    attributes, name, parameters, result = declarations[0]
+    require(name == GRAPH_DESCRIPTOR_EXPORT and attributes.strip() == "#[unsafe(no_mangle)]",
+            "checked graph descriptor export must be unconditional and unmangled")
+    types: list[str] = []
+    for parameter in parameters.split(","):
+        if not parameter.strip():
+            continue
+        parts = parameter.split(":", 1)
+        require(len(parts) == 2, "invalid checked graph descriptor parameter")
+        types.append(" ".join(parts[1].split()))
+    require(tuple(types) == GRAPH_DESCRIPTOR_SIGNATURE and result == "JettRuntimeStatusV1",
+            "checked graph descriptor C signature differs")
+    return {name}
+
+
 def export_names(repo: Path) -> tuple[set[str], set[str]]:
     directory = repo / "crates/jett_runtime/src/native_abi/resource"
     pattern = r'pub unsafe extern "C" fn (jett_rt_v1_resource_[a-z_]+)\('
     leaves = re.findall(pattern, (directory / "leaves.rs").read_text(encoding="utf-8"))
     carriers: list[str] = re.findall(pattern, (directory / "leaves/carriers.rs").read_text(encoding="utf-8"))
     private = re.findall(pattern, (directory / "test_archive_api.rs").read_text(encoding="utf-8"))
-    require(len(leaves) == len(set(leaves)) == 37, "frozen Resource leaf contract must contain 37 names")
+    graph = graph_descriptor_export(directory)
+    legacy = [name for name in leaves if name not in graph]
+    require(len(leaves) == len(set(leaves)) == 38 and len(legacy) == len(set(legacy)) == 37,
+            "frozen Resource leaf contract must contain 37 original names and one exact graph descriptor")
     require(not set(leaves) & CARRIER_EXPORTS, "carrier exports must occur only in their declared child module")
     require(len(carriers) == len(set(carriers)) == 13 and set(carriers) == set(CARRIER_EXPORTS),
             "frozen carrier leaf contract must contain the exact 13 names")
     require(len(private) == len(set(private)) == 8, "frozen private test contract must contain eight names")
     require(all(name.startswith("jett_rt_v1_resource_test_") for name in private),
             "unexpected private export name")
-    require(len(set(leaves) | set(carriers)) == 50, "current Resource contract must contain 50 names")
+    require(len(set(legacy) | set(carriers)) == 50, "original Resource contract must retain 50 names")
+    require(len(set(leaves) | set(carriers)) == 51, "graph Resource contract must contain exactly 51 names")
     startup = startup_exports(directory)
     require(not startup & (set(leaves) | set(carriers) | set(private)),
             "Resource startup exports belong only to their canonical child module")
     production = set(leaves) | set(carriers) | startup
-    require(len(production) == 55, "fifty-five production Resource exports are required")
+    require(len(production) == 56, "fifty-six production Resource exports are required")
     return production, set(private)
 
 

@@ -96,15 +96,29 @@ pub(super) fn consuming_list(
     by_view: bool,
     iterable: &Expression,
 ) -> Result<TypeId, String> {
-    ordinary_type(types, iterable.ty)?;
+    let graph = crate::native_graph_storage_for_expression(function, types, iterable).is_some();
+    if !graph {
+        ordinary_type(types, iterable.ty)?;
+    }
     let Type::List(element) = types.resolve(iterable.ty) else {
         return Err("pending ResourceOwnershipPlan: this iterator needs its dedicated ordinary sequence normalization".into());
     };
-    ordinary_type(types, *element)?;
+    if !graph {
+        ordinary_type(types, *element)?;
+    }
     if by_view || value.is_some() || *element == TypeInterner::NEVER {
         return Err("pending ResourceOwnershipPlan: borrowed or uninhabited iteration needs its exact sequence transport".into());
     }
-    let binding = header(function, types, key)?;
+    let binding = function
+        .local(key)
+        .ok_or("Resource iterator lost its exact binder")?;
+    if graph {
+        if crate::native_graph_storage_for_local(function, types, binding).is_none() {
+            return Err("graph iterator lost its exact protected element binder".into());
+        }
+    } else {
+        ordinary_type(types, binding.ty)?;
+    }
     if binding.ty != *element || binding.view_source.is_some() {
         return Err("Resource consuming iterator changed its exact ordinary element binder".into());
     }
@@ -133,6 +147,47 @@ fn carrier_binding(
     }
     Ok(())
 }
+/// Ordinary metadata iteration requires both the protected whole collection
+/// occurrence and each nonordinary element binder. It grants no carrier custody.
+pub(super) fn graph_sequence(
+    function: &Function,
+    types: &TypeInterner,
+    key: LocalId,
+    value: Option<LocalId>,
+    by_view: bool,
+    iterable: &Expression,
+) -> Result<(), String> {
+    if crate::native_graph_storage_for_expression(function, types, iterable).is_none()
+        || by_view
+        || matches!(&iterable.kind, E::View(_) | E::Field { .. })
+        || matches!(&iterable.kind, E::Local(local) if function.is_view_local(*local))
+    {
+        return Err("graph iterator lost its exact protected owning collection".into());
+    }
+    let bindings = match types.resolve(iterable.ty) {
+        Type::List(element) if value.is_none() => vec![(key, *element)],
+        Type::Map(key_ty, value_ty) => vec![
+            (key, *key_ty),
+            (
+                value.ok_or("graph map iterator needs both exact binders")?,
+                *value_ty,
+            ),
+        ],
+        _ => return Err("graph iterator needs its exact list/map transport".into()),
+    };
+    for (id, ty) in bindings {
+        carrier_binding(function, types, id, ty)?;
+        if ordinary_type(types, ty).is_err()
+            && function.local(id).is_none_or(|header| {
+                crate::native_graph_storage_for_local(function, types, header).is_none()
+            })
+        {
+            return Err("graph iterator lost its exact protected component binder".into());
+        }
+    }
+    Ok(())
+}
+
 /// Validate only the exact typed consuming iterator. This creates no carrier,
 /// owner, lease or absence proof; the independent carrier planner supplies them.
 pub(super) fn carrier_sequence(
@@ -243,12 +298,38 @@ fn sequence_element(
                 .into(),
         );
     };
-    let source = header(function, types, *local)?;
+    let source = function
+        .local(*local)
+        .ok_or("Resource sequence source header is missing")?;
+    let graph = crate::native_graph_storage_for_local(function, types, source).is_some();
+    if !graph {
+        ordinary_type(types, source.ty)?;
+    }
     let Type::List(element) = types.resolve(source.ty) else {
         return Err("Resource sequence statement changed its exact ordinary list source".into());
     };
-    ordinary_type(types, *element)?;
+    if !graph {
+        ordinary_type(types, *element)?;
+    }
     Ok(*element)
+}
+fn graph_sequence_part(
+    function: &Function,
+    types: &TypeInterner,
+    source: &SequenceSource,
+    part: Option<SequencePart>,
+) -> Option<TypeId> {
+    let SequenceSource::Local(id) = source else {
+        return None;
+    };
+    let header = function.local(*id)?;
+    crate::native_graph_storage_for_local(function, types, header)?;
+    match (types.resolve(header.ty), part) {
+        (Type::List(element), None | Some(SequencePart::Element)) => Some(*element),
+        (Type::Map(key, _), None | Some(SequencePart::Key)) => Some(*key),
+        (Type::Map(_, value), Some(SequencePart::Value)) => Some(*value),
+        _ => None,
+    }
 }
 pub(super) fn sequence_length(
     function: &Function,
@@ -256,7 +337,9 @@ pub(super) fn sequence_length(
     source: &SequenceSource,
     target: LocalId,
 ) -> Result<(), String> {
-    sequence_element(function, types, source)?;
+    if graph_sequence_part(function, types, source, None).is_none() {
+        sequence_element(function, types, source)?;
+    }
     if header(function, types, target)?.ty != TypeInterner::INT64 {
         return Err("Resource sequence length changed its ordinary integer destination".into());
     }
@@ -271,11 +354,29 @@ pub(super) fn sequence_get(
     target: LocalId,
     part: SequencePart,
 ) -> Result<(), String> {
+    if let Some(element) = graph_sequence_part(function, types, source, Some(part)) {
+        let binding = function
+            .local(target)
+            .ok_or("graph sequence lost its exact element destination")?;
+        if !consume
+            || binding.ty != element
+            || header(function, types, index)?.ty != TypeInterner::INT64
+            || (ordinary_type(types, element).is_err()
+                && crate::native_graph_storage_for_local(function, types, binding).is_none())
+        {
+            return Err("graph sequence changed its exact owning component extraction".into());
+        }
+        return Ok(());
+    }
     let element = sequence_element(function, types, source)?;
     if !consume
         || part != SequencePart::Element
         || header(function, types, index)?.ty != TypeInterner::INT64
-        || header(function, types, target)?.ty != element
+        || function.local(target).is_none_or(|binding| {
+            binding.ty != element
+                || (crate::native_graph_storage_for_local(function, types, binding).is_none()
+                    && ordinary_type(types, binding.ty).is_err())
+        })
     {
         return Err(
             "Resource consuming sequence changed its exact ordinary element extraction".into(),
@@ -330,7 +431,9 @@ fn canonical_sequence(
     if iterable.ty.index() as usize >= types.len() {
         return Err("Resource sequence transition lost its exact iterable type".into());
     }
-    if resource_type_pending(types, iterable.ty)
+    if crate::native_graph_storage_for_expression(before, types, iterable).is_some() {
+        graph_sequence(before, types, *key, *value_binding, *by_view, iterable)?;
+    } else if resource_type_pending(types, iterable.ty)
         || matches!(types.resolve(iterable.ty), Type::Map(..))
     {
         carrier_sequence(before, types, *key, *value_binding, *by_view, iterable)?;
@@ -527,7 +630,11 @@ pub(crate) fn sequence_transition(
     {
         return Err("Resource sequence transition changed its exact before-witness".into());
     }
-    if !has_execution_records(before, types) && !original.reflected_fields.is_empty() {
+    if !has_execution_records(before, types)
+        && !original.graph_metadata.needed()
+        && (!original.reflected_fields.is_empty()
+            || entry_scope::capture_needed(&original.original, &original.source))
+    {
         return reflected_fields::ordinary_sequence_transition(function, before, edit, types);
     }
     let (expected, body, prefix_length) = canonical_sequence(before, edit, types)?;
@@ -567,6 +674,7 @@ pub(crate) fn sequence_transition(
     if original.descriptors.has_body() {
         witness.descriptors.seal_body(&expected);
     }
+    graph_metadata::sequence_transition(&mut witness.graph_metadata, before, &expected, edit)?;
     witness.current(function)?;
     function.resource_lowering = Some(witness);
     Ok(())

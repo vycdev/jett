@@ -1,0 +1,17 @@
+namespace app
+actor Counter:
+    mutable int64 count = 3
+    receive read responds int64:
+        respond count
+function create() returns map[string, Counter]:
+    Counter worker = spawn Counter()
+    mutable map[string, Counter] entries = map.new[string, Counter]()
+    entries = map.set[string, Counter](entries, "first", clone worker)
+    entries = map.set[string, Counter](entries, "second", worker)
+    return entries
+function main() returns nothing:
+    map[string, Counter] entries = comptime create()
+    list[Counter] workers = map.values[string, Counter](entries)
+    for worker in workers:
+        println(ask worker.read)
+    return nothing

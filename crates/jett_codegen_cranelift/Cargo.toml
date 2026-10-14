@@ -11,6 +11,7 @@ cranelift-frontend.workspace = true
 cranelift-module.workspace = true
 cranelift-object.workspace = true
 jett_common.workspace = true
+jett_comptime.workspace = true
 jett_hir.workspace = true
 jett_mir.workspace = true
 jett_types.workspace = true
@@ -19,7 +20,6 @@ sha2.workspace = true
 target-lexicon.workspace = true
 
 [dev-dependencies]
-jett_comptime.workspace = true
 jett_diagnostics.workspace = true
 jett_parser.workspace = true
 jett_resolve.workspace = true

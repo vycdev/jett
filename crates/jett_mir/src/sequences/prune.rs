@@ -74,6 +74,9 @@ pub(crate) fn unused_locals(function: &mut Function) -> bool {
     if crate::resource_ownership::constructors::validate_nodes(function).is_err() {
         return false;
     }
+    if crate::actor_graph::has_records(function) {
+        return true;
+    }
     let before = (!function.breakpoint_regions.is_empty()
         || crate::call_owner_generations::has_records(function)
         || crate::resource_ownership::has_records(function)
@@ -392,6 +395,8 @@ fn expression(
         }
     }
     match &mut value.kind {
+        // This immutable plan cannot be remapped by a generic local visitor.
+        ExpressionKind::ActorGraphImport(_) => {}
         ExpressionKind::Local(local) => visit(local),
         ExpressionKind::ClosureRef { captures, .. } => {
             for capture in captures {
@@ -427,6 +432,7 @@ fn expression(
         | ExpressionKind::ResourceInvoke { args, .. }
         | ExpressionKind::Intrinsic { args, .. }
         | ExpressionKind::ActorSpawn { args, .. }
+        | ExpressionKind::ActorGraphStep { args, .. }
         | ExpressionKind::StructConstruct { fields: args, .. }
         | ExpressionKind::BitfieldConstruct { fields: args, .. }
         | ExpressionKind::MachineConstruct { payloads: args, .. }

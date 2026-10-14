@@ -34,7 +34,9 @@ pub(super) struct ResourceEmission<'a> {
     pub(super) position: jett_mir::ResourcePosition,
 }
 impl<'a> ResourceEmission<'a> {
-    fn function_plan(self) -> Result<&'a jett_mir::ResourceFunctionPlan, CodegenError> {
+    pub(in crate::emit) fn function_plan(
+        self,
+    ) -> Result<&'a jett_mir::ResourceFunctionPlan, CodegenError> {
         self.layout
             .plan()
             .function(self.function)
@@ -51,7 +53,10 @@ impl<'a> ResourceEmission<'a> {
             })
             .collect())
     }
-    fn ordinal(self, operation: &jett_mir::ResourceOperation) -> Result<u32, CodegenError> {
+    pub(in crate::emit) fn ordinal(
+        self,
+        operation: &jett_mir::ResourceOperation,
+    ) -> Result<u32, CodegenError> {
         self.layout
             .operation(self.function, operation.id())
             .ok_or_else(|| pending("native operation has no exact installed row"))
@@ -204,7 +209,7 @@ pub(super) fn emit(
             .function(function.id)
             .is_some()
             .then_some(&layout);
-        translate_function_inner(
+        translate_function_with_storage(
             &mut module,
             &declarations,
             program,
@@ -213,6 +218,7 @@ pub(super) fn emit(
             &declaration.symbol,
             &mut context,
             selected,
+            Some(layout.plan()),
         )?;
         module
             .define_function(declaration.native_id, &mut context)
@@ -1381,6 +1387,15 @@ impl Translator<'_, '_> {
         if self.resource_is_hook_descriptor(expression)? {
             return self.resource_hook_value(expression, &operations).map(Some);
         }
+        // Current constructor lowering can replace a protected original aggregate
+        // with an exact Commit Local. Its fresh physical expression proof keeps
+        // ordinary ownership transport; Source type alone never selects it.
+        if jett_mir::native_graph_storage_for_expression(self.function, self.types, expression)
+            .is_some()
+            || jett_mir::native_graph_metadata_expression(self.function, self.types, expression)
+        {
+            return Ok(None);
+        }
         if self.resource_is_named_value(expression)?
             || !resource.layout.plan().type_requires_custody(expression.ty)
         {
@@ -1516,6 +1531,14 @@ impl Translator<'_, '_> {
         let Some(resource) = self.resource else {
             return Ok(false);
         };
+        if let StatementKind::Let { local, .. } = &statement.kind
+            && self.function.local(*local).is_some_and(|header| {
+                jett_mir::native_graph_storage_for_local(self.function, self.types, header)
+                    .is_some()
+            })
+        {
+            return Ok(false);
+        }
         if self.carrier_statement(statement)? {
             return Ok(true);
         }

@@ -8,6 +8,9 @@ mod tests;
 /// Enclosing functions lose only unused local slots, preserving every block.
 /// Capture and ordinary parameter order remain the existing callable ABI.
 pub fn prepare_native_generated_functions(program: &mut Program, types: &TypeInterner) {
+    if crate::actor_graph::validate_native_actor_graphs(program).is_err() {
+        return;
+    }
     if validate_call_ownership(program, types).is_err() {
         return;
     }
@@ -21,5 +24,8 @@ pub fn prepare_native_generated_functions(program: &mut Program, types: &TypeInt
         if crate::reflected_callable::prepared(function, &before).is_err() {
             *function = before;
         }
+    }
+    for function in &mut program.functions {
+        crate::actor_graph::refresh(function);
     }
 }

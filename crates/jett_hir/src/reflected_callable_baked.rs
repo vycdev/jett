@@ -47,11 +47,15 @@ pub fn materialize_checked_reflected_values(
         .first()
         .map_or(Span::new(FileId::new(0), 0, 0), |function| function.span);
     let result = (|| -> Result<Program, String> {
-        if !has_reflected_callable_plans(program) || !program.resource_manifest.kinds().is_empty() {
+        if program.resource_source.checked_program().is_none()
+            || !program.resource_manifest.kinds().is_empty()
+        {
             return Err(
-                "reflected required transition has no ordinary checked adapter owner".into(),
+                "ordinary required transition has no retained checked ordinary archive".into(),
             );
         }
+        super::super::actor_graph::validate_conversion_input(program)
+            .map_err(|errors| format!("invalid protected Graph input: {errors:?}"))?;
         super::validate_program(program)
             .map_err(|errors| format!("invalid original reflected owner: {errors:?}"))?;
         program.resource_source.validate_types(types)?;
@@ -60,9 +64,17 @@ pub fn materialize_checked_reflected_values(
             .checked_program()
             .ok_or("reflected required transition lacks original checked Source")?
             .clone();
+        // The private Graph witness authenticates the entire derived table,
+        // including appended adapters. Original Source still compares exactly.
+        let source_count = if program.resource_source.graph_values.is_some() {
+            program.resource_source.functions().len()
+        } else {
+            program.functions.len()
+        };
         let original = program
             .functions
             .iter()
+            .take(source_count)
             .map(|function| super::original_function(function, &program.resource_source, &checked))
             .collect::<Result<Vec<_>, _>>()?;
         if !equal(&original, program.resource_source.functions()) {
@@ -136,11 +148,33 @@ pub fn materialize_checked_reflected_values(
                 || bindings.iter().any(|statement| !matches!(statement.kind, StatementKind::Let { local, .. } if used.contains(&local)))
             { return Err("required materializer added an unauthenticated local or statement".into()); }
         }
+        // Every ordinary replacement and added local has passed the existing
+        // private value matcher above. Renew Graph custody at this fixed boundary
+        // before installing the corresponding reflected transition.
+        super::super::actor_graph::complete_conversion(&mut candidate, program)
+            .map_err(|errors| format!("invalid combined Graph transition: {errors:?}"))?;
         candidate.resource_source.reflected_values = Some(Arc::new(Transition {
             checked,
             original,
             current: candidate.functions.clone(),
         }));
+        if program
+            .resource_source
+            .required_materializations()
+            .iter()
+            .any(|row| row.proof.actor_graph().is_some())
+        {
+            candidate
+                .resource_source
+                .install_materialized(crate::resource_source::Materialized {
+                    functions: candidate.functions.clone(),
+                    values: program.resource_source.required_materializations().to_vec(),
+                    required_only: program
+                        .resource_source
+                        .required_only_function_ids()
+                        .to_vec(),
+                });
+        }
         Ok(candidate)
     })();
     match result {

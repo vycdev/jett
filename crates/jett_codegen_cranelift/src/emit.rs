@@ -1,4 +1,6 @@
+mod actor_graph;
 pub(crate) mod debug;
+mod graph_constructors;
 mod graphics;
 pub(super) mod ordinary_borrowed_sums;
 mod resource_execution;
@@ -31,7 +33,8 @@ use target_lexicon::{HOST, Triple};
 
 use crate::CodegenError;
 use crate::verify::{
-    ScalarKind, VerifiedProgram, known_unit_enum_variant, scalar_kind, verify_program,
+    ScalarKind, VerifiedProgram, known_unit_enum_variant, native_storage_kind, scalar_kind,
+    verify_program,
 };
 
 /// One emitted target object and its deterministic defined symbol table.
@@ -232,13 +235,25 @@ fn emit_for_triple(
             },
         )?;
     }
-    crate::verify::verify_descriptor_bodies(program, types)?;
+    // Graph imports can require protected ordinary storage even when their
+    // manifest has no Resource kinds. This plan supplies storage evidence only;
+    // the ordinary path still emits no Resource layout or hidden Scope.
+    let original_storage = graph_storage_plan(program, types)?;
+    if let Some(plan) = original_storage.as_ref() {
+        crate::verify::verify_resource_descriptor_bodies(plan)?;
+    } else {
+        crate::verify::verify_descriptor_bodies(program, types)?;
+    }
     let mut prepared = program.clone();
     jett_mir::prepare_native_sequences(&mut prepared, types);
     jett_mir::prepare_native_uninhabited_sums(&mut prepared, types);
     jett_mir::prepare_native_generated_functions(&mut prepared, types);
     let program = &prepared;
-    let verified = verify_program(program, types)?;
+    let storage = graph_storage_plan(program, types)?;
+    let verified = match storage.as_ref() {
+        Some(plan) => crate::verify::verify_resource_program(plan)?,
+        None => verify_program(program, types)?,
+    };
     if let Some(entry) = entry
         && verified.get(entry).is_none()
     {
@@ -275,7 +290,7 @@ fn emit_for_triple(
         let function = program_function(program, declaration.mir_id)?;
         let mut context = module.make_context();
         context.func.signature = declaration.signature.clone();
-        translate_function(
+        translate_function_with_storage(
             &mut module,
             &declarations,
             program,
@@ -283,6 +298,8 @@ fn emit_for_triple(
             types,
             &declaration.symbol,
             &mut context,
+            None,
+            storage.as_ref(),
         )?;
         module
             .define_function(declaration.native_id, &mut context)
@@ -311,6 +328,22 @@ fn emit_for_triple(
         symbols,
         bytes,
     })
+}
+
+fn graph_storage_plan<'p>(
+    program: &'p Program,
+    types: &'p TypeInterner,
+) -> Result<Option<jett_mir::ResourceOwnershipPlan<'p>>, CodegenError> {
+    if !program
+        .functions
+        .iter()
+        .any(|function| jett_mir::native_graph_storage_has_records(function, types))
+    {
+        return Ok(None);
+    }
+    jett_mir::validate_resource_ownership(program, types)
+        .map(Some)
+        .map_err(CodegenError::InvalidMir)
 }
 
 fn declare_reachable_functions(
@@ -576,7 +609,7 @@ fn signature(
 
 fn is_task_scalar(types: &TypeInterner, ty: TypeId) -> Result<bool, CodegenError> {
     Ok(matches!(
-        scalar_kind(types, ty, "primitive task value")?,
+        native_storage_kind(types, ty, "primitive task value")?,
         ScalarKind::SignedInteger(_)
             | ScalarKind::UnsignedInteger(_)
             | ScalarKind::Float(_)
@@ -589,7 +622,7 @@ fn task_scalar_debug_kind(
     ty: TypeId,
 ) -> Result<Option<NativeSortKind>, CodegenError> {
     Ok(Some(
-        match scalar_kind(types, ty, "primitive task value")? {
+        match native_storage_kind(types, ty, "primitive task value")? {
             ScalarKind::SignedInteger(8) => NativeSortKind::Int8,
             ScalarKind::SignedInteger(16) => NativeSortKind::Int16,
             ScalarKind::SignedInteger(32) => NativeSortKind::Int32,
@@ -629,7 +662,7 @@ fn clif_type(
     ty: TypeId,
     context: &str,
 ) -> Result<Option<ir::Type>, CodegenError> {
-    let ty = match scalar_kind(types, ty, context)? {
+    let ty = match native_storage_kind(types, ty, context)? {
         ScalarKind::SignedInteger(8) | ScalarKind::UnsignedInteger(8) | ScalarKind::Bool => {
             Some(ir::types::I8)
         }
@@ -775,6 +808,32 @@ fn translate_function_inner(
     context: &mut Context,
     resource_layout: Option<&resource_layout::EmittedResourceLayout<'_>>,
 ) -> Result<(), CodegenError> {
+    translate_function_with_storage(
+        module,
+        declarations,
+        program,
+        function,
+        types,
+        symbol,
+        context,
+        resource_layout,
+        resource_layout.map(|layout| layout.plan()),
+    )
+}
+
+/// A proof-only graph storage companion retains the whole immutable plan without
+/// adding the hidden Scope or Resource calling convention to an ordinary body.
+fn translate_function_with_storage(
+    module: &mut ObjectModule,
+    declarations: &DeclaredFunctions,
+    program: &Program,
+    function: &Function,
+    types: &TypeInterner,
+    symbol: &str,
+    context: &mut Context,
+    resource_layout: Option<&resource_layout::EmittedResourceLayout<'_>>,
+    storage_plan: Option<&jett_mir::ResourceOwnershipPlan<'_>>,
+) -> Result<(), CodegenError> {
     if crate::verify::descriptor_only_function(function) {
         let mut builder_context = FunctionBuilderContext::new();
         let mut builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
@@ -799,8 +858,12 @@ fn translate_function_inner(
 
     let runtime_context = builder.declare_var(module.target_config().pointer_type());
     let environment_variable = builder.declare_var(ir::types::I64);
-    let companion = resource_layout
-        .map(|layout| jett_mir::ResourceCompanionPlan::analyze(layout.plan(), function.id))
+    let companion = storage_plan
+        .filter(|plan| {
+            plan.function(function.id).is_some()
+                || jett_mir::native_graph_storage_has_records(function, types)
+        })
+        .map(|plan| jett_mir::ResourceCompanionPlan::analyze(plan, function.id))
         .transpose()
         .map_err(|message| contract_error(symbol, function.span, message))?;
     let ordinary_acquisitions = if companion.is_none() {
@@ -861,6 +924,7 @@ fn translate_function_inner(
             ))
         })
         .collect::<Vec<_>>();
+    let graph_constructor_slots = graph_constructors::storage(function, types, &mut builder)?;
     let mut generation_slots = Vec::new();
     let mut generation_ids = std::collections::BTreeSet::new();
     let mut escrow_ids = std::collections::BTreeSet::new();
@@ -1032,6 +1096,9 @@ fn translate_function_inner(
             for slot in local_slots.iter().flatten().chain(&temporary_slots) {
                 builder.ins().stack_store(zero, *slot, 0);
             }
+            for storage in &graph_constructor_slots {
+                builder.ins().stack_store(zero, storage.slot, 0);
+            }
             for storage in &generation_slots {
                 builder.ins().stack_store(zero, storage.owner_slot, 0);
                 builder.ins().stack_store(zero, storage.retired_slot, 0);
@@ -1081,6 +1148,7 @@ fn translate_function_inner(
             local_slots: &local_slots,
             temporary_slots: &temporary_slots,
             generation_slots: &generation_slots,
+            graph_constructor_slots: &graph_constructor_slots,
             next_temporary: 0,
             failure_block,
             resource: None,
@@ -1314,6 +1382,7 @@ fn translate_function_inner(
         local_slots: &local_slots,
         temporary_slots: &temporary_slots,
         generation_slots: &generation_slots,
+        graph_constructor_slots: &graph_constructor_slots,
         next_temporary: temporary_slots.len(),
         failure_block,
         resource: None,
@@ -1397,6 +1466,7 @@ struct Translator<'a, 'builder> {
     local_slots: &'a [Option<ir::StackSlot>],
     temporary_slots: &'a [ir::StackSlot],
     generation_slots: &'a [NativeCallGenerationStorage],
+    graph_constructor_slots: &'a [graph_constructors::Storage],
     next_temporary: usize,
     failure_block: ir::Block,
     resource: Option<resource_execution::ResourceEmission<'a>>,
@@ -1410,6 +1480,9 @@ impl Translator<'_, '_> {
         statement: &Statement,
     ) -> Result<(), CodegenError> {
         if self.ordinary_borrowed_sum_statement(block, index, statement)? {
+            return Ok(());
+        }
+        if self.graph_constructor_statement(statement)? {
             return Ok(());
         }
         if self.resource_statement(statement)? {
@@ -2160,7 +2233,7 @@ impl Translator<'_, '_> {
         let kind = if self.resource_is_named_value(expression)? {
             ScalarKind::Function
         } else {
-            scalar_kind(self.types, expression.ty, "native expression")?
+            native_storage_kind(self.types, expression.ty, "native expression")?
         };
         match &expression.kind {
             ExpressionKind::ResourceHookValue { .. } | ExpressionKind::ResourceInvoke { .. } => {
@@ -2351,7 +2424,7 @@ impl Translator<'_, '_> {
                 Ok(LoweredValue::Scalar(value))
             }
             ExpressionKind::Binary { left, op, right } => {
-                let operand_kind = scalar_kind(self.types, left.ty, "binary operand")?;
+                let operand_kind = native_storage_kind(self.types, left.ty, "binary operand")?;
                 let enum_equality = operand_kind == ScalarKind::Enum
                     && matches!(op, BinaryOp::Equal | BinaryOp::NotEqual);
                 let lowered_left = self.argument(left, enum_equality)?;
@@ -2431,7 +2504,11 @@ impl Translator<'_, '_> {
                         let aggregate = variants.iter().flat_map(|variant| &variant.fields).any(
                             |(_, field_ty)| {
                                 !matches!(
-                                    scalar_kind(self.types, *field_ty, "enum equality payload"),
+                                    native_storage_kind(
+                                        self.types,
+                                        *field_ty,
+                                        "enum equality payload"
+                                    ),
                                     Ok(ScalarKind::SignedInteger(_)
                                         | ScalarKind::UnsignedInteger(_)
                                         | ScalarKind::Float(32 | 64)
@@ -2476,7 +2553,7 @@ impl Translator<'_, '_> {
                                 })?;
                                 layout.extend_from_slice(&count.to_le_bytes());
                                 for (_, field_ty) in &variant.fields {
-                                    let kind = match scalar_kind(
+                                    let kind = match native_storage_kind(
                                         self.types,
                                         *field_ty,
                                         "enum equality payload",
@@ -2777,7 +2854,7 @@ impl Translator<'_, '_> {
             ExpressionKind::Run(value) => {
                 let lowered = self.expression(value)?;
                 let representation = representation_type(self.types, value.ty);
-                if scalar_kind(self.types, value.ty, "task value")? == ScalarKind::Nothing {
+                if native_storage_kind(self.types, value.ty, "task value")? == ScalarKind::Nothing {
                     let depth = self.scalar(lowered, value.span)?;
                     let depth = self.leaf(NativeLeaf::NothingRun, &[depth], true)?;
                     Ok(LoweredValue::Scalar(depth))
@@ -2841,7 +2918,7 @@ impl Translator<'_, '_> {
             ExpressionKind::Join(value) => {
                 let result = self.expression(value)?;
                 let representation = representation_type(self.types, value.ty);
-                if scalar_kind(self.types, value.ty, "task value")? == ScalarKind::Nothing {
+                if native_storage_kind(self.types, value.ty, "task value")? == ScalarKind::Nothing {
                     let depth = self.scalar(result, value.span)?;
                     let joined = self.leaf(NativeLeaf::NothingJoin, &[depth], true)?;
                     self.own_linear(joined)
@@ -2930,6 +3007,12 @@ impl Translator<'_, '_> {
             }
             ExpressionKind::InlineFunction { .. } => {
                 Err(self.unsupported(expression.span, "inline function"))
+            }
+            ExpressionKind::ActorGraphImport(_) => {
+                Err(self.unsupported(expression.span, "unexpanded actor graph import"))
+            }
+            ExpressionKind::ActorGraphStep { instruction, args } => {
+                self.actor_graph_step(instruction, args, expression)
             }
             ExpressionKind::ActorSpawn {
                 args,

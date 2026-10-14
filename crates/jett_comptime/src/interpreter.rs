@@ -50,6 +50,7 @@ use jett_types::{
 use crate::debug::{DebugEvent, DebugEventKind};
 use crate::value::{ClosureScopedTypeBinding, ClosureTypeArgument, ClosureTypeContext, Value};
 
+pub mod actor_graph;
 mod debug;
 mod generic_inference;
 mod graphics;
@@ -2763,16 +2764,32 @@ impl Interpreter {
                                 .checked
                                 .original_comptime_key(expr)
                                 .map_err(|error| error.to_string())?;
-                            return values.checked_get(&identity).cloned().map(ExprFlow::Value)
-                                .ok_or_else(|| "explicit comptime expression has no exact checked original value".to_string());
+                            let value = values.checked_get(&identity).cloned()
+                                .ok_or_else(|| "explicit comptime expression has no exact checked original value".to_string())?;
+                            let graph = values.checked_actor_graph(&identity).cloned();
+                            return graph
+                                .as_deref()
+                                .map_or(Ok(value), |graph| self.instantiate_actor_graph(graph))
+                                .map(ExprFlow::Value);
                         }
                     }
                     let mut context = crate::ComptimeContext::from_checked(
                         self.active_checked_function.as_deref(),
                     );
                     context.scoped_type_bindings = self.scoped_type_bindings.clone();
-                    return values.get(*span, &context).cloned().map(ExprFlow::Value)
-                        .ok_or_else(|| "explicit comptime expression has no evaluated value for its checked type context".into());
+                    let value = values.get(*span, &context).cloned()
+                        .ok_or_else(|| "explicit comptime expression has no evaluated value for its checked type context".to_string())?;
+                    let graph = values.actor_graph(*span, &context).cloned();
+                    if graph.is_none() && actor_graph::contains_actor(&value) {
+                        return Err(
+                            "explicit comptime actor value has no private checked frozen graph"
+                                .into(),
+                        );
+                    }
+                    return graph
+                        .as_deref()
+                        .map_or(Ok(value), |graph| self.instantiate_actor_graph(graph))
+                        .map(ExprFlow::Value);
                 }
                 self.eval_expr_flow(inner)
             }
@@ -3111,6 +3128,18 @@ impl Interpreter {
             .ok_or_else(|| format!("unknown actor type '{actor_name}'"))?
             .clone();
 
+        let checked_initializers = self
+            .resource_transport
+            .as_ref()
+            .filter(|transport| transport.checked_source_active)
+            .map(|transport| {
+                transport
+                    .checked
+                    .prepare_actor_initializers(&actor_def)
+                    .map_err(|error| error.to_string())
+            })
+            .transpose()?;
+
         // Evaluate capability args.
         let mut capabilities = HashMap::new();
         let parameter_indices =
@@ -3138,8 +3167,18 @@ impl Interpreter {
             }
         }
         let mut state = HashMap::new();
-        for field in &actor_def.state_fields {
-            let val = value_or_signal!(self, &field.value);
+        for (field_index, field) in actor_def.state_fields.iter().enumerate() {
+            let val = if let Some(references) = &checked_initializers {
+                match self.eval_checked_actor_initializer(&references[field_index])? {
+                    ExprFlow::Value(value) => value,
+                    ExprFlow::Signal(signal) => return Ok(ExprFlow::Signal(signal)),
+                    ExprFlow::Resource(_) => {
+                        return Err("actor Resource custody has no checked transport proof".into());
+                    }
+                }
+            } else {
+                value_or_signal!(self, &field.value)
+            };
             let field_ty = self.substitute_type_expr(&field.ty);
             let val = self.normalize_value_for_type(&field_ty, val)?;
             state.insert(field.name.name.clone(), val);

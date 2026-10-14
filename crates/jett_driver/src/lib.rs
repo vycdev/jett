@@ -160,12 +160,25 @@ pub struct BackendLoweringResult {
     pub native_property_entry: Option<jett_hir::FunctionId>,
     /// Retained checked-session inputs for native property replay.
     pub native_property_plan: Option<NativePropertyPlan>,
-    pub interner: jett_types::TypeInterner,
+    pub interner: BackendTypes,
     pub source_origins: HashMap<FileId, SourceOrigin>,
     pub reflection_metadata: Arc<ReflectionMetadata>,
     pub checked_expression_types: Arc<CheckedExpressionTypes>,
     pub explicit_comptime_values: Arc<jett_comptime::ExplicitComptimeValues>,
     pub debug_observations: Vec<DebugObservation>,
+}
+
+/// Readonly ownership of the exact checked type session used by this backend.
+/// Retaining its program keeps graph proofs and session-local IDs coherent.
+#[derive(Debug, Clone)]
+pub struct BackendTypes(Arc<CheckedResourceProgram>);
+
+impl std::ops::Deref for BackendTypes {
+    type Target = jett_types::TypeInterner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0.checked().interner
+    }
 }
 
 /// Failure while validating or lowering a file for a backend.
@@ -671,50 +684,52 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             debug_observations: Vec::new(),
         };
     }
+    let mut source_origins = HashMap::from([(FileId::new(0), SourceOrigin::Project)]);
+    source_origins.extend(support_modules.origins);
     prepend_support_modules(&mut parse_result.module, support_modules.modules);
-
-    let resolve_result = resolve(&parse_result.module);
+    let primary_span = parse_result.module.span;
+    parse_result.errors = all_diagnostics;
+    let checked_program = match CheckedResourceProgram::prepare(
+        parse_result,
+        source_origins,
+        &[],
+        CheckOptions::default(),
+    ) {
+        Ok(program) => Arc::new(program),
+        Err(error) => {
+            let mut diagnostics = error.diagnostics().unwrap_or(&[]).to_vec();
+            if matches!(
+                &error,
+                ResourceProgramError::ResolveMetadata { .. }
+                    | ResourceProgramError::CheckMetadata { .. }
+            ) {
+                diagnostics.push(Diagnostic::error(0, error.to_string(), primary_span));
+            }
+            return BuildResult {
+                has_errors: true,
+                diagnostics,
+                source: source.to_string(),
+                file_path: file_path.to_string(),
+                reflection_metadata: None,
+                checked_expression_types: None,
+                breakpoint_exclusions: None,
+                explicit_comptime_values: None,
+                debug_observations: Vec::new(),
+            };
+        }
+    };
+    let module = checked_program.module();
+    let resolve_result = checked_program.resolved();
+    let check_result = checked_program.checked();
+    let mut all_diagnostics = checked_program.parse_diagnostics().to_vec();
     all_diagnostics.extend(resolve_result.diagnostics.clone());
-
-    let has_resolve_errors = has_error_diagnostics(&all_diagnostics);
-    if has_resolve_errors {
-        return BuildResult {
-            has_errors: true,
-            diagnostics: all_diagnostics,
-            source: source.to_string(),
-            file_path: file_path.to_string(),
-            reflection_metadata: None,
-            checked_expression_types: None,
-            breakpoint_exclusions: None,
-            explicit_comptime_values: None,
-            debug_observations: Vec::new(),
-        };
-    }
-
-    // Phase 4: Type check
-    let check_result = check(&parse_result.module, &resolve_result);
     all_diagnostics.extend(check_result.diagnostics.clone());
-
-    let has_typecheck_errors = has_error_diagnostics(&all_diagnostics);
-    if has_typecheck_errors {
-        return BuildResult {
-            has_errors: true,
-            diagnostics: all_diagnostics,
-            source: source.to_string(),
-            file_path: file_path.to_string(),
-            reflection_metadata: None,
-            checked_expression_types: None,
-            breakpoint_exclusions: None,
-            explicit_comptime_values: None,
-            debug_observations: Vec::new(),
-        };
-    }
-
-    // Phase 5: Execute verify blocks at compile time
     let reflection_metadata = check_result.reflection_metadata.clone();
-    let checked_expression_types = Arc::new(expression_type_names(&check_result, &resolve_result));
+    let mut type_names = expression_type_names(check_result, resolve_result);
+    type_names.resource_program = Some(checked_program.clone());
+    let checked_expression_types = Arc::new(type_names);
     let evaluation = evaluate_explicit_comptime_expressions_capture(
-        &parse_result.module,
+        module,
         reflection_metadata.clone(),
         checked_expression_types.clone(),
         Arc::new(check_result.breakpoint_exclusions.clone()),
@@ -729,8 +744,8 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
     let explicit_comptime_values = Arc::new(evaluation.values);
     if !has_error_diagnostics(&all_diagnostics) {
         let results = run_verify_blocks_detailed_with_checked_values(
-            &parse_result.module,
-            check_result.reflection_metadata,
+            module,
+            check_result.reflection_metadata.clone(),
             checked_expression_types.clone(),
             Arc::new(check_result.breakpoint_exclusions.clone()),
             explicit_comptime_values.clone(),
@@ -754,7 +769,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
         file_path: file_path.to_string(),
         reflection_metadata: Some(reflection_metadata),
         checked_expression_types: Some(checked_expression_types),
-        breakpoint_exclusions: Some(Arc::new(check_result.breakpoint_exclusions)),
+        breakpoint_exclusions: Some(Arc::new(check_result.breakpoint_exclusions.clone())),
         explicit_comptime_values: Some(explicit_comptime_values),
         debug_observations,
     }
@@ -3082,7 +3097,7 @@ fn lower_file_for_backend_inner(
         native_verify_entry,
         native_property_entry,
         native_property_plan,
-        interner: check_result.interner.snapshot(),
+        interner: BackendTypes(checked_program.clone()),
         source_origins: checked_program.source_origins().clone(),
         reflection_metadata,
         checked_expression_types,

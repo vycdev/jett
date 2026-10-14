@@ -366,6 +366,14 @@ fn collect_hir_block_references(block: &hir::Block, references: &mut References<
 /// to traverse it.
 fn collect_expression_references(expression: &Expression, references: &mut References<'_>) {
     match &expression.kind {
+        ExpressionKind::ActorGraphImport(plan) => {
+            collect_hir_block_references(plan.body(), references);
+        }
+        ExpressionKind::ActorGraphStep { args, .. } => {
+            for argument in args {
+                collect_expression_references(argument, references);
+            }
+        }
         ExpressionKind::ResourceHookValue { .. } => {}
         ExpressionKind::ResourceInvoke { args, .. } => {
             for argument in args {

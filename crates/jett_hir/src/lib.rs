@@ -25,7 +25,17 @@ use jett_types::{
     ReflectionTypeInfo, ReflectionVariantInfo, Type, TypeId, TypeInterner,
 };
 
+mod ordinary_required_values;
+pub use ordinary_required_values::bake_required_values;
+mod actor_graph;
+pub use actor_graph::{
+    ActorGraphCaptureBinding, ActorGraphInstruction, ActorGraphOperation, ActorGraphPlan,
+    ActorGraphSeeds, materialize_actor_graphs, validate_actor_graph_execution,
+    visit_actor_graph_factory_values, visit_actor_graph_plans,
+};
 mod call_ownership;
+mod evaluated_builders;
+pub mod evaluated_values;
 mod reflected_field_sources;
 mod resource_manifest;
 mod resource_materialization;
@@ -372,6 +382,13 @@ pub struct NativePropertyCase {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExpressionKind {
+    /// Sealed required-value graph, expanded at this expression activation.
+    ActorGraphImport(ActorGraphPlan),
+    /// Private import instruction derived from the exact checked graph plan.
+    ActorGraphStep {
+        instruction: ActorGraphInstruction,
+        args: Vec<Expression>,
+    },
     Int(i128),
     Float(f64),
     String(String),
@@ -866,6 +883,13 @@ impl Validator<'_> {
 
     fn expression(&mut self, expression: &Expression) {
         match &expression.kind {
+            ExpressionKind::ActorGraphImport(plan) => self.block(plan.body()),
+            ExpressionKind::ActorGraphStep { args, .. } => {
+                for arg in args {
+                    self.expression(arg);
+                }
+            }
+
             ExpressionKind::Local(local) => self.check_local(*local, expression.span),
             ExpressionKind::FunctionRef(function) => {
                 if function.index() as usize >= self.program.functions.len() {
@@ -1294,7 +1318,13 @@ fn lower_ordinary_program(
     );
     lowerer.reflected_checked_program = Some(original.clone());
     let mut program = lowerer.lower()?;
-    if has_reflected_callable_plans(&program) {
+    if has_reflected_callable_plans(&program)
+        || original
+            .checked()
+            .interner
+            .type_ids()
+            .any(|ty| matches!(original.checked().interner.resolve(ty), Type::Actor(_)))
+    {
         program.resource_source =
             ResourceSourceArchive::checked(&program, original, &original.checked().interner);
     }

@@ -4983,3 +4983,92 @@ secret observation, broader generic/reflected forms and authenticated generated
 verify/property-suite transitions remain full-goal obligations. No Source
 exclusion or broad language-completion claim follows: the rough 87% estimate,
 fixed 207-fixture/182-object inventory and full 100% goal remain unchanged.
+
+### Checked actor graph template import
+
+Successful required evaluation retains a program-owned immutable actor graph
+template, joined to its private checked required-value identity. A type-aware
+work queue and graph-wide memo preserve shared references, distinct seed nodes,
+evaluated state, pending depth and admitted captures. Each runtime evaluation
+imports fresh context-owned instances; ordinary aliases after binding share
+those imported instances. Initializers, handlers, source predicates and compiler
+observations are not replayed.
+
+Graph HIR reconstruction derives from the original checked program. Independent
+original/current MIR seals authenticate native reserve/fill/commit/abort staging
+before publication. Failed staging retires partial owners and registrations while
+preserving the first error and cleanup poison. The checked actor constructor
+remains the sole raw allocation boundary. Exact nominal and generic identities,
+Owner preflight, Resource constructor/incoming-frame checks and Callback
+plan/capture authentication remain separate requirements.
+
+An aggregate graph producer transported through Resource constructor staging
+retains its complete protected lifecycle and exact Commit output. Generated
+output headers remain separate from original Source headers. Planning and native
+ordinary word representation select a current physical graph producer, endpoint
+or complete call edge; they grant no type-wide aggregate admission or Resource
+custody. Ordinary graph heap retain/drop and prefix cleanup remain in codegen.
+When the Resource manifest has no kinds, the ordinary emitter still derives a
+fresh graph storage plan before and after canonical preparation. Verification and
+function emission consume that plan without a Resource layout or hidden Scope.
+Canonical collection iteration records only the exact generated iterator owner
+initialized from the protected original iterable. It remains separate from
+original Source headers; current validation checks its initializer, header and
+sequence operations before selecting ordinary storage.
+See [the constructor transport note](active/native_graph_constructor_transport.md).
+
+One private immutable `OriginalGraphAnalysis` table reconstructs all owner rows
+for an exact checked execution archive. Execution closure classification,
+constructor capture and typed graph validation share that table. Selection
+checks exact archive identity, preserved type meanings and the complete original
+owner; current body/header, constructor, transport and pointer checks remain
+independent. Closure reconstruction recomputes membership using the retained
+table. This adds no global cache or type-wide admission. A completed private
+analysis proving no original rows, together with empty current metadata, may
+return only a negative storage answer. It grants no proof or custody exemption;
+positive/current records retain full validation. Original archive/type checks
+and independent closure reconstruction remain mandatory.
+
+Ordinary checked namespace initializers use the same retained original program
+and selected-purpose preparation as collected explicit expressions. The two
+passes share the existing private checked attempt key, suppressing duplicate
+evaluation of successful and failed initializers without filtering observations.
+Baked reads remain silent; no runtime globals, Resource transport or provider
+are introduced. Every retained checked ordinary archive also carries required
+replacement through the private transition, regardless of graph/callable-plan
+presence. Exact original archive, owner/context proof, typed occurrence,
+original locals and generated binding checks precede canonical seal renewal.
+An admitted TypeConstruction replacement must match the complete typed
+transcript from the sole evaluated-builder producer with no added locals or
+bindings. This repair grants no wider builder-domain admission.
+
+Ordinary actor/interface wrappers with exact original entry-Scope capture and
+no execution or graph records retain the existing finite ordinary sequence
+transition. That route independently excludes constructor/seal/call/region,
+borrowed-sum and lexical-custody records, checks the whole canonical edit and
+before/current witness, preserves original headers and refuses new custody.
+It retains wrapper authentication without installing a new Scope or grant.
+Dedicated graph sequence and real Resource execution paths remain separate.
+
+Graph Resource hook descriptors carry metadata bound to the same context,
+installed program, layout, descriptor operation, hook and signature. The new
+`jett_rt_v1_resource_graph_descriptor_box` export grants no Scope, Network
+authority or Resource custody. The composed Resource inventory is 56 production
+exports: 37 original ordinary leaves, one graph descriptor leaf, 13 carrier
+leaves and five startup leaves; the eight private hooks remain separate.
+Generated startup ownership and its test-only borrowed-attempt sentinel remain
+unchanged. Completion releases Resource companions before retiring actor state
+and unfinished imports for the exact Running ordinary attempt. Retirement
+precedes emptiness checks and terminal sealing; first diagnostics remain intact
+and cleanup poison prevents successful reentry. Later context destruction
+observes the drained actor table.
+
+Existing Source admission excludes move-only Actor closure captures with E0402.
+Unchanged admitted primitive captures retain their existing witness, and reflected
+callables retain their checked plan and authenticated source. No unchecked cache,
+witness reset or new capture admission is selected. This is a sequential import
+contract. Existing sequential task/actor behavior remains in native parity
+scope. Absent asynchronous scheduling and production-provider APIs are separate
+future feature work, not prerequisites for current reference parity. Focused local checks and 32 linked MSVC executions passed; broader
+native and supported-host acceptance remain pending.
+See [the graph note](active/native_comptime_actor_graph.md).

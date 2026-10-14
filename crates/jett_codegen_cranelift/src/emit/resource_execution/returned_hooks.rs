@@ -105,6 +105,39 @@ impl Translator<'_, '_> {
                 let lowered = self.expression(inner)?;
                 self.scalar(lowered, expression.span)?
             }
+            ExpressionKind::ActorGraphStep { instruction, args } if matches!(instruction.operation(),jett_hir::ActorGraphOperation::HookBox {hook:producer,..} if producer == hook) =>
+            {
+                let mut selected=operations.iter().copied().filter(|operation|
+                    matches!(operation.role(),Role::Descriptor {hook:current} if current == hook));
+                let operation = selected
+                    .next()
+                    .ok_or_else(|| pending("graph hook lost its original Descriptor row"))?;
+                if selected.next().is_some() {
+                    return Err(pending("graph hook has duplicate Descriptor rows"));
+                }
+                let context = self.resource_context();
+                let ordinal = self
+                    .builder
+                    .ins()
+                    .iconst(ir::types::I32, i64::from(resource.ordinal(operation)?));
+                let descriptor = Leaf::Descriptor.output(
+                    self.module,
+                    self.builder,
+                    &[context, ordinal],
+                    resource.failure,
+                    8,
+                )?;
+                let ticket = self.expression(&args[0])?;
+                let ticket = self.scalar(ticket, args[0].span)?;
+                let boxed = Leaf::GraphDescriptorBox.output(
+                    self.module,
+                    self.builder,
+                    &[context, ticket, ordinal, descriptor],
+                    resource.failure,
+                    8,
+                )?;
+                return self.own(boxed);
+            }
             ExpressionKind::ResourceHookValue { hook: producer } if producer == hook => {
                 let mut selected = operations.iter().copied().filter(|operation|
                     matches!(operation.role(), Role::Descriptor { hook: current } if current == hook));

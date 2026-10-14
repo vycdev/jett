@@ -376,22 +376,31 @@ impl Translator<'_, '_> {
         evaluation_order: &[usize],
     ) -> Result<(), CodegenError> {
         for &index in evaluation_order {
-            let value = self.expression(&fields[index])?;
-            let (bits, owned) = self.payload_bits(value);
-            let index = self.builder.ins().iconst(ir::types::I64, index as i64);
-            if let LoweredValue::ScalarTask(_, depth) = value {
-                self.leaf(
-                    NativeLeaf::StructInitScalarTask,
-                    &[handle, index, bits, depth],
-                    true,
-                )?;
-            } else {
-                let owned = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
-                self.leaf(NativeLeaf::StructInit, &[handle, index, bits, owned], true)?;
-            }
-            if let LoweredValue::Owned(_, slot) = value {
-                self.clear_slot(slot);
-            }
+            self.initialize_struct_field(handle, index, &fields[index])?;
+        }
+        Ok(())
+    }
+    pub(super) fn initialize_struct_field(
+        &mut self,
+        handle: Value,
+        index: usize,
+        expression: &Expression,
+    ) -> Result<(), CodegenError> {
+        let value = self.expression(expression)?;
+        let (bits, owned) = self.payload_bits(value);
+        let index = self.builder.ins().iconst(ir::types::I64, index as i64);
+        if let LoweredValue::ScalarTask(_, depth) = value {
+            self.leaf(
+                NativeLeaf::StructInitScalarTask,
+                &[handle, index, bits, depth],
+                true,
+            )?;
+        } else {
+            let owned = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
+            self.leaf(NativeLeaf::StructInit, &[handle, index, bits, owned], true)?;
+        }
+        if let LoweredValue::Owned(_, slot) = value {
+            self.clear_slot(slot);
         }
         Ok(())
     }
@@ -1541,6 +1550,9 @@ impl Translator<'_, '_> {
     pub(super) fn drop_all(&mut self) -> Result<(), CodegenError> {
         self.drop_temporaries()?;
         self.drop_dead_locals(&BTreeSet::new())?;
+        for index in (0..self.graph_constructor_slots.len()).rev() {
+            self.drop_slot(self.graph_constructor_slots[index].slot)?;
+        }
         for index in 0..self.generation_slots.len() {
             let storage = self.generation_slots[index];
             self.drop_slot(storage.owner_slot)?;
@@ -1551,7 +1563,7 @@ impl Translator<'_, '_> {
     pub(super) fn static_data(&mut self, bytes: &[u8]) -> Result<(Value, Value), CodegenError> {
         self.static_data_with_functions(bytes, &[])
     }
-    fn static_data_with_functions(
+    pub(super) fn static_data_with_functions(
         &mut self,
         bytes: &[u8],
         functions: &[(usize, u64)],
@@ -1891,7 +1903,7 @@ impl Translator<'_, '_> {
         ty: TypeId,
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
-        let kind = scalar_kind(self.types, ty, "format")?;
+        let kind = native_storage_kind(self.types, ty, "format")?;
         if kind == ScalarKind::Nothing {
             let depth = self.scalar(value, span)?;
             let text = self.leaf(NativeLeaf::NothingFormat, &[depth], true)?;

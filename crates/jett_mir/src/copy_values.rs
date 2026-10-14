@@ -34,6 +34,17 @@ impl<'a> PlanningContext<'a> {
         self.companion
             .is_some_and(|context| context.resource_type(ty))
     }
+    fn graph_return(self) -> bool {
+        self.companion.is_some_and(|context| context.graph_return())
+    }
+    fn graph_local(self, local: &jett_hir::Local) -> bool {
+        self.companion
+            .is_some_and(|context| context.graph_local(local))
+    }
+    fn graph_expression(self, value: &Expression) -> bool {
+        self.companion
+            .is_some_and(|context| context.graph_expression(value))
+    }
     fn resource_expression(self, value: &Expression) -> bool {
         self.companion
             .is_some_and(|context| context.resource_expression(value))
@@ -106,9 +117,15 @@ impl CopyValuePlan {
         if program.is_none() && !generation_storage.slots().is_empty() {
             return Err("generation storage requires complete program ownership validation".into());
         }
-        plan_type(types, function.return_type, program)?;
+        // A protected endpoint supplies its own typed storage proof. The
+        // type-only fallback stays strict for every other endpoint of that type.
+        if !program.graph_return() {
+            plan_type(types, function.return_type, program)?;
+        }
         for local in &function.locals {
-            plan_type(types, local.ty, program)?;
+            if !program.graph_local(local) {
+                plan_type(types, local.ty, program)?;
+            }
             if function.view_root(local.id).is_none() {
                 return Err("borrowed local origin is invalid or cyclic".into());
             }
@@ -589,7 +606,9 @@ fn visit(
             );
         }
     }
-    plan_type(types, value.ty, program)?;
+    if !program.graph_expression(value) {
+        plan_type(types, value.ty, program)?;
+    }
     if program.is_some()
         && !program.resource_expression(value)
         && crate::move_values::is_linear(types, value.ty)
@@ -876,6 +895,23 @@ fn visit(
                 {
                     *temporaries += 1;
                 }
+            }
+        }
+        ExpressionKind::ActorGraphImport(_) => return Err("unexpanded actor graph import has no ordinary ownership plan".into()),
+        ExpressionKind::ActorGraphStep { instruction, args } => {
+            if program.graph_expression(value)
+                && matches!(
+                    instruction.operation(),
+                    jett_hir::ActorGraphOperation::HookBox { .. }
+                        | jett_hir::ActorGraphOperation::RootPublish { .. }
+                )
+                && (crate::move_values::is_copy_owned(types, value.ty)
+                    || crate::move_values::is_linear(types, value.ty))
+            {
+                *temporaries += 1;
+            }
+            for arg in args {
+                visit(arg, reads, temporaries, types, program, false)?;
             }
         }
         ExpressionKind::ActorSpawn {

@@ -391,6 +391,11 @@ impl BackendTypeValidator<'_> {
             format!("function `{function_name}` expression result"),
         );
         match &expression.kind {
+            ExpressionKind::ActorGraphImport(plan) => {
+                for statement in &plan.body().statements {
+                    self.statement(statement, function_name);
+                }
+            }
             ExpressionKind::Comptime {
                 value, bindings, ..
             } => {
@@ -712,7 +717,8 @@ impl BackendTypeValidator<'_> {
                 self.ownership_context = context;
                 self.ownership_locals = saved_locals;
             }
-            ExpressionKind::ActorSpawn { args, .. } => {
+            ExpressionKind::ActorSpawn { args, .. }
+            | ExpressionKind::ActorGraphStep { args, .. } => {
                 for argument in args {
                     self.expression(argument, function_name);
                 }

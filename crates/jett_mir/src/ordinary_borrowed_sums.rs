@@ -525,6 +525,8 @@ impl Inventory {
     ) -> Result<(), String> {
         let mut children: Vec<&Expression> = Vec::new();
         match &value.kind {
+            // Dedicated graph construction owns the sealed import body.
+            E::ActorGraphImport(_) => {}
             E::Binary { left, right, .. } => children.extend([left.as_ref(), right.as_ref()]),
             E::Unary { value, .. }
             | E::ResultOk(value)
@@ -549,7 +551,8 @@ impl Inventory {
             E::Call { args, .. }
             | E::ResourceInvoke { args, .. }
             | E::Intrinsic { args, .. }
-            | E::ActorSpawn { args, .. } => children.extend(args),
+            | E::ActorSpawn { args, .. }
+            | E::ActorGraphStep { args, .. } => children.extend(args),
             E::IndirectCall { callee, args, .. } => {
                 children.push(callee);
                 children.extend(args);

@@ -5,6 +5,7 @@ use jett_resolve::ResourceKernelSpec;
 use jett_typecheck::{CheckOptions, CheckedResourceProgram};
 use jett_types::ResourceKernelRecipe;
 use std::{collections::HashMap, sync::Arc};
+mod graph_metadata_constructors;
 mod lexical_borrows;
 mod named_indirect;
 mod occupied_structs;

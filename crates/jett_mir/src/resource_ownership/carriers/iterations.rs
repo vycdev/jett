@@ -105,6 +105,8 @@ impl<'a> Inventory<'a> {
 
     fn expression(&mut self, expression: &'a Expression) -> Result<(), String> {
         match &expression.kind {
+            // Dedicated graph construction owns the sealed import body.
+            E::ActorGraphImport(_) => {}
             E::Handle {
                 target, failure, ..
             } => {
@@ -138,7 +140,8 @@ impl<'a> Inventory<'a> {
             E::Call { args, .. }
             | E::ResourceInvoke { args, .. }
             | E::Intrinsic { args, .. }
-            | E::ActorSpawn { args, .. } => {
+            | E::ActorSpawn { args, .. }
+            | E::ActorGraphStep { args, .. } => {
                 for value in args {
                     self.expression(value)?;
                 }

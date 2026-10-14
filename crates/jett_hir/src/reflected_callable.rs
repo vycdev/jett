@@ -26,6 +26,7 @@ struct Plan {
     materialized: bool,
     ordinal: Option<usize>,
     reference: Option<Arc<jett_comptime::value::ReflectedCallableValue>>,
+    graph_source: Option<super::actor_graph::CallbackSource>,
 }
 
 #[derive(Debug)]
@@ -64,8 +65,17 @@ impl ReflectedCallablePlan {
                 materialized: false,
                 ordinal,
                 reference: None,
+                graph_source: None,
             }),
         }
+    }
+
+    pub(crate) fn bind_graph_source(&mut self, source: super::actor_graph::CallbackSource) {
+        Arc::make_mut(&mut self.data).graph_source = Some(source);
+    }
+
+    pub(crate) fn graph_source(&self) -> Option<&super::actor_graph::CallbackSource> {
+        self.data.graph_source.as_ref()
     }
 
     pub fn source_type(&self) -> TypeId {
@@ -542,7 +552,12 @@ pub(crate) fn seal_program(program: &mut Program) -> Result<(), Vec<LowerError>>
                 let predicates = callable.return_plan().predicates().into_iter().map(|predicate| originals.get(predicate.function.index() as usize).cloned().ok_or("materialized reflected predicate is missing")).collect::<Result<Vec<_>, _>>()?;
                 let reference = callable.data.reference.as_ref().ok_or("materialized reflected callable lost read provenance")?;
                 if !program.resource_source.belongs_to(reference.checked_program()) { return Err("materialized reflected callable lacks its original checked HIR archive".into()); }
-                if !baked::owns_materialized_owner(&program.resource_source, &originals[sites[0].0.index() as usize]) {
+                let owner = &originals[sites[0].0.index() as usize];
+                if !baked::owns_materialized_owner(&program.resource_source, owner)
+                    && !callable.data.graph_source.as_ref().is_some_and(|source| {
+                        source.validate_site(reference, &sites[0].2, owner, &program.resource_source).is_ok()
+                    })
+                {
                     return Err("materialized reflected callable has no protected checked required-value construction site".into());
                 }
                 for expected in &predicates {
@@ -553,7 +568,13 @@ pub(crate) fn seal_program(program: &mut Program) -> Result<(), Vec<LowerError>>
                     }
                 }
                 materialized_source::validate(reference, &sites[0].2, &originals[sites[0].0.index() as usize], &originals, &program.resource_source)?;
-                Arc::make_mut(&mut callable.data).seal = Some(Arc::new(Seal { owner: sites[0].0, getter: sites[0].2.clone(), adapter: erase_adapter(function), predicates, sources: sources.clone() }));
+                let protected_sources = if callable.data.graph_source.is_some() {
+                    Arc::new(super::actor_graph::conversion_sources(program)?
+                        .iter().map(erase_function).collect::<Vec<_>>())
+                } else {
+                    sources.clone()
+                };
+                Arc::make_mut(&mut callable.data).seal = Some(Arc::new(Seal { owner: sites[0].0, getter: sites[0].2.clone(), adapter: erase_adapter(function), predicates, sources: protected_sources }));
                 attached.push((function.id, callable));
             }
             Ok(())
@@ -790,6 +811,9 @@ fn original_function(
     if let Some(original) = baked::original_function(function, archive, checked)? {
         return Ok(original);
     }
+    if let Some(original) = super::actor_graph::original_function(archive, function, checked)? {
+        return Ok(original);
+    }
     let mut original = function.clone();
     for row in archive
         .required_materializations()
@@ -842,15 +866,22 @@ fn returned_plan(
                     Type::Secret(inner) => *inner,
                     _ => base_type,
                 };
+                let (definition, declaration_span, constraint_span, origin) =
+                    checked_refinement_declaration(checked, name)?;
                 let mut matches = functions.iter().filter(|function| {
-                    function.source_definition.is_some_and(|definition| {
-                        checked.checked().definition_types.get(&definition) == Some(&refined_type)
-                    }) && refinement_predicate_declaration_matches(
-                        &function.identity.declaration,
-                        name,
-                    ) && function.params.len() == 1
+                    function.source_definition == Some(definition)
+                        && function.span == declaration_span
+                        && function.body.span == declaration_span
+                        && &function.identity.declaration.origin == origin
+                        && refinement_predicate_declaration_matches(
+                            &function.identity.declaration,
+                            name,
+                        )
+                        && function.params.len() == 1
+                        && function.params[0].span == constraint_span
                         && function.params[0].ty == input_type
                         && function.params[0].mode == ParamMode::Owned
+                        && !function.params[0].mutable
                         && function.capture_count == 0
                         && function.return_type == TypeInterner::BOOL
                 });
@@ -900,6 +931,55 @@ fn returned_plan(
     })
 }
 
+// Refinement aliases are named checked types, not entries in the value/function
+// definition environment. Bind the predicate to its exact immutable Source alias.
+fn checked_refinement_declaration<'a>(
+    checked: &'a jett_typecheck::CheckedResourceProgram,
+    type_name: &str,
+) -> Result<(DefId, Span, Span, &'a SourceOrigin), String> {
+    let (namespace, name) = type_name.rsplit_once('.').unwrap_or(("", type_name));
+    let mut definitions = checked
+        .resolved()
+        .scope_table
+        .definitions
+        .iter()
+        .filter(|definition| {
+            definition.kind == DefKind::Type
+                && definition.name == type_name
+                && definition.namespace.as_deref().unwrap_or_default() == namespace
+        });
+    let definition = definitions
+        .next()
+        .ok_or("materialized return has no checked refinement declaration")?;
+    if definitions.next().is_some() {
+        return Err("materialized return checked refinement declaration is ambiguous".into());
+    }
+    let mut aliases = checked.module().items.iter().filter_map(|item| {
+        let jett_parser::ast::Item::TypeAlias(alias) = item else {
+            return None;
+        };
+        (alias.name.span == definition.span
+            && alias.name.name == name
+            && alias.constraint.is_some())
+        .then_some(alias)
+    });
+    let alias = aliases
+        .next()
+        .ok_or("materialized return has no original constrained type declaration")?;
+    if aliases.next().is_some() {
+        return Err("materialized return original constrained declaration is ambiguous".into());
+    }
+    let constraint = alias
+        .constraint
+        .as_ref()
+        .ok_or("materialized return lost original constraint")?;
+    let origin = checked
+        .source_origins()
+        .get(&alias.span.file)
+        .ok_or("materialized return refinement has no checked Source origin")?;
+    Ok((definition.id, alias.span, constraint.span(), origin))
+}
+
 pub fn reflected_callable_plans(function: &Function) -> Vec<ReflectedCallablePlan> {
     let mut plans = Vec::new();
     let mut body = function.body.clone();
@@ -934,3 +1014,11 @@ pub fn reflected_callable_plans(function: &Function) -> Vec<ReflectedCallablePla
 #[cfg(test)]
 #[path = "reflected_callable_tests.rs"]
 mod tests;
+
+// Metadata erased here is independently authenticated by validate_program.
+// Graph body, instruction identity, local headers and Source structure remain exact.
+pub(crate) fn source_functions_equal(left: &[Function], right: &[Function]) -> bool {
+    let left = left.iter().map(erase_function).collect::<Vec<_>>();
+    let right = right.iter().map(erase_function).collect::<Vec<_>>();
+    super::resource_materialization::functions_equal(&left, &right)
+}

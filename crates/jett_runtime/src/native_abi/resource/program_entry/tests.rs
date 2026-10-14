@@ -32,6 +32,292 @@ fn retained(
         .unwrap()
 }
 
+fn graph_schema(tag: u8, hook: bool) -> Vec<u8> {
+    let mut debug = b"JD\x01".to_vec();
+    for word in [1_u32, 0, 1] {
+        debug.extend_from_slice(&word.to_le_bytes());
+    }
+    debug.push(tag);
+    let mut bytes = b"JA\x01".to_vec();
+    bytes.extend_from_slice(&(debug.len() as u32).to_le_bytes());
+    bytes.extend(debug);
+    bytes.extend_from_slice(&u32::from(hook).to_le_bytes());
+    if hook {
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.push(7);
+        for word in [12_u32, 0, 0] {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+    }
+    bytes
+}
+
+fn stage_graph_hook_actor(auth: &AuthenticatedResourceContext) -> (u64, u64, u64) {
+    let pointer = pointer(auth);
+    let mut descriptor = 0;
+    assert_eq!(
+        unsafe { leaves::jett_rt_v1_resource_descriptor(pointer, 12, &mut descriptor) },
+        JettRuntimeStatusV1::OK
+    );
+    let ticket = unsafe { values::jett_rt_v1_actor_graph_begin(pointer) };
+    let actor = unsafe { values::jett_rt_v1_actor_graph_reserve_base(pointer, ticket, 1) };
+    let mut original = 0;
+    assert_eq!(
+        unsafe {
+            leaves::jett_rt_v1_resource_graph_descriptor_box(
+                pointer,
+                ticket,
+                12,
+                descriptor,
+                &mut original,
+            )
+        },
+        JettRuntimeStatusV1::OK
+    );
+    let boxed = unsafe { values::jett_rt_v1_struct_clone(pointer, original) };
+    assert_ne!(boxed, 0);
+    assert_ne!(boxed, original);
+    assert_eq!(
+        unsafe { values::jett_rt_v1_value_drop(pointer, original) },
+        0
+    );
+    let hook = graph_schema(13, true);
+    assert_eq!(
+        unsafe {
+            values::jett_rt_v1_actor_graph_fill(
+                pointer,
+                ticket,
+                actor,
+                0,
+                boxed,
+                1,
+                0,
+                hook.as_ptr(),
+                hook.len() as u64,
+            )
+        },
+        0
+    );
+    (ticket, actor, boxed)
+}
+
+fn publish_graph_hook_actor(auth: &AuthenticatedResourceContext) -> u64 {
+    let pointer = pointer(auth);
+    let (ticket, actor, boxed) = stage_graph_hook_actor(auth);
+    let root = graph_schema(14, false);
+    assert_eq!(
+        unsafe {
+            values::jett_rt_v1_actor_graph_root_fill(
+                pointer,
+                ticket,
+                actor,
+                0,
+                0,
+                root.as_ptr(),
+                root.len() as u64,
+            )
+        },
+        0
+    );
+    assert_eq!(
+        unsafe { values::jett_rt_v1_actor_graph_commit(pointer, ticket) },
+        0
+    );
+    assert_eq!(
+        unsafe { values::jett_rt_v1_actor_message_check(pointer, actor) },
+        0
+    );
+    auth.with_state(|_, state| {
+        assert!(!state.values.is_empty());
+        assert!(state.values.published_checked_graph_hook(boxed).is_ok());
+        Ok(())
+    })
+    .unwrap();
+    boxed
+}
+
+#[test]
+fn generated_startup_retires_graph_hook_actor_once_and_reentry_stays_empty() {
+    context(|auth| {
+        let wire = layout_with_entry_network(false);
+        for ordinal in 1..=2 {
+            let attempt = begin(auth, &wire, entry()).unwrap();
+            let boxed = publish_graph_hook_actor(auth);
+            assert_ne!(
+                unsafe { jett_rt_v1_resource_program_complete(pointer(auth), attempt + 1, 0) },
+                JettRuntimeStatusV1::OK
+            );
+            auth.with_state(|_, state| {
+                assert!(!state.values.is_empty());
+                assert!(state.values.published_checked_graph_hook(boxed).is_ok());
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(
+                unsafe { jett_rt_v1_resource_program_complete(pointer(auth), attempt, 0) },
+                JettRuntimeStatusV1::OK
+            );
+            assert_eq!(retained(auth).0, ordinal);
+            assert_eq!(retained(auth).1.selected_kind, 0);
+            auth.with_state(|_, state| {
+                assert!(state.values.is_empty());
+                assert!(state.values.published_checked_graph_hook(boxed).is_err());
+                assert!(!state.values.cleanup_failed);
+                Ok(())
+            })
+            .unwrap();
+            let mut kind = 99;
+            assert_eq!(
+                unsafe { jett_rt_v1_resource_program_unwind(pointer(auth), 0, 0, &mut kind) },
+                JettRuntimeStatusV1::OK
+            );
+            assert_eq!(kind, 0);
+            assert_eq!(retained(auth).0, ordinal);
+        }
+    });
+}
+
+#[test]
+fn generated_startup_aborts_unfinished_graph_hook_import_before_empty_audit() {
+    context(|auth| {
+        let wire = layout_with_entry_network(false);
+        let attempt = begin(auth, &wire, entry()).unwrap();
+        stage_graph_hook_actor(auth);
+        assert_eq!(
+            unsafe { jett_rt_v1_resource_program_complete(pointer(auth), attempt, 5) },
+            JettRuntimeStatusV1(5)
+        );
+        assert_eq!(retained(auth).1.body_status, 5);
+        assert_eq!(retained(auth).1.cleanup_status, 0);
+        assert_eq!(retained(auth).1.selected_kind, 1);
+        auth.with_state(|_, state| {
+            assert!(state.values.is_empty());
+            assert!(!state.values.cleanup_failed);
+            Ok(())
+        })
+        .unwrap();
+        let next = begin(auth, &wire, entry()).unwrap();
+        assert_eq!(
+            unsafe { jett_rt_v1_resource_program_complete(pointer(auth), next, 0) },
+            JettRuntimeStatusV1::OK
+        );
+    });
+}
+
+#[test]
+fn generated_startup_graph_actor_retirement_preserves_first_body_failure() {
+    context(|auth| {
+        let wire = layout_with_entry_network(false);
+        let attempt = begin(auth, &wire, entry()).unwrap();
+        publish_graph_hook_actor(auth);
+        assert_ne!(unsafe { values::jett_rt_v1_assert_fail(pointer(auth)) }, 0);
+        assert_eq!(
+            unsafe { jett_rt_v1_resource_program_complete(pointer(auth), attempt, 7) },
+            JettRuntimeStatusV1(7)
+        );
+        assert_eq!(retained(auth).1.body_status, 7);
+        assert_eq!(retained(auth).1.cleanup_status, 0);
+        assert_eq!(retained(auth).1.selected_kind, 1);
+        let mut bytes = [0_u8; 64];
+        let mut length = 0;
+        let mut result = JettRuntimeResultV1::ok();
+        assert_eq!(
+            unsafe {
+                jett_rt_v1_resource_program_failure_copy(
+                    pointer(auth),
+                    bytes.as_mut_ptr(),
+                    bytes.len() as u64,
+                    &mut length,
+                    &mut result,
+                )
+            },
+            JettRuntimeStatusV1::OK
+        );
+        assert_eq!(&bytes[..length as usize], b"assertion failed");
+        let next = begin(auth, &wire, entry()).unwrap();
+        assert_eq!(
+            unsafe { jett_rt_v1_resource_program_complete(pointer(auth), next, 0) },
+            JettRuntimeStatusV1::OK
+        );
+        assert_eq!(retained(auth).0, 2);
+    });
+}
+
+#[test]
+fn generated_startup_graph_actor_cleanup_poison_keeps_failure_and_blocks_reentry() {
+    let mut record = Box::new(JettRuntimeContextV1::retired());
+    let mut result = JettRuntimeResultV1::ok();
+    assert_eq!(
+        unsafe {
+            jett_rt_v1_context_create(JETT_RUNTIME_ABI_VERSION_V1, &mut *record, &mut result)
+        },
+        JettRuntimeStatusV1::OK
+    );
+    let auth = AuthenticatedResourceContext::acquire(&*record).unwrap();
+    let wire = layout_with_entry_network(false);
+    let attempt = begin(&auth, &wire, entry()).unwrap();
+    publish_graph_hook_actor(&auth);
+    let list = unsafe { values::jett_rt_v1_list_new(pointer(&auth), 0) };
+    assert_ne!(list, 0);
+    assert_ne!(unsafe { values::jett_rt_v1_assert_fail(pointer(&auth)) }, 0);
+    assert_eq!(
+        unsafe { values::jett_rt_v1_value_drop(pointer(&auth), list) },
+        0
+    );
+    assert_ne!(
+        unsafe { values::jett_rt_v1_value_drop(pointer(&auth), list) },
+        0
+    );
+    assert_eq!(
+        unsafe { jett_rt_v1_resource_program_complete(pointer(&auth), attempt, 7) },
+        JettRuntimeStatusV1::INVALID_ARGUMENT
+    );
+    assert_eq!(retained(&auth).1.body_status, 7);
+    assert_eq!(retained(&auth).1.selected_kind, 3);
+    assert_ne!(retained(&auth).1.cleanup_status, 0);
+    let mut bytes = [0_u8; 64];
+    let mut length = 0;
+    assert_eq!(
+        unsafe {
+            jett_rt_v1_resource_program_failure_copy(
+                pointer(&auth),
+                bytes.as_mut_ptr(),
+                bytes.len() as u64,
+                &mut length,
+                &mut result,
+            )
+        },
+        JettRuntimeStatusV1::OK
+    );
+    assert_eq!(&bytes[..length as usize], b"native value cleanup failed");
+    assert_eq!(
+        unsafe {
+            values::jett_rt_v1_value_failure_copy(
+                pointer(&auth),
+                bytes.as_mut_ptr(),
+                bytes.len() as u64,
+                &mut length,
+                &mut result,
+            )
+        },
+        JettRuntimeStatusV1::OK
+    );
+    assert_eq!(&bytes[..length as usize], b"assertion failed");
+    auth.with_state(|_, state| {
+        assert!(state.values.is_empty());
+        assert!(state.values.cleanup_failed);
+        Ok(())
+    })
+    .unwrap();
+    assert!(begin(&auth, &wire, entry()).is_err());
+    assert_eq!(retained(&auth).0, 1);
+    drop(auth);
+    assert_eq!(
+        unsafe { jett_rt_v1_context_destroy(&mut *record, &mut result) },
+        JettRuntimeStatusV1::INVALID_ARGUMENT
+    );
+}
+
 #[test]
 fn generated_startup_retains_wire_and_disabled_refusal() {
     context(|auth| {

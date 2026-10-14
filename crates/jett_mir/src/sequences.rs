@@ -65,6 +65,9 @@ fn projected_source(
     }
 }
 pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
+    if crate::actor_graph::validate_native_actor_graphs(program).is_err() {
+        return;
+    }
     // This pass must not make malformed, unreachable input disappear before
     // the caller reports its original validation errors.
     if validate_call_ownership(program, types).is_err() {
@@ -479,6 +482,9 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                 *function = before_pass;
             }
         }
+    }
+    for function in &mut program.functions {
+        crate::actor_graph::refresh(function);
     }
 }
 

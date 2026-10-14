@@ -1,0 +1,15 @@
+namespace app
+actor Counter:
+    mutable int64 count = 1
+actor Holder:
+    app.Counter child = spawn app.Counter()
+function baked() returns list[Holder]:
+    Holder first = spawn Holder()
+    Holder second = spawn Holder()
+    return list(clone first, first, second)
+function roots() returns list[Holder]:
+    return comptime baked()
+function main() returns nothing:
+    println(roots())
+    println(roots())
+    return nothing

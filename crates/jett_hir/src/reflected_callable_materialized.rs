@@ -189,6 +189,36 @@ impl Context<'_> {
                     .checked()
                     .ordinary_types_compatible(expression.ty, inner.ty);
         }
+        // Builders are reconstructed by the compiler's sole evaluated-builder
+        // producer. Compare its complete typed transcript, including schema,
+        // metadata, field order, pending layers and failure operations.
+        if matches!(value, Value::TypeConstruction { .. }) {
+            let functions = crate::evaluated_values::function_value_candidates(
+                self.functions,
+                &self.checked.checked().method_value_definitions,
+            );
+            let mut locals = Vec::new();
+            let mut bindings = Vec::new();
+            let mut context = crate::evaluated_values::ValueContext {
+                actor_seeds: None,
+                types,
+                reflection: &self.checked.checked().reflection_metadata,
+                functions: &functions,
+                refinement_functions: None,
+                locals: &mut locals,
+                bindings: &mut bindings,
+            };
+            return crate::evaluated_builders::builder_expression(
+                value,
+                expression.span,
+                &mut context,
+            )
+            .is_ok_and(|expected| {
+                locals.is_empty()
+                    && bindings.is_empty()
+                    && crate::resource_materialization::expression_equal(&expected, expression)
+            });
+        }
         match (value, &expression.kind) {
             (Value::Int64(a), E::Int(b)) => i128::from(*a) == *b,
             (Value::Uint64(a), E::Int(b)) => i128::from(*a) == *b,
@@ -403,6 +433,86 @@ fn bindings(block: &Block, local: LocalId, values: &mut Vec<Expression>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn materialized_builder_requires_its_complete_canonical_transcript() {
+        let file = FileId::new(0);
+        let checked = Arc::new(jett_typecheck::CheckedResourceProgram::prepare(
+            jett_parser::parse("namespace app\nstruct First:\n    raw: int64\nstruct Second:\n    raw: int64\nfunction context() returns result[TypeConstruction, string]:\n    return fail(\"unused\")\n", file),
+            HashMap::from([(file, SourceOrigin::Project)]), &[],
+            jett_typecheck::CheckOptions { release: false }).unwrap());
+        let program = lower_checked_resource_program(&checked).unwrap();
+        let owner = &program.functions[0];
+        let types = &checked.checked().interner;
+        let value = Value::TypeConstruction {
+            type_name: "app.First".into(),
+            variant: None,
+            state: None,
+            fields: vec![(0, "raw".into(), "int64".into(), Value::Int64(7))],
+        };
+        let functions = crate::evaluated_values::function_value_candidates(
+            &program.functions,
+            &checked.checked().method_value_definitions,
+        );
+        let mut locals = Vec::new();
+        let mut bindings = Vec::new();
+        let expression = crate::evaluated_builders::builder_expression(
+            &value,
+            owner.span,
+            &mut crate::evaluated_values::ValueContext {
+                actor_seeds: None,
+                types,
+                reflection: &checked.checked().reflection_metadata,
+                functions: &functions,
+                refinement_functions: None,
+                locals: &mut locals,
+                bindings: &mut bindings,
+            },
+        )
+        .unwrap();
+        assert!(locals.is_empty() && bindings.is_empty());
+        let context = Context {
+            owner,
+            functions: &program.functions,
+            archive: &program.resource_source,
+            checked: &checked,
+            used: RefCell::new(HashSet::new()),
+        };
+        assert!(context.matches(&value, &expression, types.len()));
+        for forgery in 0..4 {
+            let mut changed = expression.clone();
+            let ExpressionKind::Handle {
+                target, failure, ..
+            } = &mut changed.kind
+            else {
+                panic!("builder result")
+            };
+            let ExpressionKind::Intrinsic {
+                args,
+                type_arguments,
+                ..
+            } = &mut target.kind
+            else {
+                panic!("builder put")
+            };
+            match forgery {
+                0 => args[2].kind = ExpressionKind::Int(8),
+                1 => {
+                    type_arguments[0] = types
+                        .type_ids()
+                        .find(|ty| types.type_name(*ty) == "app.Second")
+                        .unwrap()
+                }
+                2 => args.swap(1, 2),
+                3 => failure.statements.clear(),
+                _ => unreachable!(),
+            }
+            assert!(
+                !context.matches(&value, &changed, types.len()),
+                "accepted builder forgery {forgery}"
+            );
+        }
+    }
 
     #[test]
     fn materialized_values_preserve_nominal_identity_and_every_pending_layer() {

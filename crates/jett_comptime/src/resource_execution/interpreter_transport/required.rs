@@ -6,6 +6,37 @@ use crate::resource_execution::{
 };
 
 impl Interpreter {
+    pub(crate) fn eval_checked_actor_initializer(
+        &mut self,
+        reference: &CheckedBodyReference,
+    ) -> Result<ExprFlow, String> {
+        let saved = self
+            .resource_transport
+            .as_ref()
+            .ok_or("actor initializer has no checked transport")?
+            .cursor();
+        self.resource_transport
+            .as_mut()
+            .ok_or("actor initializer has no checked transport")?
+            .checked
+            .install_function_body(reference)
+            .map_err(|error| error.to_string())?;
+        let result = reference
+            .original_expression()
+            .map_err(|error| error.to_string())
+            .and_then(|expression| self.eval_expr_flow(expression));
+        let restore = self
+            .resource_transport
+            .as_mut()
+            .ok_or("actor initializer lost checked transport")?
+            .checked
+            .restore_cursor(saved)
+            .map_err(|error| error.to_string());
+        match (result, restore) {
+            (Err(error), _) | (_, Err(error)) => Err(error),
+            (Ok(value), Ok(())) => Ok(value),
+        }
+    }
     pub(crate) fn checked_explicit_contexts(
         &self,
         expression: &Expr,
@@ -13,30 +44,46 @@ impl Interpreter {
         owner: Option<Span>,
         bindings: &[(Span, String)],
     ) -> Result<Option<Vec<PreparedRequiredExpression>>, String> {
-        self.resource_transport
-            .as_ref()
-            .map(|transport| {
-                transport
-                    .checked
-                    .prepare_explicit_contexts(expression, occurrence, owner, bindings)
-                    .map_err(|error| error.to_string())
+        if let Some(transport) = &self.resource_transport {
+            return transport
+                .checked
+                .prepare_explicit_contexts(expression, occurrence, owner, bindings)
+                .map(Some)
+                .map_err(|error| error.to_string());
+        }
+        let Some((program, purpose)) = &self.retained_resource_program else {
+            return Ok(None);
+        };
+        // Retained ordinary programs need the same exact original required key,
+        // but do not install Resource transport, a provider, or custody state.
+        crate::resource_execution::CheckedExecution::new(program.clone(), *purpose)
+            .and_then(|checked| {
+                checked.prepare_explicit_contexts(expression, occurrence, owner, bindings)
             })
-            .transpose()
+            .map(Some)
+            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn checked_namespace_initializer(
         &self,
         declaration: &VarDecl,
     ) -> Result<Option<PreparedRequiredExpression>, String> {
-        self.resource_transport
-            .as_ref()
-            .map(|transport| {
-                transport
-                    .checked
-                    .prepare_namespace_initializer(declaration)
-                    .map_err(|error| error.to_string())
-            })
-            .transpose()
+        if let Some(transport) = &self.resource_transport {
+            return transport
+                .checked
+                .prepare_namespace_initializer(declaration)
+                .map(Some)
+                .map_err(|error| error.to_string());
+        }
+        let Some((program, purpose)) = &self.retained_resource_program else {
+            return Ok(None);
+        };
+        // Match the explicit-expression route: ordinary retained programs use
+        // the exact original required key without Resource transport or custody.
+        crate::resource_execution::CheckedExecution::new(program.clone(), *purpose)
+            .and_then(|checked| checked.prepare_namespace_initializer(declaration))
+            .map(Some)
+            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn eval_checked_required_expression(
@@ -46,6 +93,27 @@ impl Interpreter {
         aliases: &HashMap<String, String>,
         parameters: &[String],
     ) -> Result<Value, String> {
+        if self.resource_transport.is_none() {
+            let (program, purpose) = self
+                .retained_resource_program
+                .as_ref()
+                .ok_or("required region has no retained checked program")?;
+            if !Arc::ptr_eq(program, prepared.checked_program()) {
+                return Err(ResourceExecutionError::ForeignProgram.to_string());
+            }
+            if *purpose != prepared.purpose() || !program.checked().resource_hooks.is_empty() {
+                return Err(ResourceExecutionError::WrongPurpose.to_string());
+            }
+            return self.eval_closed_comptime_expression(
+                namespace,
+                aliases,
+                prepared.expression().map_err(|error| error.to_string())?,
+                parameters,
+                prepared.function_projection(),
+                prepared.scope_projection(),
+                prepared.bindings(),
+            );
+        }
         if self
             .resource_transport
             .as_ref()

@@ -15,6 +15,7 @@ use crate::{AuthorityProvenance, RegistryError};
 mod borrowed_sums;
 mod carriers;
 mod carriers_sum;
+mod graph_descriptors;
 mod leaves;
 mod operations;
 #[cfg(test)]
@@ -32,6 +33,7 @@ use ordinary_reservation_faults::{ReservationFaults, ReservationSite};
 mod test_archive_api;
 #[cfg(all(test, jett_resource_native_test_archive))]
 mod test_archive_main;
+pub(super) use graph_descriptors::CheckedGraphHookProof;
 #[cfg(test)]
 pub(super) use provider::{DecodedScript, NativeTestEvent};
 use provider::{InstalledProvider, NativeProviderIdentity, NativeRestrictionIdentity};
@@ -796,6 +798,19 @@ impl NativeResourceState {
         if companion_failed {
             ordinary.cleanup_failed = true;
         }
+        // Begin requires empty ordinary storage and seals its exact attempt owner.
+        // Actor state created by this entry therefore retires with that attempt,
+        // after Resource companions release their borrowed actor references.
+        // Context destruction may call this cleanup again, but the actor table
+        // and unfinished import tickets have already been drained exactly once.
+        ordinary
+            .retire_resource_actors(
+                self.attempt
+                    .as_ref()
+                    .ok_or(NativeResourceError::InvalidEntry)?
+                    .ordinary_owner,
+            )
+            .map_err(ordinary_error)?;
         if self.custody.live_owners() != 0
             || self.custody.live_loans() != 0
             || self.custody.active_frames() != 0

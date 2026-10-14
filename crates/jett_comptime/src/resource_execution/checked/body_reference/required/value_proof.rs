@@ -5,6 +5,9 @@ use super::*;
 use crate::Value;
 use crate::explicit::ExplicitComptimeValues;
 use jett_typecheck::CheckedGenericSpecialization;
+#[path = "value_proof/actor_hook.rs"]
+mod actor_hook;
+pub use actor_hook::{ActorGraphHookRoot, CheckedActorGraphHook};
 
 /// The retained declaration that owns a successful required occurrence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -72,10 +75,15 @@ struct RequiredValueSite {
 pub struct CheckedRequiredValue {
     key: CheckedAttemptKey,
     value: Value,
+    actor_graph: Option<Arc<crate::interpreter::actor_graph::ActorGraphTemplate>>,
     site: RequiredValueSite,
 }
 
 impl CheckedRequiredValue {
+    pub fn checked_program(&self) -> &Arc<CheckedResourceProgram> {
+        &self.key.program
+    }
+
     pub(crate) fn from_cache(
         cache: &ExplicitComptimeValues,
         key: &CheckedAttemptKey,
@@ -96,16 +104,27 @@ impl CheckedRequiredValue {
         let proof = Self {
             key: key.clone(),
             value: value.clone(),
+            actor_graph: cache.checked_actor_graph(key).cloned(),
             site,
         };
         // Hook metadata must belong to the same retained program as the worker
         // occurrence. Its nominal identity and exact signature stay checked.
         proof.checked_hook(program)?;
+        if proof
+            .actor_graph
+            .as_ref()
+            .is_some_and(|graph| !graph.belongs_to(program))
+        {
+            return Err(ResourceExecutionError::ForeignProgram.to_string());
+        }
         Ok(proof)
     }
 
     pub fn value(&self) -> &Value {
         &self.value
+    }
+    pub fn actor_graph(&self) -> Option<&Arc<crate::interpreter::actor_graph::ActorGraphTemplate>> {
+        self.actor_graph.as_ref()
     }
     pub fn belongs_to(&self, program: &Arc<CheckedResourceProgram>) -> bool {
         Arc::ptr_eq(&self.key.program, program)
@@ -261,6 +280,9 @@ impl CheckedAttemptKey {
 
     fn region(&self, path: &[RegionStep]) -> Result<OriginalRegion<'_>, ResourceExecutionError> {
         let mut region = match self.node.origin {
+            ExecutableOrigin::ActorInitializer { .. } => {
+                return Err(ResourceExecutionError::MissingCheckedBody);
+            }
             ExecutableOrigin::Function { item, .. } => {
                 match self.program.module().items.get(item) {
                     Some(Item::Function(value)) => OriginalRegion::Block(&value.body),
@@ -332,6 +354,9 @@ impl CheckedAttemptKey {
             CheckedExecution::new(self.program.clone(), ExecutionPurpose::ExplicitComptime)?;
         checked.validate_executable_cursor(&self.cursor())?;
         let owner = match self.node.origin {
+            ExecutableOrigin::ActorInitializer { .. } => {
+                return Err(ResourceExecutionError::MissingCheckedBody);
+            }
             ExecutableOrigin::Function { definition, item } => {
                 match self.program.module().items.get(item) {
                     Some(Item::Function(value)) => CheckedRequiredOwner::Function {

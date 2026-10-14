@@ -1,5 +1,9 @@
 //! Jett's backend-neutral control-flow graph representation.
 
+mod actor_graph;
+pub use actor_graph::{
+    native_graph_metadata_expression, native_graph_metadata_local, validate_native_actor_graphs,
+};
 mod analysis;
 mod breakpoint_regions;
 mod call_owner_generations;
@@ -10,12 +14,12 @@ pub use ordinary_borrowed_sums::{
 };
 mod resource_ownership;
 pub use resource_ownership::{
-    ResourceArgumentEffect, ResourceArgumentSyntax, ResourceBorrowedSumProjection,
-    ResourceCallActual, ResourceCallFormal, ResourceCallNode, ResourceCallOperand,
-    ResourceCallRegion, ResourceCallRegionId, ResourceCallResult, ResourceCarrierChild,
-    ResourceCarrierConstructor, ResourceCarrierEdge, ResourceCarrierField,
-    ResourceCarrierFunctionPlan, ResourceCarrierGeneration, ResourceCarrierIndex,
-    ResourceCarrierIteration, ResourceCarrierLoan, ResourceCarrierLoanId,
+    GraphHookProjectionProof, GraphSourceEdgeProof, GraphStorageProof, ResourceArgumentEffect,
+    ResourceArgumentSyntax, ResourceBorrowedSumProjection, ResourceCallActual, ResourceCallFormal,
+    ResourceCallNode, ResourceCallOperand, ResourceCallRegion, ResourceCallRegionId,
+    ResourceCallResult, ResourceCarrierChild, ResourceCarrierConstructor, ResourceCarrierEdge,
+    ResourceCarrierField, ResourceCarrierFunctionPlan, ResourceCarrierGeneration,
+    ResourceCarrierIndex, ResourceCarrierIteration, ResourceCarrierLoan, ResourceCarrierLoanId,
     ResourceCarrierLoanSource, ResourceCarrierNode, ResourceCarrierObservation,
     ResourceCarrierOperation, ResourceCarrierOperationId, ResourceCarrierOperationRole,
     ResourceCarrierProjectionPath, ResourceCarrierShape, ResourceCarrierShapeId,
@@ -28,7 +32,11 @@ pub use resource_ownership::{
     ResourceNamedCallableProof, ResourceOccupancy, ResourceOperation, ResourceOperationId,
     ResourceOperationRole, ResourceOwnerSlot, ResourceOwnerSlotId, ResourceOwnershipPlan,
     ResourcePath, ResourcePosition, ResourceShape, ResourceSite, ResourceSlotStorage,
-    ResourceSumPayloadPath, validate_resource_ownership, validate_resource_ownership_for_entry,
+    ResourceSumPayloadPath, native_graph_hook_projection, native_graph_source_edge,
+    native_graph_storage_for_constructor, native_graph_storage_for_expression,
+    native_graph_storage_for_formal, native_graph_storage_for_local,
+    native_graph_storage_for_return, native_graph_storage_has_records, validate_resource_ownership,
+    validate_resource_ownership_for_entry,
 };
 #[cfg(test)]
 mod resource_manifest_tests;
@@ -95,6 +103,7 @@ pub struct Function {
     resource_lowering: Option<resource_ownership::ResourceLoweringWitness>,
     ordinary_borrowed_sums: Option<ordinary_borrowed_sums::Witness>,
     reflected_callable: Option<reflected_callable::Witness>,
+    actor_graph: Option<actor_graph::Witness>,
 }
 
 impl Function {
@@ -369,6 +378,15 @@ pub struct ValidationError {
 
 /// Validate structural MIR invariants before a backend consumes the program.
 pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
+    if let Err(message) = actor_graph::validate_native_actor_graphs(program) {
+        return Err(vec![ValidationError {
+            span: program
+                .functions
+                .first()
+                .map_or(Span::new(jett_common::FileId::new(0), 0, 0), |f| f.span),
+            message,
+        }]);
+    }
     let mut errors = Vec::new();
     let mut function_ids = std::collections::HashSet::new();
     for (index, function) in program.functions.iter().enumerate() {
@@ -1062,6 +1080,15 @@ impl FunctionValidator<'_, '_> {
             ownership.metadata_function_ids(|id| self.check_function(id, expression.span));
         }
         match &expression.kind {
+            hir::ExpressionKind::ActorGraphImport(_) => self.error(
+                expression.span,
+                "actor graph import was not expanded at its activation",
+            ),
+            hir::ExpressionKind::ActorGraphStep { args, .. } => {
+                for arg in args {
+                    self.expression(arg);
+                }
+            }
             hir::ExpressionKind::Local(local) => {
                 self.check_local(*local, expression.span, "expression");
             }
@@ -1316,6 +1343,15 @@ impl FunctionValidator<'_, '_> {
 }
 
 pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Vec<LowerError>> {
+    hir::validate_actor_graph_execution(program, types).map_err(|message| {
+        vec![LowerError {
+            span: program
+                .functions
+                .first()
+                .map_or(Span::new(jett_common::FileId::new(0), 0, 0), |f| f.span),
+            message,
+        }]
+    })?;
     if let Err(errors) =
         hir::validate(program).and_then(|()| hir::validate_backend_types(program, types))
     {
@@ -1436,7 +1472,11 @@ fn lower_function_body(
         resource_source,
         types,
         resource_execution,
-    );
+    )
+    .map_err(|message| LowerError {
+        span: function.span,
+        message,
+    })?;
     builder.view_params = function
         .params
         .iter()
@@ -1481,6 +1521,7 @@ fn lower_function_body(
         resource_lowering: None,
         ordinary_borrowed_sums: None,
         reflected_callable: None,
+        actor_graph: None,
     };
     lowered.breakpoint_regions =
         breakpoint_capture
@@ -1496,13 +1537,12 @@ fn lower_function_body(
                 span: function.span,
                 message,
             })?;
-    lowered.resource_lowering =
-        resource_capture
-            .finish(&lowered)
-            .map_err(|message| LowerError {
-                span: function.span,
-                message,
-            })?;
+    lowered.resource_lowering = resource_capture
+        .finish(&lowered, types)
+        .map_err(|message| LowerError {
+            span: function.span,
+            message,
+        })?;
     lowered.ordinary_borrowed_sums =
         ordinary_sum_capture
             .finish(&lowered)
@@ -1511,6 +1551,11 @@ fn lower_function_body(
                 message,
             })?;
     iteration_views::capture_original(&mut lowered, types);
+    lowered.actor_graph =
+        actor_graph::seal(function, &lowered, types).map_err(|message| LowerError {
+            span: function.span,
+            message,
+        })?;
     Ok(lowered)
 }
 
