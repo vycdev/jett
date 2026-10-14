@@ -278,6 +278,175 @@ fn resource_occupied_struct_constructor_preserves_owned_formals_lexical_order_an
 }
 
 #[test]
+fn occupied_struct_primitive_companions_mir_preserves_each_exact_original_endpoint() {
+    let sources = [
+        include_str!(
+            "../../../../jett_comptime/src/resource_execution/fixtures/36_owned_struct_primitive_companions.jett"
+        ),
+        include_str!(
+            "../../../../jett_comptime/src/resource_execution/fixtures/37_owned_struct_alias_companions.jett"
+        ),
+        include_str!(
+            "../../../../jett_comptime/src/resource_execution/fixtures/38_owned_struct_pending_int64_transport.jett"
+        ),
+        include_str!(
+            "../../../../jett_comptime/src/resource_execution/fixtures/40_owned_struct_pending_companions.jett"
+        ),
+        include_str!(
+            "../../../../jett_comptime/src/resource_execution/fixtures/42_owned_struct_pending_primitive_matrix.jett"
+        ),
+    ];
+    for release in [false, true] {
+        for source in sources {
+            let support = format!(
+                "{}\n{}",
+                crate::resource_ownership::tests::SUPPORT,
+                include_str!(
+                    "../../../../jett_comptime/src/resource_execution/fixtures/resource_companion_probe.jett"
+                )
+            );
+            let checked =
+                crate::resource_ownership::tests::checked_support(source, &support, release);
+            let types = &checked.checked().interner;
+            let mut program = lowered(&checked);
+            for canonical in [false, true] {
+                if canonical {
+                    crate::prepare_native_sequences(&mut program, types);
+                    crate::prepare_native_uninhabited_sums(&mut program, types);
+                    crate::prepare_native_generated_functions(&mut program, types);
+                }
+                let plan = validate_resource_ownership(&program, types).unwrap();
+                let function = program
+                    .functions
+                    .iter()
+                    .find(|function| {
+                        function.identity.declaration.namespace == "app"
+                            && function.identity.declaration.name.starts_with("retire_")
+                    })
+                    .unwrap();
+                let witness = function.resource_lowering.as_ref().unwrap();
+                assert_eq!(witness.constructors.len(), 1);
+                let region = function
+                    .resource_constructor(witness.constructors[0].id())
+                    .unwrap();
+                let selected = plan.function(function.id).unwrap();
+                let carriers = selected.carriers().unwrap();
+                for field in region.fields() {
+                    let child =
+                        carriers
+                            .operations()
+                            .iter()
+                            .find_map(|operation| match operation.role() {
+                                ResourceCarrierOperationRole::ConstructorChild {
+                                    child, ..
+                                } if operation.site() == field.stage() => Some(child),
+                                _ => None,
+                            })
+                            .unwrap();
+                    assert_eq!(child.index, field.field());
+                    if !resource_type_pending(types, field.original().ty) {
+                        assert!(
+                            matches!(child.value, ResourceCarrierValue::Ordinary { ty } if ty == field.original().ty)
+                        );
+                    }
+                }
+                let mut forged = program.clone();
+                let function = forged
+                    .functions
+                    .iter_mut()
+                    .find(|current| current.id == function.id)
+                    .unwrap();
+                let stage = function
+                    .blocks
+                    .iter_mut()
+                    .flat_map(|block| &mut block.statements)
+                    .find_map(|statement| match &mut statement.kind {
+                        StatementKind::ResourceConstructor(ResourceConstructorNode::Stage {
+                            value,
+                            ..
+                        }) if !resource_type_pending(types, value.ty) => Some(value),
+                        _ => None,
+                    })
+                    .unwrap();
+                stage.ty = if stage.ty == TypeInterner::INT8 {
+                    TypeInterner::INT16
+                } else {
+                    TypeInterner::INT8
+                };
+                assert!(
+                    validate_resource_ownership(&forged, types).is_err(),
+                    "changing width must not reseal an original constructor"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn occupied_struct_pending_qualifier_keeps_exact_observation_before_and_after_canonicalization() {
+    const SOURCE: &str = include_str!(
+        "../../../../jett_comptime/src/resource_execution/fixtures/38_owned_struct_pending_int64_transport.jett"
+    );
+    let support = format!(
+        "{}\n{}",
+        crate::resource_ownership::tests::SUPPORT,
+        include_str!(
+            "../../../../jett_comptime/src/resource_execution/fixtures/resource_companion_probe.jett"
+        )
+    );
+    for release in [false, true] {
+        let checked = crate::resource_ownership::tests::checked_support(SOURCE, &support, release);
+        let types = &checked.checked().interner;
+        let mut program = lowered(&checked);
+        for canonical in [false, true] {
+            if canonical {
+                crate::prepare_native_sequences(&mut program, types);
+                crate::prepare_native_uninhabited_sums(&mut program, types);
+                crate::prepare_native_generated_functions(&mut program, types);
+            }
+            let plan = validate_resource_ownership(&program, types).unwrap();
+            let function = program
+                .functions
+                .iter()
+                .find(|function| {
+                    function.identity.declaration.namespace == "app"
+                        && function.identity.declaration.name == "retire_pending"
+                })
+                .unwrap();
+            let observations = plan.function(function.id).unwrap().carriers().unwrap().operations().iter().filter(|operation| matches!(operation.role(), ResourceCarrierOperationRole::Observe { observation: ResourceCarrierObservation::Ordinary { ty, .. }, .. } if *ty == TypeInterner::INT64)).count();
+            assert_eq!(
+                observations, 1,
+                "the nested Join keeps one exact typed field observation"
+            );
+            let mut forged = program.clone();
+            let changed = forged
+                .functions
+                .iter_mut()
+                .find(|candidate| candidate.id == function.id)
+                .unwrap()
+                .blocks
+                .iter_mut()
+                .flat_map(|block| &mut block.statements)
+                .find_map(|statement| {
+                    let StatementKind::Let { value, .. } = &mut statement.kind else {
+                        return None;
+                    };
+                    let hir::ExpressionKind::Join(inner) = &mut value.kind else {
+                        return None;
+                    };
+                    matches!(inner.kind, hir::ExpressionKind::Field { .. }).then_some(inner)
+                })
+                .unwrap();
+            changed.ty = TypeInterner::INT8;
+            assert!(
+                validate_resource_ownership(&forged, types).is_err(),
+                "nested qualifier cannot redirect the original field width"
+            );
+        }
+    }
+}
+
+#[test]
 fn resource_occupied_struct_constructor_refuses_changed_fields_copied_nodes_and_lost_proof_before_prune()
  {
     for release in [false, true] {

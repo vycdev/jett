@@ -1,9 +1,9 @@
 # Ordinary terminal-error lifetime for checked Resource entries
 
-Status: the bounded ordinary-error same-grant obligation passes in both
-native checking profiles. The accepted twelve-gate scope covers **604
-Source-deleted executables / 728 entries**, and the fresh whole workspace passes
-**3,614 checks / zero failures / 14 ignored tests**. Source13 retains both
+Status: the historical v24 ordinary-error same-grant checkpoint passed in both
+native checking profiles. That twelve-gate scope covered **604
+Source-deleted executables / 728 entries**, and that workspace passed
+**3,614 checks / zero failures / 14 ignored tests**. Source13 retained both
 original Bounds outcomes without error reset. Broader full-language acceptance
 remains required; the rough feature estimate stays **87%**.
 
@@ -83,9 +83,10 @@ retained Session/provider/grant. Its completed process record is
 `4e8e36bfd4ff70e92064961a992771fffdd19dcc1b2cb08c1a4ad5cb0a9d3a84`
 and `862e8121741ea9ee81462e498e7686fb07e93d2278ed7fba20d1ae20be70290a`.
 
-Source13 retains **both** original `list.__remove_at: index -1 out of bounds`
-ordinary messages and `native Resource protocol refused` Resource messages.
-Both attempts retain **body1 / cleanup0 / Body**, with first process exit **71**,
+At that historical v24 checkpoint, Source13 retained **both** original
+`list.__remove_at: index -1 out of bounds` ordinary messages and
+`native Resource protocol refused` Resource messages.
+Both attempts retained **body1 / cleanup0 / Body**, with first process exit **71**,
 monotonic attempt identities, zero eight Resource custody counts, empty ordinary
 storage before destruction, no events, exhausted script and one successful
 Session destruction. The unchanged full Source prefix, constructor returns,
@@ -179,3 +180,33 @@ entry publication. These deterministic controls belong to the measured
 they do not independently establish Source execution or allocator behavior
 outside the selected hooks. Fresh measurements-02 is separate from unchanged
 historical measurements-01.
+
+
+## Ordinary-only channel clarification
+
+The checked entry has one ordinary first-error channel shared by root and nested
+calls. An exact propagated ordinary failure keeps its original ordinary bytes
+without creating a second Resource refusal. Independently recorded Resource
+errors and cleanup failures remain observable with their existing priority.
+Generated Scope completion still authenticates the returned status; a mismatched
+or unattributed nonzero Source body status remains a protocol error. The observed
+entry body status and the selected Body report channel do not by themselves
+imply Resource bytes.
+
+The v10 and v24 records above really observed an additional
+`native Resource protocol refused` message for Source13. Those observations,
+sessions, hashes and counts remain historical facts. The extra message is
+superseded as the current ordinary-only oracle; it is not a root/nested semantic
+distinction. The existing Runtime completion control already distinguishes an
+ordinary assertion failure with an empty Resource message from a real wrong-hook
+Resource refusal.
+
+Only the native expected Resource bytes for ordinary-only failures are corrected.
+Original Source, reference Bounds bytes, body1/cleanup0/Body, first exit71,
+events, custody/storage, exact retirement, script exhaustion and same-grant
+reentry checks remain unchanged. Corrected affected native gates now pass in
+bounded MSVC acceptance: all eighteen Resource gates cover 846 Source-deleted
+executions and 1,038 entries. See the current scalar checkpoint in the
+[native acceptance audit](native_acceptance_audit.md). Old passing receipts do
+not prove the corrected message oracle. Broader workspace, CI, GNU and installed
+acceptance remain open; these bounded results do not complete the full goal.

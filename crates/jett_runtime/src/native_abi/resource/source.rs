@@ -1291,8 +1291,14 @@ impl NativeResourceState {
                 .ok_or(NativeResourceError::InvalidEntry)?;
             attempt.root_body_status = Some(body_status);
         }
+        // An exact propagated ordinary first-error status is not a second
+        // Resource refusal. Keep the original status in the completion below.
+        let ordinary_body_failure = ordinary
+            .resource_failure()
+            .filter(|failure| body_status != 0 && failure.status.code() == body_status)
+            .map(|failure| NativeResourceError::Ordinary(failure.status));
         let body = if body_status != 0 {
-            Err(NativeResourceError::BodyFailed)
+            Err(ordinary_body_failure.unwrap_or(NativeResourceError::BodyFailed))
         } else {
             self.running(ordinary).map(|_| ())
         };
@@ -1323,9 +1329,11 @@ impl NativeResourceState {
             // Preserve the original nonzero body independently of selected cleanup.
             // A clean body whose real Scope cleanup failed must still stop its caller.
             let failure = if body_status != 0 {
-                Some(NativeResourceError::SourceBodyStatus(JettRuntimeStatusV1(
-                    body_status,
-                )))
+                Some(
+                    ordinary_body_failure.unwrap_or(NativeResourceError::SourceBodyStatus(
+                        JettRuntimeStatusV1(body_status),
+                    )),
+                )
             } else {
                 cleanup
                     .as_ref()

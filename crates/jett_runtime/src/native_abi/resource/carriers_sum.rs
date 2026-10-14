@@ -57,7 +57,7 @@ impl NativeResourceState {
                 else {
                     return Err(NativeResourceError::UnsupportedCarrierCustody);
                 };
-                if child.node != *fail || !child.children.is_empty() {
+                if child.node != *fail || !child.children.is_empty() || child.pending_depth != 0 {
                     return Err(NativeResourceError::WrongFamily);
                 }
                 let (actual, bits) = child.ordinary.ok_or(NativeResourceError::WrongFamily)?;

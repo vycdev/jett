@@ -31,6 +31,50 @@ pub unsafe extern "C" fn jett_rt_v1_resource_carrier_child(
     })
 }
 /// # Safety
+/// Context obeys the stationary-context contract; the installed row owns the child.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_resource_carrier_child_scalar_task(
+    context: *const JettRuntimeContextV1,
+    builder: u64,
+    ordinal: u32,
+    bits: u64,
+    pending_depth: u64,
+) -> JettRuntimeStatusV1 {
+    status(context, |s, v, _| {
+        s.carrier_child_scalar_task(v, id(builder)?, ordinal, bits, pending_depth)
+    })
+}
+
+/// # Safety
+/// Both outputs obey the stationary-context, exclusive-output and disjoint contracts.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_resource_carrier_observe_scalar_task(
+    context: *const JettRuntimeContextV1,
+    frame: u64,
+    operation: u32,
+    input: u64,
+    selection: u64,
+    out_bits: *mut u64,
+    out_depth: *mut u64,
+) -> JettRuntimeStatusV1 {
+    if !output_ok(context, out_bits)
+        || !output_ok(context, out_depth)
+        || !disjoint(out_bits, out_depth)
+    {
+        return JettRuntimeStatusV1::INVALID_ARGUMENT;
+    }
+    status(context, |s, v, _| {
+        let (bits, depth) =
+            s.carrier_observe_scalar_task(v, id(frame)?, operation, id(input)?, selection)?;
+        // SAFETY: caller supplies live exclusive, validated disjoint output words.
+        unsafe {
+            ptr::write(out_bits, bits);
+            ptr::write(out_depth, depth);
+        }
+        Ok(())
+    })
+}
+/// # Safety
 /// Context and output obey the stationary-context and exclusive-output contracts.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn jett_rt_v1_resource_carrier_commit(

@@ -46,12 +46,14 @@ pub(super) enum Leaf {
     ReturnPublish,
     CarrierConstructBegin,
     CarrierChild,
+    CarrierChildScalarTask,
     CarrierCommit,
     CarrierTransfer,
     CarrierBorrow,
     CarrierExtract,
     CarrierAdaptSum,
     CarrierObserve,
+    CarrierObserveScalarTask,
     CarrierEndBorrow,
     CarrierRetire,
     CarrierResetIteration,
@@ -164,6 +166,10 @@ impl Leaf {
                 &[I64, I64, I32, I64],
             ),
             CarrierChild => ("jett_rt_v1_resource_carrier_child", &[I64, I64, I32, I64]),
+            CarrierChildScalarTask => (
+                "jett_rt_v1_resource_carrier_child_scalar_task",
+                &[I64, I64, I32, I64, I64],
+            ),
             CarrierCommit => ("jett_rt_v1_resource_carrier_commit", &[I64, I64, I64]),
             CarrierTransfer => (
                 "jett_rt_v1_resource_carrier_transfer",
@@ -184,6 +190,10 @@ impl Leaf {
             CarrierObserve => (
                 "jett_rt_v1_resource_carrier_observe",
                 &[I64, I64, I32, I64, I64, I64],
+            ),
+            CarrierObserveScalarTask => (
+                "jett_rt_v1_resource_carrier_observe_scalar_task",
+                &[I64, I64, I32, I64, I64, I64, I64],
             ),
             CarrierEndBorrow => ("jett_rt_v1_resource_carrier_end", &[I64, I64, I32, I64]),
             CarrierRetire => ("jett_rt_v1_resource_carrier_retire", &[I64, I64, I32, I64]),
@@ -304,5 +314,36 @@ impl Leaf {
         Ok(builder
             .ins()
             .stack_load(output_type, slot, if result_bytes == 16 { 8 } else { 0 }))
+    }
+
+    pub(super) fn scalar_task_output(
+        self,
+        module: &mut ObjectModule,
+        builder: &mut FunctionBuilder<'_>,
+        arguments: &[Value],
+        failure: ir::Block,
+    ) -> Result<(Value, Value), CodegenError> {
+        if self != Leaf::CarrierObserveScalarTask {
+            return Err(pending(
+                "scalar transport outputs require their exact selected leaf",
+            ));
+        }
+        let slot = builder.create_sized_stack_slot(ir::StackSlotData::new(
+            ir::StackSlotKind::ExplicitSlot,
+            16,
+            3,
+        ));
+        let zero = builder.ins().iconst(ir::types::I64, 0);
+        builder.ins().stack_store(zero, slot, 0);
+        builder.ins().stack_store(zero, slot, 8);
+        let bits = builder.ins().stack_addr(ir::types::I64, slot, 0);
+        let depth = builder.ins().stack_addr(ir::types::I64, slot, 8);
+        let mut arguments = arguments.to_vec();
+        arguments.extend([bits, depth]);
+        self.checked(module, builder, &arguments, failure)?;
+        Ok((
+            builder.ins().stack_load(ir::types::I64, slot, 0),
+            builder.ins().stack_load(ir::types::I64, slot, 8),
+        ))
     }
 }

@@ -45,8 +45,18 @@ CARRIER_EXPORTS = frozenset(
     "jett_rt_v1_resource_carrier_" + suffix for suffix in (
         "construct_begin", "child", "commit", "transfer", "qualify", "borrow", "observe",
         "extract", "adapt", "end", "retire", "reset_iteration", "publish",
+        "child_scalar_task", "observe_scalar_task",
     )
 )
+SCALAR_TASK_SIGNATURES: dict[str, tuple[str, ...]] = {
+    "jett_rt_v1_resource_carrier_child_scalar_task": (
+        "*const JettRuntimeContextV1", "u64", "u32", "u64", "u64",
+    ),
+    "jett_rt_v1_resource_carrier_observe_scalar_task": (
+        "*const JettRuntimeContextV1", "u64", "u32", "u64", "u64", "*mut u64", "*mut u64",
+    ),
+}
+SCALAR_TASK_EXPORTS = frozenset(SCALAR_TASK_SIGNATURES)
 CFGS = ["test", "jett_resource_native_test_archive"]
 STARTUP_SIGNATURES: dict[str, tuple[str, ...]] = {
     "jett_rt_v1_resource_program_begin": (
@@ -569,6 +579,40 @@ def graph_descriptor_export(directory: Path) -> set[str]:
     return {name}
 
 
+def scalar_task_exports(directory: Path) -> set[str]:
+    leaves = directory / "leaves.rs"
+    child = directory / "leaves/carriers.rs"
+    require(leaves.is_file() and child.is_file(), "scalar carrier leaf sources are required")
+    owner_text = leaves.read_text(encoding="utf-8")
+    module_pattern = (r'(?m)^[ \t]*((?:#\[[^\n]*\][ \t]*\n[ \t]*)*)'
+                      r'mod[ \t]+carrier_leaves[ \t]*;')
+    require(len(re.findall(r"\bmod\s+carrier_leaves\b", owner_text)) == 1
+            and re.findall(module_pattern, owner_text) == ['#[path = "leaves/carriers.rs"]\n'],
+            "scalar carrier leaves must retain their unconditional canonical private child module")
+    text = child.read_text(encoding="utf-8")
+    require("#![" not in text, "scalar carrier child cannot carry conditional module attributes")
+    pattern = (r'(?m)^[ \t]*((?:#\[[^\n]*\][ \t]*\n[ \t]*)*)'
+               r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+(jett_rt_v1_resource_carrier_[a-z_]+)'
+               r'\s*\(([^)]*)\)\s*->\s*([A-Za-z_][A-Za-z0-9_]*)\s*\{')
+    declarations = [row for row in re.findall(pattern, text) if row[1] in SCALAR_TASK_EXPORTS]
+    names = [name for _, name, _, _ in declarations]
+    require(len(names) == len(set(names)) == 2 and set(names) == SCALAR_TASK_EXPORTS,
+            "two exact additive scalar-task C exports are required")
+    for attributes, name, parameters, result in declarations:
+        require(attributes.strip() == "#[unsafe(no_mangle)]",
+                f"scalar-task export must be unconditional and unmangled: {name}")
+        types: list[str] = []
+        for parameter in parameters.split(","):
+            if not parameter.strip():
+                continue
+            parts = parameter.split(":", 1)
+            require(len(parts) == 2, f"invalid scalar-task parameter: {name}")
+            types.append(" ".join(parts[1].split()))
+        require(tuple(types) == SCALAR_TASK_SIGNATURES[name] and result == "JettRuntimeStatusV1",
+                f"scalar-task C signature differs: {name}")
+    return set(names)
+
+
 def export_names(repo: Path) -> tuple[set[str], set[str]]:
     directory = repo / "crates/jett_runtime/src/native_abi/resource"
     pattern = r'pub unsafe extern "C" fn (jett_rt_v1_resource_[a-z_]+)\('
@@ -576,22 +620,27 @@ def export_names(repo: Path) -> tuple[set[str], set[str]]:
     carriers: list[str] = re.findall(pattern, (directory / "leaves/carriers.rs").read_text(encoding="utf-8"))
     private = re.findall(pattern, (directory / "test_archive_api.rs").read_text(encoding="utf-8"))
     graph = graph_descriptor_export(directory)
+    scalar = scalar_task_exports(directory)
     legacy = [name for name in leaves if name not in graph]
     require(len(leaves) == len(set(leaves)) == 38 and len(legacy) == len(set(legacy)) == 37,
             "frozen Resource leaf contract must contain 37 original names and one exact graph descriptor")
     require(not set(leaves) & CARRIER_EXPORTS, "carrier exports must occur only in their declared child module")
-    require(len(carriers) == len(set(carriers)) == 13 and set(carriers) == set(CARRIER_EXPORTS),
-            "frozen carrier leaf contract must contain the exact 13 names")
+    require(len(carriers) == len(set(carriers)) == 15 and set(carriers) == set(CARRIER_EXPORTS),
+            "carrier leaf contract must retain 13 original and two exact scalar-task names")
     require(len(private) == len(set(private)) == 8, "frozen private test contract must contain eight names")
     require(all(name.startswith("jett_rt_v1_resource_test_") for name in private),
             "unexpected private export name")
-    require(len(set(legacy) | set(carriers)) == 50, "original Resource contract must retain 50 names")
-    require(len(set(leaves) | set(carriers)) == 51, "graph Resource contract must contain exactly 51 names")
+    require(len(set(legacy) | (set(carriers) - scalar)) == 50,
+            "original Resource contract must retain 50 names")
+    require(len(set(leaves) | (set(carriers) - scalar)) == 51,
+            "graph Resource contract must retain exactly 51 original names")
+    require(len(set(leaves) | set(carriers)) == 53,
+            "graph and scalar Resource contract must contain exactly 53 names")
     startup = startup_exports(directory)
     require(not startup & (set(leaves) | set(carriers) | set(private)),
             "Resource startup exports belong only to their canonical child module")
     production = set(leaves) | set(carriers) | startup
-    require(len(production) == 56, "fifty-six production Resource exports are required")
+    require(len(production) == 58, "fifty-eight production Resource exports are required")
     return production, set(private)
 
 

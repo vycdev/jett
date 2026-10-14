@@ -3,6 +3,47 @@ use super::super::checked::PreparedOwnedStruct;
 use super::*;
 use jett_parser::ast::Expr;
 
+/// Validate the exact checked carrier, without rounding a supplied value or
+/// granting a predicate transition to a merely layout-compatible payload.
+pub(super) fn companion_shape(
+    value: &Value,
+    ty: jett_types::TypeId,
+    checked: &CheckedExecution,
+) -> Result<(), ResourceExecutionError> {
+    let types = &checked.program().checked().interner;
+    if ty.index() as usize >= types.len() {
+        return Err(ResourceExecutionError::InvalidCheckedProgram);
+    }
+    if !PreparedOwnedStruct::supports_companion(types.resolve(ty)) {
+        return Err(ResourceExecutionError::InvalidPayloadPath);
+    }
+    // Pending layers belong to the transported field, not to an inspection of
+    // it. Validate the stored carrier without consuming or rewriting any layer.
+    let mut payload = value;
+    loop {
+        match payload {
+            Value::Pending(inner) => payload = inner,
+            Value::Typed { type_name, value } if type_name == &types.type_name(ty) => {
+                payload = value;
+            }
+            _ => break,
+        }
+    }
+    super::absent_generated::absent_shape(payload, ty, checked)?;
+    if matches!(types.resolve(ty), jett_types::Type::Float32) {
+        let Value::Float64(number) = payload.payload() else {
+            return Err(ResourceExecutionError::InvalidPayloadPath);
+        };
+        // This cast is the language's binary32 rounding boundary. Validate its
+        // exact widening instead of modifying an untrusted physical carrier.
+        let widened = f64::from(*number as f32);
+        if !number.is_nan() && number.to_bits() != widened.to_bits() {
+            return Err(ResourceExecutionError::InvalidPayloadPath);
+        }
+    }
+    Ok(())
+}
+
 impl ResourceTransport {
     pub(crate) fn assemble_owned_struct(
         &mut self,

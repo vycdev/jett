@@ -248,3 +248,65 @@ fn occupied_struct_wrong_scalar_and_redirected_physical_field_fail_before_public
         (0, 0)
     );
 }
+
+#[test]
+fn occupied_struct_companion_validation_keeps_width_carriers_binary32_and_layers() {
+    use jett_types::TypeInterner as Types;
+    let (runtime, _) = setup();
+    let accepted = [
+        (Types::INT8, Value::Int64(-128)),
+        (Types::INT16, Value::Int64(-32768)),
+        (Types::INT32, Value::Int64(i64::from(i32::MIN))),
+        (Types::INT64, Value::Int64(i64::MIN)),
+        (Types::UINT8, Value::Int64(255)),
+        (Types::UINT16, Value::Int64(65535)),
+        (Types::UINT32, Value::Int64(i64::from(u32::MAX))),
+        (Types::UINT64, Value::Uint64(u64::MAX)),
+        (Types::FLOAT32, Value::Float64(f64::from(0.1f32))),
+        (Types::FLOAT64, Value::Float64(0.1)),
+        (Types::BOOL, Value::Bool(true)),
+        (Types::STRING, Value::String("retained".into())),
+        (Types::NOTHING, Value::Nothing),
+    ];
+    for (ty, value) in accepted {
+        for depth in 0..=3 {
+            let mut transported = value.clone();
+            for _ in 0..depth {
+                transported = Value::Pending(Box::new(transported));
+            }
+            let before = format!("{transported:?}");
+            companion_shape(&transported, ty, &runtime.checked).unwrap();
+            assert_eq!(
+                format!("{transported:?}"),
+                before,
+                "validation must not consume a layer"
+            );
+        }
+    }
+    for number in [-0.0, 0.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+        companion_shape(&Value::Float64(number), Types::FLOAT32, &runtime.checked).unwrap();
+    }
+    for (ty, value) in [
+        (Types::INT8, Value::Int64(128)),
+        (Types::INT16, Value::Int64(-32769)),
+        (Types::INT32, Value::Int64(i64::from(i32::MAX) + 1)),
+        (Types::UINT8, Value::Int64(-1)),
+        (Types::UINT16, Value::Int64(65536)),
+        (Types::UINT32, Value::Int64(i64::from(u32::MAX) + 1)),
+        (Types::UINT64, Value::Int64(17)),
+        (Types::INT64, Value::Uint64(17)),
+        (Types::FLOAT32, Value::Float64(0.1)),
+        (Types::FLOAT32, Value::Float64(16777217.0)),
+        (Types::BOOL, Value::Int64(1)),
+        (Types::NOTHING, Value::Bool(false)),
+    ] {
+        assert_eq!(
+            companion_shape(&value, ty, &runtime.checked),
+            Err(ResourceExecutionError::InvalidPayloadPath)
+        );
+        assert_eq!(
+            companion_shape(&Value::Pending(Box::new(value)), ty, &runtime.checked),
+            Err(ResourceExecutionError::InvalidPayloadPath)
+        );
+    }
+}

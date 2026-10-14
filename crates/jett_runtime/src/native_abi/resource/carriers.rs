@@ -14,6 +14,8 @@ pub(super) struct NativeCarrierTree {
     pub(super) node: u32,
     pub(super) selector: u32,
     pub(super) ordinary: Option<(u32, u64)>,
+    /// Present only on scalar Ordinary nodes; strings retain their own depth.
+    pub(super) pending_depth: u64,
     pub(super) owner: Option<OwnedResourceToken>,
     pub(super) children: Vec<Option<NativeCarrierTree>>,
     pub(super) acquisition: Vec<usize>,
@@ -190,6 +192,9 @@ impl NativeResourceState {
         pending.push(tree);
         while let Some(t) = pending.pop() {
             let n = self.layout.carriers().node(t.node)?;
+            if !matches!(n, Node::Ordinary { .. }) && t.pending_depth != 0 {
+                return Err(NativeResourceError::WrongFamily);
+            }
             if !matches!(n, Node::Resource { .. }) && t.owner.is_some() {
                 return Err(NativeResourceError::WrongFamily);
             }
@@ -224,10 +229,11 @@ impl NativeResourceState {
                         return Err(NativeResourceError::WrongFamily);
                     }
                     ordinary
-                        .validate_resource_ordinary(
+                        .validate_resource_carrier_companion(
                             t.ordinary.ok_or(NativeResourceError::WrongFamily)?.1,
                             &self.layout,
                             *shape,
+                            t.pending_depth,
                         )
                         .map_err(ordinary_error)?;
                     continue;
@@ -490,6 +496,17 @@ impl NativeResourceState {
         ordinal: u32,
         bits: u64,
     ) -> ResourceResult<()> {
+        self.carrier_child_value(ordinary, builder, ordinal, bits, 0)
+    }
+
+    fn carrier_child_value(
+        &mut self,
+        ordinary: &values::NativeValues,
+        builder: ResourceHandleId,
+        ordinal: u32,
+        bits: u64,
+        pending_depth: u64,
+    ) -> ResourceResult<()> {
         self.running(ordinary)?;
         let Some(NativeResourceEntry::CarrierBuilder(b)) = self.handles.get(&builder) else {
             return Err(NativeResourceError::WrongFamily);
@@ -504,6 +521,9 @@ impl NativeResourceState {
         let child = children
             .get(next)
             .ok_or(NativeResourceError::WrongOperation)?;
+        if pending_depth != 0 && !matches!(child.source, ChildSource::Ordinary { .. }) {
+            return Err(NativeResourceError::WrongOperation);
+        }
         if b.children
             .get(child.index as usize)
             .ok_or(NativeResourceError::WrongOperation)?
@@ -514,12 +534,13 @@ impl NativeResourceState {
         let tree = match child.source {
             ChildSource::Ordinary { shape } => {
                 ordinary
-                    .validate_resource_ordinary(bits, &self.layout, shape)
+                    .validate_resource_carrier_companion(bits, &self.layout, shape, pending_depth)
                     .map_err(ordinary_error)?;
                 NativeCarrierTree {
                     node: child.node,
                     selector: 0,
                     ordinary: Some((shape, bits)),
+                    pending_depth,
                     owner: None,
                     children: Vec::new(),
                     acquisition: Vec::new(),
@@ -604,6 +625,7 @@ impl NativeResourceState {
                 node,
                 selector: b.selector,
                 ordinary: None,
+                pending_depth: 0,
                 owner: None,
                 children: b.children,
                 acquisition: b.acquisition,
@@ -851,7 +873,7 @@ impl NativeResourceState {
             Observation::State => Ok(u64::from(tree.selector)),
             Observation::Ordinary { shape, clone } => {
                 let (actual, bits) = tree.ordinary.ok_or(NativeResourceError::WrongFamily)?;
-                if actual != shape {
+                if actual != shape || tree.pending_depth != 0 {
                     return Err(NativeResourceError::WrongFamily);
                 }
                 self.carrier_observe_ordinary(ordinary, shape, clone, bits)
@@ -871,15 +893,64 @@ impl NativeResourceState {
             return Err(NativeResourceError::WrongOperation);
         }
         ordinary
-            .validate_resource_ordinary(bits, &self.layout, shape)
+            .validate_resource_carrier_companion(bits, &self.layout, shape, 0)
             .map_err(ordinary_error)?;
         if required {
             ordinary
-                .clone_resource_string_companion(&self.layout, shape, bits)
+                .clone_resource_carrier_string_companion(&self.layout, shape, bits)
                 .map_err(ordinary_error)
         } else {
             Ok(bits)
         }
+    }
+
+    pub(super) fn carrier_observe_scalar_task(
+        &mut self,
+        ordinary: &mut values::NativeValues,
+        frame: ResourceHandleId,
+        operation: u32,
+        handle: ResourceHandleId,
+        dynamic: u64,
+    ) -> ResourceResult<(u64, u64)> {
+        self.running(ordinary)?;
+        let Op::Observe {
+            source,
+            path,
+            observation:
+                Observation::Ordinary {
+                    shape,
+                    clone: false,
+                },
+            ..
+        } = self.carrier_operation(operation, frame)?
+        else {
+            return Err(NativeResourceError::WrongOperation);
+        };
+        if !matches!(
+            self.layout.shapes().get(shape as usize),
+            Some(
+                NativeShape::Integer { .. }
+                    | NativeShape::Float { .. }
+                    | NativeShape::Bool
+                    | NativeShape::Nothing
+            )
+        ) {
+            return Err(NativeResourceError::WrongFamily);
+        }
+        let (root, _, path, _) =
+            self.carrier_location(ordinary, frame, handle, source, &path, dynamic)?;
+        let Some(NativeResourceEntry::CarrierRoot(root)) = self.handles.get(&root) else {
+            return Err(NativeResourceError::WrongFamily);
+        };
+        let tree = selected(&root.tree, &path)?;
+        let (actual, bits) = tree.ordinary.ok_or(NativeResourceError::WrongFamily)?;
+        if actual != shape {
+            return Err(NativeResourceError::WrongFamily);
+        }
+        ordinary
+            .validate_resource_carrier_companion(bits, &self.layout, shape, tree.pending_depth)
+            .map_err(ordinary_error)?;
+        Ok((bits, tree.pending_depth))
     }
     pub(super) fn carrier_extract(
         &mut self,
@@ -923,7 +994,7 @@ impl NativeResourceState {
                 }
             }
             Destination::Ordinary { shape } => {
-                if projected.ordinary.map(|v| v.0) != Some(shape) {
+                if projected.ordinary.map(|v| v.0) != Some(shape) || projected.pending_depth != 0 {
                     return Err(NativeResourceError::WrongFamily);
                 }
             }
@@ -1003,6 +1074,7 @@ impl NativeResourceState {
                         node: *fail,
                         selector: 0,
                         ordinary: Some((shape, string)),
+                        pending_depth: 0,
                         owner: None,
                         children: Vec::new(),
                         acquisition: Vec::new(),
@@ -1028,6 +1100,7 @@ impl NativeResourceState {
             node,
             selector,
             ordinary: None,
+            pending_depth: 0,
             owner: None,
             children,
             acquisition,
@@ -1067,7 +1140,7 @@ impl NativeResourceState {
         while let Some(mut tree) = pending.pop() {
             if let Some((shape, bits)) = tree.ordinary {
                 if let Err(e) = ordinary
-                    .drop_resource_typed_companion(&self.layout, shape, bits)
+                    .drop_resource_carrier_companion(&self.layout, shape, bits, tree.pending_depth)
                     .map_err(ordinary_error)
                 {
                     first.get_or_insert(e);
@@ -1237,6 +1310,7 @@ impl NativeResourceState {
                             .node,
                         selector: builder.selector,
                         ordinary: None,
+                        pending_depth: 0,
                         owner: None,
                         children: builder.children,
                         acquisition: builder.acquisition,

@@ -136,6 +136,50 @@ fn retirement_owners<'a>(
 }
 
 impl NativeResourceState {
+    /// Additive scalar transport uses the same authenticated constructor row.
+    /// Depth is data and cannot select a Resource adoption or another schema.
+    pub(in crate::native_abi::resource) fn carrier_child_scalar_task(
+        &mut self,
+        ordinary: &values::NativeValues,
+        builder_id: ResourceHandleId,
+        ordinal: u32,
+        bits: u64,
+        pending_depth: u64,
+    ) -> ResourceResult<()> {
+        self.running(ordinary)?;
+        let Some(NativeResourceEntry::CarrierBuilder(builder)) = self.handles.get(&builder_id)
+        else {
+            return Err(NativeResourceError::WrongFamily);
+        };
+        self.validate_carrier_builder(ordinary, builder)?;
+        let Op::Construct { children, .. } =
+            self.carrier_operation(builder.operation, builder.frame)?
+        else {
+            return Err(NativeResourceError::WrongOperation);
+        };
+        if ordinal as usize != builder.next {
+            return Err(NativeResourceError::WrongOperation);
+        }
+        let child = children
+            .get(builder.next)
+            .ok_or(NativeResourceError::WrongOperation)?;
+        let ChildSource::Ordinary { shape } = child.source else {
+            return Err(NativeResourceError::WrongOperation);
+        };
+        if !matches!(
+            self.layout.shapes().get(shape as usize),
+            Some(
+                NativeShape::Integer { .. }
+                    | NativeShape::Float { .. }
+                    | NativeShape::Bool
+                    | NativeShape::Nothing
+            )
+        ) {
+            return Err(NativeResourceError::WrongFamily);
+        }
+        self.carrier_child_value(ordinary, builder_id, ordinal, bits, pending_depth)
+    }
+
     pub(super) fn validate_carrier_ownership(
         &self,
         root: Option<&CarrierRootToken>,
@@ -320,6 +364,7 @@ impl NativeResourceState {
                 node: child.node,
                 selector: 0,
                 ordinary: None,
+                pending_depth: 0,
                 owner: Some(owner.token),
                 children: Vec::new(),
                 acquisition: Vec::new(),
@@ -663,6 +708,7 @@ impl NativeResourceState {
                     node: self.layout.carriers().slots[b.destination as usize].node,
                     selector: b.selector,
                     ordinary: None,
+                    pending_depth: 0,
                     owner: None,
                     children: b.children,
                     acquisition: b.acquisition,

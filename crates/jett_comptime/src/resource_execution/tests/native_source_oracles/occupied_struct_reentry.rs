@@ -46,8 +46,17 @@ fn empty_before_teardown(interpreter: &mut Interpreter, expected: &[ProviderEven
 }
 
 pub(super) fn original_then_ready(first: &cases::Case, ready: &cases::Case, release: bool) {
+    original_then_ready_with_support(first, ready, release, cases::SUPPORT);
+}
+
+pub(super) fn original_then_ready_with_support(
+    first: &cases::Case,
+    ready: &cases::Case,
+    release: bool,
+    support: &str,
+) {
     assert_eq!(first.source.as_bytes(), ready.source.as_bytes());
-    let checked = checked_case(first, release);
+    let checked = checked_case_with_support(first, release, support);
     let definition = entry(&checked, "main");
     let mut interpreter = reference_with_required_values(&checked, first, release);
     let combined = first

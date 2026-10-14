@@ -766,3 +766,92 @@ fn native_resource_source_unfinished_and_merely_retired_frames_have_no_completio
         finish(auth, attempt);
     });
 }
+
+#[test]
+fn native_resource_source_matching_ordinary_failure_preserves_exact_status_and_independent_errors()
+{
+    for case in 0..5 {
+        context(|auth| {
+            let f = fixture(4, false, false);
+            let finalizer = if case == 2 { 3 } else { 1 };
+            let (attempt, _, op, network) = setup(auth, &f, &[(finalizer, 501, 0, "")]);
+            let owner = acquire(auth, op, network);
+            let (call, scope) = auth
+                .with_resource(|s, v, r| {
+                    let call = s.source_prepare(v, op, f.source)?;
+                    s.source_actual(v, r, call, 0, 0, owner.raw())?;
+                    let scope = s.source_enter(v, r, call)?;
+                    Ok((call, scope))
+                })
+                .unwrap();
+            if case == 3 {
+                assert!(
+                    auth.with_resource(|s, v, _| s.prepare_hook(v, 999, scope, None))
+                        .is_err()
+                );
+            }
+            let pointer = auth.key.owner_address as *const JettRuntimeContextV1;
+            if case != 4 {
+                unsafe {
+                    values::jett_rt_v1_nothing_equal(pointer, 1, 0, 0);
+                    assert_eq!(values::jett_rt_v1_value_status(pointer), 1);
+                }
+            }
+            let body_status = if case == 1 { 71 } else { 1 };
+            let ordinary = NativeResourceError::Ordinary(JettRuntimeStatusV1::INVALID_ARGUMENT);
+            let expected_scope = match case {
+                1 | 4 => NativeResourceError::BodyFailed,
+                2 => NativeResourceError::Cleanup(ResourceCleanupFailure::FinalizerPanic),
+                _ => ordinary,
+            };
+            assert_eq!(
+                auth.with_resource(|s, v, r| {
+                    s.scope_complete(v, r, scope, f.complete_scope, body_status)
+                }),
+                Err(expected_scope)
+            );
+            let expected_source = if matches!(case, 1 | 4) {
+                NativeResourceError::SourceBodyStatus(JettRuntimeStatusV1(body_status))
+            } else {
+                ordinary
+            };
+            assert_eq!(
+                auth.with_resource(|s, v, _| s.source_status(v, call)),
+                Err(expected_source)
+            );
+            auth.with_resource(|s, v, r| {
+                assert_eq!(s.source_completed_body_status(call)?, Some(body_status));
+                assert!(!s.handles.contains_key(&scope));
+                assert_eq!(s.custody.live_owners(), 0);
+                assert_eq!(r.live_count(), 0);
+                s.end_operation_frame(v, r, op)?;
+                let completion = s.complete_entry(v, r, attempt, body_status, false)?;
+                assert_eq!(completion.body_status, body_status);
+                assert_eq!(completion.cleanup_status, if case == 2 { 255 } else { 0 });
+                assert_eq!(completion.selected_kind, if case == 2 { 3 } else { 1 });
+                let (resource, ordinary_message) = s.completed_messages(attempt)?;
+                let ordinary_expected: &[u8] = if case == 4 {
+                    b""
+                } else {
+                    b"unsupported binary operation: pending(nothing) Eq nothing"
+                };
+                assert_eq!(ordinary_message, ordinary_expected);
+                let resource_expected: &[u8] = match case {
+                    0 => b"",
+                    2 => CLEANUP_FAILED,
+                    _ => REFUSED,
+                };
+                assert_eq!(resource, resource_expected, "case {case}");
+                assert_eq!(
+                    s.counts(v, r),
+                    NativeResourceCounts {
+                        ordinary_empty: 1,
+                        ..NativeResourceCounts::default()
+                    }
+                );
+                Ok(())
+            })
+            .unwrap();
+        });
+    }
+}

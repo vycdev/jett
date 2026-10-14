@@ -362,12 +362,9 @@ pub unsafe extern "C" fn jett_rt_v1_resource_test_failure_copy(
                 .resource_state
                 .as_ref()
                 .ok_or(NativeResourceError::MissingInstallation)?;
-            let (resource, ordinary) = resource.completed_messages(attempt)?;
-            let message = if resource.is_empty() {
-                ordinary
-            } else {
-                resource
-            };
+            // This private observation reports only the Resource channel.
+            // The matched launcher copies the ordinary channel separately.
+            let (message, _) = resource.completed_messages(attempt)?;
             unsafe { ptr::write(out_length, message.len() as u64) };
             if capacity == 0 {
                 return Ok(());

@@ -5072,3 +5072,65 @@ scope. Absent asynchronous scheduling and production-provider APIs are separate
 future feature work, not prerequisites for current reference parity. Focused local checks and 32 linked MSVC executions passed; broader
 native and supported-host acceptance remain pending.
 See [the graph note](active/native_comptime_actor_graph.md).
+
+
+### Occupied Resource primitive companion transport
+
+The selected extension shares one checked primitive admission predicate between
+constructor planning and physical companion validation. It preserves canonical
+alias TypeIds, each original constructor endpoint and field ordinal, written
+evaluation order, and the existing acquisition and cleanup transcript. uint64
+requires `Value::Uint64`; float32 physical validation requires the exact f64
+widening of binary32. Checked expression normalization is the separate rounding
+boundary and restores every pending wrapper before physical validation.
+
+Integer, floating-point and bool carrier children retain pending depth
+separately from payload bits. Nothing keeps its existing scalar-word depth
+encoding: codegen sends zero payload plus depth into the carrier and reconstructs
+the depth word on observation. String handles retain their existing depth
+through clone, observation and retirement. Single-word observation refuses
+pending carrier scalar data; the generated path uses the depth-preserving pair.
+`jett_rt_v1_resource_carrier_child_scalar_task` and
+`jett_rt_v1_resource_carrier_observe_scalar_task` carry payload and depth without
+encoding Resource ownership or capability authority. Their observation outputs
+are committed only after handle, operation and output validation succeeds.
+All existing leaf signatures, generated startup ownership and graph descriptor
+authentication remain unchanged. ABI1/wire3 remains unchanged. The selected
+catalog has 58 production exports: 38 ordinary, 15 carrier and five startup;
+the eight private hooks remain separate. Source completion preserves an
+ordinary body failure only when the returned nonzero status exactly matches the
+recorded ordinary status. Independent Resource errors and cleanup failures retain
+their existing priority. The private test API copies each selected diagnostic
+channel directly; production failure-copy behavior is unchanged.
+
+The original all-target check, 46 focused compiler tests and 82 measurement-helper
+controls passed. After the ordinary source-completion repair, the four compiler
+libraries pass 1,322 tests and Runtime passes 366. Those unit checks precede the
+private report-copy repair and two-file native oracle correction. Fresh normal
+and private MSVC Debug/Release archive measurements retain the 58-export catalog,
+static CRT and unchanged ABI1/wire3. All eighteen corrected Resource gates pass
+846 Source-deleted executions and 1,038 entries; Startup80 also passes with exact
+current source guards. Earlier Graph32 and selected normal regressions retain
+their accepted scope before the isolated oracle correction, with no production
+or selected-test behavior change. This supplies bounded local MSVC acceptance;
+full workspace, inventory, GNU and installed-distribution acceptance remain
+separate requirements. See
+[primitive companion work](active/native_resource_primitive_companions.md).
+
+
+### Ordinary diagnostic propagation across Source scopes
+
+Classification follows the recorded ordinary or Resource failure, not whether
+the failing expression is in a root or nested Source scope. The exact installed
+scope, operation and current ordinary status remain authenticated. Matching
+ordinary propagation does not add `NativeBodyFailure::Resource`; a wrong nonzero
+status or genuine protocol error still does. Cleanup priority and immutable
+completed attempts remain unchanged. The private test API copies the requested channel's
+own bytes; production failure-copy selection is unchanged.
+
+The v10/v24 Source13 observations of an additional Resource refusal are retained
+as historical behavior, not the current ordinary-only message contract. Their
+receipt counts remain bound to those revisions. Correcting only the stale
+message oracle supplies no execution credit; the affected exact native gates
+still require fresh acceptance. See the
+[ordinary terminal-error lifetime note](active/native_resource_ordinary_error_reentry.md).

@@ -737,8 +737,11 @@ impl ResourceTransport {
                         }
                         match types.resolve(*field_type) {
                             Type::Resource(_) => shape(value, *field_type, checked)?,
-                            Type::Int64 | Type::String | Type::Bool | Type::Nothing => {
-                                absent_generated::absent_shape(value, *field_type, checked)?;
+                            kind if super::checked::PreparedOwnedStruct::supports_companion(
+                                kind,
+                            ) =>
+                            {
+                                owned_struct::companion_shape(value, *field_type, checked)?;
                             }
                             _ => return Err(ResourceExecutionError::InvalidPayloadPath),
                         }
@@ -768,6 +771,9 @@ impl ResourceTransport {
                 (Value::Int64(_), _) if ty == TypeInterner::INT64 => Ok(()),
                 (Value::String(_), _) if ty == TypeInterner::STRING => Ok(()),
                 (Value::Nothing, _) if ty == TypeInterner::NOTHING => Ok(()),
+                (value, kind) if super::checked::PreparedOwnedStruct::supports_companion(kind) => {
+                    owned_struct::companion_shape(value, ty, checked)
+                }
                 (value, _)
                     if !value.contains_live_resource_or_grant()
                         && !checked.type_contains_resource(ty)? =>

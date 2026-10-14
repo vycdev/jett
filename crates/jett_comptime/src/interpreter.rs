@@ -2533,6 +2533,9 @@ impl Interpreter {
         expr: &Expr,
         value: Value,
     ) -> Result<Value, String> {
+        if let Some(type_name) = self.resource_companion_expression_name(expr)? {
+            return self.normalize_resource_companion_expression(expr, &type_name, value);
+        }
         // A live binding also has its invocation's type when a compiler-owned
         // facade has no checked source instance. Other expressions use the
         // selected body map rather than another generic instantiation.

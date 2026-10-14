@@ -74,6 +74,92 @@ fn resource_occupied_struct_actual_sources_emit_carrier_and_plain_owner_adoption
 }
 
 #[test]
+fn occupied_struct_primitive_companions_objects_keep_checked_carriers_and_scalar_task_imports() {
+    let sources = [
+        include_str!(
+            "../../../../../jett_comptime/src/resource_execution/fixtures/36_owned_struct_primitive_companions.jett"
+        ),
+        include_str!(
+            "../../../../../jett_comptime/src/resource_execution/fixtures/37_owned_struct_alias_companions.jett"
+        ),
+        include_str!(
+            "../../../../../jett_comptime/src/resource_execution/fixtures/38_owned_struct_pending_int64_transport.jett"
+        ),
+        include_str!(
+            "../../../../../jett_comptime/src/resource_execution/fixtures/39_owned_struct_pending_int64_inspection.jett"
+        ),
+        include_str!(
+            "../../../../../jett_comptime/src/resource_execution/fixtures/40_owned_struct_pending_companions.jett"
+        ),
+        include_str!(
+            "../../../../../jett_comptime/src/resource_execution/fixtures/42_owned_struct_pending_primitive_matrix.jett"
+        ),
+        include_str!(
+            "../../../../../jett_comptime/src/resource_execution/fixtures/43_owned_struct_pending_nothing_inspection.jett"
+        ),
+        include_str!(
+            "../../../../../jett_comptime/src/resource_execution/fixtures/44_owned_struct_pending_string_inspection.jett"
+        ),
+    ];
+    for release in [false, true] {
+        for (index, source) in sources.into_iter().enumerate() {
+            let checked = checked_companion(source, release);
+            let types = &checked.checked().interner;
+            let mut program = lower_source(&checked);
+            jett_mir::prepare_native_sequences(&mut program, types);
+            jett_mir::prepare_native_uninhabited_sums(&mut program, types);
+            jett_mir::prepare_native_generated_functions(&mut program, types);
+            jett_mir::validate_call_ownership(&program, types).unwrap();
+            jett_mir::validate_resource_ownership_for_entry(&program, types, entry(&program))
+                .unwrap();
+            let artifact = super::super::super::emit_for_triple(
+                &program,
+                types,
+                HOST,
+                Some(entry(&program)),
+                CodegenOptions { optimize: release },
+            )
+            .unwrap();
+            let (definitions, imports) = symbols(&artifact);
+            assert!(
+                definitions
+                    .iter()
+                    .any(|name| name == JETT_AOT_ENTRY_SYMBOL_V1)
+            );
+            if index != 7 {
+                assert!(
+                    imports
+                        .iter()
+                        .any(|name| name == "jett_rt_v1_resource_carrier_observe_scalar_task")
+                );
+            }
+            if (2..=6).contains(&index) {
+                assert!(
+                    imports
+                        .iter()
+                        .any(|name| name == "jett_rt_v1_resource_carrier_child_scalar_task")
+                );
+            }
+            for leaf in [
+                "carrier_construct_begin",
+                "carrier_child",
+                "carrier_commit",
+                "carrier_transfer",
+                "operation_complete",
+                "scope_complete",
+            ] {
+                assert!(
+                    imports
+                        .iter()
+                        .any(|name| name == &format!("jett_rt_v1_resource_{leaf}")),
+                    "missing exact {leaf}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn resource_occupied_struct_public_copied_field_or_header_cannot_reach_ordinary_emission() {
     for release in [false, true] {
         let checked = checked(SOURCES[1], release);

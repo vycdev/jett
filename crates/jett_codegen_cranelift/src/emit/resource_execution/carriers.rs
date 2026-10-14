@@ -228,10 +228,10 @@ impl Translator<'_, '_> {
             }
             _ => evaluated,
         };
-        let bits = match child {
-            CarrierValue::Owned { slot } => self.carrier_owner(slot)?,
-            CarrierValue::LeafOwned { slot } => self.resource_owner(slot)?,
-            CarrierValue::Ordinary { .. } => self.payload_bits(value).0,
+        let (bits, depth) = match child {
+            CarrierValue::Owned { slot } => (self.carrier_owner(slot)?, None),
+            CarrierValue::LeafOwned { slot } => (self.resource_owner(slot)?, None),
+            CarrierValue::Ordinary { ty } => self.carrier_companion_payload(value, ty)?,
             _ => return Err(pending("carrier Child cannot adopt a borrowed endpoint")),
         };
         let builder = self.builder.ins().stack_load(
@@ -246,12 +246,21 @@ impl Translator<'_, '_> {
             .builder
             .ins()
             .iconst(ir::types::I32, i64::from(arrival));
-        Leaf::CarrierChild.checked(
-            self.module,
-            self.builder,
-            &[context, builder, arrival, bits],
-            resource.failure,
-        )?;
+        if let Some(depth) = depth {
+            Leaf::CarrierChildScalarTask.checked(
+                self.module,
+                self.builder,
+                &[context, builder, arrival, bits, depth],
+                resource.failure,
+            )?;
+        } else {
+            Leaf::CarrierChild.checked(
+                self.module,
+                self.builder,
+                &[context, builder, arrival, bits],
+                resource.failure,
+            )?;
+        }
         match child {
             CarrierValue::Owned { slot } => self.clear_slot(resource.carrier_owners[slot.index()]),
             CarrierValue::LeafOwned { slot } => self.clear_slot(resource.owners[slot.index()]),
@@ -263,6 +272,33 @@ impl Translator<'_, '_> {
             _ => unreachable!(),
         }
         Ok(())
+    }
+    fn carrier_companion_payload(
+        &mut self,
+        value: LoweredValue,
+        ty: TypeId,
+    ) -> Result<(Value, Option<Value>), CodegenError> {
+        if ty == TypeInterner::NOTHING {
+            // Nothing's existing native scalar word is task depth, not payload.
+            let LoweredValue::Scalar(depth) = value else {
+                return Err(pending(
+                    "Nothing companion changed its exact native depth representation",
+                ));
+            };
+            if self.builder.func.dfg.value_type(depth) != ir::types::I64 {
+                return Err(pending(
+                    "Nothing companion changed its exact native depth width",
+                ));
+            }
+            let bits = self.builder.ins().iconst(ir::types::I64, 0);
+            return Ok((bits, Some(depth)));
+        }
+        let bits = self.payload_bits(value).0;
+        let depth = match value {
+            LoweredValue::ScalarTask(_, depth) => Some(depth),
+            _ => None,
+        };
+        Ok((bits, depth))
     }
     fn carrier_operation(
         &mut self,
@@ -568,13 +604,28 @@ impl Translator<'_, '_> {
                 };
                 let selection = self.carrier_selection(selected)?;
                 let (context, frame, ordinal) = self.carrier_operation(operation)?;
-                let bits = Leaf::CarrierObserve.output(
-                    self.module,
-                    self.builder,
-                    &[context, frame, ordinal, input, selection],
-                    resource.failure,
-                    8,
-                )?;
+                let scalar_task = matches!(observation, Observation::Ordinary { ty, .. }
+                    if *ty == TypeInterner::NOTHING || super::task_scalar(Some(resource.layout), self.types, *ty)?);
+                let (bits, depth) = if scalar_task {
+                    let (bits, depth) = Leaf::CarrierObserveScalarTask.scalar_task_output(
+                        self.module,
+                        self.builder,
+                        &[context, frame, ordinal, input, selection],
+                        resource.failure,
+                    )?;
+                    (bits, Some(depth))
+                } else {
+                    (
+                        Leaf::CarrierObserve.output(
+                            self.module,
+                            self.builder,
+                            &[context, frame, ordinal, input, selection],
+                            resource.failure,
+                            8,
+                        )?,
+                        None,
+                    )
+                };
                 let result = match observation {
                     Observation::Length | Observation::Tag => LoweredValue::Scalar(bits),
                     Observation::State { state } => {
@@ -586,7 +637,20 @@ impl Translator<'_, '_> {
                             selected,
                         ))
                     }
-                    Observation::Ordinary { ty, .. } => self.unpack_payload(bits, *ty, span)?,
+                    Observation::Ordinary { ty, .. } if *ty == TypeInterner::NOTHING => {
+                        LoweredValue::Scalar(depth.ok_or_else(|| {
+                            pending("Nothing observation lost its exact retained depth")
+                        })?)
+                    }
+                    Observation::Ordinary { ty, .. } => {
+                        let value = self.unpack_payload(bits, *ty, span)?;
+                        if let Some(depth) = depth {
+                            let bits = self.scalar(value, span)?;
+                            LoweredValue::ScalarTask(bits, depth)
+                        } else {
+                            value
+                        }
+                    }
                 };
                 if let Some(target) = target {
                     let bits = self.scalar(result, span)?;
@@ -788,10 +852,12 @@ impl Translator<'_, '_> {
                         }
                         _ => evaluated,
                     };
-                    let bits = match child.value {
-                        CarrierValue::Owned { slot } => self.carrier_owner(slot)?,
-                        CarrierValue::LeafOwned { slot } => self.resource_owner(slot)?,
-                        CarrierValue::Ordinary { .. } => self.payload_bits(value).0,
+                    let (bits, depth) = match child.value {
+                        CarrierValue::Owned { slot } => (self.carrier_owner(slot)?, None),
+                        CarrierValue::LeafOwned { slot } => (self.resource_owner(slot)?, None),
+                        CarrierValue::Ordinary { ty } => {
+                            self.carrier_companion_payload(value, ty)?
+                        }
                         CarrierValue::Borrowed { .. } | CarrierValue::LeafBorrowed { .. } => {
                             return Err(pending(
                                 "carrier constructor cannot adopt a borrowed child",
@@ -810,12 +876,21 @@ impl Translator<'_, '_> {
                         .checked_add(1)
                         .ok_or_else(|| pending("carrier child arrival overflow"))?;
                     let index = self.builder.ins().iconst(ir::types::I32, i64::from(index));
-                    Leaf::CarrierChild.checked(
-                        self.module,
-                        self.builder,
-                        &[context, builder, index, bits],
-                        resource.failure,
-                    )?;
+                    if let Some(depth) = depth {
+                        Leaf::CarrierChildScalarTask.checked(
+                            self.module,
+                            self.builder,
+                            &[context, builder, index, bits, depth],
+                            resource.failure,
+                        )?;
+                    } else {
+                        Leaf::CarrierChild.checked(
+                            self.module,
+                            self.builder,
+                            &[context, builder, index, bits],
+                            resource.failure,
+                        )?;
+                    }
                     match child.value {
                         CarrierValue::Owned { slot } => {
                             self.clear_slot(resource.carrier_owners[slot.index()])

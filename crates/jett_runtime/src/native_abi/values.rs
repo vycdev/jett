@@ -5166,6 +5166,71 @@ impl NativeValues {
         self.clone_value(value)
     }
 
+    /// Ordinary carrier children transport pending data without inspecting it.
+    /// Scalar depth is stored separately; strings retain their handle's depth.
+    pub(super) fn validate_resource_carrier_companion(
+        &self,
+        value: u64,
+        layout: &crate::resource_custody::RegisteredNativeLayout,
+        shape: u32,
+        scalar_depth: u64,
+    ) -> LeafResult<()> {
+        use crate::resource_custody::NativeShape;
+        match layout.shapes().get(shape as usize).ok_or(INVALID_HANDLE)? {
+            NativeShape::Integer { bits, .. } if *bits < 64 && value >> *bits != 0 => {
+                Err(INVALID_HANDLE)
+            }
+            NativeShape::Float { bits: 32 } if value >> 32 != 0 => Err(INVALID_HANDLE),
+            NativeShape::Integer { .. }
+            | NativeShape::Float { .. }
+            | NativeShape::Bool
+            | NativeShape::Nothing => self.validate_resource_ordinary(value, layout, shape),
+            NativeShape::String if scalar_depth == 0 => {
+                let string = self.strings.get(&value).ok_or(INVALID_HANDLE)?;
+                if string.references == 0 {
+                    return Err(INVALID_HANDLE);
+                }
+                Ok(())
+            }
+            _ if scalar_depth == 0 => self.validate_resource_ordinary(value, layout, shape),
+            _ => Err(INVALID_HANDLE),
+        }
+    }
+
+    pub(super) fn clone_resource_carrier_string_companion(
+        &mut self,
+        layout: &crate::resource_custody::RegisteredNativeLayout,
+        shape: u32,
+        value: u64,
+    ) -> LeafResult<u64> {
+        if !matches!(
+            layout.shapes().get(shape as usize),
+            Some(crate::resource_custody::NativeShape::String)
+        ) {
+            return Err(INVALID_HANDLE);
+        }
+        self.validate_resource_carrier_companion(value, layout, shape, 0)?;
+        self.clone_value(value)
+    }
+
+    pub(super) fn drop_resource_carrier_companion(
+        &mut self,
+        layout: &crate::resource_custody::RegisteredNativeLayout,
+        shape: u32,
+        value: u64,
+        scalar_depth: u64,
+    ) -> LeafResult<()> {
+        self.validate_resource_carrier_companion(value, layout, shape, scalar_depth)?;
+        if matches!(
+            layout.shapes().get(shape as usize),
+            Some(crate::resource_custody::NativeShape::String)
+        ) {
+            self.drop_value(value).map(|_| ())
+        } else {
+            self.drop_resource_typed_companion(layout, shape, value)
+        }
+    }
+
     pub(super) fn drop_resource_typed_companion(
         &mut self,
         layout: &crate::resource_custody::RegisteredNativeLayout,

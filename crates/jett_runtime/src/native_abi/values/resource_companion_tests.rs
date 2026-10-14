@@ -124,3 +124,61 @@ fn resource_ordinary_companion_absence_and_primitive_failure_do_not_own_payload_
         .unwrap();
     assert!(values.is_empty());
 }
+
+#[test]
+fn resource_carrier_companion_keeps_pending_string_layers_through_clone_and_drop() {
+    let layout = layout();
+    let mut values = NativeValues::default();
+    let text = values.insert_pending("retained".into(), 3).unwrap();
+    assert!(
+        values.validate_resource_ordinary(text, &layout, 2).is_err(),
+        "an inspection remains unavailable"
+    );
+    values
+        .validate_resource_carrier_companion(text, &layout, 2, 0)
+        .unwrap();
+    assert!(
+        values
+            .validate_resource_carrier_companion(text, &layout, 2, 1)
+            .is_err(),
+        "a string handle cannot acquire a second scalar depth"
+    );
+    let clone = values
+        .clone_resource_carrier_string_companion(&layout, 2, text)
+        .unwrap();
+    assert_eq!(values.strings[&clone].pending_depth, 3);
+    values
+        .drop_resource_carrier_companion(&layout, 2, text, 0)
+        .unwrap();
+    assert_eq!(values.strings[&clone].pending_depth, 3);
+    values
+        .drop_resource_carrier_companion(&layout, 2, clone, 0)
+        .unwrap();
+    assert!(values.is_empty());
+}
+
+#[test]
+fn resource_carrier_companion_pending_nothing_keeps_its_exact_payload_contract() {
+    let layout = layout();
+    let mut values = NativeValues::default();
+    for depth in [0, 1, 3, u64::MAX] {
+        values
+            .validate_resource_carrier_companion(0, &layout, 0, depth)
+            .unwrap();
+        assert!(
+            values
+                .validate_resource_carrier_companion(1, &layout, 0, depth)
+                .is_err(),
+            "pending layers never authorize non-Nothing bits"
+        );
+        assert!(
+            values
+                .drop_resource_carrier_companion(&layout, 0, 1, depth)
+                .is_err()
+        );
+        values
+            .drop_resource_carrier_companion(&layout, 0, 0, depth)
+            .unwrap();
+        assert!(values.is_empty());
+    }
+}

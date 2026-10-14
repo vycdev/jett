@@ -540,9 +540,37 @@ fn native_resource_receipt_pin_runtime_env_cannot_replace_compiled_pin() {
     );
 }
 
+#[derive(Eq, PartialEq)]
+struct LinkedProgramKey {
+    project_bytes: Vec<u8>,
+    support_bytes: Vec<u8>,
+    release: bool,
+    archive_path: PathBuf,
+    archive_sha256: String,
+    target: String,
+    profile: String,
+}
+impl LinkedProgramKey {
+    fn new(source: &str, support: &str, release: bool, archive: &Archive) -> Self {
+        Self {
+            project_bytes: source.as_bytes().to_vec(),
+            support_bytes: support.as_bytes().to_vec(),
+            release,
+            archive_path: archive.path.clone(),
+            archive_sha256: archive.archive_sha256.clone(),
+            target: archive.target.clone(),
+            profile: archive.profile.clone(),
+        }
+    }
+}
+
 fn run_native_cases(selected: &[cases::Case]) {
+    run_native_cases_with_support(selected, cases::SUPPORT);
+}
+
+fn run_native_cases_with_support(selected: &[cases::Case], support_source: &str) {
     struct LinkedProgram {
-        source: &'static str,
+        key: LinkedProgramKey,
         directory: tempfile::TempDir,
         binary: PathBuf,
         binary_sha256: String,
@@ -550,16 +578,14 @@ fn run_native_cases(selected: &[cases::Case]) {
 
     for release in [false, true] {
         let archive = archive(release);
-        // This cache cannot outlive the exact profile and measured archive. Support
-        // bytes, FileIds/origins, declaration order and kernel catalog are fixed by
-        // checked(); only the exact project bytes vary between these script rows.
-        // Cache completed artifacts, never compiler-session proofs or runtime state.
+        // Retain only completed files under the same exact project/support bytes,
+        // checked profile, target and measured archive. FileIds/origins and kernel
+        // catalog stay fixed by checked(); witnesses and runtime state are never cached.
         let mut previous: Option<LinkedProgram> = None;
         let mut builds = 0usize;
         for case in selected {
-            let reuse = previous
-                .as_ref()
-                .is_some_and(|program| program.source.as_bytes() == case.source.as_bytes());
+            let key = LinkedProgramKey::new(case.source, support_source, release, &archive);
+            let reuse = previous.as_ref().is_some_and(|program| program.key == key);
             if !reuse {
                 // Retire the previous files before allocating the next build directory.
                 // At most one completed program is retained for the current profile.
@@ -573,7 +599,7 @@ fn run_native_cases(selected: &[cases::Case]) {
                 let entry = project.join("main.jett");
                 let support = stdlib.join("resource_probe.jett");
                 fs::write(&entry, case.source).unwrap();
-                fs::write(&support, cases::SUPPORT).unwrap();
+                fs::write(&support, support_source).unwrap();
                 let artifact = object(&entry, &support, release);
                 assert_eq!(artifact.target, archive.target);
                 assert!(
@@ -604,7 +630,7 @@ fn run_native_cases(selected: &[cases::Case]) {
                 );
                 let binary_sha256 = digest(&fs::read(&binary).unwrap());
                 previous = Some(LinkedProgram {
-                    source: case.source,
+                    key,
                     directory,
                     binary,
                     binary_sha256,
@@ -690,6 +716,10 @@ fn native_resource_pipeline_original_source_lifecycle_matches_reference_and_reti
 }
 
 fn run_object_preflight(selected: &[cases::Case], family: &str) {
+    run_object_preflight_with_support(selected, family, cases::SUPPORT);
+}
+
+fn run_object_preflight_with_support(selected: &[cases::Case], family: &str, support_source: &str) {
     let expected = 2 * selected.len();
     let mut emitted = 0usize;
     let mut refusals = Vec::new();
@@ -699,7 +729,7 @@ fn run_object_preflight(selected: &[cases::Case], family: &str) {
             let entry = directory.path().join("main.jett");
             let support = directory.path().join("resource_probe.jett");
             fs::write(&entry, case.source).unwrap();
-            fs::write(&support, cases::SUPPORT).unwrap();
+            fs::write(&support, support_source).unwrap();
             // Source/HIR/MIR assertions remain fatal; only final CodegenError is collected.
             let outcome = try_object(&entry, &support, release);
             fs::remove_file(&entry).unwrap();

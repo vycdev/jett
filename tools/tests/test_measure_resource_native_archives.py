@@ -22,8 +22,14 @@ def copy_resource_export_fixture(root: Path) -> tuple[Path, Path]:
     owner = resource.with_suffix(".rs")
     owner.write_bytes((measure.ROOT / "crates/jett_runtime/src/native_abi/resource.rs").read_bytes())
     carriers = resource / "leaves/carriers.rs"
-    carriers.write_text("\n".join(f'pub unsafe extern "C" fn {name}() {{}}'
-        for name in sorted(measure.CARRIER_EXPORTS)), encoding="utf-8")
+    declarations = [f'pub unsafe extern "C" fn {name}() {{}}'
+                    for name in sorted(measure.CARRIER_EXPORTS - measure.SCALAR_TASK_EXPORTS)]
+    for name, types in measure.SCALAR_TASK_SIGNATURES.items():
+        parameters = "\n".join(f"    argument_{index}: {kind},"
+                               for index, kind in enumerate(types))
+        declarations.append(f'#[unsafe(no_mangle)]\npub unsafe extern "C" fn {name}(\n'
+                            f"{parameters}\n) -> JettRuntimeStatusV1 {{}}")
+    carriers.write_text("\n".join(declarations), encoding="utf-8")
     return owner, resource / "program_entry.rs"
 
 
@@ -108,11 +114,12 @@ class SymbolAndFingerprintTests(unittest.TestCase):
             f"{name} T 0 10" for name in sorted(self.leaves | self.private | {"main"}))
 
     def test_complete_current_source_export_contract(self) -> None:
-        self.assertEqual((len(self.leaves), len(self.private)), (56, 8))
+        self.assertEqual((len(self.leaves), len(self.private)), (58, 8))
         self.assertTrue(measure.CARRIER_EXPORTS <= self.leaves)
         self.assertTrue(measure.STARTUP_EXPORTS <= self.leaves)
-        self.assertEqual(len(self.leaves - measure.STARTUP_EXPORTS), 51)
-        self.assertEqual(len(self.leaves - measure.STARTUP_EXPORTS - {measure.GRAPH_DESCRIPTOR_EXPORT}), 50)
+        self.assertEqual(len(self.leaves - measure.STARTUP_EXPORTS), 53)
+        self.assertEqual(len(self.leaves - measure.STARTUP_EXPORTS - {measure.GRAPH_DESCRIPTOR_EXPORT}
+                             - measure.SCALAR_TASK_EXPORTS), 50)
         measure.check_symbols(self.symbols, self.leaves, self.private)
 
     def test_each_startup_symbol_must_have_one_text_definition(self) -> None:
@@ -348,7 +355,7 @@ class CarrierContractTests(unittest.TestCase):
             self.fixture(root)
             measure.checked_layout_wire(root)
             leaves, private = measure.export_names(root)
-            self.assertEqual((len(leaves), len(private)), (56, 8))
+            self.assertEqual((len(leaves), len(private)), (58, 8))
             self.assertTrue(measure.CARRIER_EXPORTS <= leaves)
             self.assertEqual(leaves & measure.STARTUP_EXPORTS, measure.STARTUP_EXPORTS)
 
@@ -470,11 +477,164 @@ class CarrierContractTests(unittest.TestCase):
                 self.assertFalse(output.exists())
 
 
+class ScalarTaskContractTests(unittest.TestCase):
+    def test_additive_scalar_contract_preserves_original_and_graph_startup_exports(self) -> None:
+        leaves, private = measure.export_names(measure.ROOT)
+        self.assertEqual((len(leaves), len(private)), (58, 8))
+        self.assertEqual(len(leaves - measure.SCALAR_TASK_EXPORTS), 56)
+        self.assertEqual(len(measure.CARRIER_EXPORTS - measure.SCALAR_TASK_EXPORTS), 13)
+        self.assertEqual(measure.scalar_task_exports(
+            measure.ROOT / "crates/jett_runtime/src/native_abi/resource"), measure.SCALAR_TASK_EXPORTS)
+
+    def test_scalar_symbols_are_required_once_as_global_text(self) -> None:
+        leaves, private = measure.export_names(measure.ROOT)
+        symbols = "\n".join(f"{name} T 0 10" for name in sorted(leaves | private | {"main"}))
+        for name in sorted(measure.SCALAR_TASK_EXPORTS):
+            line = f"{name} T 0 10"
+            for invalid in (symbols.replace(line, ""), symbols + "\n" + line,
+                            symbols.replace(line, f"{name} D 0 10")):
+                with self.subTest(name=name, symbols=invalid), self.assertRaises(measure.MeasurementError):
+                    measure.check_symbols(invalid, leaves, private)
+
+    def test_scalar_child_module_cannot_be_conditional_public_redirected_or_duplicated(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, startup = copy_resource_export_fixture(root)
+            owner = startup.parent / "leaves.rs"
+            original = owner.read_text(encoding="utf-8")
+            declaration = '#[path = "leaves/carriers.rs"]\nmod carrier_leaves;'
+            for replacement in ("", declaration + "\n" + declaration,
+                                "#[cfg(test)]\n" + declaration,
+                                declaration.replace("mod carrier_leaves", "pub mod carrier_leaves"),
+                                declaration.replace("leaves/carriers.rs", "other.rs")):
+                owner.write_text(original.replace(declaration, replacement), encoding="utf-8")
+                with self.subTest(module=replacement), self.assertRaises(measure.MeasurementError):
+                    measure.export_names(root)
+
+    def test_scalar_exports_cannot_be_missing_duplicate_conditional_mangled_or_non_c(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, startup = copy_resource_export_fixture(root)
+            child = startup.parent / "leaves/carriers.rs"
+            original = child.read_text(encoding="utf-8")
+            for name in sorted(measure.SCALAR_TASK_EXPORTS):
+                prefix = f'pub unsafe extern "C" fn {name}('
+                start, end = original.index(prefix), original.index("{", original.index(prefix))
+                header = original[start:end]
+                for invalid in (
+                    original.replace(prefix, prefix.removeprefix("pub "), 1),
+                    original + '\n#[unsafe(no_mangle)]\n' + header + '{}\n',
+                    original.replace(name + "(", "jett_rt_v1_resource_carrier_foreign_scalar(", 1),
+                    original.replace(prefix, "#[cfg(test)]\n" + prefix, 1),
+                    original[:start].removesuffix("#[unsafe(no_mangle)]\n") + original[start:],
+                    original.replace(prefix, prefix.replace('extern "C"', 'extern "Rust"'), 1),
+                    "#![cfg(test)]\n" + original,
+                ):
+                    child.write_text(invalid, encoding="utf-8")
+                    with self.subTest(name=name, source=invalid), self.assertRaises(measure.MeasurementError):
+                        measure.export_names(root)
+
+    def test_every_scalar_argument_and_return_type_has_exact_c_width(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, startup = copy_resource_export_fixture(root)
+            child = startup.parent / "leaves/carriers.rs"
+            original = child.read_text(encoding="utf-8")
+            for name in sorted(measure.SCALAR_TASK_EXPORTS):
+                start = original.index(f'pub unsafe extern "C" fn {name}(')
+                end = original.index("{", start)
+                lines = original[start:end].splitlines(keepends=True)
+                for index, line in enumerate(lines):
+                    if ": " not in line and "-> JettRuntimeStatusV1" not in line:
+                        continue
+                    changed = list(lines)
+                    changed[index] = (line.split(": ", 1)[0] + ": usize,\n" if ": " in line
+                                      else line.replace("JettRuntimeStatusV1", "u32"))
+                    child.write_text(original[:start] + "".join(changed) + original[end:], encoding="utf-8")
+                    with self.subTest(name=name, parameter=index), self.assertRaises(measure.MeasurementError):
+                        measure.export_names(root)
+
+    def test_scalar_argument_reorder_and_missing_output_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, startup = copy_resource_export_fixture(root)
+            child = startup.parent / "leaves/carriers.rs"
+            original = child.read_text(encoding="utf-8")
+            for name in sorted(measure.SCALAR_TASK_EXPORTS):
+                start = original.index(f'pub unsafe extern "C" fn {name}(')
+                end = original.index("{", start)
+                lines = original[start:end].splitlines(keepends=True)
+                reordered = list(lines)
+                reordered[2], reordered[3] = reordered[3], reordered[2]
+                for changed in (reordered, lines[:-2] + lines[-1:]):
+                    child.write_text(original[:start] + "".join(changed) + original[end:], encoding="utf-8")
+                    with self.subTest(name=name, header=changed), self.assertRaises(measure.MeasurementError):
+                        measure.export_names(root)
+
+    def test_scalar_cannot_move_to_ordinary_startup_or_private_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, startup = copy_resource_export_fixture(root)
+            child = startup.parent / "leaves/carriers.rs"
+            original = child.read_text(encoding="utf-8")
+            for name in sorted(measure.SCALAR_TASK_EXPORTS):
+                prefix = f'pub unsafe extern "C" fn {name}('
+                start, end = original.index(prefix), original.index("{", original.index(prefix))
+                header = original[start:end]
+                for destination in (startup, startup.parent / "leaves.rs", startup.parent / "test_archive_api.rs"):
+                    prior = destination.read_text(encoding="utf-8")
+                    child.write_text(original.replace(prefix, prefix.removeprefix("pub "), 1), encoding="utf-8")
+                    destination.write_text(prior + '\n#[unsafe(no_mangle)]\n' + header + '{}\n', encoding="utf-8")
+                    with self.subTest(name=name, destination=destination), self.assertRaises(measure.MeasurementError):
+                        measure.export_names(root)
+                    destination.write_text(prior, encoding="utf-8")
+
+    def test_scalar_snapshot_mutation_refuses_before_tool_discovery_and_output(self) -> None:
+        for changed in ("width", "missing", "cfg", "reorder", "module"):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                _, child = CarrierContractTests().fixture(root)
+                output = root / "fresh-measurement"
+                def snapshot_mutation(repo: Path, complete: bool = False) -> dict[str, measure.Json]:
+                    self.assertEqual(repo, root)
+                    self.assertFalse(complete)
+                    text = child.read_text(encoding="utf-8")
+                    name = "jett_rt_v1_resource_carrier_observe_scalar_task"
+                    prefix = f'pub unsafe extern "C" fn {name}('
+                    start, end = text.index(prefix), text.index("{", text.index(prefix))
+                    header = text[start:end]
+                    if changed == "module":
+                        owner = child.parent.parent / "leaves.rs"
+                        owner.write_text(owner.read_text(encoding="utf-8").replace(
+                            "mod carrier_leaves;", "#[cfg(test)]\nmod carrier_leaves;"), encoding="utf-8")
+                    else:
+                        if changed == "width":
+                            header = header.replace("argument_6: *mut u64", "argument_6: *mut u32")
+                        elif changed == "missing":
+                            header = header.replace("    argument_6: *mut u64,\n", "")
+                        elif changed == "cfg":
+                            header = "#[cfg(test)]\n" + header
+                        else:
+                            header = header.replace("argument_1: u64", "argument_1: u32").replace(
+                                "argument_2: u32", "argument_2: u64")
+                        child.write_text(text[:start] + header + text[end:], encoding="utf-8")
+                    return {}
+                with patch.object(measure, "sources", side_effect=snapshot_mutation), \
+                     patch.object(measure, "executable", return_value=root / "unused-tool"), \
+                     patch.object(measure, "build_environment", return_value={}), \
+                     patch.object(measure, "toolchain") as toolchain, \
+                     self.assertRaises(measure.MeasurementError):
+                    measure.prepare(root, output, "unused-cc", "unused-nm", "unused-readelf")
+                toolchain.assert_not_called()
+                self.assertFalse(output.exists())
+
+
 class GraphDescriptorContractTests(unittest.TestCase):
     def test_exact_graph_symbol_joins_only_the_original_fifty_and_startup_five(self) -> None:
         leaves, private = measure.export_names(measure.ROOT)
-        self.assertEqual((len(leaves), len(private)), (56, 8))
-        self.assertEqual(len(leaves - {measure.GRAPH_DESCRIPTOR_EXPORT} - measure.STARTUP_EXPORTS), 50)
+        self.assertEqual((len(leaves), len(private)), (58, 8))
+        self.assertEqual(len(leaves - {measure.GRAPH_DESCRIPTOR_EXPORT} - measure.STARTUP_EXPORTS
+                             - measure.SCALAR_TASK_EXPORTS), 50)
         self.assertEqual(measure.graph_descriptor_export(
             measure.ROOT / "crates/jett_runtime/src/native_abi/resource"), {measure.GRAPH_DESCRIPTOR_EXPORT})
         symbols = "\n".join(f"{name} T 0 10" for name in sorted(leaves | private | {"main"}))
@@ -933,10 +1093,7 @@ class MsvcReceiptTests(unittest.TestCase):
         resource = runtime / "src/native_abi/resource"
         copy_resource_export_fixture(root)
         leaves, private = measure.export_names(measure.ROOT)
-        for path, names in (
-            (resource / "leaves/carriers.rs", measure.CARRIER_EXPORTS),
-            (resource / "test_archive_api.rs", private),
-        ):
+        for path, names in ((resource / "test_archive_api.rs", private),):
             path.write_text("\n".join(f'pub unsafe extern "C" fn {name}() {{}}' for name in sorted(names)),
                             encoding="utf-8")
         registration = runtime / "src/resource_custody/registration.rs"
@@ -1045,7 +1202,7 @@ class MsvcReceiptTests(unittest.TestCase):
                                   - {measure.GRAPH_DESCRIPTOR_EXPORT}),
                               len(measure.CARRIER_EXPORTS), len(leaves & measure.STARTUP_EXPORTS),
                               int(measure.GRAPH_DESCRIPTOR_EXPORT in leaves), len(private)),
-                             (37, 13, 5, 1, 8))
+                             (37, 15, 5, 1, 8))
 
     def test_receipt_pin_and_actual_runtime_or_helper_source_changes_are_refused(self) -> None:
         for changed in ("Cargo.lock", "tools/measure_resource_native_archives.py",

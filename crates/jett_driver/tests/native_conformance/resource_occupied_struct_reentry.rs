@@ -118,6 +118,15 @@ fn assert_original_then_ready(first: &cases::Case, ready: &cases::Case, observed
 }
 
 pub(super) fn run_original_then_ready(first: &cases::Case, ready: &cases::Case, release: bool) {
+    run_original_then_ready_with_support(first, ready, release, cases::SUPPORT);
+}
+
+pub(super) fn run_original_then_ready_with_support(
+    first: &cases::Case,
+    ready: &cases::Case,
+    release: bool,
+    support_source: &str,
+) {
     let archive = archive(release);
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
@@ -128,7 +137,7 @@ pub(super) fn run_original_then_ready(first: &cases::Case, ready: &cases::Case, 
     let entry = project.join("main.jett");
     let support = stdlib.join("resource_probe.jett");
     fs::write(&entry, first.source).unwrap();
-    fs::write(&support, cases::SUPPORT).unwrap();
+    fs::write(&support, support_source).unwrap();
     let artifact = object(&entry, &support, release);
     assert_eq!(artifact.target, archive.target);
     assert!(

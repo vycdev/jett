@@ -10,9 +10,27 @@ const SUPPORT: &str =
 const CLOSE: &str =
     include_str!("../../jett_driver/tests/native_conformance/resource/33_comptime_hook_close.jett");
 fn checked(source: &str, release: bool) -> Arc<CheckedResourceProgram> {
+    checked_support(source, SUPPORT, release)
+}
+
+fn checked_companion(source: &str, release: bool) -> Arc<CheckedResourceProgram> {
+    let support = format!(
+        "{SUPPORT}\n{}",
+        include_str!(
+            "../../jett_comptime/src/resource_execution/fixtures/resource_companion_probe.jett"
+        )
+    );
+    checked_support(source, &support, release)
+}
+
+fn checked_support(
+    source: &str,
+    support_source: &str,
+    release: bool,
+) -> Arc<CheckedResourceProgram> {
     let support = FileId::new(10_000);
     let primary = FileId::new(0);
-    let mut parsed = jett_parser::parse(SUPPORT, support);
+    let mut parsed = jett_parser::parse(support_source, support);
     let project = jett_parser::parse(source, primary);
     assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
     assert!(project.errors.is_empty(), "{:?}", project.errors);
@@ -207,6 +225,85 @@ fn foreign_missing_and_public_mirror_values_never_materialize_resource_authority
                 .iter()
                 .any(|row| row.hook().is_some())
         );
+    }
+}
+
+#[test]
+fn occupied_struct_primitive_companions_hir_keeps_exact_checked_schema_and_order() {
+    let sources = [
+        include_str!(
+            "../../jett_comptime/src/resource_execution/fixtures/36_owned_struct_primitive_companions.jett"
+        ),
+        include_str!(
+            "../../jett_comptime/src/resource_execution/fixtures/37_owned_struct_alias_companions.jett"
+        ),
+        include_str!(
+            "../../jett_comptime/src/resource_execution/fixtures/38_owned_struct_pending_int64_transport.jett"
+        ),
+        include_str!(
+            "../../jett_comptime/src/resource_execution/fixtures/40_owned_struct_pending_companions.jett"
+        ),
+        include_str!(
+            "../../jett_comptime/src/resource_execution/fixtures/42_owned_struct_pending_primitive_matrix.jett"
+        ),
+    ];
+    for release in [false, true] {
+        for source in sources {
+            let checked = checked_companion(source, release);
+            let types = &checked.checked().interner;
+            let mut program = crate::lower_checked_resource_program(&checked).unwrap();
+            crate::validate_backend_types(&program, types).unwrap();
+            let mut constructions = Vec::new();
+            for function in &mut program.functions {
+                walk_block(&mut function.body, &mut |expression| {
+                    if let E::StructConstruct {
+                        struct_type,
+                        fields,
+                        evaluation_order,
+                        validates_refinements,
+                        ..
+                    } = &expression.kind
+                    {
+                        constructions.push((
+                            *struct_type,
+                            fields.iter().map(|field| field.ty).collect::<Vec<_>>(),
+                            evaluation_order.clone(),
+                            *validates_refinements,
+                        ));
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            }
+            let [(owner, fields, order, validates)] = constructions.as_slice() else {
+                panic!("one original occupied constructor")
+            };
+            let Type::Struct(id) = types.resolve(*owner) else {
+                panic!("exact nominal struct")
+            };
+            assert_eq!(
+                fields,
+                &types
+                    .resolve_struct(*id)
+                    .fields
+                    .iter()
+                    .map(|(_, ty)| *ty)
+                    .collect::<Vec<_>>()
+            );
+            assert!(!validates);
+            assert_eq!(
+                order
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>(),
+                (0..fields.len()).collect()
+            );
+            if fields.len() == 14 {
+                assert_eq!(&order[..3], &[8, 9, 0]);
+            }
+            assert!(program.resource_source.belongs_to(&checked));
+            crate::validate_backend_types(&program, types).unwrap();
+        }
     }
 }
 

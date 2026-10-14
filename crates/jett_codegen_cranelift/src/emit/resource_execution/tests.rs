@@ -16,9 +16,23 @@ mod sum_views;
 const SUPPORT: &str =
     include_str!("../../../../jett_driver/tests/native_conformance/resource/resource_probe.jett");
 fn checked(source: &str, release: bool) -> Arc<CheckedResourceProgram> {
+    checked_support(source, SUPPORT, release)
+}
+
+fn checked_companion(source: &str, release: bool) -> Arc<CheckedResourceProgram> {
+    let support = format!(
+        "{SUPPORT}\n{}",
+        include_str!(
+            "../../../../jett_comptime/src/resource_execution/fixtures/resource_companion_probe.jett"
+        )
+    );
+    checked_support(source, &support, release)
+}
+
+fn checked_support(source: &str, support: &str, release: bool) -> Arc<CheckedResourceProgram> {
     let stdlib = FileId::new(10_000);
     let project = FileId::new(0);
-    let mut parsed = parse(SUPPORT, stdlib);
+    let mut parsed = parse(support, stdlib);
     let primary = parse(source, project);
     assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
     assert!(primary.errors.is_empty(), "{:?}", primary.errors);

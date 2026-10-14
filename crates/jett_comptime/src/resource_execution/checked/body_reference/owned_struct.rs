@@ -12,6 +12,27 @@ pub(crate) struct PreparedOwnedStruct {
 }
 
 impl PreparedOwnedStruct {
+    /// Canonical aliases share these checked primitive kinds. Qualifications
+    /// remain distinct and cannot acquire constructor authority by peeling.
+    pub(crate) fn supports_companion(kind: &Type) -> bool {
+        matches!(
+            kind,
+            Type::Int8
+                | Type::Int16
+                | Type::Int32
+                | Type::Int64
+                | Type::Uint8
+                | Type::Uint16
+                | Type::Uint32
+                | Type::Uint64
+                | Type::Float32
+                | Type::Float64
+                | Type::String
+                | Type::Bool
+                | Type::Nothing
+        )
+    }
+
     pub(crate) fn ty(&self) -> TypeId {
         self.ty
     }
@@ -118,10 +139,8 @@ impl CheckedExecution {
         // This vertical has direct nominal leaves and scalar companions only.
         // Do not accidentally grant a nested/capability/refined carrier path.
         if structure.fields.iter().any(|(_, field)| {
-            !matches!(
-                self.program.checked().interner.resolve(*field),
-                Type::Resource(_) | Type::Int64 | Type::String | Type::Bool | Type::Nothing
-            )
+            let kind = self.program.checked().interner.resolve(*field);
+            !matches!(kind, Type::Resource(_)) && !PreparedOwnedStruct::supports_companion(kind)
         }) {
             return Ok(None);
         }

@@ -8,6 +8,36 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 mod occupied_struct_cases;
 #[path = "native_source_oracles/occupied_struct_reentry.rs"]
 mod occupied_struct_reentry;
+#[path = "../../../../jett_driver/tests/native_conformance/resource_primitive_companion_cases.rs"]
+mod primitive_companion_cases;
+
+fn companion_support() -> String {
+    format!(
+        "{}\n{}",
+        cases::SUPPORT,
+        include_str!("../fixtures/resource_companion_probe.jett")
+    )
+}
+
+#[test]
+fn native_resource_primitive_companions_shared_scripts_match_real_reference() {
+    assert_eq!(primitive_companion_cases::CASES.len(), 23);
+    run_reference_cases_with_support(primitive_companion_cases::CASES, &companion_support());
+}
+
+#[test]
+fn native_resource_primitive_companions_shared_reentry_inputs_match_real_reference() {
+    for release in [false, true] {
+        for first in primitive_companion_cases::CASES {
+            occupied_struct_reentry::original_then_ready_with_support(
+                first,
+                primitive_companion_cases::ready_for(first),
+                release,
+                &companion_support(),
+            );
+        }
+    }
+}
 
 #[test]
 fn native_resource_occupied_struct_shared_scripts_match_real_reference() {
@@ -28,9 +58,17 @@ fn native_resource_occupied_struct_shared_reentry_inputs_match_real_reference() 
 }
 
 fn checked_case(case: &cases::Case, release: bool) -> Arc<CheckedResourceProgram> {
+    checked_case_with_support(case, release, cases::SUPPORT)
+}
+
+fn checked_case_with_support(
+    case: &cases::Case,
+    release: bool,
+    support: &str,
+) -> Arc<CheckedResourceProgram> {
     let stdlib = FileId::new(10_000);
     let primary = FileId::new(0);
-    let mut parsed = parse(cases::SUPPORT, stdlib);
+    let mut parsed = parse(support, stdlib);
     let project = parse(case.source, primary);
     assert!(parsed.errors.is_empty(), "support: {:?}", parsed.errors);
     assert!(
@@ -198,9 +236,13 @@ fn reference_with_required_values(
 }
 
 fn run_reference_cases(selected: &[cases::Case]) {
+    run_reference_cases_with_support(selected, cases::SUPPORT);
+}
+
+fn run_reference_cases_with_support(selected: &[cases::Case], support: &str) {
     for release in [false, true] {
         for case in selected {
-            let checked = checked_case(case, release);
+            let checked = checked_case_with_support(case, release, support);
             let definition = entry(&checked, "main");
             let mut interpreter = reference_with_required_values(&checked, case, release);
             let grant = interpreter

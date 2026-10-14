@@ -37,6 +37,7 @@ pub(crate) struct Case {
     pub(crate) cleanup: u32,
     pub(crate) channel: u32,
     pub(crate) ordinary_message: &'static [u8],
+    // Ordinary terminal errors have no Resource diagnostic without an independent protocol fault.
     pub(crate) resource_message: &'static [u8],
     pub(crate) exit: i32,
 }
@@ -81,7 +82,7 @@ pub(crate) const CASES: &[Case] = &[
         cleanup: 0,
         channel: 1,
         ordinary_message: b"list.__remove_at: index -1 out of bounds",
-        resource_message: b"native Resource protocol refused",
+        resource_message: b"",
         exit: 71,
     },
     Case {
@@ -196,7 +197,7 @@ pub(crate) const CASES: &[Case] = &[
         cleanup: 0,
         channel: 1,
         ordinary_message: b"list.__remove_at: index -1 out of bounds",
-        resource_message: b"native Resource protocol refused",
+        resource_message: b"",
         exit: 71,
     },
     Case {
@@ -436,7 +437,7 @@ pub(crate) const CASES: &[Case] = &[
         cleanup: 0,
         channel: 1,
         ordinary_message: b"list.__remove_at: index -1 out of bounds",
-        resource_message: b"native Resource protocol refused",
+        resource_message: b"",
         exit: 71,
     },
     Case {
@@ -741,7 +742,7 @@ pub(crate) const CASES: &[Case] = &[
         cleanup: 0,
         channel: 1,
         ordinary_message: b"list.__remove_at: index -1 out of bounds",
-        resource_message: b"native Resource protocol refused",
+        resource_message: b"",
         exit: 71,
     },
     Case {
@@ -764,7 +765,7 @@ pub(crate) const CASES: &[Case] = &[
         cleanup: 0,
         channel: 1,
         ordinary_message: b"list.__remove_at: index -1 out of bounds",
-        resource_message: b"native Resource protocol refused",
+        resource_message: b"",
         exit: 71,
     },
     Case {

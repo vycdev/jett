@@ -8870,3 +8870,45 @@ entry-Scope metadata through canonical collection iteration without gaining
 Resource custody. Graph transport and real Resource execution still require
 their separate exact proofs.
 See [the graph integration note](active/native_comptime_actor_graph.md).
+
+
+### Occupied Resource struct primitive companions
+
+The selected companion extension follows the existing implicitly copyable
+primitive surface: all eight fixed-width integer types, float32/float64, string,
+bool and nothing, including transparent aliases with the same canonical checked
+type. The original nominal declaration, exact field schema, written argument
+order and authenticated constructor lifecycle remain authoritative. Resource
+custody and reverse cleanup retain their existing rules.
+
+Construction and field transport retain every pending layer. They neither join
+a task nor make a stored field ready. Ordinary checked expression normalization
+applies the declared primitive's arithmetic and float32 rounding rules before
+transport; physical validation then checks the exact carrier without rounding
+an untrusted supplied value into acceptance. In particular, uint64 uses its
+distinct unsigned carrier, and float32 stores an exact widening of binary32.
+Focused checks and bounded linked MSVC acceptance pass against fresh
+58-export runtimes, including both new scalar gates and all sixteen predecessor
+Resource gates. Full inventory, workspace and supported-host acceptance remain
+pending; see
+[primitive companion work](active/native_resource_primitive_companions.md).
+
+
+### Ordinary failure classification through Resource scopes
+
+Root and nested calls share the checked entry's ordinary first-error channel.
+An exact propagated ordinary failure retains its ordinary diagnostic and does
+not manufacture a second Resource refusal. Real Resource errors and cleanup
+failures retain their separate observations and priority. Generated Scope
+completion still refuses a mismatched or unattributed nonzero Source body status;
+independently observed entry body status remains distinct from the recorded
+failure channel.
+The selected Body report channel does not require a nonempty Resource message.
+
+The earlier ordinary-error reentry checkpoints preserve their historical
+sessions, hashes and counts. Their duplicated `native Resource protocol refused`
+bytes for ordinary-only Bounds failures are superseded as the current message
+oracle. This correction changes no Source, ordinary diagnostic, body or cleanup
+status, process exit, custody, retirement or reentry requirement. Corrected
+native gates must pass before new acceptance is recorded. See the
+[ordinary terminal-error lifetime note](active/native_resource_ordinary_error_reentry.md).

@@ -214,7 +214,8 @@ fn expected(input: &inputs::Input) -> NativeExpectation {
                 body: 1,
                 channel: report::FailureChannel::Body,
                 ordinary_message: error.as_bytes(),
-                resource_message: b"native Resource protocol refused",
+                // terminal_label fails in the ordinary list kernel; the Resource channel stays empty.
+                resource_message: b"",
                 exit: 71,
             }
         }

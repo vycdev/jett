@@ -14,9 +14,21 @@ use crate::{Interpreter, Value};
 const SUPPORT: &str = include_str!("fixtures/resource_probe.jett");
 
 pub(crate) fn program(source: &str, release: bool) -> Arc<CheckedResourceProgram> {
+    program_support(source, SUPPORT, release)
+}
+
+pub(crate) fn companion_program(source: &str, release: bool) -> Arc<CheckedResourceProgram> {
+    let support = format!(
+        "{SUPPORT}\n{}",
+        include_str!("fixtures/resource_companion_probe.jett")
+    );
+    program_support(source, &support, release)
+}
+
+fn program_support(source: &str, support: &str, release: bool) -> Arc<CheckedResourceProgram> {
     let stdlib_file = FileId::new(10_000);
     let project_file = FileId::new(0);
-    let mut parsed = parse(SUPPORT, stdlib_file);
+    let mut parsed = parse(support, stdlib_file);
     let project = parse(source, project_file);
     assert!(
         !parsed

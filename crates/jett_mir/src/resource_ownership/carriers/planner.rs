@@ -485,6 +485,21 @@ impl Planner<'_> {
                     match &expression.kind {
                         E::Binary { left, right, .. } => { self.expression(left, false)?; self.expression(right, false)?; }
                         E::Unary { value, .. } => { self.expression(value, false)?; }
+                        E::Run(value) => {
+                            if expression.ty != value.ty {
+                                return Err("carrier Run observation changed its exact checked value type".into());
+                            }
+                            self.expression(value, false)?;
+                        }
+                        E::Join(value) => {
+                            let Type::Result(success, failure) = self.types.resolve(expression.ty) else {
+                                return Err("carrier Join observation lost its exact checked result type".into());
+                            };
+                            if value.ty != expression.ty && (*success != value.ty || *failure != TypeInterner::STRING) {
+                                return Err("carrier Join observation changed its exact checked payload or failure type".into());
+                            }
+                            self.expression(value, false)?;
+                        }
                         _ => return Err("pending Resource carrier: nested ordinary observation needs its dedicated operation".into()),
                     }
                 }

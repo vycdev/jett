@@ -5,6 +5,20 @@ use jett_common::FileId;
 const SINGLE: &str = include_str!("../fixtures/33_owned_struct_scope_drop_entry.jett");
 const REVERSE: &str = include_str!("../fixtures/34_owned_struct_reverse_entry.jett");
 const PREFIX: &str = include_str!("../fixtures/35_owned_struct_abandoned_prefix_entry.jett");
+const PRIMITIVES: &str = include_str!("../fixtures/36_owned_struct_primitive_companions.jett");
+const ALIASES: &str = include_str!("../fixtures/37_owned_struct_alias_companions.jett");
+const PENDING: &str = include_str!("../fixtures/38_owned_struct_pending_int64_transport.jett");
+const PENDING_INSPECTION: &str =
+    include_str!("../fixtures/39_owned_struct_pending_int64_inspection.jett");
+const PENDING_PRIMITIVES: &str =
+    include_str!("../fixtures/40_owned_struct_pending_companions.jett");
+const PENDING_PREFIX: &str = include_str!("../fixtures/41_owned_struct_pending_prior_failure.jett");
+const PENDING_MATRIX: &str =
+    include_str!("../fixtures/42_owned_struct_pending_primitive_matrix.jett");
+const PENDING_UNIT_INSPECTION: &str =
+    include_str!("../fixtures/43_owned_struct_pending_nothing_inspection.jett");
+const PENDING_TEXT_INSPECTION: &str =
+    include_str!("../fixtures/44_owned_struct_pending_string_inspection.jett");
 
 fn entry(program: &jett_typecheck::CheckedResourceProgram) -> DefId {
     program
@@ -23,8 +37,22 @@ fn entry(program: &jett_typecheck::CheckedResourceProgram) -> DefId {
 }
 
 fn run(source: &str, script: Vec<ScriptOperation>, events: Vec<ProviderEvent>) {
+    run_program(
+        source,
+        script,
+        events,
+        crate::resource_execution::tests::program,
+    );
+}
+
+fn run_program(
+    source: &str,
+    script: Vec<ScriptOperation>,
+    events: Vec<ProviderEvent>,
+    prepare: fn(&str, bool) -> Arc<jett_typecheck::CheckedResourceProgram>,
+) {
     for release in [false, true] {
-        let program = crate::resource_execution::tests::program(source, release);
+        let program = prepare(source, release);
         let target = entry(&program);
         let mut interpreter =
             Interpreter::from_checked_resource_program(program, ExecutionPurpose::ReferenceRuntime)
@@ -83,6 +111,99 @@ fn occupied_struct_owned_formal_moves_into_checked_root_and_reenters_without_tea
         ],
         vec![ProviderEvent::ConstructionFailed(1001)],
     );
+}
+
+#[test]
+fn occupied_struct_primitive_companions_keep_checked_widths_aliases_and_pending_layers() {
+    for (source, label) in [
+        (PRIMITIVES, 1101),
+        (ALIASES, 1102),
+        (PENDING, 1103),
+        (PENDING_PRIMITIVES, 1104),
+        (PENDING_MATRIX, 1106),
+    ] {
+        run_program(
+            source,
+            vec![
+                ScriptOperation::Construct {
+                    label,
+                    outcome: Ok(())
+                };
+                2
+            ],
+            vec![
+                ProviderEvent::Constructed(label),
+                ProviderEvent::Finalized(label),
+            ],
+            crate::resource_execution::tests::companion_program,
+        );
+    }
+}
+
+#[test]
+fn occupied_struct_pending_inspection_and_prior_failure_retire_before_reentry() {
+    for release in [false, true] {
+        for (source, label, expected) in [
+            (
+                PENDING_INSPECTION,
+                1103,
+                "unsupported binary operation: pending(17) Eq 17",
+            ),
+            (
+                PENDING_PREFIX,
+                1105,
+                "list.__remove_at: index -1 out of bounds",
+            ),
+            (
+                PENDING_UNIT_INSPECTION,
+                1107,
+                "unsupported binary operation: pending(nothing) Eq nothing",
+            ),
+            (
+                PENDING_TEXT_INSPECTION,
+                1108,
+                "unsupported binary operation: pending(retained) Eq retained",
+            ),
+        ] {
+            let program = crate::resource_execution::tests::companion_program(source, release);
+            let target = entry(&program);
+            let mut interpreter = Interpreter::from_checked_resource_program(
+                program,
+                ExecutionPurpose::ReferenceRuntime,
+            )
+            .unwrap();
+            let grant = interpreter
+                .install_resource_test_script(vec![
+                    ScriptOperation::Construct {
+                        label,
+                        outcome: Ok(())
+                    };
+                    2
+                ])
+                .unwrap();
+            for invocation in 0..2 {
+                let error = interpreter
+                    .call_checked_program_entry(target, vec![grant.clone()])
+                    .unwrap_err();
+                assert_eq!(
+                    error, expected,
+                    "release={release}, invocation={invocation}"
+                );
+                let expected_events = [
+                    ProviderEvent::Constructed(label),
+                    ProviderEvent::Finalized(label),
+                ]
+                .into_iter()
+                .cycle()
+                .take((invocation + 1) * 2)
+                .collect::<Vec<_>>();
+                assert_eq!(
+                    interpreter.resource_test_observations().unwrap(),
+                    (expected_events, 0, 0)
+                );
+            }
+        }
+    }
 }
 
 #[test]

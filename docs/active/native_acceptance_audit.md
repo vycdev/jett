@@ -2906,3 +2906,61 @@ clean installed distribution remain separate obligations. The rough **87%**
 estimate and fixed **207/182** inventory are unchanged. Existing sequential
 reference parity remains required; absent scheduler/provider APIs remain separate
 feature work.
+
+
+#### Occupied Resource primitive companion MSVC acceptance
+
+The occupied constructor path now carries every implicitly copyable primitive
+and transparent alias with exact checked schema and written argument order.
+uint64 retains its unsigned carrier, float32 normalization remains separate
+from physical validation, and integer/float/bool pending depth remains separate
+from payload bits. Nothing retains its scalar-word depth representation across
+the carrier boundary; strings retain depth in their handles. No new Source
+admission, Resource custody or authority is introduced. Original Sources33..35
+and their support remain unchanged.
+
+The original all-target check, formatting checks, 82 measurement-helper controls
+and eleven focused groups/46 tests passed. After the Scope completion repair,
+actual Cargo runs pass 1,322 compiler tests (Comptime 620, HIR 221, MIR 347,
+Codegen 134), and Runtime passes 366. These unit runs precede the private report
+copier and two-file oracle correction. Only those three exact guarded files
+differ afterward. Broad receipt: `native-codegen-recovery-2026-10-09/scalar-v9/current-broad-cargo-acceptance.json`, SHA-256 `f4b2217d6ed8228de432922f3ee90fc066d20ed4dbb40c420dbc79794289ce9c`.
+These groups do not establish a fresh whole-workspace test run.
+
+The correction changes six expected Resource-message fields for ordinary-only
+Bounds failures and introduces no root/nested special case. Original Source,
+reference messages, body/cleanup statuses, process exits, events, custody and
+reentry assertions remain unchanged. Oracle correction:
+`native-codegen-recovery-2026-10-09/scalar-v9/ordinary-diagnostic-oracle-correction/manifest.json`, SHA-256 `aafc67f2455050bc0b15bfc535a859fc4a01662ef8e6291e8200c5efed328d44`.
+
+Fresh normal and private MSVC Debug/Release measurements retain 58 production
+exports (38 ordinary, 15 carrier, five startup), eight separate private hooks,
+ABI1/wire3 and static CRT. Receipt pins:
+2cdef1b1c334389e624407ceb819246a9ea61737539f1943d1d167ec95470fd6 and
+46bbe5fd5116b9093afa374f15c64e70f8747cd5cba0670ff607281d90df3738.
+The fresh corrected Resource gate binds exact current Source and dep-info.
+All sixteen predecessor gates pass 754 Source-deleted executions/900 entries;
+both new scalar gates pass 92 executions/138 entries, totaling 846 executions
+and 1,038 entries. Scalar receipt: `target/native/scalar-resource18-oracle-corrected-v4/scalar-gate-acceptance.json`, SHA-256 `902e3f6ec6cb946c646b4fa12917ba365ccecfa7eedbcf43b9b83ec9d4dda2b6`.
+Its reentry counts derive from guarded 23-case/two-profile loops and internally
+decoded two-entry reports; individual per-child counts are not logged.
+Predecessor counts: `target/native/scalar-resource18-oracle-corrected-v4/current-gate-counts.json`, SHA-256 `adf33cbab4544509dc66dce176493fcbab18bcfc22f0713ca007cb33636be991`.
+
+Before the isolated two-file oracle correction, Graph acceptance passed 32
+Source-deleted executions (24 public, eight hooks), and selected Callback, Owner,
+Actor and interface regressions passed 42 tests. Only those two exact
+expected-message tables differ from their source snapshots. Production and
+selected test behavior are unchanged. These retain bounded prior evidence,
+not a fresh run of the corrected test binary. Receipts:
+`target/native/actor-graph-current-scalar-v2/after.json`, SHA-256 `11dc2e66b2cffa23cb502111307e3b40d544d67456e37b7613194d1a1a13700e` and `target/native/scalar-normal-regressions-v2/after.json`, SHA-256 `314ef80985d15d79e130747a7b1cd973db802498f152f2630cbd03151b3dba77`.
+The current guarded Startup rerun passes 80 executions (48 normal, 32 private).
+Earlier failed attempts supply no acceptance. Startup:
+`target/native/startup80-current-scalar-v4/after.json`, SHA-256 `09c79ae568c54ca818f37aa928b3f3857653826aba21565b62f506299b03dcaa`.
+Source33 wire3 remains object-only and gains no linked execution credit.
+
+All scopes remain bounded local MSVC evidence. Full coherent-workspace and
+fixed-inventory conformance, exact-revision CI, GNU and clean installed
+distribution remain required. Known deterministic CI failures remain a separate
+repair obligation; this slice claims no exact-revision CI acceptance. Other
+incomplete language parity compositions remain full-goal obligations. The rough
+87% estimate and fixed 207/182 inventory denominators remain unchanged.

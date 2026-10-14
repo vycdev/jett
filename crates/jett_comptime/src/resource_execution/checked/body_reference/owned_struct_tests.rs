@@ -5,6 +5,13 @@ const SOURCE: &str = include_str!("../../fixtures/33_owned_struct_scope_drop_ent
 
 fn execution(source: &str, name: &str) -> (CheckedExecution, CheckedBodyReference) {
     let program = crate::resource_execution::tests::program(source, false);
+    execution_program(program, name)
+}
+
+fn execution_program(
+    program: Arc<jett_typecheck::CheckedResourceProgram>,
+    name: &str,
+) -> (CheckedExecution, CheckedBodyReference) {
     let mut checked =
         CheckedExecution::new(program.clone(), ExecutionPurpose::ReferenceRuntime).unwrap();
     let function = program
@@ -29,13 +36,17 @@ fn execution(source: &str, name: &str) -> (CheckedExecution, CheckedBodyReferenc
 }
 
 fn constructor(body: &CheckedBodyReference) -> &Expr {
+    constructor_named(body, "OwnedEnvelope")
+}
+
+fn constructor_named<'a>(body: &'a CheckedBodyReference, selected: &str) -> &'a Expr {
     let mut found = Vec::new();
     walk_region(
         body.region().unwrap(),
         &mut |_| {},
         &mut |expression| {
             if let Expr::Call(callee, _, _) = expression {
-                if matches!(callee.as_ref(), Expr::Ident(name) if name.name == "OwnedEnvelope") {
+                if matches!(callee.as_ref(), Expr::Ident(name) if name.name == selected) {
                     found.push(expression);
                 }
             }
@@ -44,6 +55,69 @@ fn constructor(body: &CheckedBodyReference) -> &Expr {
     );
     assert_eq!(found.len(), 1);
     found[0]
+}
+
+#[test]
+fn occupied_struct_primitive_companion_proofs_keep_exact_types_aliases_and_original_order() {
+    let sources = [
+        (
+            include_str!("../../fixtures/36_owned_struct_primitive_companions.jett"),
+            "retire_primitives",
+            "PrimitiveEnvelope",
+        ),
+        (
+            include_str!("../../fixtures/37_owned_struct_alias_companions.jett"),
+            "retire_aliases",
+            "AliasEnvelope",
+        ),
+        (
+            include_str!("../../fixtures/38_owned_struct_pending_int64_transport.jett"),
+            "retire_pending",
+            "PendingEnvelope",
+        ),
+        (
+            include_str!("../../fixtures/40_owned_struct_pending_companions.jett"),
+            "retire_pending_primitives",
+            "PendingPrimitives",
+        ),
+        (
+            include_str!("../../fixtures/42_owned_struct_pending_primitive_matrix.jett"),
+            "retire_pending_matrix",
+            "PendingMatrix",
+        ),
+    ];
+    for (source, helper, name) in sources {
+        let (checked, body) = execution_program(
+            crate::resource_execution::tests::companion_program(source, false),
+            helper,
+        );
+        let expression = constructor_named(&body, name);
+        let proof = checked.prepare_owned_struct(expression).unwrap().unwrap();
+        checked.revalidate_owned_struct(&proof, expression).unwrap();
+        assert!(checked.prepare_owned_struct(&expression.clone()).is_err());
+        assert!(proof.fields().iter().all(|(_, ty)| matches!(
+            checked.program.checked().interner.resolve(*ty),
+            Type::Resource(_)
+        ) || PreparedOwnedStruct::supports_companion(
+            checked.program.checked().interner.resolve(*ty)
+        )));
+        if name == "PrimitiveEnvelope" {
+            assert_eq!(&proof.source_fields()[..3], &[8, 9, 0]);
+            assert_eq!(proof.fields().len(), 14);
+        }
+        if name == "AliasEnvelope" {
+            assert_eq!(proof.fields()[1].1, jett_types::TypeInterner::INT8);
+            assert_eq!(proof.fields()[2].1, jett_types::TypeInterner::UINT64);
+            assert_eq!(proof.fields()[3].1, jett_types::TypeInterner::FLOAT32);
+        }
+        let mut redirected = proof;
+        redirected.fields[1].1 = jett_types::TypeInterner::STRING;
+        assert!(
+            checked
+                .revalidate_owned_struct(&redirected, expression)
+                .is_err()
+        );
+    }
 }
 
 #[test]

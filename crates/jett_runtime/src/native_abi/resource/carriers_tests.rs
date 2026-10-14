@@ -152,6 +152,30 @@ fn transfer_issues_a_fresh_generation_and_preserves_the_exact_nominal_stamp() {
     });
 }
 
+#[test]
+fn carrier_scalar_task_transport_keeps_all_layers_across_typed_transfer_and_observation() {
+    context(|auth| {
+        auth.with_resource(|state, ordinary, registry| {
+            let (attempt, frame) = start(state, ordinary, registry)?;
+            let optional = none(state, ordinary, frame, 0)?;
+            let constructor = op(state, |row| matches!(row, Op::Construct { destination: 2, children, .. } if children.iter().any(|child| matches!(child.source, ChildSource::Move { slot: 0 }))));
+            let builder = state.carrier_construct_begin(ordinary, frame, constructor)?;
+            state.carrier_child_scalar_task(ordinary, builder, 0, 17, 3)?;
+            assert_eq!(state.carrier_child_scalar_task(ordinary, builder, 1, optional.raw(), 1), Err(NativeResourceError::WrongOperation));
+            assert!(state.handles.contains_key(&optional), "a refused scalar endpoint must not adopt another family");
+            state.carrier_child(ordinary, builder, 1, optional.raw())?;
+            let input = state.carrier_commit(ordinary, builder)?;
+            let transfer = op(state, |row| matches!(row, Op::Transfer { source: 2, destination: 9, .. }));
+            let output = state.carrier_transfer(ordinary, frame, transfer, input)?;
+            let observer = op(state, |row| matches!(row, Op::Observe { source: Source::Slot(9), path, observation: Observation::Ordinary { shape: 0, clone: false }, .. } if path == &[Path::Field(0)]));
+            assert_eq!(state.carrier_observe_scalar_task(ordinary, frame, observer, output, 0)?, (17, 3));
+            assert_eq!(state.carrier_observe(ordinary, frame, observer, output, 0), Err(NativeResourceError::WrongFamily), "the old one-word endpoint cannot discard layers");
+            assert_eq!(state.carrier_observe_scalar_task(ordinary, frame, observer, output, 0)?, (17, 3));
+            finish(state, ordinary, registry, attempt)
+        }).unwrap();
+    });
+}
+
 fn rejected_fake_leaf(
     state: &mut NativeResourceState,
     ordinary: &mut values::NativeValues,
@@ -171,6 +195,7 @@ fn rejected_fake_leaf(
                 node: 3,
                 selector: 0,
                 ordinary: None,
+                pending_depth: 0,
                 owner: None,
                 children: vec![],
                 acquisition: vec![],
@@ -289,15 +314,15 @@ fn latent_generic_state_and_refinement_metadata_never_synthesizes_live_custody()
     context(|auth| {
         auth.with_resource(|state,ordinary,registry|{
         let (attempt,_frame)=start(state,ordinary,registry)?;
-        let scalar=||NativeCarrierTree{node:0,selector:0,ordinary:Some((0,17)),owner:None,children:vec![],acquisition:vec![]};
-        let absent=||NativeCarrierTree{node:4,selector:0,ordinary:None,owner:None,children:vec![],acquisition:vec![]};
-        let generic=NativeCarrierTree{node:13,selector:0,ordinary:None,owner:None,children:vec![Some(absent())],acquisition:vec![0]};
+        let scalar=||NativeCarrierTree{node:0,selector:0,ordinary:Some((0,17)),pending_depth:0,owner:None,children:vec![],acquisition:vec![]};
+        let absent=||NativeCarrierTree{node:4,selector:0,ordinary:None,pending_depth:0,owner:None,children:vec![],acquisition:vec![]};
+        let generic=NativeCarrierTree{node:13,selector:0,ordinary:None,pending_depth:0,owner:None,children:vec![Some(absent())],acquisition:vec![0]};
         state.validate_complete_tree(ordinary,&generic)?;
         assert!(matches!(state.layout.carriers().node(13)?,Node::Struct{arguments,..} if arguments==&[3]));
         assert!(matches!(state.layout.carriers().node(14)?,Node::Struct{arguments,..} if arguments==&[4]));
-        let state_value=NativeCarrierTree{node:11,selector:0,ordinary:None,owner:None,children:vec![Some(scalar())],acquisition:vec![0]};state.validate_complete_tree(ordinary,&state_value)?;
+        let state_value=NativeCarrierTree{node:11,selector:0,ordinary:None,pending_depth:0,owner:None,children:vec![Some(scalar())],acquisition:vec![0]};state.validate_complete_tree(ordinary,&state_value)?;
         let wrong_state=NativeCarrierTree{selector:1,..state_value};assert!(state.validate_complete_tree(ordinary,&wrong_state).is_err());
-        let refined=NativeCarrierTree{node:12,selector:0,ordinary:None,owner:None,children:vec![Some(scalar())],acquisition:vec![0]};
+        let refined=NativeCarrierTree{node:12,selector:0,ordinary:None,pending_depth:0,owner:None,children:vec![Some(scalar())],acquisition:vec![0]};
         assert_eq!(state.validate_complete_tree(ordinary,&refined),Err(NativeResourceError::UnprovedCarrierRefinement));
         assert_eq!(registry.live_count(),0);finish(state,ordinary,registry,attempt)
     }).unwrap();
@@ -559,4 +584,177 @@ fn unsupported_owning_observation_flags_refuse_before_inspecting_a_fake_handle()
         })
         .unwrap();
     });
+}
+
+unsafe extern "C" {
+    fn jett_rt_v1_resource_carrier_child_scalar_task(
+        context: *const JettRuntimeContextV1,
+        builder: u64,
+        ordinal: u32,
+        bits: u64,
+        pending_depth: u64,
+    ) -> JettRuntimeStatusV1;
+    fn jett_rt_v1_resource_carrier_observe_scalar_task(
+        context: *const JettRuntimeContextV1,
+        frame: u64,
+        operation: u32,
+        input: u64,
+        selection: u64,
+        out_bits: *mut u64,
+        out_depth: *mut u64,
+    ) -> JettRuntimeStatusV1;
+}
+
+#[test]
+fn carrier_scalar_task_c_outputs_are_atomic_on_refusal_and_preserve_all_layers() {
+    // Refused operations record their first error, so each case owns a fresh attempt.
+    for case in 0..12 {
+        context(|auth| scalar_task_c_output_case(auth, case));
+    }
+}
+
+fn scalar_task_c_output_case(auth: &AuthenticatedResourceContext, case: u32) {
+    let pointer = auth.key.owner_address as *const JettRuntimeContextV1;
+    let (attempt, frame, builder, constructor, optional) = auth
+        .with_resource(|state, ordinary, registry| {
+            let (attempt, frame) = start(state, ordinary, registry)?;
+            let optional = none(state, ordinary, frame, 0)?;
+            let constructor = op(state, |row| {
+                matches!(row, Op::Construct { destination: 2, children, .. }
+                    if children.iter().any(|child| matches!(child.source, ChildSource::Move { slot: 0 })))
+            });
+            let builder = state.carrier_construct_begin(ordinary, frame, constructor)?;
+            Ok((attempt, frame, builder, constructor, optional))
+        })
+        .unwrap();
+    assert_eq!(
+        unsafe { jett_rt_v1_resource_carrier_child_scalar_task(pointer, builder.raw(), 0, 17, 3) },
+        JettRuntimeStatusV1::OK
+    );
+    let (output, observer) = auth
+        .with_resource(|state, ordinary, _| {
+            state.carrier_child(ordinary, builder, 1, optional.raw())?;
+            let input = state.carrier_commit(ordinary, builder)?;
+            let transfer = op(state, |row| {
+                matches!(
+                    row,
+                    Op::Transfer {
+                        source: 2,
+                        destination: 9,
+                        ..
+                    }
+                )
+            });
+            let output = state.carrier_transfer(ordinary, frame, transfer, input)?;
+            let observer = op(state, |row| {
+                matches!(row, Op::Observe { source: Source::Slot(9), path,
+                    observation: Observation::Ordinary { shape: 0, clone: false }, .. }
+                    if path == &[Path::Field(0)])
+            });
+            Ok((output, observer))
+        })
+        .unwrap();
+    let retired = JettRuntimeContextV1::retired();
+    let mut words = [0x0123_4567_89ab_cdefu64, 0xfedc_ba98_7654_3210];
+    let sentinel = words;
+    let bits = std::ptr::addr_of_mut!(words[0]);
+    let depth = std::ptr::addr_of_mut!(words[1]);
+    let (ctx, call_frame, operation, input, out_bits, out_depth) = match case {
+        0 => (
+            std::ptr::null(),
+            frame.raw(),
+            observer,
+            output.raw(),
+            bits,
+            depth,
+        ),
+        1 => (
+            &retired as *const _,
+            frame.raw(),
+            observer,
+            output.raw(),
+            bits,
+            depth,
+        ),
+        2 => (pointer, frame.raw(), observer, 0, bits, depth),
+        3 => (pointer, frame.raw(), observer, u64::MAX, bits, depth),
+        4 => (pointer, 0, observer, output.raw(), bits, depth),
+        5 => (pointer, u64::MAX, observer, output.raw(), bits, depth),
+        6 => (pointer, frame.raw(), constructor, output.raw(), bits, depth),
+        7 => (
+            pointer,
+            frame.raw(),
+            observer,
+            output.raw(),
+            std::ptr::null_mut(),
+            depth,
+        ),
+        8 => (
+            pointer,
+            frame.raw(),
+            observer,
+            output.raw(),
+            bits,
+            std::ptr::null_mut(),
+        ),
+        9 => (pointer, frame.raw(), observer, output.raw(), bits, bits),
+        10 => (pointer, frame.raw(), observer, output.raw(), depth, depth),
+        _ => (pointer, frame.raw(), observer, output.raw(), bits, depth),
+    };
+    let status = unsafe {
+        jett_rt_v1_resource_carrier_observe_scalar_task(
+            ctx, call_frame, operation, input, 0, out_bits, out_depth,
+        )
+    };
+    if case == 11 {
+        assert_eq!(status, JettRuntimeStatusV1::OK);
+        assert_eq!(words, [17, 3]);
+    } else {
+        let expected = if case <= 1 {
+            JettRuntimeStatusV1::INVALID_CONTEXT
+        } else {
+            JettRuntimeStatusV1::INVALID_ARGUMENT
+        };
+        assert_eq!(status, expected, "case {case}");
+        assert_eq!(
+            words, sentinel,
+            "both outputs remain unchanged in case {case}"
+        );
+    }
+    let recorded_failure = (2..=6).contains(&case);
+    if !recorded_failure {
+        assert_eq!(
+            unsafe {
+                jett_rt_v1_resource_carrier_observe_scalar_task(
+                    pointer,
+                    frame.raw(),
+                    observer,
+                    output.raw(),
+                    0,
+                    bits,
+                    depth,
+                )
+            },
+            JettRuntimeStatusV1::OK
+        );
+        assert_eq!(words, [17, 3]);
+    }
+    auth.with_resource(|state, ordinary, registry| {
+        assert!(
+            state.handles.contains_key(&output),
+            "refusal never consumes the carrier"
+        );
+        let completion = state.complete_entry(ordinary, registry, attempt, 0, false)?;
+        assert_eq!(completion.selected_kind, u32::from(recorded_failure));
+        assert_eq!(completion.cleanup_status, 0);
+        assert_eq!(
+            state.counts(ordinary, registry),
+            NativeResourceCounts {
+                ordinary_empty: 1,
+                ..NativeResourceCounts::default()
+            }
+        );
+        Ok(())
+    })
+    .unwrap();
 }

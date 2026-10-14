@@ -2,6 +2,63 @@
 use super::*;
 
 impl Interpreter {
+    /// The retained body, rather than an optional ordinary interpreter map,
+    /// supplies primitive expression typing inside checked Resource execution.
+    pub(in crate::interpreter) fn resource_companion_expression_name(
+        &self,
+        expression: &Expr,
+    ) -> Result<Option<String>, String> {
+        let Some(transport) = self
+            .resource_transport
+            .as_ref()
+            .filter(|transport| transport.checked_source_active)
+        else {
+            return Ok(None);
+        };
+        let ty = transport
+            .checked
+            .expression_type(expression.span())
+            .map_err(|error| error.to_string())?;
+        let types = &transport.checked.program().checked().interner;
+        if !crate::resource_execution::PreparedOwnedStruct::supports_companion(types.resolve(ty)) {
+            return Ok(None);
+        }
+        Ok(Some(types.type_name(ty)))
+    }
+
+    pub(in crate::interpreter) fn normalize_resource_companion_expression(
+        &self,
+        expression: &Expr,
+        type_name: &str,
+        mut value: Value,
+    ) -> Result<Value, String> {
+        let mut depth = 0usize;
+        while let Value::Pending(inner) = value {
+            value = *inner;
+            depth = depth
+                .checked_add(1)
+                .ok_or("pending companion depth exceeds the physical carrier")?;
+        }
+        value = if matches!(
+            expression,
+            Expr::Binary(
+                _,
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Modulo,
+                _,
+                _
+            ) | Expr::Unary(UnaryOp::Neg, _, _)
+        ) {
+            self.wrap_integer_value_for_type_name(type_name, value.into_payload())?
+        } else {
+            self.normalize_value_for_type_name(type_name, value)?
+        };
+        value = self.retain_checked_identity(type_name, value);
+        for _ in 0..depth {
+            value = Value::Pending(Box::new(value));
+        }
+        Ok(value)
+    }
+
     pub(super) fn eval_resource_owned_struct(
         &mut self,
         expression: &Expr,
