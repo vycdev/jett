@@ -111,6 +111,9 @@ mod reflected_nested_producers;
 #[path = "native_conformance/debug_event_transport.rs"]
 mod debug_event_transport;
 
+#[path = "native_conformance/hidden_secret_print.rs"]
+mod hidden_secret_print;
+
 #[path = "native_conformance/json_qualified_machines.rs"]
 mod json_qualified_machines;
 

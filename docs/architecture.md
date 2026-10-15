@@ -944,7 +944,18 @@ Track which capabilities flow through the program:
 - **`print` and `println` are compiler-owned debug builtins, not ordinary I/O.**
   They remain secret-output boundaries and require no `Stdout` capability. The
   interpreter keeps one canonical ordered buffer of typed debug events with
-  exact text. Runtime entrypoints emit those bytes to stderr; only `Stdout.write`
+  exact text. Accepted Print/Println calls retain caller argument type metadata
+  before evaluation and recursively redact hidden secrets with `[redacted]`.
+  Retained concrete identities and builder field types drive observation;
+  the reference fallback for missing composite/field metadata redacts the
+  subtree without inventing an owner contract. Native malformed-schema guards
+  remain errors. Print rendering does not invoke user methods or inspect
+  captures, and emits one complete event after all arguments succeed. This
+  selection leaves pending-sum diagnostics separate. The accompanying direct-field
+  diagnostic repair retains checked receiver types; integrated verification is
+  pending. Native typed schemas and redaction checks remain intact. Runtime
+  entrypoints emit
+  those bytes to stderr; only `Stdout.write`
   enters application stdout. The native DebugPrint leaf shares the diagnostic
   stderr transport used by trace and breakpoint without changing the C ABI.
   Driver results retain comptime and frontend verification observations apart
@@ -1145,8 +1156,11 @@ exactly `Secret(field TypeId)`. Emission retains the original receiver type for
 pending diagnostics and ownership, uses the existing machine-state field offset,
 and preserves field depth and owned-copy behavior. Nested-secret or refinement
 receivers, mismatched nominal owners, invalid indexes, and forged result types
-remain rejected. Pending secret receiver diagnostics retain native redaction;
-their raw reference observation remains an explicit open policy boundary.
+remain rejected. Direct-field receiver failures retain the original checked
+receiver type in both execution paths. The reference renderer observes the
+original value before consuming its wrappers and applies the existing typed
+secret redaction, matching native pending receiver diagnostics. It does not
+join pending values, declassify payloads, or change the field failure point.
 
 For refinement boundaries, HIR lowers each checked predicate to a
 compiler-owned pure function. MIR calls unvalidated ancestor predicates in
@@ -3717,8 +3731,11 @@ Handler extraction, ownership planning, and emission use the same argument rule.
 Formatting starts only after every argument has evaluated successfully.
 An additive `Uninhabited` debug node describes never-typed children of empty
 containers and absent sums; attempting to format an actual value at that node
-fails without reading a payload. The typed formatter still redacts hidden
-secrets; interpreter parity for those print values awaits the recorded policy.
+fails without reading a payload. Native and interpreter accepted Print/Println
+formatting now use typed redaction for hidden secrets. This selected print
+policy leaves trace behavior unchanged and pending-sum diagnostics separate.
+The accompanying direct-field diagnostic repair applies typed secret redaction;
+integrated verification remains pending until its focused and linked tests run.
 Typed aggregate formatting traverses values with an explicit work stack, so
 finite recursive values have no formatter-specific nesting cutoff. An active
 path tracks layout, node, and payload identity to reject malformed cycles while

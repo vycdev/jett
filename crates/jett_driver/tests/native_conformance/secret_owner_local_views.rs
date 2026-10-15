@@ -5,11 +5,7 @@ use std::fs;
 
 enum SecretOutcome<'a> {
     Success(&'a str),
-    RuntimeFailure {
-        stdout: &'a str,
-        reference_message: &'a str,
-        native_message: &'a str,
-    },
+    RuntimeFailure { stdout: &'a str, message: &'a str },
 }
 
 fn run_case(name: &str, source_text: &str, expected_stdout: &str) {
@@ -27,16 +23,13 @@ fn run_case_with_outcome(name: &str, source_text: &str, expected: SecretOutcome<
             assert_eq!(output.stdout, stdout, "{name}");
             (output, 0, String::new())
         }
-        SecretOutcome::RuntimeFailure {
-            stdout,
-            reference_message,
-            native_message,
-        } => {
+        SecretOutcome::RuntimeFailure { stdout, message } => {
             let failure = run_file_capture_outcome(&source)
                 .expect_err("expected terminal secret receiver fixture failure");
             assert_eq!(failure.output.stdout, stdout, "{name}");
-            assert_eq!(failure.message, reference_message, "{name}");
-            (failure.output, 71, format!("{native_message}\n"))
+            assert_eq!(failure.message, message, "{name}");
+            let stderr = format!("{}\n", failure.message);
+            (failure.output, 71, stderr)
         }
     };
     assert!(reference.debug_events.is_empty(), "{name}: {reference:?}");
@@ -150,8 +143,7 @@ fn native_secret_owner_local_views_07_pending_secret_struct_receiver_preserves_n
         include_str!("secret_owner_local_views/07_pending_secret_struct_receiver.jett"),
         SecretOutcome::RuntimeFailure {
             stdout: "before:secret\n",
-            reference_message: "runtime error: field access is not supported on pending(pending(app.Packet(payload: app.Payload(data: bytes(65, 66)))))",
-            native_message: "runtime error: field access is not supported on [redacted]",
+            message: "runtime error: field access is not supported on [redacted]",
         },
     );
 }

@@ -31,7 +31,9 @@ checks. No allocation, hidden owner, implicit clone/join, ABI change, mutable or
 temporary view, capture escape, projected mutation, owner-change permission or
 loan-expiry policy is added. The independent interface handler staging draft
 is unapplied; this proof does not resolve its scoped internal loan problem.
-No hidden-secret debugger or terminal observation policy is selected here.
+This field-view proof introduces no debugger observation policy. Direct-field
+terminal receiver errors apply the existing secret non-disclosure contract;
+the diagnostic successor below preserves the checked receiver type.
 
 ## Actual pre-change source evidence
 
@@ -56,10 +58,11 @@ contains the underlying aggregate. Its normal CLI `error: ` reporting prefix
 is separate from `RunFailure.message`. Native retains its existing checked
 `[redacted]` receiver rendering. This exact difference is already recorded in
 [the open observation note](../open_design/debug_print_hidden_secrets.md);
-qualified-field admission preserves native redaction and does not choose
-the reference observation policy.
+qualified-field admission preserved native redaction. Those original raw
+reference observations remain historical; the direct-field diagnostic successor
+below applies existing non-disclosure to this same checked source.
 
-## Current acceptance and remaining gates
+## Historical acceptance and remaining gates
 
 The formatted/rebased HIR proof adds three tests: nested/forwarded exact owner
 and declared qualification exceptions; concrete generic scalar/linear binding
@@ -110,3 +113,24 @@ The prior accepted
 The predecessor platform result does not validate this secret revision.
 Whole-language native parity
 remains the 100% objective, tracked with about-85% and the fixed 207 inventory.
+
+## Direct-field diagnostic successor
+
+Unsupported direct-field receivers now render from the original value and its
+checked receiver type before wrapper consumption. This makes the existing
+pending secret Packet failure redact the entire receiver, including pending
+depth and nested bytes, in both execution paths. Successful extraction, receiver
+evaluation, failure location, partial stdout and cleanup order stay unchanged.
+No implicit declassification, join, new field admission or debugger policy is
+introduced. Raw direct-handle and pipeline fallbacks are outside this repair;
+no authenticated secret-bearing failing source for them was established.
+
+The original `07_pending_secret_struct_receiver.jett` bytes remain unchanged.
+Its existing native gate now requires one exact shared reference/native message,
+`runtime error: field access is not supported on [redacted]`, before-only stdout,
+status 71 and both Source-deleted profile executions. Historical receipts above
+retain their original mismatch scope. Integrated verification passes all seven
+secret-owner controls (14 Source-deleted profile executions), all 645 Comptime
+tests and eight adjacent native debug/pending controls. The focused execution
+log is `target/native/secret-observation-owner-views-v1.log`; these results do
+not replace full-workspace or supported-host acceptance.

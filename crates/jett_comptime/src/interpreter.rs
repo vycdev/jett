@@ -2959,10 +2959,14 @@ impl Interpreter {
                 if let Some(value) = self.borrowed_struct_place(expr) {
                     return Ok(ExprFlow::Value(value.clone()));
                 }
+                let receiver_type = self
+                    .checked_expression_type(obj.span())
+                    .and_then(|name| Self::debug_type(name))
+                    .or_else(|| self.debug_expression_type(obj));
                 match obj.as_ref() {
                     Expr::Ident(ident) => {
                         if let Some(value) = self.get_variable(&ident.name).cloned() {
-                            self.eval_value_field_access(value, &field.name)
+                            self.eval_value_field_access(value, &field.name, receiver_type.as_ref())
                         } else {
                             // Treat as enum variant: Type.variant
                             if let Some(enum_name) = self.registry_name(&self.enums, &ident.name) {
@@ -2982,7 +2986,7 @@ impl Interpreter {
                     }
                     _ => {
                         let base = value_or_signal!(self, obj);
-                        self.eval_value_field_access(base, &field.name)
+                        self.eval_value_field_access(base, &field.name, receiver_type.as_ref())
                     }
                 }
             }
@@ -3742,6 +3746,17 @@ impl Interpreter {
         // Capture caller facts before evaluating any argument or entering a
         // nested generic/reflected body. Reorder each witness with its value;
         // destination parameter types never supply caller proof.
+        let debug_print_kind = self.debug_print_call_kind(callee);
+        let debug_argument_types = if debug_print_kind.is_some() {
+            Self::reorder_function_arguments(
+                args.iter()
+                    .map(|arg| self.debug_print_expression_type(&arg.value))
+                    .collect(),
+                argument_order.as_deref(),
+            )?
+        } else {
+            Vec::new()
+        };
         let argument_source_types: Vec<_> = args
             .iter()
             .map(|arg| {
@@ -3758,6 +3773,13 @@ impl Interpreter {
                 .into_iter()
                 .unzip();
 
+        if let Some(kind) = debug_print_kind {
+            return Ok(ExprFlow::Value(self.emit_typed_debug_print(
+                kind,
+                &arg_values,
+                &debug_argument_types,
+            )));
+        }
         if self.is_value_call_target(callee) {
             let function = value_or_signal!(self, callee);
             return Ok(ExprFlow::Value(self.call_fn_value_from_source(
@@ -4058,6 +4080,22 @@ impl Interpreter {
         // step.span records the checked inbound type, including a previous
         // step's handled success type. Capture extra argument facts before any
         // evaluation, then permute each proof together with its value.
+        let debug_print_kind = self.debug_print_call_kind(function);
+        let debug_argument_types = if debug_print_kind.is_some() {
+            let mut types = vec![
+                self.checked_expression_type(step.span)
+                    .and_then(|name| Self::debug_type(name))
+                    .map(|ty| self.substitute_type_expr(&ty)),
+            ];
+            types.extend(
+                extra_args
+                    .iter()
+                    .map(|arg| self.debug_print_expression_type(&arg.value)),
+            );
+            Self::reorder_function_arguments(types, argument_order.as_deref())?
+        } else {
+            Vec::new()
+        };
         let mut evaluated_args = vec![(
             piped_value,
             self.checked_refinement_source_type(step.span).cloned(),
@@ -4077,6 +4115,13 @@ impl Interpreter {
                 .into_iter()
                 .unzip();
 
+        if let Some(kind) = debug_print_kind {
+            return Ok(ExprFlow::Value(self.emit_typed_debug_print(
+                kind,
+                &arg_values,
+                &debug_argument_types,
+            )));
+        }
         if self.is_value_call_target(function) {
             let function = value_or_signal!(self, function);
             return Ok(ExprFlow::Value(self.call_fn_value_from_source(
@@ -11230,18 +11275,16 @@ impl Interpreter {
             }
 
             // -- print (debugging helper) -------------------------------------
-            IntrinsicId::Print => {
-                let output: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
-                self.emit_debug_event(DebugEventKind::Print, output.join(" "));
-                Some(Ok(Value::Nothing))
-            }
-            IntrinsicId::Println => {
-                let output: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
-                let mut text = output.join(" ");
-                text.push('\n');
-                self.emit_debug_event(DebugEventKind::Println, text);
-                Some(Ok(Value::Nothing))
-            }
+            IntrinsicId::Print => Some(Ok(self.emit_typed_debug_print(
+                DebugEventKind::Print,
+                args,
+                &[],
+            ))),
+            IntrinsicId::Println => Some(Ok(self.emit_typed_debug_print(
+                DebugEventKind::Println,
+                args,
+                &[],
+            ))),
 
             // -- Private list kernels (stdlib/list.jett) ----------------------
             IntrinsicId::ListNew if self.current_function_trusted_stdlib => {
@@ -13721,7 +13764,21 @@ impl Interpreter {
         }
     }
 
-    fn eval_value_field_access(&self, value: Value, field_name: &str) -> Result<ExprFlow, String> {
+    fn eval_value_field_access(
+        &self,
+        value: Value,
+        field_name: &str,
+        receiver_type: Option<&TypeExpr>,
+    ) -> Result<ExprFlow, String> {
+        if !matches!(
+            value.payload(),
+            Value::Struct { .. } | Value::Machine { .. }
+        ) {
+            return Err(format!(
+                "field access is not supported on {}",
+                self.format_debug_value(&value, receiver_type)
+            ));
+        }
         match value.into_payload() {
             Value::Struct {
                 concrete_type: _,
@@ -13759,7 +13816,7 @@ impl Interpreter {
                     )
                 })
             }
-            other => Err(format!("field access is not supported on {other}")),
+            _ => unreachable!("field receiver shape checked before consuming its wrappers"),
         }
     }
 
@@ -26487,7 +26544,13 @@ function main() returns nothing:
         let mut interp = Interpreter::new();
         interp.enable_stdout_capture();
         let values = Value::List(vec![Value::String("a".into()), Value::String("b".into())]);
-        interp.set_variable("values", values.clone());
+        // Host-built values have no checked Source facts. Supply the known
+        // declared contract; the public-text oracle below stays unchanged.
+        interp.set_variable_with_type(
+            "values",
+            values.clone(),
+            Interpreter::debug_type("list[string]").unwrap(),
+        );
         let expression = debug_call("println", vec![Expr::View(Box::new(var("values")), sp())]);
         assert_eq!(interp.eval_expr(&expression), Ok(Value::Nothing));
         assert_eq!(interp.get_variable("values"), Some(&values));

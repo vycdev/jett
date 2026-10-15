@@ -1,0 +1,15 @@
+namespace app
+struct Vault:
+    token: secret[string]
+    label: string
+function main() returns nothing:
+    Vault original = Vault(token: "builder-secret", label: "public")
+    mutable TypeConstruction builder = type.construct_start[Vault]()
+    println(view builder)
+    for field in type.fields[Vault]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[Vault, Field](view original, view field)
+            builder = type.construct_put[Vault, Field](builder, view field, value) handle error:
+                return nothing
+            println(view builder)
+    return nothing

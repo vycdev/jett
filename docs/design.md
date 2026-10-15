@@ -3719,8 +3719,15 @@ Non-release native debug printing supports the same public aggregate and opaque
 values as the interpreter, including empty containers and absent sums. Explicit
 `view` arguments remain borrowed; ordinary arguments retain their consumption
 rules. All arguments are evaluated before the call emits text, so a failing
-later argument cannot leave partial output from that call. The policy for
-secrets hidden by an interface or builder remains tracked in
+later argument cannot leave partial output from that call. Accepted non-release
+`print` and `println` recursively redact hidden secret subtrees as `[redacted]`
+using the retained concrete type and builder field metadata. The reference
+fallback for missing composite or field metadata redacts that subtree rather
+than exposing raw payloads; it does not prove checked metadata propagation is
+complete. Native malformed-schema guards remain errors. Rendering
+invokes no user getter, Displayable method, or callback and inspects no captures
+or actor state. Direct secret argument restrictions and Source release E0362
+remain unchanged. Pending-value terminal diagnostics remain separately open in
 `open_design/debug_print_hidden_secrets.md`.
 Finite recursive values retain their full typed debug representation; nesting
 past a fixed implementation depth must not turn valid observation into a runtime
@@ -7852,7 +7859,10 @@ including through aliases and refinements and inside collections, sums, records,
 enums, machines, and builders. Secret payloads and their pending depth never
 appear; public fields and pending wrappers outside a secret retain their usual
 format. Formatting does not consume, finish, or declassify values. Typed runtime
-reflection diagnostics use the same rule. The interactive debugger's existing
+reflection diagnostics and unsupported direct-field receiver diagnostics use the
+same rule. Direct-field failures retain the checked receiver type before removing
+value wrappers; redaction does not join pending values or change failure order.
+The interactive debugger's existing
 metadata-only secret inspection policy remains in force. See
 `docs/completed/secret_debug_output.md`.
 Debug binding labels preserve declared aliases, including concrete generic

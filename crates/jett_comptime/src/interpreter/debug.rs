@@ -1,6 +1,8 @@
 //! Typed, non-destructive rendering for compiler-owned debug observations.
 use super::{Expr, FileId, Interpreter, ReflectionFieldInfo, Span, TypeExpr, Value};
 
+mod print;
+
 impl Interpreter {
     pub(super) fn set_inferred_debug_binding(
         &mut self,
