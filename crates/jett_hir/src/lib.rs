@@ -1319,18 +1319,7 @@ fn lower_ordinary_program(
         tests,
     );
     lowerer.reflected_checked_program = Some(original.clone());
-    let mut program = lowerer.lower()?;
-    if has_reflected_callable_plans(&program)
-        || original
-            .checked()
-            .interner
-            .type_ids()
-            .any(|ty| matches!(original.checked().interner.resolve(ty), Type::Actor(_)))
-    {
-        program.resource_source =
-            ResourceSourceArchive::checked(&program, original, &original.checked().interner);
-    }
-    Ok(program)
+    lowerer.lower()
 }
 
 /// Lower the original immutable checked Resource envelope, including unused hooks.
@@ -1364,10 +1353,7 @@ fn lower_resource_program(
     lowerer.resource_manifest = manifest;
     lowerer.authenticated_resource_lowering = true;
     lowerer.reflected_checked_program = Some(original.clone());
-    let mut program = lowerer.lower()?;
-    program.resource_source =
-        ResourceSourceArchive::checked(&program, original, &original.checked().interner);
-    Ok(program)
+    lowerer.lower()
 }
 
 struct FunctionSource<'a> {
@@ -1435,6 +1421,7 @@ struct Lowerer<'a> {
     constant_definitions: HashMap<DefId, Span>,
     errors: Vec<LowerError>,
     include_test_bodies: bool,
+    source_inline_nodes: Vec<inline_functions::LoweredSourceInline>,
 }
 
 impl<'a> Lowerer<'a> {
@@ -1482,6 +1469,7 @@ impl<'a> Lowerer<'a> {
             constant_definitions,
             errors: Vec::new(),
             include_test_bodies,
+            source_inline_nodes: Vec::new(),
         }
     }
 
@@ -1491,25 +1479,33 @@ impl<'a> Lowerer<'a> {
         let sources = std::mem::take(&mut self.functions);
         let mut functions = Vec::with_capacity(sources.len());
         for source in sources {
+            let first_inline = self.source_inline_nodes.len();
             if let Some(function) = self.lower_function(source) {
+                self.assign_inline_root(first_inline, function.id);
                 functions.push(function);
             }
         }
         let actor_constructors = std::mem::take(&mut self.actor_constructors);
         for source in actor_constructors {
+            let first_inline = self.source_inline_nodes.len();
             if let Some(function) = self.lower_actor_constructor(source) {
+                self.assign_inline_root(first_inline, function.id);
                 functions.push(function);
             }
         }
         let actor_handlers = std::mem::take(&mut self.actor_handlers);
         for source in actor_handlers {
+            let first_inline = self.source_inline_nodes.len();
             if let Some(function) = self.lower_actor_handler(source) {
+                self.assign_inline_root(first_inline, function.id);
                 functions.push(function);
             }
         }
         let refinement_sources = std::mem::take(&mut self.refinement_sources);
         for source in refinement_sources {
+            let first_inline = self.source_inline_nodes.len();
             if let Some(function) = self.lower_refinement_predicate(source) {
+                self.assign_inline_root(first_inline, function.id);
                 functions.push(function);
             }
         }
@@ -1540,6 +1536,7 @@ impl<'a> Lowerer<'a> {
                 };
                 if let Some((kind, name, givens, body, span)) = test {
                     let namespace = namespaces.get(&span.file).map_or("", String::as_str);
+                    let first_inline = self.source_inline_nodes.len();
                     if let Some(function) = self.lower_test_body(
                         FunctionId(functions.len() as u32),
                         kind,
@@ -1549,13 +1546,18 @@ impl<'a> Lowerer<'a> {
                         body,
                         span,
                     ) {
+                        self.assign_inline_root(first_inline, function.id);
                         functions.push(function);
                     }
                 }
             }
         }
         if self.errors.is_empty() {
-            inline_functions::extract_inline_functions(&mut functions, &self.check.interner);
+            let inline_sources = inline_functions::extract_inline_functions_with_sources(
+                &mut functions,
+                &self.check.interner,
+                &self.source_inline_nodes,
+            );
             let equality_methods = self
                 .check
                 .equality_methods
@@ -1603,9 +1605,31 @@ impl<'a> Lowerer<'a> {
                     })
                     .collect::<Vec<_>>()
             })?;
+            if let Some(original) = &self.reflected_checked_program
+                && (self.authenticated_resource_lowering
+                    || has_reflected_callable_plans(&program)
+                    || self
+                        .check
+                        .interner
+                        .type_ids()
+                        .any(|ty| matches!(self.check.interner.resolve(ty), Type::Actor(_))))
+            {
+                program.resource_source = ResourceSourceArchive::checked(
+                    &program,
+                    original,
+                    &self.check.interner,
+                    inline_sources,
+                );
+            }
             Ok(program)
         } else {
             Err(self.errors)
+        }
+    }
+
+    fn assign_inline_root(&mut self, first: usize, root: FunctionId) {
+        for source in &mut self.source_inline_nodes[first..] {
+            source.root = Some(root);
         }
     }
 
@@ -3969,9 +3993,20 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 return self.lower_pipeline(initial, steps, ty, span);
             }
             Expr::Paren(inner, _) => {
+                let first_inline = self.parent.source_inline_nodes.len();
                 return self.lower_expression(inner).map(|mut lowered| {
                     lowered.span = span;
                     lowered.ty = ty;
+                    // Parentheses widen HIR spans without replacing the
+                    // physical inline source node retained by its proof.
+                    if matches!(lowered.kind, ExpressionKind::InlineFunction { .. }) {
+                        let node = std::ptr::from_ref(Self::unparenthesized(inner)).addr();
+                        for source in &mut self.parent.source_inline_nodes[first_inline..] {
+                            if source.source_node == node {
+                                source.original = lowered.clone();
+                            }
+                        }
+                    }
                     lowered
                 });
             }
@@ -4035,6 +4070,17 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             }
         };
         let lowered = Expression { kind, ty, span };
+        if self.parent.reflected_checked_program.is_some()
+            && matches!(expression, Expr::InlineFn(..))
+        {
+            self.parent
+                .source_inline_nodes
+                .push(inline_functions::LoweredSourceInline {
+                    source_node: std::ptr::from_ref(expression).addr(),
+                    root: None,
+                    original: lowered.clone(),
+                });
+        }
         let checked_constructor_call = match expression {
             Expr::Call(callee, ..) | Expr::GenericCall(callee, ..) => {
                 let callee = Self::unparenthesized(callee);

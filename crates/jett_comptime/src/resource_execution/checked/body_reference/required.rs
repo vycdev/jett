@@ -35,7 +35,15 @@ impl CheckedAttemptKey {
         Arc::ptr_eq(&self.program, &parent.program)
             && self.node.origin == parent.node.origin
             && self.node.generic == parent.node.generic
-            && self.node.path.starts_with(&parent.node.path)
+            && self
+                .node
+                .path
+                .strip_prefix(parent.node.path.as_slice())
+                .is_some_and(|suffix| {
+                    !suffix
+                        .iter()
+                        .any(|step| matches!(step, RegionStep::InlineBody(_)))
+                })
             && self.node.scopes.starts_with(&parent.node.scopes)
     }
 }
@@ -333,6 +341,12 @@ impl CheckedExecution {
                 }
                 Item::Verify(_) if owner.is_none() => ExecutableOrigin::Verify { item },
                 Item::Property(_) if owner.is_none() => ExecutableOrigin::Property { item },
+                Item::TypeAlias(alias) if owner.is_none() && alias.constraint.is_some() => {
+                    ExecutableOrigin::RefinementPredicate {
+                        definition: self.refinement_definition(alias)?,
+                        item,
+                    }
+                }
                 _ => continue,
             };
             // Authenticate syntax independently of concrete execution eligibility.
@@ -348,37 +362,14 @@ impl CheckedExecution {
                     }),
                 },
             };
-            let mut region = structural.region()?;
-            let mut owns_path = true;
-            for (binding_owner, name) in bindings {
-                let Ok(binding) = region_binding(region, *binding_owner) else {
-                    owns_path = false;
-                    break;
-                };
-                if &binding.name.name != name {
-                    return Err(ResourceExecutionError::MissingCheckedBody);
-                }
-                region = OriginalRegion::Block(&binding.body);
-            }
-            if !owns_path {
+            let paths =
+                explicit_region_paths(structural.region()?, expression, occurrence, bindings)?;
+            if paths.is_empty() {
                 continue;
             }
-            let mut owns_expression = false;
-            walk_region(
-                region,
-                &mut |_| {},
-                &mut |node| {
-                    if let Expr::Comptime(inner, span) = node {
-                        if *span == occurrence && std::ptr::eq(inner.as_ref(), expression) {
-                            owns_expression = true;
-                        }
-                    }
-                },
-                &mut |_| {},
-            );
-            if !owns_expression {
-                continue;
-            }
+            let [path] = paths.as_slice() else {
+                return Err(ResourceExecutionError::MissingCheckedBody);
+            };
             source_is_original = true;
             let roots = match (origin, original) {
                 (ExecutableOrigin::Function { definition, .. }, Item::Function(function))
@@ -406,76 +397,75 @@ impl CheckedExecution {
                             path: Vec::new(),
                         }),
                     },
-                    Vec::new(),
+                    path.clone(),
                 ));
             }
         }
-        for (owner, name) in bindings {
-            let mut expanded = Vec::new();
-            for (cursor, prior_bindings) in bases {
-                let reference = CheckedBodyReference {
-                    cursor: cursor.clone(),
-                };
-                // A foreign owner simply is not this retained lexical region.
-                let Ok(binding) = region_binding(reference.region()?, *owner) else {
-                    continue;
-                };
-                if name != &binding.name.name {
-                    return Err(ResourceExecutionError::MissingCheckedBody);
-                }
-                let Some(candidates) = self.facts(&cursor)?.scopes.get(owner) else {
-                    continue;
-                };
-                for (index, candidate) in candidates.iter().enumerate() {
-                    let mut next = cursor.clone();
-                    next.scopes.push(ScopedSelection {
-                        owner: *owner,
-                        index,
-                        bound_type: candidate.bound_type,
-                        selection: candidate.selection,
-                        reflection: candidate.reflection.clone(),
-                    });
-                    next.executable
-                        .as_mut()
-                        .ok_or(ResourceExecutionError::MissingCheckedBody)?
-                        .path
-                        .push(RegionStep::Scope(binding.span));
-                    self.validate_executable_cursor(&next)?;
-                    let mut projected = prior_bindings.clone();
-                    projected.push(ClosureScopedTypeBinding {
-                        name: name.clone(),
-                        canonical_name: self
-                            .program
-                            .checked()
-                            .interner
-                            .type_name(candidate.bound_type),
-                        reflection: Some(candidate.reflection.clone()),
-                    });
-                    expanded.push((next, projected));
-                }
-            }
-            bases = expanded;
-        }
         let mut prepared = Vec::new();
-        for (cursor, bindings) in bases {
-            let reference = CheckedBodyReference {
-                cursor: cursor.clone(),
-            };
-            let mut original = false;
-            walk_region(
-                reference.region()?,
-                &mut |_| {},
-                &mut |node| {
-                    if let Expr::Comptime(inner, span) = node {
-                        if *span == occurrence && std::ptr::eq(inner.as_ref(), expression) {
-                            original = true;
+        for (base, path) in bases {
+            let mut contexts = vec![(base, Vec::new())];
+            for step in path {
+                let mut expanded = Vec::new();
+                for (cursor, prior_bindings) in contexts {
+                    let reference = CheckedBodyReference {
+                        cursor: cursor.clone(),
+                    };
+                    match step {
+                        RegionStep::InlineBody(index) => {
+                            region_inline_body(reference.region()?, index)?;
+                            let mut next = cursor;
+                            next.executable
+                                .as_mut()
+                                .ok_or(ResourceExecutionError::MissingCheckedBody)?
+                                .path
+                                .push(RegionStep::InlineBody(index));
+                            self.validate_executable_cursor(&next)?;
+                            expanded.push((next, prior_bindings));
+                        }
+                        RegionStep::Scope(owner) => {
+                            let binding = region_binding(reference.region()?, owner)?;
+                            let Some(candidates) = self.facts(&cursor)?.scopes.get(&owner) else {
+                                continue;
+                            };
+                            for (index, candidate) in candidates.iter().enumerate() {
+                                let mut next = cursor.clone();
+                                next.scopes.push(ScopedSelection {
+                                    owner,
+                                    index,
+                                    bound_type: candidate.bound_type,
+                                    selection: candidate.selection,
+                                    reflection: candidate.reflection.clone(),
+                                });
+                                next.executable
+                                    .as_mut()
+                                    .ok_or(ResourceExecutionError::MissingCheckedBody)?
+                                    .path
+                                    .push(RegionStep::Scope(owner));
+                                self.validate_executable_cursor(&next)?;
+                                let mut projected = prior_bindings.clone();
+                                projected.push(ClosureScopedTypeBinding {
+                                    name: binding.name.name.clone(),
+                                    canonical_name: self
+                                        .program
+                                        .checked()
+                                        .interner
+                                        .type_name(candidate.bound_type),
+                                    reflection: Some(candidate.reflection.clone()),
+                                });
+                                expanded.push((next, projected));
+                            }
+                        }
+                        RegionStep::Expression(_) => {
+                            return Err(ResourceExecutionError::MissingCheckedBody);
                         }
                     }
-                },
-                &mut |_| {},
-            );
-            if original && self.facts(&cursor)?.types.contains_key(&occurrence) {
-                prepared.push(self.required_expression(cursor, expression, bindings)?);
+                }
+                contexts = expanded;
+            }
+            for (cursor, projected) in contexts {
+                if self.facts(&cursor)?.types.contains_key(&occurrence) {
+                    prepared.push(self.required_expression(cursor, expression, projected)?);
+                }
             }
         }
         if !source_is_original {
@@ -514,6 +504,69 @@ impl CheckedExecution {
             .required_expression(self.body.clone(), inner, Vec::new())?
             .key)
     }
+}
+
+/// Select pure required syntax without making callable bodies part of the
+/// ordinary executable walker. Every path is to one physical retained node.
+fn explicit_region_paths(
+    region: OriginalRegion<'_>,
+    expression: &Expr,
+    occurrence: Span,
+    bindings: &[(Span, String)],
+) -> Result<Vec<Vec<RegionStep>>, ResourceExecutionError> {
+    let mut scopes = Vec::new();
+    let mut inline = Vec::new();
+    let mut owns = false;
+    walk_region(
+        region,
+        &mut |scope| scopes.push(scope),
+        &mut |node| {
+            if let Expr::Comptime(inner, span) = node {
+                owns |= *span == occurrence && std::ptr::eq(inner.as_ref(), expression);
+            }
+            if matches!(node, Expr::InlineFn(..)) {
+                inline.push(node);
+            }
+        },
+        &mut |_| {},
+    );
+    let mut paths = Vec::new();
+    if owns && bindings.is_empty() {
+        paths.push(Vec::new());
+    }
+    if let Some(((owner, name), rest)) = bindings.split_first() {
+        for scope in scopes {
+            if scope.span != *owner {
+                continue;
+            }
+            if scope.name.name != *name {
+                return Err(ResourceExecutionError::MissingCheckedBody);
+            }
+            for mut path in explicit_region_paths(
+                OriginalRegion::Block(&scope.body),
+                expression,
+                occurrence,
+                rest,
+            )? {
+                path.insert(0, RegionStep::Scope(*owner));
+                paths.push(path);
+            }
+        }
+    }
+    for node in inline {
+        let index = expression_index(region, node)?;
+        let body = region_inline_body(region, index)?;
+        for mut path in explicit_region_paths(
+            OriginalRegion::Block(body),
+            expression,
+            occurrence,
+            bindings,
+        )? {
+            path.insert(0, RegionStep::InlineBody(index));
+            paths.push(path);
+        }
+    }
+    Ok(paths)
 }
 
 fn function_projection(
@@ -564,3 +617,7 @@ fn function_projection(
 #[cfg(test)]
 #[path = "required/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "required/owner_tests.rs"]
+mod owner_tests;

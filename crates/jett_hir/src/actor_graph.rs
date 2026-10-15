@@ -413,7 +413,7 @@ pub fn materialize_actor_graphs(
                         .iter()
                         .filter(|proof| {
                             crate::resource_materialization::proof_matches(
-                                proof, &owner, expression, checked,
+                                proof, &owner, expression, checked, &archive,
                             )
                         })
                         .collect::<Vec<_>>();

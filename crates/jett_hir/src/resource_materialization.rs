@@ -54,7 +54,7 @@ pub fn materialize_checked_required_values(
                 let original = expression.clone();
                 let selected = proofs
                     .iter()
-                    .filter(|proof| proof_matches(proof, &owner, expression, checked))
+                    .filter(|proof| proof_matches(proof, &owner, expression, checked, &archive))
                     .collect::<Vec<_>>();
                 let [proof] = selected.as_slice() else {
                     return Err("required expression has no unique original checked value and complete context".into());
@@ -149,6 +149,7 @@ pub(crate) fn proof_matches(
     function: &Function,
     expression: &Expression,
     checked: &Arc<CheckedResourceProgram>,
+    archive: &crate::ResourceSourceArchive,
 ) -> bool {
     if !proof.belongs_to(checked) {
         return false;
@@ -178,30 +179,48 @@ pub(crate) fn proof_matches(
     {
         return false;
     }
-    let owner_matches = match proof.owner() {
-        CheckedRequiredOwner::Function { definition, declaration } => {
-            function.source_definition == Some(definition)
-                && checked.module().items.iter().any(|item| {
-                    matches!(item, Item::Function(value)
-                        if value.name.span == declaration && value.span == function.span
-                            && (checked.resolved().scope_table.def(definition).span == value.name.span
-                                || checked.resolved().resolutions.get(&value.name.span) == Some(&definition)))
-                })
-                && function.identity.declaration.kind == DeclarationKind::Function
-        }
-        CheckedRequiredOwner::Verify { declaration } => function.identity.declaration.kind == DeclarationKind::Verify
-            && checked.module().items.iter().any(|item| matches!(item, Item::Verify(v) if v.name.span == declaration && v.span == function.span)),
-        CheckedRequiredOwner::Property { declaration } => function.identity.declaration.kind == DeclarationKind::Property
-            && checked.module().items.iter().any(|item| matches!(item, Item::Property(v) if v.name.span == declaration && v.span == function.span)),
-        CheckedRequiredOwner::NamespaceConstant { .. } => false,
+    let Ok(inline) = proof.original_inline_function() else {
+        return false;
     };
+    let owner = if let Some(inline) = inline {
+        let Some(root) = archive.original_inline_root(function, expression, inline, checked) else {
+            return false;
+        };
+        if function.debug_kind != crate::FunctionDebugKind::Inline
+            || function.source_definition.is_some()
+            || function.identity.type_arguments != root.identity.type_arguments
+            || function.identity.specialization != root.identity.specialization
+            || function.identity.scoped_type_bindings.len() > bindings.len()
+            || !function
+                .identity
+                .scoped_type_bindings
+                .iter()
+                .zip(bindings)
+                .all(|(original, current)| original == current)
+        {
+            return false;
+        }
+        root
+    } else {
+        if matches!(
+            proof.owner(),
+            CheckedRequiredOwner::RefinementPredicate { .. }
+        ) && archive
+            .original_required_function(function, expression, checked)
+            .is_none()
+        {
+            return false;
+        }
+        function
+    };
+    let owner_matches = required_owner_matches(proof.owner(), owner, checked);
     if !owner_matches
         || proof.type_arguments() != function.identity.type_arguments
         || proof.specialization() != &function.identity.specialization
     {
         return false;
     }
-    let generic = if function.identity.type_arguments.is_empty() {
+    let generic = if owner.identity.type_arguments.is_empty() {
         None
     } else {
         let matches = checked
@@ -210,9 +229,9 @@ pub(crate) fn proof_matches(
             .iter()
             .enumerate()
             .filter(|(_, instance)| {
-                Some(instance.definition) == function.source_definition
-                    && instance.concrete_args == function.identity.type_arguments
-                    && instance.specialization == function.identity.specialization
+                Some(instance.definition) == owner.source_definition
+                    && instance.concrete_args == owner.identity.type_arguments
+                    && instance.specialization == owner.identity.specialization
             })
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
@@ -237,6 +256,52 @@ pub(crate) fn proof_matches(
                     && proof.index() == scope.index
                     && proof.selection() == scope.selection
             })
+}
+
+fn required_owner_matches(
+    owner: CheckedRequiredOwner,
+    function: &Function,
+    checked: &Arc<CheckedResourceProgram>,
+) -> bool {
+    match owner {
+        CheckedRequiredOwner::Function { definition, declaration } => {
+            function.source_definition == Some(definition)
+                && checked.module().items.iter().any(|item| {
+                    matches!(item, Item::Function(value)
+                        if value.name.span == declaration && value.span == function.span
+                            && (checked.resolved().scope_table.def(definition).span == value.name.span
+                                || checked.resolved().resolutions.get(&value.name.span) == Some(&definition)))
+                })
+                && function.identity.declaration.kind == DeclarationKind::Function
+        }
+        CheckedRequiredOwner::Verify { declaration } => function.identity.declaration.kind == DeclarationKind::Verify
+            && checked.module().items.iter().any(|item| matches!(item, Item::Verify(v) if v.name.span == declaration && v.span == function.span)),
+        CheckedRequiredOwner::Property { declaration } => function.identity.declaration.kind == DeclarationKind::Property
+            && checked.module().items.iter().any(|item| matches!(item, Item::Property(v) if v.name.span == declaration && v.span == function.span)),
+        CheckedRequiredOwner::RefinementPredicate { definition, declaration } => {
+            let Some(declared) = checked.resolved().scope_table.definitions.get(definition.index() as usize) else {
+                return false;
+            };
+            let declaration_name = if function.identity.declaration.namespace.is_empty() {
+                function.identity.declaration.name.clone()
+            } else {
+                format!("{}.{}", function.identity.declaration.namespace, function.identity.declaration.name)
+            };
+            function.source_definition == Some(definition)
+                && function.identity.declaration.kind == DeclarationKind::RefinementPredicate
+                && declared.id == definition
+                && declared.kind == jett_resolve::DefKind::Type
+                && declared.span == declaration
+                && function.identity.declaration.namespace == declared.namespace.as_deref().unwrap_or_default()
+                && declaration_name == declared.name
+                && checked.source_origins().get(&function.span.file) == Some(&function.identity.declaration.origin)
+                && checked.module().items.iter().any(|item| matches!(item, Item::TypeAlias(value)
+                    if value.name.span == declaration && value.span == function.span
+                        && value.name.name == function.identity.declaration.name
+                        && value.constraint.is_some()))
+        }
+        CheckedRequiredOwner::NamespaceConstant { .. } => false,
+    }
 }
 
 fn derive_value(

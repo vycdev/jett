@@ -18,6 +18,7 @@ enum ExecutableOrigin {
     Function { definition: DefId, item: usize },
     ActorInitializer { item: usize, field: usize },
     NamespaceInitializer { item: usize },
+    RefinementPredicate { definition: DefId, item: usize },
     Verify { item: usize },
     Property { item: usize },
 }
@@ -26,6 +27,7 @@ enum ExecutableOrigin {
 enum RegionStep {
     Scope(Span),
     Expression(usize),
+    InlineBody(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +108,17 @@ impl CheckedBodyReference {
                     _ => return Err(ResourceExecutionError::MissingCheckedBody),
                 }
             }
+            ExecutableOrigin::RefinementPredicate { item, .. } => {
+                match identity.program.module().items.get(item) {
+                    Some(Item::TypeAlias(alias)) => OriginalRegion::Expression(
+                        alias
+                            .constraint
+                            .as_ref()
+                            .ok_or(ResourceExecutionError::MissingCheckedBody)?,
+                    ),
+                    _ => return Err(ResourceExecutionError::MissingCheckedBody),
+                }
+            }
             ExecutableOrigin::ActorInitializer { item, field } => {
                 match identity.program.module().items.get(item) {
                     Some(Item::Actor(actor)) => OriginalRegion::Expression(
@@ -136,6 +149,9 @@ impl CheckedBodyReference {
                 }
                 RegionStep::Expression(index) => {
                     OriginalRegion::Expression(region_expression(region, *index)?)
+                }
+                RegionStep::InlineBody(index) => {
+                    OriginalRegion::Block(region_inline_body(region, *index)?)
                 }
             };
         }
@@ -172,6 +188,64 @@ impl PreparedDirectScope {
 }
 
 impl CheckedExecution {
+    fn refinement_definition(
+        &self,
+        alias: &jett_parser::ast::TypeAlias,
+    ) -> Result<DefId, ResourceExecutionError> {
+        let original = self
+            .program
+            .module()
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| {
+                matches!(item, Item::TypeAlias(value) if std::ptr::eq(value, alias))
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let [item] = original.as_slice() else {
+            return Err(ResourceExecutionError::MissingCheckedBody);
+        };
+        if alias.constraint.is_none() {
+            return Err(ResourceExecutionError::MissingCheckedBody);
+        }
+        let namespace = self.program.module().items[..*item]
+            .iter()
+            .filter_map(|item| match item {
+                Item::Namespace(value) if value.span.file == alias.name.span.file => {
+                    Some(value.name.name.as_str())
+                }
+                _ => None,
+            })
+            .last();
+        let canonical = namespace.map_or_else(
+            || alias.name.name.clone(),
+            |namespace| format!("{namespace}.{}", alias.name.name),
+        );
+        let definitions = self
+            .program
+            .resolved()
+            .scope_table
+            .definitions
+            .iter()
+            .filter(|definition| {
+                definition.kind == jett_resolve::DefKind::Type
+                    && definition.span == alias.name.span
+                    && definition.namespace.as_deref() == namespace
+                    && definition.name == canonical
+            })
+            .collect::<Vec<_>>();
+        let [definition] = definitions.as_slice() else {
+            return Err(ResourceExecutionError::MissingCheckedBody);
+        };
+        if self.program.resolved().resolutions.get(&alias.name.span).is_some_and(|resolved| *resolved != definition.id)
+            || self.program.checked().interner.type_ids().filter(|ty| {
+                matches!(self.program.checked().interner.resolve(*ty), Type::Refinement { name, .. } if name == &canonical)
+            }).count() != 1
+        { return Err(ResourceExecutionError::MissingCheckedBody); }
+        Ok(definition.id)
+    }
+
     /// Retain original actor initializer nodes before interpreter scope mutation.
     /// Registration clones and equal spans never supply executable call authority.
     pub(crate) fn prepare_actor_initializers(
@@ -379,6 +453,19 @@ impl CheckedExecution {
         if !Arc::ptr_eq(&identity.program, &self.program) {
             return Err(ResourceExecutionError::ForeignProgram);
         }
+        // Required syntax selection carries no authority to execute an inline
+        // callable or a refinement predicate as a runtime Resource entry.
+        if (matches!(
+            identity.origin,
+            ExecutableOrigin::RefinementPredicate { .. }
+        ) || identity
+            .path
+            .iter()
+            .any(|step| matches!(step, RegionStep::InlineBody(_))))
+            && self.purpose != ExecutionPurpose::ExplicitComptime
+        {
+            return Err(ResourceExecutionError::WrongPurpose);
+        }
         let reference = CheckedBodyReference {
             cursor: cursor.clone(),
         };
@@ -406,6 +493,17 @@ impl CheckedExecution {
                         }
                     }
                     BodyRoot::Ordinary => {}
+                }
+            }
+            ExecutableOrigin::RefinementPredicate { definition, item } => {
+                let Some(Item::TypeAlias(alias)) = self.program.module().items.get(item) else {
+                    return Err(ResourceExecutionError::MissingCheckedBody);
+                };
+                if alias.constraint.is_none() || self.refinement_definition(alias)? != definition {
+                    return Err(ResourceExecutionError::MissingCheckedBody);
+                }
+                if !matches!(cursor.root, BodyRoot::Ordinary) {
+                    return Err(ResourceExecutionError::MissingCheckedBody);
                 }
             }
             _ if !matches!(cursor.root, BodyRoot::Ordinary) => {
@@ -810,6 +908,16 @@ fn region_expression(
         .get(index)
         .copied()
         .ok_or(ResourceExecutionError::MissingCheckedBody)
+}
+
+fn region_inline_body(
+    region: OriginalRegion<'_>,
+    index: usize,
+) -> Result<&Block, ResourceExecutionError> {
+    match region_expression(region, index)? {
+        Expr::InlineFn(_, _, body, _) => Ok(body),
+        _ => Err(ResourceExecutionError::MissingCheckedBody),
+    }
 }
 
 fn expression_index(

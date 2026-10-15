@@ -1,4 +1,6 @@
 use super::*;
+#[path = "required_owner_materialization_tests.rs"]
+mod required_owner;
 use jett_common::SourceOrigin;
 use jett_comptime::ComptimeContext;
 use jett_comptime::checked_types::CheckedExpressionTypes;
@@ -496,13 +498,20 @@ fn actual_generic_and_nested_scope_required_nodes_join_full_context() {
                 &row.proof,
                 function,
                 row.original(),
-                &checked
+                &checked,
+                &program.resource_source,
             ));
             let mut copied = row.original().clone();
             if let E::Comptime { source_span, .. } = &mut copied.kind {
                 source_span.start += 1;
             }
-            assert!(!proof_matches(&row.proof, function, &copied, &checked));
+            assert!(!proof_matches(
+                &row.proof,
+                function,
+                &copied,
+                &checked,
+                &program.resource_source
+            ));
         }
         let function = program
             .resource_source
@@ -520,7 +529,8 @@ fn actual_generic_and_nested_scope_required_nodes_join_full_context() {
             &generic.proof,
             &changed,
             generic.original(),
-            &checked
+            &checked,
+            &program.resource_source,
         ));
         let function = program
             .resource_source
@@ -541,7 +551,13 @@ fn actual_generic_and_nested_scope_required_nodes_join_full_context() {
                         jett_typecheck::CheckedComptimeTypeSelection::ReflectedIteration(99)
                 }
             }
-            assert!(!proof_matches(&scoped.proof, function, &changed, &checked));
+            assert!(!proof_matches(
+                &scoped.proof,
+                function,
+                &changed,
+                &checked,
+                &program.resource_source
+            ));
         }
     }
 }

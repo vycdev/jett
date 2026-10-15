@@ -25,6 +25,10 @@ pub enum CheckedRequiredOwner {
     NamespaceConstant {
         declaration: Span,
     },
+    RefinementPredicate {
+        definition: DefId,
+        declaration: Span,
+    },
 }
 
 /// One exact selected scoped type context, in outer-to-inner source order.
@@ -167,6 +171,40 @@ impl CheckedRequiredValue {
             .is_ok_and(|original| std::ptr::eq(original, expression))
     }
 
+    /// Original nearest enclosing inline node, selected only by the private
+    /// required-region path in this retained checked program.
+    pub fn original_inline_function(&self) -> Result<Option<&Expr>, String> {
+        let checked =
+            CheckedExecution::new(self.key.program.clone(), ExecutionPurpose::ExplicitComptime)
+                .map_err(|error| error.to_string())?;
+        checked
+            .validate_executable_cursor(&self.key.cursor())
+            .map_err(|error| error.to_string())?;
+        let Some((position, index)) =
+            self.key
+                .node
+                .path
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(position, step)| match step {
+                    RegionStep::InlineBody(index) => Some((position, *index)),
+                    _ => None,
+                })
+        else {
+            return Ok(None);
+        };
+        let region = self
+            .key
+            .region(&self.key.node.path[..position])
+            .map_err(|error| error.to_string())?;
+        let expression = region_expression(region, index).map_err(|error| error.to_string())?;
+        if !matches!(expression, Expr::InlineFn(..)) {
+            return Err(ResourceExecutionError::MissingCheckedBody.to_string());
+        }
+        Ok(Some(expression))
+    }
+
     /// Project only an opaque hook descriptor bound to this exact checked
     /// program. Reading the metadata does not invoke a runtime hook.
     pub fn checked_hook<'a>(
@@ -295,6 +333,17 @@ impl CheckedAttemptKey {
                     _ => return Err(ResourceExecutionError::MissingCheckedBody),
                 }
             }
+            ExecutableOrigin::RefinementPredicate { item, .. } => {
+                match self.program.module().items.get(item) {
+                    Some(Item::TypeAlias(alias)) => OriginalRegion::Expression(
+                        alias
+                            .constraint
+                            .as_ref()
+                            .ok_or(ResourceExecutionError::MissingCheckedBody)?,
+                    ),
+                    _ => return Err(ResourceExecutionError::MissingCheckedBody),
+                }
+            }
             ExecutableOrigin::Verify { item } => match self.program.module().items.get(item) {
                 Some(Item::Verify(value)) => OriginalRegion::Block(&value.body),
                 _ => return Err(ResourceExecutionError::MissingCheckedBody),
@@ -311,6 +360,9 @@ impl CheckedAttemptKey {
                 }
                 RegionStep::Expression(index) => {
                     OriginalRegion::Expression(region_expression(region, *index)?)
+                }
+                RegionStep::InlineBody(index) => {
+                    OriginalRegion::Block(region_inline_body(region, *index)?)
                 }
             };
         }
@@ -374,6 +426,17 @@ impl CheckedAttemptKey {
                     _ => return Err(ResourceExecutionError::MissingCheckedBody),
                 }
             }
+            ExecutableOrigin::RefinementPredicate { definition, item } => {
+                match self.program.module().items.get(item) {
+                    Some(Item::TypeAlias(alias)) if alias.constraint.is_some() => {
+                        CheckedRequiredOwner::RefinementPredicate {
+                            definition,
+                            declaration: alias.name.span,
+                        }
+                    }
+                    _ => return Err(ResourceExecutionError::MissingCheckedBody),
+                }
+            }
             ExecutableOrigin::Verify { item } => match self.program.module().items.get(item) {
                 Some(Item::Verify(value)) => CheckedRequiredOwner::Verify {
                     declaration: value.name.span,
@@ -432,6 +495,9 @@ impl CheckedAttemptKey {
                 }
                 RegionStep::Expression(index) => {
                     OriginalRegion::Expression(region_expression(region, *index)?)
+                }
+                RegionStep::InlineBody(index) => {
+                    OriginalRegion::Block(region_inline_body(region, *index)?)
                 }
             };
         }

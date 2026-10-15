@@ -2995,3 +2995,44 @@ These results resolve the local Verify-suite regression. The two required-owner
 CI failures, exact-head supported-host/installed acceptance and broader language
 parity remain open. The rough 87% estimate and fixed 207/182 denominators remain
 unchanged; this does not complete the native-codegen goal.
+
+
+#### Original required regions inside inline bodies and refinement predicates
+
+Required evaluation now selects exact original inline-body regions and checked
+refinement predicates while retaining the enclosing declaration and complete
+generic/scoped context. The executable walker still stops at callable boundaries.
+Canonical HIR extraction and predicate declaration joins retain private archive,
+header and operand authentication. Canonical resolver names and original HIR
+alias leaves are checked separately. Copied syntax or matching spelling grants
+no proof, capability or runtime Resource permission. Closed and pure eligibility
+and once-per-original-attempt evaluation remain unchanged.
+
+Focused checks pass 20 tests across 17 actual invocations, with no failures or ignored tests, including meaningful foreign,
+clone, owner, context, header, operand, alias-name and runtime-purpose refusals.
+Receipt: `target/native/required-owner-focused-v2/focused-results.json`, SHA-256 `14494e22ef31e941ea97e87fb2a06dee503e9daf929279bd633150aae0d5f96e`.
+Affected-library breadth passes 1,334 complete library tests (Cranelift 134, Comptime 624, HIR 229 and MIR 347), plus 25 selected Driver tests (library 14, backend lowering 7, generic function values 2 and named arguments 2), all with no failures or ignored tests.
+Receipt: `target/native/required-owner-broad-v3/broad-results.json`, SHA-256 `4241e0b95302f388f2d748f2c8cbb6599262541d66b1af72723ed479c82e5797`.
+The broad run's final guard authenticates 2,099 current Source/fixture inputs
+and 68 unchanged Runtime artifacts. Its library run completed successfully in
+v2; v3 resumed only the Driver batches after independently checking unchanged
+inputs. The later test-only restoration extension passes one focused control:
+`native-codegen-recovery-2026-10-09/scalar-v9/required-owner-restoration-acceptance.json`, SHA-256 `a6ba8bf827ff749e400c7460ef7cf5d39399c541b4f1c77236fc06dc19f691e0`.
+It checks same-program failure, full metadata restoration and successful reentry.
+This changes no production code. The earlier 20-test and native receipts precede
+that test-only extension and retain their own snapshot; the final breadth
+includes it. The two native fixtures and their expected streams remain exact.
+
+The two unchanged original contextual-comptime and refinement-declaration gates
+pass two Debug native main executions and two interpreter mains with Source
+present. Exact stdout and rendered debug-event stderr match their reference
+oracles. Receipt: `target/native/required-owner-native2-v2/after.json`, SHA-256 `a8e1014f3c7f79d10bff2b0077f353a9357d69f74b5486681d3f90f3ce9f225d`.
+The gates supply no Release execution, Verify/Property suite or Source-deleted
+lifecycle credit. Measured Runtime archives are reused unchanged; neither archive
+guards nor compilation supply execution credit for other profiles or platforms.
+
+This closes the local RequiredOwner regression; published Graph's earlier E9001
+results remain historical. Full coherent-workspace/inventory conformance,
+exact-revision supported-host CI, GNU and clean installed distribution remain
+pending. The separate VerifySuite and capture-owner results retain their existing
+scope. The rough 87% estimate and fixed 207/182 denominators remain unchanged.

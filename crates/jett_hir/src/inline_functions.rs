@@ -8,9 +8,35 @@ use crate::{
 use jett_types::{Type, TypeInterner};
 use std::collections::HashSet;
 
+/// These records are created only while lowering physical original AST nodes.
+/// Neither a generated name nor a same-span source copy can supply a node token.
+pub(crate) struct LoweredSourceInline {
+    pub(crate) source_node: usize,
+    pub(crate) root: Option<FunctionId>,
+    pub(crate) original: Expression,
+}
+
+#[derive(Debug)]
+pub(crate) struct InlineSource {
+    pub(crate) source_node: usize,
+    pub(crate) root: FunctionId,
+    pub(crate) function: FunctionId,
+}
+
+#[cfg(test)]
 pub(super) fn extract_inline_functions(functions: &mut Vec<Function>, types: &TypeInterner) {
+    extract_inline_functions_with_sources(functions, types, &[]);
+}
+
+pub(super) fn extract_inline_functions_with_sources(
+    functions: &mut Vec<Function>,
+    types: &TypeInterner,
+    source_nodes: &[LoweredSourceInline],
+) -> Vec<InlineSource> {
     let mut extractor = Extractor {
         types,
+        source_nodes,
+        sources: Vec::new(),
         next_id: functions.len() as u32,
         pending: Vec::new(),
         detached_aliases: HashSet::new(),
@@ -19,7 +45,13 @@ pub(super) fn extract_inline_functions(functions: &mut Vec<Function>, types: &Ty
     let mut index = 0;
     while index < functions.len() {
         let function = &mut functions[index];
+        let root = extractor
+            .sources
+            .iter()
+            .find(|source| source.function == function.id)
+            .map_or(function.id, |source| source.root);
         let parent = ParentInfo {
+            root,
             identity: &function.identity,
             locals: &function.locals,
         };
@@ -36,15 +68,19 @@ pub(super) fn extract_inline_functions(functions: &mut Vec<Function>, types: &Ty
         functions.append(&mut extractor.pending);
         index += 1;
     }
+    extractor.sources
 }
 
 struct ParentInfo<'a> {
+    root: FunctionId,
     identity: &'a FunctionIdentity,
     locals: &'a [Local],
 }
 
 struct Extractor<'a> {
     types: &'a TypeInterner,
+    source_nodes: &'a [LoweredSourceInline],
+    sources: Vec<InlineSource>,
     next_id: u32,
     pending: Vec<Function>,
     detached_aliases: HashSet<LocalId>,
@@ -190,6 +226,24 @@ impl Extractor<'_> {
             capture_parameters.extend(parameters);
             let id = FunctionId(self.next_id);
             self.next_id += 1;
+            let sources = self
+                .source_nodes
+                .iter()
+                .filter(|source| {
+                    source.root == Some(parent.root)
+                        && crate::resource_materialization::expression_equal(
+                            &source.original,
+                            &original_shape,
+                        )
+                })
+                .collect::<Vec<_>>();
+            if let [source] = sources.as_slice() {
+                self.sources.push(InlineSource {
+                    source_node: source.source_node,
+                    root: parent.root,
+                    function: id,
+                });
+            }
             let name = format!(
                 "{}$inline{}_{}",
                 parent.identity.declaration.name, expression.span.start, expression.span.end

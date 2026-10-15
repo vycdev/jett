@@ -5147,3 +5147,27 @@ receipt counts remain bound to those revisions. Correcting only the stale
 message oracle supplies no execution credit; the affected exact native gates
 still require fresh acceptance. See the
 [ordinary terminal-error lifetime note](active/native_resource_ordinary_error_reentry.md).
+
+### Original required regions for inline bodies and refinement predicates
+
+Required-value preparation follows explicit private region steps into retained
+inline bodies. The ordinary executable walker continues to stop at callable
+boundaries. Each step identifies the exact physical original inline node, keeps
+its enclosing declaration and concrete generic instance, and interleaves scoped
+selections in lexical order. These references are admitted only for explicit
+required evaluation; they cannot become runtime Resource entry authority.
+
+A refinement required region names the exact retained alias item, checked
+declaration definition and physical constraint expression. The existing checker
+still proves each explicit subexpression closed and pure. The original attempt
+key and read-only required proof include this region rather than selecting it by
+source spelling or nominal type alone.
+
+HIR records the canonical extraction association from an original inline node
+to its extracted function and enclosing original owner. Required materialization
+joins that private record, the retained checked program, exact original HIR
+header and expression, and complete generic and scoped context. Refinement
+materialization likewise joins the original checked predicate declaration and
+HIR function. Both routes retain original/current archive authentication and the
+existing value matcher. Prepared payloads and format checks provide no native
+execution credit; focused forgery controls and exact-head CI must pass first.

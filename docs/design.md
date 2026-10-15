@@ -8919,3 +8919,18 @@ oracle. This correction changes no Source, ordinary diagnostic, body or cleanup
 status, process exit, custody, retirement or reentry requirement. Corrected
 native gates must pass before new acceptance is recorded. See the
 [ordinary terminal-error lifetime note](active/native_resource_ordinary_error_reentry.md).
+
+### Required expressions in inline bodies and refinement predicates
+
+Explicit `comptime` expressions keep the same closed, pure eligibility rules
+inside an inline function or a refinement predicate as elsewhere. Every pure
+function remains eligible; capabilities are unavailable during required
+compile-time evaluation. These positions add no runtime Resource permission.
+
+The compiler must retain the exact original declaration and lexical generic and
+scoped type context for each required occurrence. An inline body has its own
+original syntax region within its enclosing declaration. A refinement predicate
+belongs to the exact checked refinement declaration. Copied syntax, coincident
+source spans, a different enclosing declaration or another compiler session
+cannot substitute for that association. A successful or failed occurrence is
+still evaluated once for each selected original context.

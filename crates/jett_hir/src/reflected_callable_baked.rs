@@ -103,7 +103,11 @@ pub fn materialize_checked_reflected_values(
                         .iter()
                         .filter(|proof| {
                             super::super::resource_materialization::proof_matches(
-                                proof, &owner, expression, &checked,
+                                proof,
+                                &owner,
+                                expression,
+                                &checked,
+                                &program.resource_source,
                             )
                         })
                         .collect::<Vec<_>>();

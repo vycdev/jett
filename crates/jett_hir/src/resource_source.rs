@@ -58,6 +58,7 @@ struct Original {
     types: Vec<TypeRow>,
     exported: Vec<FunctionId>,
     reflected_fields: Vec<ReflectedFieldDispatchProof>,
+    inline_sources: Vec<crate::inline_functions::InlineSource>,
 }
 
 /// A checked required occurrence and the expression derived from its opaque value.
@@ -165,6 +166,7 @@ impl ResourceSourceArchive {
         program: &Program,
         checked: &Arc<CheckedResourceProgram>,
         types: &TypeInterner,
+        inline_sources: Vec<crate::inline_functions::InlineSource>,
     ) -> Self {
         let rows = types
             .type_ids()
@@ -184,6 +186,7 @@ impl ResourceSourceArchive {
                 types: rows,
                 exported: super::resource_materialization::exported_functions(program, checked),
                 reflected_fields: super::reflected_field_sources::capture(program, checked),
+                inline_sources,
             })),
             execution: None,
             reflected_values: None,
@@ -285,6 +288,66 @@ impl ResourceSourceArchive {
     }
     pub(crate) fn checked_program(&self) -> Option<&Arc<CheckedResourceProgram>> {
         self.data.as_ref().map(|data| &data.checked)
+    }
+    /// Bind an extracted function to its physical checked inline node and
+    /// retained enclosing callable. All records are minted during original lowering.
+    pub(crate) fn original_inline_root(
+        &self,
+        function: &Function,
+        expression: &Expression,
+        source: &jett_parser::ast::Expr,
+        checked: &Arc<CheckedResourceProgram>,
+    ) -> Option<&Function> {
+        let data = self.data.as_ref()?;
+        if !Arc::ptr_eq(&data.checked, checked) {
+            return None;
+        }
+        let mut matches = data.inline_sources.iter().filter(|row| {
+            row.function == function.id && row.source_node == std::ptr::from_ref(source).addr()
+        });
+        let row = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        self.original_required_function(function, expression, checked)?;
+        data.functions.iter().find(|f| f.id == row.root)
+    }
+
+    pub(crate) fn original_required_function(
+        &self,
+        function: &Function,
+        expression: &Expression,
+        checked: &Arc<CheckedResourceProgram>,
+    ) -> Option<&Function> {
+        let data = self.data.as_ref()?;
+        if !Arc::ptr_eq(&data.checked, checked) {
+            return None;
+        }
+        let original = data.functions.iter().find(|f| f.id == function.id)?;
+        // The caller separately authenticates the complete table transition.
+        // This join additionally checks the entire extracted header and exact
+        // original operand; modified bodies cannot forge extraction provenance.
+        let mut header = function.clone();
+        header.body = original.body.clone();
+        if !super::resource_materialization::functions_equal(
+            std::slice::from_ref(&header),
+            std::slice::from_ref(original),
+        ) {
+            return None;
+        }
+        let mut body = original.body.clone();
+        let mut occurrences = 0;
+        super::resource_materialization::walk_block(&mut body, &mut |candidate| {
+            if super::resource_materialization::expression_equal(candidate, expression) {
+                occurrences += 1;
+            }
+            Ok(())
+        })
+        .ok()?;
+        if occurrences != 1 {
+            return None;
+        }
+        Some(original)
     }
     pub(crate) fn install_materialized(&mut self, view: Materialized) {
         self.execution = Some(Arc::new(view));
