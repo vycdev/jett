@@ -674,22 +674,37 @@ This sub-phase tracks the ownership state of every variable through the control 
 - **View propagation:** Views propagate through field access and collection element access. `view list[T]` element access yields `view T`, not an owned copy. `clone` is required to get an owned value from a view.
 - **Closure capture analysis:** Anonymous functions may capture only implicitly copyable values from the enclosing scope. Each capture is copied into the closure. Capturing a move-only value is a compile error; it must be passed explicitly as a parameter.
 
-Projected field assignment does not yet have an execution contract. The checker
-rejects immutable and temporary roots with E0404 and known view roots with
-E0401, including mutable view parameters. It records assignment mode by resolved
-declaration span for function and inline parameters, local bindings, loop
-bindings, and actor state and handler parameters. Actor state facts are recorded
-after checking their initializer. Explicit view initializers and aliases of
-known move-only views retain read-only status; ordinary field copies and clones
-are owned. These checks apply even where the function ownership pass does not
-run, including verify/property bodies and actor handlers. They do not implement
-general borrow provenance. Direct rebinding of an owned mutable local from a
-known move-only view also reports E0401, preventing assignment from erasing that
-restriction; copyable values and explicit clones remain allowed. Owned mutable
-roots remain checker-admitted while the interpreter and native place planners
-reject execution. The
-[open contract](open_design/projected_field_assignment.md) must settle safe
-updates or rejection of all projected writes before extending this handoff.
+Projected field assignment implements the selected local replacement contract for ordinary records and exact-state machine values in checked reference, required-comptime and native execution. Actor handler and Resource-bearing updates remain implementation obligations. An exact resolved live mutable owned binding may supply a finite checked ordinary-record field path. An existing exact machine-state qualification or checked narrowing may supply that state's fields without changing the state or tag. No mutable reference, caller mutation or structural owner inference is introduced. See [owned mutable field updates](active/owned_mutable_field_updates.md).
+
+Checked field places retain the original binding, concrete/scoped body and exact
+field identities through HIR and MIR. Preflight precedes RHS staging; commit
+revalidates the place and transfers a complete replacement before retiring the
+old field. The ordinary `StructReplaceOccupied` runtime leaf validates an occupied
+slot atomically and returns the displaced bits without performing cleanup. Its
+caller retains RHS ownership until success and handles terminal cleanup through
+the existing drop plan. Resource custody never follows from this ordinary leaf.
+
+Nonzero facts for field reads use the exact root and checked finite field path.
+A write invalidates affected root facts after evaluating its RHS. Loop backedges
+and writes inside condition prefixes cannot reuse a stale guard. Borrowed enum
+match payloads carry their exact arm/tag/field origin through caller validation
+and canonical MIR remapping. Transparent `coarsen` and `declassify` views retain
+an independent native match snapshot before destructive payload extraction;
+owned matches retain ordinary owned transfers.
+
+The checker retains E0404 for immutable/temporary roots and E0401 for views, including mutable view parameters and view-derived aliases. Actual consumed/uninitialized/loaned roots must be rejected by ownership/liveness analysis, not inferred from a mutable flag. Paths through enclosing nominal refinements require whole-value reconstruction and validation; bitfields retain constructor-and-rebind updates. Exact field types and their existing refinement conversion rules remain authoritative.
+
+Compiler-produced reflection metadata is not an ordinary mutable user record.
+Field paths cannot traverse the canonical builtin metadata owners: TypeInfo,
+TypeField, TypeBitfield, TypeBitfieldField, TypeMachine, TypeMachineState,
+TypeMachineTransition and TypeVariant. The type table records their exact
+identities when creating the builtins and preserves that identity through clones
+and canonical remaps; checked-place construction and revalidation use that
+registry, never spelling or structural shape. Whole genuine metadata values can
+still replace fields in user holders. This maintains the existing constructor
+and reflected-observer authority boundary.
+
+The checked place and every ancestor's readiness/state are established before evaluating the RHS once. Existing runtime pending-inspection failures are preserved without an implicit join or reading pending payloads. Precommit RHS/validation/allocation failure preserves the old field and retires temporaries; successful replacement retires the displaced field once and preserves sibling ownership, exact metadata, task depth and logical clone independence. Cleanup failures keep established failure precedence. Typed HIR/MIR place, move/loan and drop plans must make those edges explicit before emission. Resource custody and Graph/original-Source authentication cannot be bypassed by the ordinary update route.
 
 The checker rejects known move-only views at owned return boundaries and
 ordinary bare argument boundaries with E0401, including calls whose formal is
@@ -866,10 +881,12 @@ Native ownership planning conservatively refuses owner consumption or rebinding
 after a persistent move-only source alias may have been created on a reachable
 path. Final copied primitive/String bindings retain the ordinary ownership
 behavior described above. This does not select a source lifetime-expiry rule.
-Mutable source alias chains,
-temporary-backed source aliases, projected mutation, allocating conversions,
-flow-narrowed bare-machine origins, and field paths without the checked
-declared-owner proof remain explicit native limitations. Owner transitions
+Mutable source alias chains, temporary-backed source aliases, allocating
+conversions, flow-narrowed bare-machine origins, and field paths without the
+checked declared-owner proof remain explicit native limitations. Read-only
+aliases grant no write authority, and retained dependent loans block changes to
+their owners. Selected owned-local field updates follow their checked ownership
+and loan requirements. Owner transitions
 after source alias creation follow the same conservative owner-change refusal;
 see
 [the bounded implementation](active/native_local_view_aliases.md) and
@@ -1880,7 +1897,7 @@ These optimizations exploit Jett's linear type system — the compiler has **per
 
 #### Ownership-Aware Optimizations
 
-1. **In-place reuse (consume-transform pattern):** When a value is consumed and immediately transformed (`x = transform(x)`), the compiler detects that the old value has no other references and mutates the underlying memory in-place. This turns `list.append(old_list, item)` into a genuine in-place buffer append (no copy), and `struct.with_field(old_struct, new_value)` into a field write on the existing allocation. This is the single highest-impact Jett-specific optimization — it turns what looks like immutable functional code into zero-copy imperative code.
+1. **In-place reuse (consume-transform pattern):** A MIR optimization may reuse uniquely owned storage for a consume-and-return transform (`x = transform(x)`) or the canonical owned-local replacement `record.field = value`. A checked field update must preserve ancestor/place preflight, one RHS evaluation, replacement ownership, displaced-value cleanup and failure order. Shared backing must retain the selected clone/view and reconstruction rules. This is an optimization opportunity, not a claim that every update reuses its allocation or that list append is always zero-copy.
 
 2. **Move coalescing:** When a value is moved through a chain of single-use variables (`a` → `b` → `c` → `f(c)`), the intermediate names are eliminated and the value stays in the same memory location. No intermediate allocations or copies.
 

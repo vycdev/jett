@@ -322,6 +322,7 @@ struct Validator<'a, 't, 's> {
     absent_successes: RefCell<Vec<AbsentSuccessPlan>>,
     present_successes: RefCell<Vec<PresentSuccessPlan>>,
     iteration_scopes: Vec<crate::iteration_views::IterationScope>,
+    match_scopes: Vec<crate::match_bindings::Scope>,
     iteration_scope_enabled: bool,
 }
 
@@ -342,6 +343,7 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
         }
         crate::ordinary_borrowed_sums::validate(function, types)?;
         let iteration_scopes = crate::iteration_views::scopes(function, types)?;
+        let match_scopes = crate::match_bindings::scopes(function, types)?;
         let locals = function
             .locals
             .iter()
@@ -351,6 +353,7 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                 span: local.span,
                 view_source: local.view_source,
                 view_iteration: None,
+                match_binding: None,
                 is_view_parameter: function
                     .parameter_for_local(local.id)
                     .is_some_and(|parameter| parameter.mode == hir::ParamMode::View),
@@ -530,6 +533,7 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
             absent_successes: RefCell::new(Vec::new()),
             present_successes: RefCell::new(Vec::new()),
             iteration_scopes,
+            match_scopes,
             iteration_scope_enabled: true,
         })
     }
@@ -597,6 +601,12 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                     crate::iteration_views::ensure_scope(
                         self.function,
                         &self.iteration_scopes,
+                        local,
+                        site.block,
+                    )?;
+                    crate::match_bindings::ensure_scope(
+                        self.function,
+                        &self.match_scopes,
                         local,
                         site.block,
                     )?;
@@ -924,6 +934,7 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                 &mut locals,
                 self.types,
             );
+            crate::match_bindings::apply(&self.match_scopes, site.block, &mut locals);
         }
         locals
     }
@@ -3007,7 +3018,7 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
             | S::Evaluate(value)
             | S::HandleDefault(value) => self.expression(value, site, context)?,
             S::CheckRefinement { call, .. } => self.expression(call, site, context)?,
-            S::Assign { target, value } => {
+            S::Assign { target, value } | S::UpdateField { target, value, .. } => {
                 self.expression(target, site, context)?;
                 self.expression(value, site, context)?;
             }
@@ -3197,7 +3208,7 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                 | H::Expression(value)
                 | H::HandleDefault(value)
                 | H::Respond(value) => self.expression(value, site, context)?,
-                H::Assign { target, value } => {
+                H::Assign { target, value } | H::UpdateField { target, value, .. } => {
                     self.expression(target, site, context)?;
                     self.expression(value, site, context)?;
                 }

@@ -429,6 +429,7 @@ fn handle_body_has_default(body: &Block) -> bool {
             }
             StatementKind::Let { .. }
             | StatementKind::Assign { .. }
+            | StatementKind::UpdateField { .. }
             | StatementKind::Return(_)
             | StatementKind::Expression(_)
             | StatementKind::Respond(_)

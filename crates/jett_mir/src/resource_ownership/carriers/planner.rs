@@ -1230,7 +1230,7 @@ impl Planner<'_> {
                     let input = self.expression(value, !self.function.is_view_local(*local))?;
                     self.store(*local, input, value.ty)?;
                 }
-                StatementKind::Assign { target, value } => {
+                StatementKind::Assign { target, value } | StatementKind::UpdateField { target, value, .. } => {
                     if resource_type_pending(self.types, target.ty) { return Err("pending Resource carrier: replacement needs its established acquisition/destruction transition".into()); }
                     self.expression(target, false)?;
                     self.expression(value, true)?;

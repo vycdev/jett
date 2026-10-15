@@ -10,7 +10,8 @@ pub use body_reference::{
 };
 pub(crate) use body_reference::{
     CheckedAttemptKey, CheckedBodyReference, PreparedAbsentBindings, PreparedDirectScope,
-    PreparedIntrinsicArguments, PreparedNamedCallable, PreparedOwnedStruct, PreparedPipelineStep,
+    PreparedFieldAssignment, PreparedFieldBinding, PreparedIntrinsicArguments,
+    PreparedNamedCallable, PreparedOwnedStruct, PreparedPipelineStep,
     PreparedReflectedFieldIteration, PreparedReflectedFieldLoop, PreparedRequiredExpression,
 };
 use std::collections::HashMap;
@@ -193,6 +194,7 @@ pub(crate) struct CheckedExecution {
 }
 
 struct BodyFacts<'a> {
+    assignment_places: &'a HashMap<Span, jett_typecheck::assignment_places::CheckedAssignmentPlace>,
     selections: Option<&'a HashMap<Span, jett_typecheck::CheckedStaticSelection>>,
     calls: &'a HashMap<Span, CheckedCallOwnership>,
     bindings: &'a HashMap<Span, CheckedBindingFact>,
@@ -210,6 +212,7 @@ struct BodyFacts<'a> {
 impl<'a> BodyFacts<'a> {
     fn scoped(body: &'a CheckedBodyFacts) -> Self {
         Self {
+            assignment_places: &body.assignment_places,
             selections: Some(&body.static_selections),
             calls: &body.call_ownership,
             bindings: &body.binding_facts,
@@ -376,6 +379,7 @@ impl CheckedExecution {
         let checked = self.program.checked();
         let mut facts = match cursor.root {
             BodyRoot::Ordinary => BodyFacts {
+                assignment_places: &checked.assignment_places,
                 selections: None,
                 calls: &checked.call_ownership,
                 bindings: &checked.binding_facts,
@@ -395,6 +399,7 @@ impl CheckedExecution {
                     .get(index)
                     .ok_or(ResourceExecutionError::MissingCheckedBody)?;
                 BodyFacts {
+                    assignment_places: &body.assignment_places,
                     selections: Some(&body.static_selections),
                     calls: &body.call_ownership,
                     bindings: &body.binding_facts,

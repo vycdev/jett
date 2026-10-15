@@ -141,6 +141,9 @@ mod ordinary_borrowed_sums;
 #[path = "native_conformance/ordinary_borrowed_sums_additional.rs"]
 mod ordinary_borrowed_sums_additional;
 
+#[path = "native_conformance/field_updates.rs"]
+mod field_updates;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

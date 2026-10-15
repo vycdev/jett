@@ -66,8 +66,8 @@ fn rejected_cases() -> Vec<(&'static str, String, u16, &'static str)> {
         (
             "borrowed_match",
             "function invalid(view choice: Choice) returns nothing:\n    match choice:\n        wrapped(record):\n            record.inner.value = 9\n",
-            404,
-            "cannot reassign `record` because it is not mutable",
+            401,
+            "cannot assign through a view because views are read-only",
         ),
         (
             "expired_binding",
@@ -167,7 +167,7 @@ fn readonly_projected_writes_fail_before_driver_evaluation() {
 }
 
 #[test]
-fn owned_mutable_projected_writes_remain_checked_pending_execution_policy() {
+fn owned_mutable_projected_writes_pass_build_only_checks() {
     let source = format!(
         "{DECLARATIONS}function local() returns nothing:\n    mutable Record record = make()\n    (record).inner.value = 9\nfunction parameter(mutable record: Record) returns nothing:\n    record.label = \"after\"\n"
     );

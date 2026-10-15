@@ -51,23 +51,17 @@ asynchronous scheduling must not be inferred from host packaging or the current
 sequential interpreter/native task model. Their implementation status remains
 separate from parity for existing accepted behavior.
 
-## Remaining semantic work
+## Selected semantics and remaining acceptance
 
-The following semantic and implementation gaps prevent a full parity claim:
+The resolved decisions below distinguish selected contracts from remaining work. Recorded
+implementation evidence retains its revision and scope; remaining implementation,
+coherent-workspace and supported-host gates still prevent a full parity claim.
 
 - [Comptime actor graph materialization](native_comptime_actor_graph.md) implements the selected frozen-graph contract. Current bounded MSVC acceptance passes 32 Source-deleted executions; wider admitted compositions and coherent-revision release gates remain required. Actor closure capture remains rejected with E0402.
-- [Erased interface equality](../open_design/interface_value_equality.md): the selected contract rejects implicit equality after erasure with E0376; concrete equality and explicit domain comparisons remain available. Focused and coherent-revision validation must be recorded before closing this gate.
-- [Secrets hidden in debug print values](../open_design/debug_print_hidden_secrets.md): extend redaction to erased/builder payloads versus reject potentially secret values.
-- [Projected field assignment](../open_design/projected_field_assignment.md):
-  implement safe updates to owned mutable locals versus reject projected writes
-  and use construction/rebinding. The checker now rejects immutable, temporary,
-  and known view roots before either execution backend; owned mutable roots
-  remain admitted without an implemented update contract.
-- [List summation types](../open_design/list_sum_type_contract.md): numeric
-  primitives and transparent aliases work in both paths, but the unconstrained
-  source signature still admits refinements, secret wrappers, and nonnumeric
-  elements. Native admission rejects them, and some reference empty sums have
-  the wrong value shape. The domain and invariant contract remain unresolved.
+- [Erased interface equality](../open_design/interface_value_equality.md): **selected and implemented.** Interface-typed `==` and `!=` report E0376 before evaluation or lowering; concrete equality and explicit domain comparisons remain available. Recorded frontend, publication-refusal and Source-deleted positive-comparison controls cover this contract. Final-revision workspace and platform acceptance remain separate.
+- [Secrets hidden in debug print values](hidden_secret_debug_print.md): **selected and implemented.** Accepted non-release Print/Println values use recursive typed redaction for secrets hidden by interfaces, aggregates and builders. Direct-secret and Source release restrictions remain unchanged. The recorded nine-program/eighteen-execution gate is bounded acceptance; pending-sum and pipeline terminal diagnostics remain separate.
+- [Owned mutable field updates](owned_mutable_field_updates.md): **selected contract.** Checked updates through live mutable owners retain the selected ownership, readiness, replacement and Resource-custody rules. Native implementation and execution acceptance are tracked separately from policy selection; frontend publication refusals do not supply execution evidence.
+- [List summation types](../open_design/list_sum_type_contract.md): **selected and implemented.** `list.sum` and trusted `list.__sum` admit exactly the ten numeric primitives and their transparent aliases. Refinements, secret wrappers and nonnumeric elements report E0300 during checking, including empty and explicit-comptime calls. Checked width, typed zero, borrowing and pending behavior remain unchanged. Recorded focused controls retain their scope; final-revision acceptance is separate.
 - [Reflected field request compatibility](../open_design/reflected_field_request_compatibility.md):
   current checks admit some refinement/base requests with matching carriers and
   secrecy. Preserving the actual owner on an admitted interface read does not
@@ -3100,3 +3094,60 @@ revision and scope. Full workspace/inventory conformance, exact-revision CI,
 GNU and installed-distribution acceptance remain separate. The rough 87%
 estimate, fixed 207 fixtures/182 object obligations and full native-codegen goal
 are unchanged.
+
+#### Owned mutable field updates: bounded MSVC acceptance
+
+Ordinary record and exact-state machine writes now use one checked place from
+frontend ownership through reference/required evaluation, HIR, MIR and native
+preflight/commit. The ordinary occupied-slot leaf transfers a staged replacement
+atomically and leaves displaced-value cleanup to the caller. Exact builtin
+reflection metadata stays read-only internally. Nonzero field guards retain
+exact paths and lose stale facts after writes, across loop backedges and inside
+condition prefixes. Borrowed enum match payloads retain exact arm origins;
+transparent borrowed coarsening/declassification takes an independent native
+snapshot before payload extraction. Owned matches retain owned transfer.
+
+All seven affected libraries pass 2,162 tests: Codegen 135, Comptime 659, HIR 246,
+MIR 355, Runtime 378, Typecheck 354 and Types 35. All 97 Driver library controls
+pass across two invocations: the broad run passed 96, and its sole missing-runtime-
+manifest Graph test passed after supplying the measured bundle. All eight backend
+lowering tests pass, including every one of the 182 run-pass fixtures; all ten
+field reference/frontend tests pass. The measurement helper passes 93 controls.
+Full formatting and whitespace checks pass. Logs below refer to the primary
+checkout's shared `target/native`:
+`field-update-libraries-full-v5.log`, `field-driver-broad-v1.log`,
+`field-driver-graph-configured-v1.log`, and
+`field-driver-lowering-reference-v2.log`. The corrected Python result is
+`native-codegen-recovery-2026-10-09/field-runtime-measurement-prepare-v1/measurement-controls-corrected.log`.
+
+All four permanent native field tests pass: 18 positive mains in both paired
+profiles (36 executions), three expected pending failures in both profiles (six),
+and Verify/Property suites in both profiles (four): **46 actual executions**.
+Each compiled temporary Source is removed before launch. Exact success output,
+exit 71 and exact failure streams, early RHS/preflight order, owning-field clone
+independence, generic/inline/reflected bodies, and repeated borrowed enum owners
+are checked. Eighteen frontend publication refusals pass separately; they supply
+no execution credit. Source Debug/default and Release/optimized are paired with
+normal Runtime Debug and Release respectively, not a full profile cross-product.
+
+The fresh compiler gate is `field-gate-compile-v2/gate-acceptance.json`, SHA-256
+`179bd113686808bd0d5ae2c1a6f0ffbd5e0d673912fbeb0ef861c4fa5f271143`.
+`field-native-execution-v3/accepted-counts.json`, SHA-256
+`db72c9958a614156347fea8c099fc4c4cdb8013d5304d5d3a3c888853df09c9a`,
+records the passing counts and exact test-harness/log/guard pins. Before/after
+checks retain 1,012 compiler Source inputs, 68 measured runtime artifacts and all
+32 fixture hashes. The guarded set includes the unexecuted actor-future fixture.
+The measured normal/private v2 archives contain the new ordinary leaf; Resource
+exports remain 58, private hooks eight, and ABI version one. Public ordinary
+launchers supply no private Resource-retirement observation. Earlier failed
+attempts retain their own scope and supply no linked acceptance.
+
+Actor handler identity/state ownership, Resource-bearing replacement and wider
+unarchived reflected/generic compositions remain implementation obligations.
+The checked pending-sum secret diagnostic probes establish the next reference
+repair; they have no repaired/native acceptance here. Full coherent workspace,
+fixed-inventory execution/object gates, exact-revision supported-host CI, GNU and
+clean installed-package acceptance remain separate. Earlier workflow
+38685454101 passed all four jobs at its own head; it does not validate this
+change. The fixed 207-fixture/182-object denominators and full native-codegen goal
+remain unchanged.

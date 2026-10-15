@@ -9,6 +9,12 @@ use jett_parser::ast::{
 use super::*;
 use crate::checked_types::{CheckedScopedBindings, CheckedScopedTypes};
 
+#[path = "body_reference/field_updates.rs"]
+mod field_updates;
+pub(crate) use field_updates::{PreparedFieldAssignment, PreparedFieldBinding};
+#[path = "body_reference/field_inline.rs"]
+mod field_inline;
+
 #[path = "body_reference/absent_generated.rs"]
 mod absent_generated;
 pub(crate) use absent_generated::PreparedAbsentBindings;
@@ -95,6 +101,20 @@ impl CheckedBodyReference {
     }
 
     fn region(&self) -> Result<OriginalRegion<'_>, ResourceExecutionError> {
+        let length = self
+            .cursor
+            .executable
+            .as_ref()
+            .ok_or(ResourceExecutionError::MissingCheckedBody)?
+            .path
+            .len();
+        self.region_at_path_len(length)
+    }
+
+    fn region_at_path_len(
+        &self,
+        length: usize,
+    ) -> Result<OriginalRegion<'_>, ResourceExecutionError> {
         let identity = self
             .cursor
             .executable
@@ -142,7 +162,10 @@ impl CheckedBodyReference {
                 }
             }
         };
-        for step in &identity.path {
+        if length > identity.path.len() {
+            return Err(ResourceExecutionError::MissingCheckedBody);
+        }
+        for step in identity.path.iter().take(length) {
             region = match step {
                 RegionStep::Scope(owner) => {
                     OriginalRegion::Block(&region_binding(region, *owner)?.body)
@@ -173,6 +196,9 @@ impl CheckedBodyReference {
 }
 
 impl PreparedDirectScope {
+    pub(crate) fn field_reference(&self) -> CheckedBodyReference {
+        self.reference.clone()
+    }
     pub(crate) fn projection(&self) -> Arc<CheckedScopedTypes> {
         self.projection.clone()
     }
@@ -453,8 +479,6 @@ impl CheckedExecution {
         if !Arc::ptr_eq(&identity.program, &self.program) {
             return Err(ResourceExecutionError::ForeignProgram);
         }
-        // Required syntax selection carries no authority to execute an inline
-        // callable or a refinement predicate as a runtime Resource entry.
         if (matches!(
             identity.origin,
             ExecutableOrigin::RefinementPredicate { .. }
@@ -466,6 +490,31 @@ impl CheckedExecution {
         {
             return Err(ResourceExecutionError::WrongPurpose);
         }
+        self.validate_cursor_identity(cursor)
+    }
+
+    /// Ordinary field storage has no provider/custody route. Resource APIs keep
+    /// calling validate_executable_cursor and retain their runtime-inline gate.
+    pub(super) fn validate_field_executable_cursor(
+        &self,
+        cursor: &CheckedBodyCursor,
+    ) -> Result<(), ResourceExecutionError> {
+        self.validate_cursor_identity(cursor)
+    }
+
+    fn validate_cursor_identity(
+        &self,
+        cursor: &CheckedBodyCursor,
+    ) -> Result<(), ResourceExecutionError> {
+        let identity = cursor
+            .executable
+            .as_ref()
+            .ok_or(ResourceExecutionError::MissingCheckedBody)?;
+        if !Arc::ptr_eq(&identity.program, &self.program) {
+            return Err(ResourceExecutionError::ForeignProgram);
+        }
+        // Required syntax selection carries no authority to execute an inline
+        // callable or a refinement predicate as a runtime Resource entry.
         let reference = CheckedBodyReference {
             cursor: cursor.clone(),
         };
@@ -554,6 +603,26 @@ impl CheckedExecution {
         bind: &ComptimeTypeBindStmt,
     ) -> Result<PreparedDirectScope, ResourceExecutionError> {
         self.validate_executable_cursor(&self.body)?;
+        let prepared = self.prepare_original_direct_scope(bind)?;
+        self.validate_executable_cursor(&prepared.reference.cursor)?;
+        Ok(prepared)
+    }
+
+    /// Shares physical Source selection, without authorizing Resource entry.
+    pub(crate) fn prepare_field_direct_scope(
+        &self,
+        bind: &ComptimeTypeBindStmt,
+    ) -> Result<PreparedDirectScope, ResourceExecutionError> {
+        self.validate_field_executable_cursor(&self.body)?;
+        let prepared = self.prepare_original_direct_scope(bind)?;
+        self.validate_field_executable_cursor(&prepared.reference.cursor)?;
+        Ok(prepared)
+    }
+
+    fn prepare_original_direct_scope(
+        &self,
+        bind: &ComptimeTypeBindStmt,
+    ) -> Result<PreparedDirectScope, ResourceExecutionError> {
         let parent = CheckedBodyReference {
             cursor: self.body.clone(),
         };
@@ -632,7 +701,6 @@ impl CheckedExecution {
             .ok_or(ResourceExecutionError::MissingCheckedBody)?
             .path
             .push(RegionStep::Scope(original.span));
-        self.validate_executable_cursor(&cursor)?;
         Ok(PreparedDirectScope {
             reference: CheckedBodyReference { cursor },
             projection: scoped_projection(candidate, &self.program.checked().interner),

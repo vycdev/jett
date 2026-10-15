@@ -211,6 +211,7 @@ fn verify_descriptor_bodies_inner<'a>(
     resource: Option<&'a jett_mir::ResourceOwnershipPlan<'a>>,
 ) -> Result<(), CodegenError> {
     jett_mir::validate_native_actor_graphs(program).map_err(CodegenError::Backend)?;
+    jett_mir::validate_field_updates(program, types).map_err(CodegenError::Backend)?;
     jett_mir::validate_call_ownership(program, types).map_err(CodegenError::InvalidMir)?;
     jett_mir::validate_reflected_callable_plans(program, types)
         .map_err(CodegenError::InvalidMir)?;
@@ -363,6 +364,7 @@ pub(crate) fn verify_program(
     types: &TypeInterner,
 ) -> Result<VerifiedProgram, CodegenError> {
     jett_mir::validate_native_actor_graphs(program).map_err(CodegenError::Backend)?;
+    jett_mir::validate_field_updates(program, types).map_err(CodegenError::Backend)?;
     jett_mir::validate_call_ownership(program, types).map_err(CodegenError::InvalidMir)?;
     jett_mir::validate_reflected_callable_plans(program, types)
         .map_err(CodegenError::InvalidMir)?;
@@ -1624,6 +1626,34 @@ impl Verifier<'_> {
                 Ok(())
             }
             StatementKind::CloseCallOwnerGeneration { .. } => Ok(()),
+            StatementKind::PrepareFieldUpdate { place, .. } => place
+                .validate(place.target(), &function.locals, self.types)
+                .map_err(|message| self.contract_error(function, statement.span, message)),
+            StatementKind::UpdateField {
+                target,
+                value,
+                place,
+            } => {
+                place
+                    .validate(target, &function.locals, self.types)
+                    .map_err(|message| self.contract_error(function, statement.span, message))?;
+                if function.is_view_local(place.root()) {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "field update targets a view",
+                    ));
+                }
+                self.expression(function, target)?;
+                self.expression(function, value)?;
+                self.require_same_type(
+                    function,
+                    statement.span,
+                    target.ty,
+                    value.ty,
+                    "field update value type changed",
+                )
+            }
             StatementKind::CheckRefinement { local, call, .. } => {
                 let local = function.local(*local).ok_or_else(|| {
                     self.contract_error(

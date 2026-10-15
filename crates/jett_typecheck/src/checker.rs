@@ -22,6 +22,11 @@ use jett_types::{
     StructDef as TypeStructDef, StructId, Type, TypeId, TypeInterner, VariantDef,
 };
 
+use crate::assignment_places::{
+    AssignmentContext, AssignmentContextRoot, CheckedAssignmentPlace, CheckedFieldProjection,
+    CheckedFieldUpdateResourceRequirement, checked_field_owner, seal_assignment_ownership,
+    validate_assignment_place_shape,
+};
 use crate::caller_ownership::{
     CheckedArgumentOwnership, CheckedBindingFact, CheckedCallOwnership, CheckedCalleeAccess,
     CheckedCallerEffect, CheckedCallerOrigin, CheckedCallerSyntax, CheckedIntrinsicOperandRole,
@@ -33,9 +38,15 @@ use crate::errors;
 use crate::resource_hooks::{CheckedResourceHook, ResourceHookError};
 
 mod graphics_audit;
+mod nonzero_facts;
+
+use nonzero_facts::NonzeroFact;
 
 #[cfg(test)]
 mod list_sum_domain_tests;
+
+#[cfg(test)]
+mod assignment_place_tests;
 
 #[cfg(test)]
 mod resource_copy_tests;
@@ -70,6 +81,7 @@ pub struct CheckedGenericFunctionInstantiation {
     /// Physical copy/borrow facts, keyed by local declaration-name span.
     pub binding_modes: HashMap<Span, CheckedBindingMode>,
     pub binding_facts: HashMap<Span, CheckedBindingFact>,
+    pub assignment_places: HashMap<Span, CheckedAssignmentPlace>,
     pub call_ownership: HashMap<Span, CheckedCallOwnership>,
     /// Nested generic calls selected while checking this concrete body.
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
@@ -147,6 +159,7 @@ pub struct CheckedBodyFacts {
     pub debug_type_names: HashMap<Span, String>,
     pub binding_modes: HashMap<Span, CheckedBindingMode>,
     pub binding_facts: HashMap<Span, CheckedBindingFact>,
+    pub assignment_places: HashMap<Span, CheckedAssignmentPlace>,
     pub call_ownership: HashMap<Span, CheckedCallOwnership>,
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
     pub intrinsic_ids: HashMap<Span, IntrinsicId>,
@@ -288,6 +301,7 @@ pub struct CheckResult {
     /// Physical copy/borrow facts outside generic bodies, by declaration name.
     pub binding_modes: HashMap<Span, CheckedBindingMode>,
     pub binding_facts: HashMap<Span, CheckedBindingFact>,
+    pub assignment_places: HashMap<Span, CheckedAssignmentPlace>,
     pub call_ownership: HashMap<Span, CheckedCallOwnership>,
     /// Session-local resolved definitions and their checked types.
     ///
@@ -504,20 +518,22 @@ fn finish_check(
     };
 
     // Run ownership analysis (linear type checking) after type checking.
-    let (ownership_diagnostics, breakpoint_exclusions) = if checked_bodies {
-        crate::ownership::OwnershipChecker::new(&checker.interner)
-            .with_checked_facts(
-                checker.resolve,
-                &checker.binding_facts,
-                &checker.call_ownership,
-                &checker.type_map,
-                &checker.comptime_type_bindings,
-                &checker.generic_function_instantiations,
-            )
-            .check_module_with_debug(module)
-    } else {
-        (Vec::new(), HashMap::new())
-    };
+    let (ownership_diagnostics, breakpoint_exclusions, mut validated_field_updates) =
+        if checked_bodies {
+            crate::ownership::OwnershipChecker::new(&checker.interner)
+                .with_checked_facts(
+                    checker.resolve,
+                    &checker.binding_facts,
+                    &checker.assignment_places,
+                    &checker.call_ownership,
+                    &checker.type_map,
+                    &checker.comptime_type_bindings,
+                    &checker.generic_function_instantiations,
+                )
+                .check_module_with_field_updates(module)
+        } else {
+            (Vec::new(), HashMap::new(), HashSet::new())
+        };
 
     let reflection_metadata = Arc::new(checker.build_reflection_metadata());
     let equality_methods = checker
@@ -566,6 +582,36 @@ fn finish_check(
                 }))
     }));
 
+    // An error in any selected body invalidates all admission records, including
+    // public diagnostics that a downstream caller might later edit or remove.
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+    {
+        validated_field_updates.clear();
+    }
+    seal_assignment_ownership(
+        &mut checker.assignment_places,
+        &mut checker.comptime_type_bindings,
+        &AssignmentContext::default(),
+        &validated_field_updates,
+    );
+    for (index, body) in checker
+        .generic_function_instantiations
+        .iter_mut()
+        .enumerate()
+    {
+        seal_assignment_ownership(
+            &mut body.assignment_places,
+            &mut body.comptime_type_bindings,
+            &AssignmentContext {
+                root: AssignmentContextRoot::Generic(index),
+                scopes: Vec::new(),
+            },
+            &validated_field_updates,
+        );
+    }
+
     let method_value_definitions = checker
         .method_definitions_by_owner
         .values()
@@ -584,6 +630,7 @@ fn finish_check(
         debug_type_names: checker.debug_type_names,
         binding_modes: checker.binding_modes,
         binding_facts: checker.binding_facts,
+        assignment_places: checker.assignment_places,
         call_ownership: checker.call_ownership,
         definition_types: checker.type_env,
         resource_hooks: checker.resource_hooks,
@@ -681,6 +728,7 @@ struct ActiveGenericInstantiation {
     debug_type_names: HashMap<Span, String>,
     binding_modes: HashMap<Span, CheckedBindingMode>,
     binding_facts: HashMap<Span, CheckedBindingFact>,
+    assignment_places: HashMap<Span, CheckedAssignmentPlace>,
     call_ownership: HashMap<Span, CheckedCallOwnership>,
     invocation_signatures: HashMap<Span, (Vec<TypeId>, TypeId)>,
     generic_calls: HashMap<Span, CheckedGenericCall>,
@@ -796,8 +844,8 @@ struct TypeChecker<'a> {
     in_property_block: bool,
     /// Nesting depth inside an explicit `comptime` expression.
     comptime_expr_depth: usize,
-    /// Lexically visible proofs that integer bindings are nonzero.
-    nonzero_fact_scopes: Vec<HashSet<DefId>>,
+    /// Lexically visible nonzero observations of exact bindings and field places.
+    nonzero_fact_scopes: Vec<HashSet<NonzeroFact>>,
     /// The name of the verify block currently being checked (for error messages).
     current_verify_name: Option<String>,
     /// Nesting depth inside a handle-block body. Used to validate `default`.
@@ -888,6 +936,7 @@ struct TypeChecker<'a> {
     /// Physical local binding modes outside generic bodies.
     binding_modes: HashMap<Span, CheckedBindingMode>,
     binding_facts: HashMap<Span, CheckedBindingFact>,
+    assignment_places: HashMap<Span, CheckedAssignmentPlace>,
     call_ownership: HashMap<Span, CheckedCallOwnership>,
     invocation_signatures: HashMap<Span, (Vec<TypeId>, TypeId)>,
     /// Checked struct constructions outside generic bodies.
@@ -1007,6 +1056,7 @@ impl<'a> TypeChecker<'a> {
             method_values: HashMap::new(),
             binding_modes: HashMap::new(),
             binding_facts: HashMap::new(),
+            assignment_places: HashMap::new(),
             call_ownership: HashMap::new(),
             invocation_signatures: HashMap::new(),
             struct_constructions: HashMap::new(),
@@ -1081,7 +1131,7 @@ impl<'a> TypeChecker<'a> {
         self.named_types
             .insert("TypeBitfieldFieldShape".to_string(), bitfield_shape_ty);
 
-        let type_info_sid = self.interner.add_struct(TypeStructDef {
+        let type_info_sid = self.interner.add_compiler_metadata_struct(TypeStructDef {
             name: "TypeInfo".to_string(),
             fields: Vec::new(),
             methods: Vec::new(),
@@ -1108,7 +1158,7 @@ impl<'a> TypeChecker<'a> {
             .insert("TypeInfo".to_string(), type_info_ty);
 
         let optional_string_ty = self.interner.intern(Type::Optional(TypeInterner::STRING));
-        let type_field_sid = self.interner.add_struct(TypeStructDef {
+        let type_field_sid = self.interner.add_compiler_metadata_struct(TypeStructDef {
             name: "TypeField".to_string(),
             fields: vec![
                 ("index".to_string(), TypeInterner::INT64),
@@ -1129,7 +1179,7 @@ impl<'a> TypeChecker<'a> {
             .insert("TypeField".to_string(), type_field_ty);
 
         let optional_type_info_ty = self.interner.intern(Type::Optional(type_info_ty));
-        let type_bitfield_field_sid = self.interner.add_struct(TypeStructDef {
+        let type_bitfield_field_sid = self.interner.add_compiler_metadata_struct(TypeStructDef {
             name: "TypeBitfieldField".to_string(),
             fields: vec![
                 ("index".to_string(), TypeInterner::INT64),
@@ -1147,7 +1197,7 @@ impl<'a> TypeChecker<'a> {
             .insert("TypeBitfieldField".to_string(), type_bitfield_field_ty);
 
         let type_bitfield_fields_ty = self.interner.intern(Type::List(type_bitfield_field_ty));
-        let type_bitfield_sid = self.interner.add_struct(TypeStructDef {
+        let type_bitfield_sid = self.interner.add_compiler_metadata_struct(TypeStructDef {
             name: "TypeBitfield".to_string(),
             fields: vec![
                 ("network_order".to_string(), TypeInterner::BOOL),
@@ -1160,7 +1210,7 @@ impl<'a> TypeChecker<'a> {
             .insert("TypeBitfield".to_string(), type_bitfield_ty);
 
         let type_variant_fields_ty = self.interner.intern(Type::List(type_field_ty));
-        let type_variant_sid = self.interner.add_struct(TypeStructDef {
+        let type_variant_sid = self.interner.add_compiler_metadata_struct(TypeStructDef {
             name: "TypeVariant".to_string(),
             fields: vec![
                 ("index".to_string(), TypeInterner::INT64),
@@ -1177,7 +1227,7 @@ impl<'a> TypeChecker<'a> {
             .insert("TypeVariant".to_string(), type_variant_ty);
 
         let type_machine_state_fields_ty = self.interner.intern(Type::List(type_field_ty));
-        let type_machine_state_sid = self.interner.add_struct(TypeStructDef {
+        let type_machine_state_sid = self.interner.add_compiler_metadata_struct(TypeStructDef {
             name: "TypeMachineState".to_string(),
             fields: vec![
                 ("index".to_string(), TypeInterner::INT64),
@@ -1192,17 +1242,18 @@ impl<'a> TypeChecker<'a> {
         self.named_types
             .insert("TypeMachineState".to_string(), type_machine_state_ty);
 
-        let type_machine_transition_sid = self.interner.add_struct(TypeStructDef {
-            name: "TypeMachineTransition".to_string(),
-            fields: vec![
-                ("index".to_string(), TypeInterner::INT64),
-                ("source_index".to_string(), TypeInterner::INT64),
-                ("source".to_string(), TypeInterner::STRING),
-                ("target_index".to_string(), TypeInterner::INT64),
-                ("target".to_string(), TypeInterner::STRING),
-            ],
-            methods: Vec::new(),
-        });
+        let type_machine_transition_sid =
+            self.interner.add_compiler_metadata_struct(TypeStructDef {
+                name: "TypeMachineTransition".to_string(),
+                fields: vec![
+                    ("index".to_string(), TypeInterner::INT64),
+                    ("source_index".to_string(), TypeInterner::INT64),
+                    ("source".to_string(), TypeInterner::STRING),
+                    ("target_index".to_string(), TypeInterner::INT64),
+                    ("target".to_string(), TypeInterner::STRING),
+                ],
+                methods: Vec::new(),
+            });
         let type_machine_transition_ty = self
             .interner
             .intern(Type::Struct(type_machine_transition_sid));
@@ -1214,7 +1265,7 @@ impl<'a> TypeChecker<'a> {
         let type_machine_states_ty = self.interner.intern(Type::List(type_machine_state_ty));
         let type_machine_transitions_ty =
             self.interner.intern(Type::List(type_machine_transition_ty));
-        let type_machine_sid = self.interner.add_struct(TypeStructDef {
+        let type_machine_sid = self.interner.add_compiler_metadata_struct(TypeStructDef {
             name: "TypeMachine".to_string(),
             fields: vec![
                 ("states".to_string(), type_machine_states_ty),
@@ -1490,20 +1541,6 @@ impl<'a> TypeChecker<'a> {
             .is_some_and(|ty| matches!(self.interner.resolve(*ty), Type::Bitfield(_)))
     }
 
-    fn is_reflection_metadata_type_name(name: &str) -> bool {
-        matches!(
-            name,
-            "TypeInfo"
-                | "TypeField"
-                | "TypeBitfield"
-                | "TypeBitfieldField"
-                | "TypeMachine"
-                | "TypeMachineState"
-                | "TypeMachineTransition"
-                | "TypeVariant"
-        )
-    }
-
     /// Returns true if the type is numeric (any integer or float type).
     fn is_numeric(&self, id: TypeId) -> bool {
         matches!(
@@ -1632,15 +1669,17 @@ impl<'a> TypeChecker<'a> {
             | Expr::Paren(inner, _)
             | Expr::Comptime(inner, _)
             | Expr::Coarsen(inner, _) => {
-                let inner_ty = self.type_map.get(&inner.span()).copied().unwrap_or(ty);
+                let inner_ty = self.checked_expression_type(inner.span()).unwrap_or(ty);
                 self.expression_is_proven_nonzero(inner, inner_ty)
             }
-            Expr::Ident(ident) => self.ident_def_id(ident).is_some_and(|def_id| {
-                self.nonzero_fact_scopes
-                    .iter()
-                    .rev()
-                    .any(|scope| scope.contains(&def_id))
-            }),
+            Expr::Ident(_) | Expr::FieldAccess(_, _, _) => {
+                self.nonzero_fact(expr).is_some_and(|fact| {
+                    self.nonzero_fact_scopes
+                        .iter()
+                        .rev()
+                        .any(|scope| scope.contains(&fact))
+                })
+            }
             _ => false,
         }
     }
@@ -7346,6 +7385,7 @@ impl<'a> TypeChecker<'a> {
                         debug_type_names: HashMap::new(),
                         binding_modes: HashMap::new(),
                         binding_facts: HashMap::new(),
+                        assignment_places: HashMap::new(),
                         call_ownership: HashMap::new(),
                         generic_calls: HashMap::new(),
                         intrinsic_ids: HashMap::new(),
@@ -7396,6 +7436,7 @@ impl<'a> TypeChecker<'a> {
                     debug_type_names: HashMap::new(),
                     binding_modes: HashMap::new(),
                     binding_facts: HashMap::new(),
+                    assignment_places: HashMap::new(),
                     call_ownership: HashMap::new(),
                     invocation_signatures: HashMap::new(),
                     generic_calls: HashMap::new(),
@@ -7430,6 +7471,7 @@ impl<'a> TypeChecker<'a> {
                 entry.debug_type_names.extend(active.debug_type_names);
                 entry.binding_modes.extend(active.binding_modes);
                 entry.binding_facts.extend(active.binding_facts);
+                entry.assignment_places.extend(active.assignment_places);
                 entry.call_ownership.extend(active.call_ownership);
                 entry.generic_calls.extend(active.generic_calls);
                 entry.intrinsic_ids.extend(active.intrinsic_ids);
@@ -8305,6 +8347,19 @@ impl<'a> TypeChecker<'a> {
         owner: Span,
     ) -> HashMap<Span, CheckedBindingFact> {
         let mut facts = Self::facts_in_span(bindings, owner);
+        let assignments = self
+            .active_generic_instantiations
+            .last()
+            .map(|active| &active.assignment_places)
+            .unwrap_or(&self.assignment_places);
+        for place in assignments
+            .values()
+            .filter(|place| Self::span_is_within(place.assignment_span, owner))
+        {
+            if bindings.get(&place.root.declaration_span) == Some(&place.root) {
+                facts.insert(place.root.declaration_span, place.root);
+            }
+        }
         for (_, call) in calls
             .iter()
             .filter(|(span, _)| Self::span_is_within(**span, owner))
@@ -8346,6 +8401,7 @@ impl<'a> TypeChecker<'a> {
             Self::clear_facts_in_span(&mut active.debug_type_names, owner);
             Self::clear_facts_in_span(&mut active.binding_modes, owner);
             Self::clear_facts_in_span(&mut active.binding_facts, owner);
+            Self::clear_facts_in_span(&mut active.assignment_places, owner);
             Self::clear_facts_in_span(&mut active.call_ownership, owner);
             Self::clear_facts_in_span(&mut active.invocation_signatures, owner);
             Self::clear_facts_in_span(&mut active.generic_calls, owner);
@@ -8365,6 +8421,7 @@ impl<'a> TypeChecker<'a> {
             Self::clear_facts_in_span(&mut self.source_type_map, owner);
             Self::clear_facts_in_span(&mut self.binding_modes, owner);
             Self::clear_facts_in_span(&mut self.binding_facts, owner);
+            Self::clear_facts_in_span(&mut self.assignment_places, owner);
             Self::clear_facts_in_span(&mut self.call_ownership, owner);
             Self::clear_facts_in_span(&mut self.invocation_signatures, owner);
             Self::clear_facts_in_span(&mut self.generic_calls, owner);
@@ -8395,6 +8452,7 @@ impl<'a> TypeChecker<'a> {
                     owner,
                 ),
                 call_ownership: Self::facts_in_span(&active.call_ownership, owner),
+                assignment_places: Self::facts_in_span(&active.assignment_places, owner),
                 generic_calls: Self::facts_in_span(&active.generic_calls, owner),
                 intrinsic_ids: Self::facts_in_span(&active.intrinsic_ids, owner),
                 intrinsic_type_arguments: Self::facts_in_span(
@@ -8433,6 +8491,7 @@ impl<'a> TypeChecker<'a> {
                 owner,
             ),
             call_ownership: Self::facts_in_span(&self.call_ownership, owner),
+            assignment_places: Self::facts_in_span(&self.assignment_places, owner),
             generic_calls: Self::facts_in_span(&self.generic_calls, owner),
             intrinsic_ids: Self::facts_in_span(&self.intrinsic_ids, owner),
             intrinsic_type_arguments: Self::facts_in_span(&self.intrinsic_type_arguments, owner),
@@ -10216,7 +10275,7 @@ impl<'a> TypeChecker<'a> {
             self.record_closure_local(def_id);
             if !decl.mutable && self.expression_is_proven_nonzero(&decl.value, init_type) {
                 if let Some(scope) = self.nonzero_fact_scopes.last_mut() {
-                    scope.insert(def_id);
+                    scope.insert(NonzeroFact::Binding(def_id));
                 }
             }
         }
@@ -10275,18 +10334,41 @@ impl<'a> TypeChecker<'a> {
         } else if !matches!(&assign.target, Expr::Ident(_)) {
             self.check_projected_assignment_target(&assign.target);
         }
-        if let Expr::Ident(ident) = &assign.target {
-            if let Some(def_id) = self.ident_def_id(ident) {
-                self.clear_reflection_local_fact(def_id);
-                for scope in &mut self.nonzero_fact_scopes {
-                    scope.remove(&def_id);
-                }
-            }
+        let target_type = if Self::assignment_root(&assign.target).is_some()
+            && !self.check_assignment_owner_policy(&assign.target)
+        {
+            TypeInterner::ERROR
+        } else {
+            self.check_expr_with_resource_projection(
+                &assign.target,
+                ResourceProjectionMode::Borrowed,
+            )
+        };
+        if target_type != TypeInterner::ERROR {
+            self.record_assignment_place(assign);
         }
-
-        let target_type = self
-            .check_expr_with_resource_projection(&assign.target, ResourceProjectionMode::Borrowed);
+        // The RHS may observe the old root under existing local facts. Clear
+        // changed-root facts after checking it, before any subsequent statement.
         let value_type = self.check_expr_for_expected(&assign.value, target_type, false);
+        let mut projected_target = &assign.target;
+        while let Expr::Paren(inner, _) = projected_target {
+            projected_target = inner;
+        }
+        if matches!(projected_target, Expr::FieldAccess(_, _, _))
+            && target_type != TypeInterner::ERROR
+            && !crate::ownership::is_implicitly_copyable(&self.interner, target_type)
+            && self.initializer_is_view(&assign.value)
+        {
+            self.sink.emit(crate::ownership::cannot_rebind_from_view(
+                assign.value.span(),
+            ));
+        }
+        if let Some(root) = Self::assignment_root(&assign.target)
+            && let Some(definition) = self.ident_def_id(root)
+        {
+            self.clear_reflection_local_fact(definition);
+            self.invalidate_nonzero_root(definition);
+        }
         self.check_view_rebinding(assign, target_type, value_type);
 
         if !self.types_compatible(target_type, value_type) {
@@ -10295,6 +10377,134 @@ impl<'a> TypeChecker<'a> {
                 &self.type_name(value_type),
                 assign.span,
             ));
+        }
+    }
+
+    fn check_assignment_owner_policy(&mut self, target: &Expr) -> bool {
+        match target {
+            Expr::Ident(_) => true,
+            Expr::Paren(inner, _) => self.check_assignment_owner_policy(inner),
+            Expr::FieldAccess(base, _, span) => {
+                if !self.check_assignment_owner_policy(base) {
+                    return false;
+                }
+                let mut owner = self
+                    .check_expr_with_resource_projection(base, ResourceProjectionMode::Borrowed);
+                while let Type::Secret(inner) = self.interner.resolve(owner) {
+                    owner = *inner;
+                }
+                let message = match self.interner.resolve(owner) {
+                    Type::Struct(id) if self.interner.is_compiler_metadata_struct(*id) => Some(
+                        "cannot assign through compiler-produced reflection metadata; replace the complete genuine value instead",
+                    ),
+                    Type::Refinement { .. } => Some(
+                        "cannot assign through a nominal refinement; replace the complete validated value instead",
+                    ),
+                    Type::Bitfield(_) => Some(
+                        "cannot assign through a bitfield; construct and rebind the complete value instead",
+                    ),
+                    Type::Error => return false,
+                    _ => None,
+                };
+                if let Some(message) = message {
+                    self.sink.emit(Diagnostic::error(404, message, *span));
+                    false
+                } else {
+                    true
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn record_assignment_place(&mut self, assign: &ast::AssignStmt) {
+        let Some(root_ident) = Self::assignment_root(&assign.target) else {
+            return;
+        };
+        let Some(definition) = self.ident_def_id(root_ident) else {
+            return;
+        };
+        let declaration = self.resolve.scope_table.def(definition).span;
+        if self.assignment_bindings.get(&declaration) != Some(&AssignmentBinding::OwnedMutable) {
+            return;
+        }
+        let Some(root) = self.caller_binding_fact(definition) else {
+            return;
+        };
+        let Some(root_type) = self.checked_expression_type(root_ident.span) else {
+            return;
+        };
+        let mut projections = Vec::new();
+        if !self.collect_assignment_projections(&assign.target, &mut projections)
+            || projections.is_empty()
+        {
+            return;
+        }
+        let resource = if self.type_contains_resource_data(root.ty) {
+            CheckedFieldUpdateResourceRequirement::RequiresCustody
+        } else {
+            CheckedFieldUpdateResourceRequirement::Ordinary
+        };
+        let place = CheckedAssignmentPlace {
+            assignment_span: assign.span,
+            root,
+            root_use_span: root_ident.span,
+            root_type,
+            projections,
+            resource,
+            ownership_seal: None,
+        };
+        // A malformed or unsupported layout receives no mutation fact. The
+        // source's existing type/place diagnostics remain authoritative.
+        if validate_assignment_place_shape(&place, &self.interner).is_err() {
+            return;
+        }
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.assignment_places.insert(assign.span, place);
+        } else {
+            self.assignment_places.insert(assign.span, place);
+        }
+    }
+
+    fn collect_assignment_projections(
+        &self,
+        expression: &Expr,
+        projections: &mut Vec<CheckedFieldProjection>,
+    ) -> bool {
+        match expression {
+            Expr::Ident(_) => true,
+            Expr::Paren(inner, _) => self.collect_assignment_projections(inner, projections),
+            Expr::FieldAccess(base, field, span) => {
+                if !self.collect_assignment_projections(base, projections) {
+                    return false;
+                }
+                let Some(owner_type) = self.checked_expression_type(base.span()) else {
+                    return false;
+                };
+                let Some(field_type) = self.checked_expression_type(*span) else {
+                    return false;
+                };
+                let Ok((owner, fields)) = checked_field_owner(&self.interner, owner_type) else {
+                    return false;
+                };
+                let Some((field_index, (_, declared_field_type))) = fields
+                    .iter()
+                    .enumerate()
+                    .find(|(_, (name, _))| name == &field.name)
+                else {
+                    return false;
+                };
+                projections.push(CheckedFieldProjection {
+                    source_span: *span,
+                    owner_type,
+                    owner,
+                    field_index,
+                    declared_field_type: *declared_field_type,
+                    field_type,
+                });
+                true
+            }
+            _ => false,
         }
     }
 
@@ -10840,64 +11050,11 @@ impl<'a> TypeChecker<'a> {
         matches!(block.stmts.last(), Some(Stmt::Return(_)))
     }
 
-    fn nonzero_defs_from_conditions<'b>(
-        &self,
-        conditions: impl IntoIterator<Item = (&'b Expr, bool)>,
-    ) -> HashSet<DefId> {
-        let mut facts = HashSet::new();
-        for (condition, truth) in conditions {
-            self.collect_nonzero_defs(condition, truth, &mut facts);
-        }
-        facts
-    }
-
-    fn collect_nonzero_defs(&self, condition: &Expr, truth: bool, facts: &mut HashSet<DefId>) {
-        match condition {
-            Expr::Paren(inner, _) => self.collect_nonzero_defs(inner, truth, facts),
-            Expr::Unary(UnaryOp::Not, inner, _) => self.collect_nonzero_defs(inner, !truth, facts),
-            Expr::Binary(lhs, BinOp::And, rhs, _) if truth => {
-                self.collect_nonzero_defs(lhs, true, facts);
-                self.collect_nonzero_defs(rhs, true, facts);
-            }
-            Expr::Binary(lhs, BinOp::Or, rhs, _) if !truth => {
-                self.collect_nonzero_defs(lhs, false, facts);
-                self.collect_nonzero_defs(rhs, false, facts);
-            }
-            Expr::Binary(lhs, op @ (BinOp::Eq | BinOp::NotEq), rhs, _) => {
-                let proves_nonzero = matches!(op, BinOp::NotEq) == truth;
-                if !proves_nonzero {
-                    return;
-                }
-                let ident = if Self::is_zero_integer_literal(rhs) {
-                    Self::narrowable_ident_expr(lhs)
-                } else if Self::is_zero_integer_literal(lhs) {
-                    Self::narrowable_ident_expr(rhs)
-                } else {
-                    None
-                };
-                if let Some(def_id) = ident.and_then(|ident| self.ident_def_id(ident)) {
-                    facts.insert(def_id);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn is_zero_integer_literal(expr: &Expr) -> bool {
-        match expr {
-            Expr::IntLiteral(value, _) => *value == 0,
-            Expr::Unary(UnaryOp::Neg, inner, _) | Expr::Paren(inner, _) => {
-                Self::is_zero_integer_literal(inner)
-            }
-            _ => false,
-        }
-    }
-
     fn check_block_with_type_override_and_nonzero(
         &mut self,
         block: &Block,
         override_ty: Option<(DefId, TypeId)>,
-        nonzero_defs: HashSet<DefId>,
+        nonzero_defs: HashSet<NonzeroFact>,
     ) {
         self.nonzero_fact_scopes.push(nonzero_defs);
         self.check_block_with_type_override(block, override_ty);
@@ -11230,6 +11387,7 @@ impl<'a> TypeChecker<'a> {
             false
         };
 
+        self.invalidate_nonzero_loop_facts(&for_stmt.body, None);
         self.check_block(&for_stmt.body);
 
         if pushed_type_info_scope {
@@ -11247,6 +11405,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_while(&mut self, while_stmt: &ast::WhileStmt) {
+        self.invalidate_nonzero_loop_facts(&while_stmt.body, Some(&while_stmt.condition));
         let cond_type = self.check_expr(&while_stmt.condition);
         if cond_type != TypeInterner::ERROR && cond_type != TypeInterner::BOOL {
             self.sink.emit(errors::condition_not_bool(
@@ -11311,6 +11470,7 @@ impl<'a> TypeChecker<'a> {
         }
         let mut covered = HashSet::new();
         let mut has_other = false;
+        let borrowed_payloads = self.initializer_is_view(&match_stmt.expr);
 
         for (arm_index, arm) in match_stmt.arms.iter().enumerate() {
             let check_body = selected_static_arm.map_or(true, |selected| selected == arm_index);
@@ -11354,7 +11514,11 @@ impl<'a> TypeChecker<'a> {
                                 if let Some(def_id) = self.declaration_def_id(binding.span) {
                                     self.type_env.insert(def_id, *field_ty);
                                     self.record_expression_type(binding.span, *field_ty);
-                                    self.record_assignment_binding(binding, false, false);
+                                    self.record_assignment_binding(
+                                        binding,
+                                        false,
+                                        borrowed_payloads,
+                                    );
                                     self.record_closure_local(def_id);
                                 }
                             }
@@ -13941,14 +14105,6 @@ impl<'a> TypeChecker<'a> {
                 if let Some(type_id) = self.named_types.get(type_name).copied() {
                     match self.interner.resolve(type_id).clone() {
                         Type::Struct(sid) => {
-                            if Self::is_reflection_metadata_type_name(type_name) {
-                                self.sink
-                                    .emit(errors::reflection_metadata_constructor(type_name, span));
-                                for arg in args {
-                                    self.check_expr(&arg.value);
-                                }
-                                return TypeInterner::ERROR;
-                            }
                             return self.check_struct_constructor(sid, args, span);
                         }
                         Type::Bitfield(bid) => {
@@ -15711,6 +15867,16 @@ impl<'a> TypeChecker<'a> {
         span: Span,
     ) -> TypeId {
         let struct_def = self.interner.resolve_struct(sid).clone();
+        if self.interner.is_compiler_metadata_struct(sid) {
+            self.sink.emit(errors::reflection_metadata_constructor(
+                &struct_def.name,
+                span,
+            ));
+            for arg in args {
+                self.check_expr(&arg.value);
+            }
+            return TypeInterner::ERROR;
+        }
         let mut assigned = vec![false; struct_def.fields.len()];
         let mut source_indices = vec![None; struct_def.fields.len()];
         let mut arguments_valid = true;

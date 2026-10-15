@@ -757,3 +757,126 @@ mod selected_field_control_flow {
         }
     }
 }
+
+#[test]
+fn ordinary_field_reflection_wrappers_rejoin_original_frames_and_ordinal_tables() {
+    for release in [false, true] {
+        let (program, mut checked, parent) = execution(release, "two_loops");
+        let first = loop_at(function(&program, "two_loops"), 0);
+        let second = loop_at(function(&program, "two_loops"), 1);
+        let binding = field_scope(&first.body);
+        let before = current_key(&checked);
+        let proof = checked
+            .prepare_field_reflected_loop(first)
+            .unwrap()
+            .unwrap();
+        assert!(
+            checked
+                .prepare_field_reflected_loop(&first.clone())
+                .is_err()
+        );
+        assert!(proof.iteration(proof.fields.len()).is_err());
+        for index in 0..proof.fields.len() {
+            let iteration = proof.iteration(index).unwrap();
+            let scope = checked
+                .prepare_field_reflected_scope(binding, &iteration)
+                .unwrap();
+            assert_eq!(
+                scope.reference.cursor.scopes.last().unwrap().selection,
+                CheckedComptimeTypeSelection::ReflectedIteration(index)
+            );
+            checked
+                .install_field_function_body(&scope.field_reference())
+                .unwrap();
+            assert!(
+                checked
+                    .prepare_field_reflected_scope(binding, &iteration)
+                    .is_err()
+            );
+            checked.install_field_function_body(&parent).unwrap();
+        }
+        let iteration = proof.iteration(0).unwrap();
+        assert!(
+            checked
+                .prepare_field_reflected_scope(&binding.clone(), &iteration)
+                .is_err()
+        );
+        assert!(
+            checked
+                .prepare_field_reflected_scope(field_scope(&second.body), &iteration)
+                .is_err()
+        );
+        let mut swapped = copy_loop(&proof);
+        swapped.fields.swap(0, 1); // Same types, different immutable ordinal identity.
+        let swapped = Arc::new(swapped).iteration(0).unwrap();
+        assert!(
+            checked
+                .prepare_field_reflected_scope(binding, &swapped)
+                .is_err()
+        );
+        let wrong_item =
+            Interpreter::reflection_field_info_value(&proof.owner_name(), None, &proof.fields[1].1);
+        assert!(iteration.validate_value(&wrong_item).is_err());
+        let (foreign_program, foreign, _) = execution(release, "two_loops");
+        let foreign_binding =
+            field_scope(&loop_at(function(&foreign_program, "two_loops"), 0).body);
+        assert!(
+            foreign
+                .prepare_field_reflected_scope(foreign_binding, &iteration)
+                .is_err()
+        );
+        assert_eq!(current_key(&checked), before);
+        install_entry(&mut checked, &program, "other");
+        assert!(
+            checked
+                .prepare_field_reflected_scope(binding, &iteration)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn checked_scope_without_lexical_writes_preserves_external_field_call_identity() {
+    let source = r#"namespace app
+struct Record:
+    value: int64
+function update(mutable record: Record) returns Record:
+    record.value = 7
+    return record
+export function scoped_call() returns int64:
+    Record original = Record(value: 1)
+    comptime type Number = type.info[int64]():
+        Record changed = update(original)
+        return changed.value
+"#;
+    for release in [false, true] {
+        let program = Arc::new(
+            CheckedResourceProgram::prepare(
+                jett_parser::parse(source, FileId::new(0)),
+                std::collections::HashMap::from([(
+                    FileId::new(0),
+                    jett_common::SourceOrigin::Project,
+                )]),
+                &[],
+                jett_typecheck::CheckOptions { release },
+            )
+            .expect("genuine checked ordinary-only Source"),
+        );
+        assert!(program.checked().resource_hooks.is_empty());
+        let mut interpreter = Interpreter::from_checked_resource_program(
+            program.clone(),
+            ExecutionPurpose::ReferenceRuntime,
+        )
+        .unwrap();
+        interpreter.set_checked_expression_types(Arc::new(
+            crate::checked_types::CheckedExpressionTypes::from_checked_program(&program),
+        ));
+        interpreter.set_reflection_metadata(program.checked().reflection_metadata.clone());
+        assert_eq!(
+            interpreter
+                .call_checked_function_in_namespace(Some("app"), "scoped_call", vec![])
+                .unwrap(),
+            Value::Int64(7)
+        );
+    }
+}

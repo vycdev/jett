@@ -82,6 +82,7 @@ GRAPH_DESCRIPTOR_EXPORT = "jett_rt_v1_resource_graph_descriptor_box"
 GRAPH_DESCRIPTOR_SIGNATURE = (
     "*const JettRuntimeContextV1", "u64", "u32", "u64", "*mut u64",
 )
+STRUCT_REPLACE_EXPORT = "jett_rt_v1_struct_replace_occupied"
 PIN_ENV = "JETT_RESOURCE_NATIVE_TEST_ARCHIVE_EXPECTED_SHA256_V1"
 RECEIPT_ENV = "JETT_RESOURCE_NATIVE_TEST_ARCHIVE_RECEIPT_V1"
 TEST = ("resource_execution::"
@@ -291,11 +292,20 @@ def msvc_build_environment() -> dict[str, str]:
     return environment
 
 
-def msvc_fingerprint_records(directory: Path) -> list[Json]:
-    paths = sorted(directory.glob("jett_runtime-*/lib-jett_runtime.json"))
+def msvc_fingerprint_records(directory: Path, snapshot_directory: Path | None = None, *,
+                             selected_filename: str | None = None) -> list[Json]:
+    if selected_filename is None:
+        paths = sorted(directory.glob("jett_runtime-*/lib-jett_runtime.json"))
+    else:
+        require(re.fullmatch(r"jett_runtime-[a-f0-9]{16}", selected_filename) is not None,
+                "selected MSVC fingerprint must have one canonical runtime identity")
+        paths = [directory / selected_filename / "lib-jett_runtime.json"]
     require(bool(paths), "runtime Cargo fingerprint is missing")
     records: list[Json] = []
     for path in paths:
+        require(path.is_file(), f"runtime Cargo fingerprint is missing: {path}")
+        if snapshot_directory is not None:
+            path = snapshot_artifact(path, snapshot_directory / path.parent.name / path.name)
         value = read_object(path)
         require(value.get("rustflags") == list(MSVC_RUSTFLAGS),
                 "MSVC target fingerprint must contain the exact static CRT and zero-debug flags")
@@ -368,6 +378,47 @@ def digest(path: Path) -> str:
 def artifact(path: Path) -> dict[str, Json]:
     require(path.is_file(), f"missing measured file: {path}")
     return {"path": str(path.resolve()), "sha256": digest(path)}
+
+
+def reject_reparse_ancestors(path: Path) -> None:
+    for ancestor in (path, *path.parents):
+        require(not ancestor.is_symlink(), f"symlink is not a bounded measurement path: {ancestor}")
+        if os.name == "nt" and ancestor.exists():
+            require(ancestor.lstat().st_file_attributes & 0x400 == 0,
+                    f"reparse point is not a bounded measurement path: {ancestor}")
+
+
+def bounded_msvc_build_cache(cache_root: Path, target_dir: Path, output: Path) -> Path:
+    require(cache_root.is_absolute() and target_dir.is_absolute() and output.is_absolute(),
+            "explicit MSVC cache, root and evidence paths must be absolute")
+    for path in (cache_root, target_dir, output):
+        reject_reparse_ancestors(path)
+    require(cache_root.is_dir(), "reuse requires an existing bounded cache root")
+    root = cache_root.resolve(strict=True)
+    cache = target_dir.resolve()
+    evidence = output.resolve()
+    require(cache != root and cache.is_relative_to(root)
+            and evidence != root and evidence.is_relative_to(root),
+            "MSVC cache and evidence must remain strict descendants of the explicit root")
+    require(not cache.is_relative_to(evidence) and not evidence.is_relative_to(cache),
+            "MSVC cache and immutable evidence must not overlap")
+    require(not cache.exists() or cache.is_dir(), "MSVC cache must be a directory")
+    return cache
+
+
+def snapshot_artifact(source: Path, destination: Path) -> Path:
+    require(source.is_file(), f"snapshot source is missing: {source}")
+    reject_reparse_ancestors(source)
+    reject_reparse_ancestors(destination)
+    require(source.resolve() != destination.resolve() and not destination.exists(),
+            "immutable snapshot destination must be distinct and absent")
+    expected = digest(source)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with source.open("rb") as reader, destination.open("xb") as writer:
+        shutil.copyfileobj(reader, writer)
+    require(digest(source) == expected and digest(destination) == expected,
+            "snapshot source changed or copied bytes differ")
+    return destination
 
 
 def write_json(path: Path, value: Json) -> None:
@@ -680,6 +731,34 @@ def check_symbols(text: str, leaves: set[str], private: set[str]) -> None:
         require(definitions[name] == 1, f"expected exactly one definition of {name}")
 
 
+def checked_struct_replace_leaf(repo: Path) -> None:
+    text = (repo / "crates/jett_runtime/src/native_abi/values.rs").read_text(encoding="utf-8")
+    invocations = re.findall(r"(?ms)^leaves! \{\n(.*?)^\}\s*$", text)
+    require(len(invocations) == 1, "ordinary leaf catalog must retain one canonical invocation")
+    body = invocations[0]
+    require("/*" not in body and "*/" not in body,
+            "ordinary leaf signature observation requires its uncommented canonical invocation")
+    rows = re.findall(r"(?m)^[ \t]*StructReplaceOccupied,[^\n]*", body)
+    expected = (
+        r"\s*StructReplaceOccupied,\s*jett_rt_v1_struct_replace_occupied,\s*false,\s*\("
+        r"value:\s*u64\s*=>\s*I64,\s*index:\s*u64\s*=>\s*I64,\s*"
+        r"bits:\s*u64\s*=>\s*I64,\s*owned:\s*u32\s*=>\s*I32,\s*"
+        r"depth:\s*u64\s*=>\s*I64\),\s*u64\s*=>\s*I64,\s*"
+    )
+    require(len(rows) == 1 and re.fullmatch(expected, rows[0]) is not None,
+            "StructReplaceOccupied must retain its exact ordinary C/ABI signature and cleanup mode")
+    contexts = re.findall(r'pub unsafe extern "C" fn \$name\(context:\s*([^,]+),\s*\$\(', text)
+    require(contexts == ["*const JettRuntimeContextV1"],
+            "ordinary leaf macro must retain its exact leading context pointer")
+
+
+def check_struct_replace_symbols(text: str) -> None:
+    definitions = [line.split()[1] for line in text.splitlines()
+                   if len(line.split()) >= 3 and line.split()[0] == STRUCT_REPLACE_EXPORT]
+    require(definitions == ["T"],
+            "StructReplaceOccupied must have exactly one global text definition")
+
+
 def fingerprint_records(directory: Path) -> list[Json]:
     paths = sorted(directory.glob("jett_runtime-*/lib-jett_runtime.json"))
     require(bool(paths), "runtime Cargo fingerprint is missing")
@@ -842,9 +921,11 @@ def checked_msvc_linker_commands(text: str, compiler: Path, linker: Path) -> Non
 
 def measure_msvc_profile(tools: MsvcTools, repo: Path, output: Path, profile: str,
                          environment: dict[str, str], inputs: dict[str, Json],
-                         versions: dict[str, Json], leaves: set[str], private: set[str]) -> dict[str, Json]:
-    target_dir = output / f"{profile}-build"
-    require(not target_dir.exists(), "each private MSVC profile requires a fresh build directory")
+                         versions: dict[str, Json], leaves: set[str], private: set[str], *,
+                         build_cache: Path | None = None) -> dict[str, Json]:
+    target_dir = output / f"{profile}-build" if build_cache is None else build_cache
+    require(build_cache is not None or not target_dir.exists(),
+            "each private MSVC profile requires a fresh build directory unless reuse is explicit")
     require(sources(repo) == inputs, "runtime inputs changed before private archive build")
     command = [str(tools.cargo), "rustc", "--offline", "--locked", "--color", "never", "--verbose",
                "-p", "jett_runtime", "--lib", "--target", MSVC_TARGET, "--target-dir", str(target_dir)]
@@ -857,22 +938,37 @@ def measure_msvc_profile(tools: MsvcTools, repo: Path, output: Path, profile: st
     require(sources(repo) == inputs, "runtime inputs changed during private archive build")
     msvc_selected_cfgs(text, tools.rustc)
     checked_msvc_linker_commands(text, tools.rustc, tools.linker)
+    runtime_commands = [argv for argv in msvc_compiler_commands(text, tools.rustc)
+                        if option_values(argv, "--crate-name") == ["jett_runtime"]]
+    require(len(runtime_commands) == 1, "one actual selected runtime compiler invocation is required")
+    suffixes = [value.removeprefix("extra-filename=-")
+                for value in option_values(runtime_commands[0], "-C")
+                if value.startswith("extra-filename=-")]
+    require(len(suffixes) == 1 and re.fullmatch(r"[a-f0-9]{16}", suffixes[0]) is not None,
+            "actual selected runtime compiler fingerprint identity is missing")
     arguments = msvc_native_libraries(text)
     directory = target_dir / MSVC_TARGET / profile
     archive = directory / "jett_runtime.lib"
     require(archive.is_file() and archive.stat().st_size <= 256 * 1024 * 1024,
             "private archive is missing or exceeds the harness limit")
+    emitted_path = archive
+    if build_cache is not None:
+        archive = snapshot_artifact(archive, output / "artifacts" / profile / "jett_runtime.lib")
     archive_hash = digest(archive)
     symbols = output / f"{profile}-symbols.log"
     text = logged([str(tools.nm), "--defined-only", "--extern-only", "--format=posix", str(archive)],
                   repo, environment, symbols)
     check_symbols(text, leaves, private)
+    check_struct_replace_symbols(text)
     coff = output / f"{profile}-archive-coff.log"
     text = logged([str(tools.readobj), "--file-headers", "--coff-directives", str(archive)],
                   repo, environment, coff)
     checked_coff_archive(text)
     directive_count = len(re.findall(r"^Directive\(s\):", text, re.MULTILINE))
-    fingerprints = msvc_fingerprint_records(directory / ".fingerprint")
+    fingerprints = msvc_fingerprint_records(
+        directory / ".fingerprint",
+        output / "fingerprints" / profile if build_cache is not None else None,
+        selected_filename="jett_runtime-" + suffixes[0])
     require(sources(repo) == inputs, "runtime inputs changed during archive measurement")
     require(digest(archive) == archive_hash, "runtime archive changed during independent measurement")
     checked_msvc_environment(environment, tools.linker)
@@ -881,6 +977,8 @@ def measure_msvc_profile(tools: MsvcTools, repo: Path, output: Path, profile: st
                        "runtime_sources": inputs, "workspace_lock": inputs["Cargo.lock"],
                        "cfgs_selected_package_only": list(CFGS), "actual_build_command": list(command),
                        "cargo_build_log": artifact(build_log), "archive": artifact(archive),
+                       "actual_emitted_archive_path": str(emitted_path),
+                       "actual_emitted_archive_sha256": archive_hash,
                        "build_environment": {name: environment[name] for name in (
                            MSVC_FLAGS_ENV, "CARGO_INCREMENTAL", "CARGO_PROFILE_DEV_DEBUG",
                            "CARGO_PROFILE_RELEASE_DEBUG")},
@@ -906,9 +1004,16 @@ def measure_msvc_profile(tools: MsvcTools, repo: Path, output: Path, profile: st
 
 
 def prepare_msvc(repo: Path, output: Path, nm: str = "llvm-nm", readobj: str = "llvm-readobj",
-                 linker: str = "link.exe") -> tuple[Path, str]:
+                 linker: str = "link.exe", *, cache_root: Path | None = None,
+                 build_target_dir: Path | None = None) -> tuple[Path, str]:
     require(not output.exists(), "preserve immutable measurements: choose a fresh output directory")
+    require((cache_root is None) == (build_target_dir is None),
+            "explicit MSVC cache reuse requires both root and target directory")
+    cache = None
+    if cache_root is not None and build_target_dir is not None:
+        cache = bounded_msvc_build_cache(cache_root, build_target_dir, output)
     checked_layout_wire(repo)
+    checked_struct_replace_leaf(repo)
     leaves, private = export_names(repo)
     checked_measurement_source(repo)
     environment = msvc_build_environment()
@@ -930,19 +1035,25 @@ def prepare_msvc(repo: Path, output: Path, nm: str = "llvm-nm", readobj: str = "
     archives: list[Json] = []
     for profile in ("debug", "release"):
         archives.append(measure_msvc_profile(tools, repo, output, profile, environment,
-                                             inputs, versions, leaves, private))
+                                             inputs, versions, leaves, private, build_cache=cache))
     checked_measurement_source(repo)
     require(sources(repo) == inputs, "runtime inputs changed across matched archive profiles")
+    checked_struct_replace_leaf(repo)
     receipt = output / "receipt.json"
     write_json(receipt, {"version": 1, "scope": "Measured compiler-test MSVC static CRT archives; not Source execution",
                          "archives": archives})
     return receipt, digest(receipt)
 
 def prepare(repo: Path, output: Path, cc: str, nm: str, readelf: str, *,
-            target: str = TARGET, readobj: str = "llvm-readobj", linker: str = "link.exe") -> tuple[Path, str]:
+             target: str = TARGET, readobj: str = "llvm-readobj", linker: str = "link.exe",
+             msvc_cache_root: Path | None = None,
+             msvc_build_target_dir: Path | None = None) -> tuple[Path, str]:
     require(target in (TARGET, MSVC_TARGET), "unsupported archive measurement target")
     if target == MSVC_TARGET:
-        return prepare_msvc(repo, output, nm, readobj, linker)
+        return prepare_msvc(repo, output, nm, readobj, linker, cache_root=msvc_cache_root,
+                            build_target_dir=msvc_build_target_dir)
+    require(msvc_cache_root is None and msvc_build_target_dir is None,
+            "explicit MSVC cache arguments cannot alter GNU measurement")
     require(not output.exists(), "preserve immutable measurements: choose a fresh output directory")
     checked_layout_wire(repo)
     leaves, private = export_names(repo)
@@ -1071,6 +1182,8 @@ def checked_msvc_receipt(row: dict[str, Json], build: dict[str, Json],
     symbols = measured_artifact(crt.get("complete_symbol_inventory"))
     leaves, private = export_names(repo)
     check_symbols(symbols.read_text(encoding="utf-8"), leaves, private)
+    checked_struct_replace_leaf(repo)
+    check_struct_replace_symbols(symbols.read_text(encoding="utf-8"))
 
 def receipt_sources(receipt: Path, expected: str, repo: Path, *, target: str = TARGET) -> None:
     require(target in (TARGET, MSVC_TARGET), "unsupported archive receipt target")
@@ -1302,6 +1415,10 @@ def main() -> None:
     preparation.add_argument("--nm")
     preparation.add_argument("--readobj", default="llvm-readobj")
     preparation.add_argument("--linker", default="link.exe")
+    preparation.add_argument("--msvc-cache-root", type=Path,
+                             help="explicit existing root bounding a reusable MSVC Cargo cache")
+    preparation.add_argument("--msvc-build-target-dir", type=Path,
+                             help="MSVC only: one bounded reusable cache; linked evidence is snapshotted")
     preparation.add_argument("--readelf", default="readelf")
     preparation.add_argument("--github-output", type=Path)
     gate = commands.add_parser("run", help="compile the independently supplied receipt pin and run Source gate")
@@ -1316,9 +1433,13 @@ def main() -> None:
     arguments = parser.parse_args()
     if arguments.command == "prepare":
         nm = arguments.nm or ("llvm-nm" if arguments.target == MSVC_TARGET else "nm")
-        receipt, expected = prepare(arguments.repo.resolve(), arguments.output.resolve(), arguments.cc,
+        measurement_output = (arguments.output if arguments.target == MSVC_TARGET
+                              and arguments.msvc_cache_root is not None else arguments.output.resolve())
+        receipt, expected = prepare(arguments.repo.resolve(), measurement_output, arguments.cc,
                                     nm, arguments.readelf, target=arguments.target,
-                                    readobj=arguments.readobj, linker=arguments.linker)
+                                    readobj=arguments.readobj, linker=arguments.linker,
+                                    msvc_cache_root=arguments.msvc_cache_root,
+                                    msvc_build_target_dir=arguments.msvc_build_target_dir)
         if arguments.github_output is not None:
             require("\n" not in str(receipt) and "\r" not in str(receipt), "receipt path cannot contain a newline")
             with arguments.github_output.open("a", encoding="utf-8", newline="\n") as output:

@@ -52,6 +52,7 @@ use crate::value::{ClosureScopedTypeBinding, ClosureTypeArgument, ClosureTypeCon
 
 pub mod actor_graph;
 mod debug;
+mod field_updates;
 mod generic_inference;
 mod graphics;
 mod interface_arguments;
@@ -633,6 +634,10 @@ struct RegisteredFunction {
 }
 
 pub struct Interpreter {
+    field_update_context: Option<field_updates::FieldUpdateContext>,
+    /// One existing checked entry may start ordinary executable identity.
+    /// Source callees then require their authenticated caller context.
+    field_update_entry_allowed: bool,
     resource_transport: Option<ResourceTransport>,
     retained_resource_program: Option<(
         Arc<jett_typecheck::CheckedResourceProgram>,
@@ -746,6 +751,8 @@ impl Interpreter {
     /// Create a new interpreter with an empty global scope.
     pub fn new() -> Self {
         Self {
+            field_update_context: None,
+            field_update_entry_allowed: false,
             resource_transport: None,
             retained_resource_program: None,
             scopes: vec![HashMap::new()],
@@ -912,6 +919,9 @@ impl Interpreter {
     // -- Scope management ---------------------------------------------------
 
     fn push_scope(&mut self) {
+        if let Some(context) = &mut self.field_update_context {
+            context.push_scope();
+        }
         if let Some(transport) = &mut self.resource_transport {
             transport.push_scope();
         }
@@ -921,6 +931,9 @@ impl Interpreter {
     }
 
     fn pop_scope(&mut self) {
+        if let Some(context) = &mut self.field_update_context {
+            context.pop_scope();
+        }
         if let Some(transport) = &mut self.resource_transport {
             transport.pop_scope();
         }
@@ -930,6 +943,11 @@ impl Interpreter {
     }
 
     fn set_variable(&mut self, name: &str, value: Value) {
+        if let Some(context) = &mut self.field_update_context
+            && let Some(index) = self.scopes.len().checked_sub(1)
+        {
+            context.notice_write(index, name);
+        }
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name.to_string(), value);
         }
@@ -1002,6 +1020,9 @@ impl Interpreter {
                     value
                 };
                 self.scopes[index].insert(name.to_string(), value);
+                if let Some(context) = &mut self.field_update_context {
+                    context.notice_write(index, name);
+                }
                 return Ok(());
             }
         }
@@ -2326,42 +2347,66 @@ impl Interpreter {
         {
             return self.exec_checked_resource_type_bind(bind);
         }
-        let bound_type_expr = if let Some(bound_type_expr) = comptime_type_info_binding(&bind.value)
+        let prepared_field_scope = self.checked_field_scope_body(bind)?;
+        let (bound_type_expr, bound_type, reflection, checked_scope) = if let Some((
+            _,
+            projection,
+            reflection,
+        )) = &prepared_field_scope
         {
-            self.substitute_type_expr(bound_type_expr)
-        } else if let Some((source_ty, index)) = comptime_type_arg_binding(&bind.value) {
-            let source_ty = self.substitute_type_expr(source_ty);
-            self.with_resolved_type_aliases(|interpreter| {
-                interpreter
-                    .checked_type_info_arg_types(&source_ty)
-                    .unwrap_or_else(|| interpreter.type_info_arg_types(&source_ty))
-            })
-            .get(index)
-            .cloned()
-            .ok_or_else(|| {
-                format!(
-                    "`comptime type` type.arg index {index} is out of range for type '{}'",
-                    type_expr_display(&source_ty)
-                )
-            })?
-        } else if let Some(field_name) = reflected_field_type_info_binding(&bind.value) {
-            self.bound_reflected_field_type(field_name)?
-        } else if let Some(info_name) = reflected_type_info_binding(&bind.value) {
-            self.bound_reflected_type_info_type(info_name)?
+            let expression =
+                Self::simple_type_expr_from_name(&reflection.type_name, bind.value.span())
+                    .ok_or("checked field scope has no canonical interpreter syntax")?;
+            (
+                expression,
+                projection.bound_type.clone(),
+                Some(reflection.clone()),
+                Some(projection.clone()),
+            )
         } else {
-            return Err("`comptime type` currently requires a direct `type.info[T]()` initializer or trusted reflected metadata".to_string());
+            let bound_type_expr = if let Some(bound_type_expr) =
+                comptime_type_info_binding(&bind.value)
+            {
+                self.substitute_type_expr(bound_type_expr)
+            } else if let Some((source_ty, index)) = comptime_type_arg_binding(&bind.value) {
+                let source_ty = self.substitute_type_expr(source_ty);
+                self.with_resolved_type_aliases(|interpreter| {
+                    interpreter
+                        .checked_type_info_arg_types(&source_ty)
+                        .unwrap_or_else(|| interpreter.type_info_arg_types(&source_ty))
+                })
+                .get(index)
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "`comptime type` type.arg index {index} is out of range for type '{}'",
+                        type_expr_display(&source_ty)
+                    )
+                })?
+            } else if let Some(field_name) = reflected_field_type_info_binding(&bind.value) {
+                self.bound_reflected_field_type(field_name)?
+            } else if let Some(info_name) = reflected_type_info_binding(&bind.value) {
+                self.bound_reflected_type_info_type(info_name)?
+            } else {
+                return Err("`comptime type` currently requires a direct `type.info[T]()` initializer or trusted reflected metadata".to_string());
+            };
+            let (bound_type, reflection, checked_scope) =
+                self.with_resolved_type_aliases(|interpreter| {
+                    let bound_type = interpreter.resolved_concrete_type_display(&bound_type_expr);
+                    let reflection = Some(interpreter.reflection_type_argument(&bound_type_expr)?);
+                    let checked_scope = interpreter.checked_scoped_types(
+                        bind.span,
+                        &bound_type,
+                        reflection.as_ref(),
+                    )?;
+                    Ok::<_, String>((bound_type, reflection, checked_scope))
+                })?;
+            (bound_type_expr, bound_type, reflection, checked_scope)
         };
-        let (bound_type, reflection, checked_scope) =
-            self.with_resolved_type_aliases(|interpreter| {
-                let bound_type = interpreter.resolved_concrete_type_display(&bound_type_expr);
-                let reflection = Some(interpreter.reflection_type_argument(&bound_type_expr)?);
-                let checked_scope = interpreter.checked_scoped_types(
-                    bind.span,
-                    &bound_type,
-                    reflection.as_ref(),
-                )?;
-                Ok::<_, String>((bound_type, reflection, checked_scope))
-            })?;
+        let field_body = prepared_field_scope
+            .as_ref()
+            .map(|(reference, _, _)| reference);
+        let saved_field_cursor = self.enter_checked_field_body(field_body)?;
         let saved_checked_scope = std::mem::replace(&mut self.active_checked_scope, checked_scope);
         self.scoped_type_bindings.push(ClosureScopedTypeBinding {
             name: bind.name.name.clone(),
@@ -2375,7 +2420,11 @@ impl Interpreter {
         self.active_checked_scope = saved_checked_scope;
         self.scoped_type_bindings.pop();
         self.type_arg_scopes.pop();
-        result
+        let field_restore = self.restore_checked_field_body(saved_field_cursor);
+        match (result, field_restore) {
+            (Err(error), _) | (_, Err(error)) => Err(error),
+            (Ok(value), Ok(())) => Ok(value),
+        }
     }
 
     fn checked_expression_type(&self, span: Span) -> Option<&String> {
@@ -4394,6 +4443,7 @@ impl Interpreter {
                 };
                 let val = self.normalize_value_for_resolved_type(&declared_ty, val)?;
                 self.set_variable_with_type(&decl.name.name, val, declared_ty);
+                self.install_checked_field_binding(&decl.name)?;
                 Ok(None)
             }
 
@@ -4407,6 +4457,9 @@ impl Interpreter {
                     && self.resource_type_at(assign.target.span())?
                 {
                     return self.exec_resource_assignment(assign);
+                }
+                if field_updates::is_projected_target(&assign.target) {
+                    return self.exec_checked_field_assignment(assign);
                 }
                 let val = match self.eval_expr_flow(&assign.value)? {
                     ExprFlow::Value(value) => value,
@@ -5157,6 +5210,8 @@ impl Interpreter {
         }
 
         // An actor handler is a separate lexical call frame.
+        // Its real original handler-origin/ownership adapter is still pending.
+        let saved_field_cursor = self.enter_checked_field_body(None)?;
         let scope_base = self.scopes.len();
         let saved_floor = std::mem::replace(&mut self.lexical_scope_floor, scope_base);
         self.push_scope();
@@ -5228,7 +5283,11 @@ impl Interpreter {
             self.pop_scope();
         }
         self.lexical_scope_floor = saved_floor;
-        let (mut respond_value, updated_state) = outcome?;
+        let field_restore = self.restore_checked_field_body(saved_field_cursor);
+        let (mut respond_value, updated_state) = match (outcome, field_restore) {
+            (Err(error), _) | (_, Err(error)) => return Err(error),
+            (Ok(value), Ok(())) => value,
+        };
 
         // Write updated state back to the actor instance.
         if let Some(instance) = self.actor_instances.get_mut(&actor_id) {
@@ -12651,7 +12710,9 @@ impl Interpreter {
             .registry_name(&self.functions, name)
             .unwrap_or_else(|| name.to_string());
         let source_types = vec![None; args.len()];
+        let previous_field_entry = std::mem::replace(&mut self.field_update_entry_allowed, true);
         let result = self.call_function_from_source(&runtime_name, &[], args, Some(&source_types));
+        self.field_update_entry_allowed = previous_field_entry;
         self.current_namespace = saved_namespace;
         result
     }
@@ -12850,7 +12911,8 @@ impl Interpreter {
             } else {
                 None
             };
-        let func = registered.definition;
+        let registered_definition = registered.definition.clone();
+        let func = registered_definition.as_ref();
 
         if args.len() != func.params.len() {
             return Err(format!(
@@ -12883,6 +12945,19 @@ impl Interpreter {
                 .map_err(|error| format!("{resolved_name}: {error}"))?,
             None => None,
         };
+        let field_body = self.prepare_checked_field_function(
+            &resolved_name,
+            &registered.namespace,
+            func,
+            expression_types.as_deref(),
+            &captured_arguments,
+            source_types.is_some(),
+        )?;
+        let func = match &field_body {
+            Some(reference) => reference.function().map_err(|error| error.to_string())?,
+            None => func,
+        };
+        let saved_field_cursor = self.enter_checked_field_body(field_body.as_ref())?;
         let saved_expression_types =
             std::mem::replace(&mut self.active_checked_function, expression_types);
         let saved_type_arguments = std::mem::replace(&mut self.current_type_arguments, arguments);
@@ -12921,6 +12996,7 @@ impl Interpreter {
                 let arg =
                     self.normalize_and_validate_value_from_source(&param_ty, arg, source_type)?;
                 self.set_variable_with_type(&param.name.name, arg, param_ty);
+                self.install_checked_field_binding(&param.name)?;
             }
 
             let result = self.exec_block_inner(&func.body)?;
@@ -12967,7 +13043,11 @@ impl Interpreter {
         self.current_namespace = saved_namespace;
         self.current_function_trusted_stdlib = saved_trusted_stdlib;
         self.active_reflected_capture_origin = saved_capture_origin;
-        call_result
+        let field_restore = self.restore_checked_field_body(saved_field_cursor);
+        match (call_result, field_restore) {
+            (Err(error), _) | (_, Err(error)) => Err(error),
+            (Ok(value), Ok(())) => Ok(value),
+        }
     }
 
     fn type_scope_for_function(
@@ -13259,6 +13339,7 @@ impl Interpreter {
                 self.call_registered_function_from_source(&name, &[], args, source_types)
             }
             source @ Value::Function { .. } => {
+                let field_body = self.prepare_checked_field_inline(&source)?;
                 let original_capture_origin = match &source {
                     Value::Function { body, .. }
                         if crate::value::body_may_mint_inline_function(body) =>
@@ -13290,6 +13371,12 @@ impl Interpreter {
                 else {
                     unreachable!("inline call matched its function value above");
                 };
+                let (execution_params, execution_body) = match &field_body {
+                    Some(reference) => reference
+                        .field_inline_parts()
+                        .map_err(|error| error.to_string())?,
+                    None => (params.as_slice(), &body),
+                };
                 if args.len() != params.len() {
                     return Err(format!(
                         "inline function expects {} argument(s), got {}",
@@ -13301,6 +13388,7 @@ impl Interpreter {
                     &mut self.active_reflected_capture_origin,
                     original_capture_origin,
                 );
+                let saved_field_cursor = self.enter_checked_field_body(field_body.as_ref())?;
                 let saved_expression_types = std::mem::replace(
                     &mut self.active_checked_function,
                     type_context.checked_function,
@@ -13347,7 +13435,7 @@ impl Interpreter {
                 self.allow_checked_refinement_proofs &= source_types.is_some();
                 let source_types = source_types.filter(|_| self.allow_checked_refinement_proofs);
                 let result = (|| {
-                    for (index, (param, arg)) in params.iter().zip(args).enumerate() {
+                    for (index, (param, arg)) in execution_params.iter().zip(args).enumerate() {
                         let param_ty = self.substitute_type_expr(&param.ty);
                         let source_type = source_types
                             .and_then(|types| types.get(index))
@@ -13358,22 +13446,23 @@ impl Interpreter {
                             source_type,
                         )?;
                         self.set_variable_with_type(&param.name.name, arg, param_ty);
+                        self.install_checked_field_binding(&param.name)?;
                     }
-                    let (mut value, return_source_type) = match self.exec_block_inner(&body)? {
-                        Some(Signal::Return(value, source_type)) => (value, source_type),
-                        Some(Signal::ResourceReturn(..) | Signal::ResourceDefault(..)) => {
-                            return Err(
+                    let (mut value, return_source_type) =
+                        match self.exec_block_inner(execution_body)? {
+                            Some(Signal::Return(value, source_type)) => (value, source_type),
+                            Some(Signal::ResourceReturn(..) | Signal::ResourceDefault(..)) => {
+                                return Err(
                                 "captured Resource return has no checked custody transport proof"
                                     .to_string(),
                             );
-                        }
-                        Some(Signal::Default(_)) => {
-                            return Err(
-                                "`default` can only be used inside a `handle` block".to_string()
-                            );
-                        }
-                        _ => (Value::Nothing, None),
-                    };
+                            }
+                            Some(Signal::Default(_)) => {
+                                return Err("`default` can only be used inside a `handle` block"
+                                    .to_string());
+                            }
+                            _ => (Value::Nothing, None),
+                        };
                     if let Some(return_type) = &type_context.return_type {
                         let return_type = self.substitute_type_expr(return_type);
                         let source_type = source_types.and(return_source_type.as_deref());
@@ -13403,7 +13492,11 @@ impl Interpreter {
                 self.current_type_arguments = saved_type_arguments;
                 self.active_checked_function = saved_expression_types;
                 self.active_reflected_capture_origin = saved_capture_origin;
-                result
+                let field_restore = self.restore_checked_field_body(saved_field_cursor);
+                match (result, field_restore) {
+                    (Err(error), _) | (_, Err(error)) => Err(error),
+                    (Ok(value), Ok(())) => Ok(value),
+                }
             }
             other => Err(format!("expected function value, got {other}")),
         }

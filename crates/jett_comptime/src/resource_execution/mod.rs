@@ -20,9 +20,9 @@ pub use checked::{
 };
 pub(crate) use checked::{
     CheckedAttemptKey, CheckedBodyCursor, CheckedBodyReference, CheckedExecution,
-    CheckedInvocation, FunctionInvocation, PreparedAbsentBindings, PreparedIntrinsicArguments,
-    PreparedOwnedStruct, PreparedPipelineStep, PreparedReflectedFieldIteration,
-    PreparedReflectedFieldLoop, PreparedRequiredExpression,
+    CheckedInvocation, FunctionInvocation, PreparedAbsentBindings, PreparedFieldAssignment,
+    PreparedFieldBinding, PreparedIntrinsicArguments, PreparedOwnedStruct, PreparedPipelineStep,
+    PreparedReflectedFieldIteration, PreparedReflectedFieldLoop, PreparedRequiredExpression,
 };
 pub(crate) use custody::{
     EvaluatedValue, FrameId, OwnerHolder, OwnerLedger, PayloadStep, ValueCustody,

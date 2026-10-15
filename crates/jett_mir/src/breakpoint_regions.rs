@@ -1059,7 +1059,8 @@ fn float_block(block: &mut BasicBlock, bits: &mut Vec<u64>) {
             | StatementKind::CheckRefinement { call: value, .. }
             | StatementKind::Evaluate(value)
             | StatementKind::HandleDefault(value) => float_expression(value, bits),
-            StatementKind::Assign { target, value } => {
+            StatementKind::Assign { target, value }
+            | StatementKind::UpdateField { target, value, .. } => {
                 float_expression(target, bits);
                 float_expression(value, bits);
             }
@@ -1087,6 +1088,7 @@ fn float_block(block: &mut BasicBlock, bits: &mut Vec<u64>) {
             | StatementKind::ResourceLexicalExit(_)
             | StatementKind::OpenCallOwnerGeneration { .. }
             | StatementKind::ReplaceCallOwnerGeneration { .. }
+            | StatementKind::PrepareFieldUpdate { .. }
             | StatementKind::CloseCallOwnerGeneration { .. }
             | StatementKind::EndCallView { .. }
             | StatementKind::ReflectedContainerReady { .. }
@@ -1229,7 +1231,7 @@ fn float_hir_block(block: &mut hir::Block, bits: &mut Vec<u64>) {
             | H::HandleDefault(value)
             | H::Expression(value)
             | H::Respond(value) => float_expression(value, bits),
-            H::Assign { target, value } => {
+            H::Assign { target, value } | H::UpdateField { target, value, .. } => {
                 float_expression(target, bits);
                 float_expression(value, bits);
             }

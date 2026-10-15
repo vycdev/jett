@@ -243,6 +243,7 @@ fn resource_intrinsic_packet_rejects_missing_records_counts_ids_shapes_and_unres
                 }
             }
             let facts = BodyFacts {
+                assignment_places: original.assignment_places,
                 calls: &calls,
                 bindings: original.bindings,
                 types: original.types,

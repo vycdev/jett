@@ -1616,6 +1616,31 @@ fn shape(
     })
 }
 
+/// Exact original/current ordinal membership only; no runtime Resource grant.
+pub(super) fn validate_field_update_scope(
+    function: &Function,
+    scope: &hir::RequiredScopeIdentity,
+    binding: &hir::ScopedTypeBinding,
+) -> Result<(), String> {
+    let witness = function
+        .resource_lowering
+        .as_ref()
+        .ok_or("field update reflected scope lacks its original checked ordinal archive")?;
+    witness.current(function)?;
+    if witness
+        .reflected_fields
+        .iter()
+        .filter(|row| row.matches_field_update_scope(scope, binding))
+        .count()
+        != 1
+    {
+        return Err(
+            "field update reflected scope is not its exact original checked ordinal body".into(),
+        );
+    }
+    Ok(())
+}
+
 pub(super) fn has_records(function: &Function) -> bool {
     function.resource_lowering.is_some()
 }

@@ -170,7 +170,7 @@ fn same_slice<T>(left: &[T], right: &[T]) -> bool {
     left.len() == right.len() && (left.is_empty() || std::ptr::eq(left.as_ptr(), right.as_ptr()))
 }
 
-fn intrinsic_records<'a>(
+pub(super) fn intrinsic_records<'a>(
     facts: &BodyFacts<'a>,
     invocation: &CheckedInvocation,
     arity: usize,

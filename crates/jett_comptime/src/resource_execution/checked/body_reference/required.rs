@@ -111,6 +111,21 @@ impl CheckedExecution {
         cursor: &CheckedBodyCursor,
     ) -> Result<CheckedAttemptKey, ResourceExecutionError> {
         self.validate_executable_cursor(cursor)?;
+        self.attempt_key_after_identity(cursor)
+    }
+
+    pub(super) fn field_attempt_key(
+        &self,
+        cursor: &CheckedBodyCursor,
+    ) -> Result<CheckedAttemptKey, ResourceExecutionError> {
+        self.validate_field_executable_cursor(cursor)?;
+        self.attempt_key_after_identity(cursor)
+    }
+
+    fn attempt_key_after_identity(
+        &self,
+        cursor: &CheckedBodyCursor,
+    ) -> Result<CheckedAttemptKey, ResourceExecutionError> {
         let executable = cursor
             .executable
             .as_ref()
@@ -483,6 +498,10 @@ impl CheckedExecution {
     ) -> Result<CheckedAttemptKey, ResourceExecutionError> {
         self.original_assignment(assignment)?;
         self.attempt_key(&self.body)
+    }
+
+    pub(super) fn field_body_key(&self) -> Result<CheckedAttemptKey, ResourceExecutionError> {
+        self.field_attempt_key(&self.body)
     }
 
     pub(crate) fn original_comptime_key(

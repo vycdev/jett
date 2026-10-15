@@ -1092,6 +1092,9 @@ class MsvcReceiptTests(unittest.TestCase):
         runtime = root / "crates/jett_runtime"
         resource = runtime / "src/native_abi/resource"
         copy_resource_export_fixture(root)
+        ordinary_values = runtime / "src/native_abi/values.rs"
+        ordinary_values.write_bytes(
+            (measure.ROOT / "crates/jett_runtime/src/native_abi/values.rs").read_bytes())
         leaves, private = measure.export_names(measure.ROOT)
         for path, names in ((resource / "test_archive_api.rs", private),):
             path.write_text("\n".join(f'pub unsafe extern "C" fn {name}() {{}}' for name in sorted(names)),
@@ -1124,7 +1127,8 @@ class MsvcReceiptTests(unittest.TestCase):
                 encoding="utf-8")
             symbols = root / f"{profile}-symbols.log"
             symbols.write_text("runtime.lib(runtime.o):\n" + "\n".join(
-                f"{name} T 0 10" for name in sorted(leaves | private | {"main"})), encoding="utf-8")
+                f"{name} T 0 10" for name in sorted(
+                    leaves | private | {"main", measure.STRUCT_REPLACE_EXPORT})), encoding="utf-8")
             coff = root / f"{profile}-coff.log"
             coff.write_text(MsvcObservationTests.coff_observation(), encoding="utf-8")
             build = root / f"{profile}-build.json"
@@ -1719,6 +1723,257 @@ class MsvcLinkerVersionTests(unittest.TestCase):
                 if not isinstance(observed, dict):
                     self.fail("toolchain version observation must be an object")
                 self.assertEqual(observed["returncode"], 0)
+
+class BoundedMsvcCacheTests(unittest.TestCase):
+    def test_new_and_existing_caches_are_strict_siblings_of_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            cache, evidence = root / "cache", root / "evidence"
+            self.assertEqual(measure.bounded_msvc_build_cache(root, cache, evidence), cache)
+            self.assertFalse(cache.exists(), "path validation must not allocate a build cache")
+            cache.mkdir()
+            self.assertEqual(measure.bounded_msvc_build_cache(root, cache, evidence), cache)
+
+    def test_relative_missing_escape_alias_and_overlapping_paths_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            cache, evidence = root / "cache", root / "evidence"
+            invalid = [
+                (Path("relative-root"), cache, evidence),
+                (root, Path("relative-cache"), evidence),
+                (root, cache, Path("relative-evidence")),
+                (root / "missing", root / "missing/cache", root / "missing/evidence"),
+                (root, root.parent / "escaped-cache", evidence),
+                (root, root / ".." / "escaped-cache", evidence),
+                (root, cache, root.parent / "escaped-evidence"),
+                (root, root, evidence),
+                (root, cache, root),
+                (root, cache, cache),
+                (root, cache, cache / "evidence"),
+                (root, evidence / "cache", evidence),
+            ]
+            for arguments in invalid:
+                with self.subTest(arguments=arguments), self.assertRaises(measure.MeasurementError):
+                    measure.bounded_msvc_build_cache(*arguments)
+            cache.write_bytes(b"a regular file cannot be a cache")
+            with self.assertRaises(measure.MeasurementError):
+                measure.bounded_msvc_build_cache(root, cache, evidence)
+
+    def test_symlink_ancestors_cannot_supply_a_bounded_cache_or_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            actual = root / "actual"
+            actual.mkdir()
+            alias = root / "alias"
+            try:
+                alias.symlink_to(actual, target_is_directory=True)
+            except (OSError, NotImplementedError) as error:
+                self.skipTest(f"directory symlinks unavailable: {error}")
+            for arguments in ((root, alias / "cache", root / "evidence"),
+                              (root, root / "cache", alias / "evidence"),
+                              (alias, alias / "cache", alias / "evidence")):
+                with self.subTest(arguments=arguments), self.assertRaises(measure.MeasurementError):
+                    measure.bounded_msvc_build_cache(*arguments)
+
+    def test_prepare_cli_preserves_raw_output_ancestry_for_actual_cache_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            actual = root / "actual-evidence"
+            actual.mkdir()
+            alias = root / "alias-evidence"
+            try:
+                alias.symlink_to(actual, target_is_directory=True)
+            except (OSError, NotImplementedError) as error:
+                self.skipTest(f"directory symlinks unavailable: {error}")
+            cache, output = root / "cache", alias / "proof"
+            # Canonicalizing first would hide the prohibited symlink ancestor.
+            self.assertEqual(measure.bounded_msvc_build_cache(root, cache, output.resolve()), cache)
+            received: list[Path] = []
+
+            def validate_received_paths(repo: Path, evidence: Path, cc: str, nm: str,
+                                        readelf: str, *, target: str, readobj: str,
+                                        linker: str, msvc_cache_root: Path | None,
+                                        msvc_build_target_dir: Path | None) -> tuple[Path, str]:
+                self.assertEqual(target, measure.MSVC_TARGET)
+                if msvc_cache_root is None or msvc_build_target_dir is None:
+                    self.fail("CLI lost its explicit cache boundary arguments")
+                received.append(evidence)
+                measure.bounded_msvc_build_cache(msvc_cache_root, msvc_build_target_dir, evidence)
+                raise AssertionError("CLI erased the output ancestry before real validation")
+
+            arguments = ["measure_resource_native_archives.py", "prepare", "--repo", str(root),
+                         "--output", str(output), "--target", measure.MSVC_TARGET,
+                         "--msvc-cache-root", str(root), "--msvc-build-target-dir", str(cache)]
+            with patch("sys.argv", arguments), \
+                 patch.object(measure, "prepare", side_effect=validate_received_paths) as prepare:
+                with self.assertRaises(measure.MeasurementError):
+                    measure.main()
+            prepare.assert_called_once()
+            self.assertEqual(received, [output])
+            self.assertFalse(cache.exists())
+            self.assertFalse(output.exists())
+
+
+class ImmutableMsvcSnapshotTests(unittest.TestCase):
+    def test_exclusive_snapshot_retains_bytes_and_hash_after_source_reuse(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source, destination = root / "runtime.lib", root / "proof/runtime.lib"
+            source.write_bytes(b"first measured archive\x00\xff")
+            expected = measure.artifact(source)
+            self.assertEqual(measure.snapshot_artifact(source, destination), destination)
+            self.assertEqual(source.read_bytes(), destination.read_bytes())
+            self.assertEqual(measure.digest(destination), expected["sha256"])
+            source.write_bytes(b"next cache build")
+            self.assertEqual(destination.read_bytes(), b"first measured archive\x00\xff")
+            self.assertEqual(measure.digest(destination), expected["sha256"])
+            with self.assertRaises(measure.MeasurementError):
+                measure.snapshot_artifact(source, destination)
+            self.assertEqual(destination.read_bytes(), b"first measured archive\x00\xff")
+            with self.assertRaises(measure.MeasurementError):
+                measure.snapshot_artifact(source, source)
+            with self.assertRaises(measure.MeasurementError):
+                measure.snapshot_artifact(root / "absent.lib", root / "absent-copy.lib")
+
+    def test_source_change_during_real_copy_cannot_produce_a_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source, destination = root / "runtime.lib", root / "proof/runtime.lib"
+            source.write_bytes(b"original archive")
+            copy_bytes = measure.shutil.copyfileobj
+
+            def copy_then_change(reader: BinaryIO, writer: BinaryIO, length: int = 0) -> None:
+                copy_bytes(reader, writer, length)
+                source.write_bytes(b"changed while copying")
+
+            with patch.object(measure.shutil, "copyfileobj", side_effect=copy_then_change):
+                with self.assertRaises(measure.MeasurementError):
+                    measure.snapshot_artifact(source, destination)
+            self.assertEqual(source.read_bytes(), b"changed while copying")
+
+    def test_copied_fingerprint_preserves_raw_json_and_measured_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            directory, snapshots = root / "cache", root / "evidence"
+            fingerprint = directory / "jett_runtime-real/lib-jett_runtime.json"
+            fingerprint.parent.mkdir(parents=True)
+            raw = json.dumps({"rustflags": list(measure.MSVC_RUSTFLAGS), "profile": 42},
+                             indent=3) + "\n"
+            fingerprint.write_bytes(raw.encode("utf-8"))
+            copied = snapshots / fingerprint.parent.name / fingerprint.name
+            records = measure.msvc_fingerprint_records(directory, snapshots)
+            self.assertEqual(records, [{**measure.artifact(copied), "raw_json_utf8": raw}])
+            self.assertEqual(copied.read_bytes(), fingerprint.read_bytes())
+            fingerprint.write_bytes(b'{"rustflags":[]}')
+            self.assertEqual(copied.read_bytes(), raw.encode("utf-8"))
+            self.assertEqual(records[0], {**measure.artifact(copied), "raw_json_utf8": raw})
+            with self.assertRaises(measure.MeasurementError):
+                measure.msvc_fingerprint_records(directory, root / "invalid-evidence")
+
+    def test_fingerprint_validation_applies_to_the_immutable_copied_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            directory = root / "cache"
+            fingerprint = directory / "jett_runtime-real/lib-jett_runtime.json"
+            fingerprint.parent.mkdir(parents=True)
+            fingerprint.write_text(json.dumps({"rustflags": list(measure.MSVC_RUSTFLAGS)}),
+                                   encoding="utf-8")
+            snapshot = measure.snapshot_artifact
+
+            def snapshot_changed_flags(source: Path, destination: Path) -> Path:
+                source.write_bytes(b'{"rustflags":[]}')
+                return snapshot(source, destination)
+
+            with patch.object(measure, "snapshot_artifact", side_effect=snapshot_changed_flags):
+                with self.assertRaises(measure.MeasurementError):
+                    measure.msvc_fingerprint_records(directory, root / "evidence")
+
+    def test_selected_compiler_fingerprint_excludes_stale_cache_variants(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            directory = root / "cache"
+            fingerprint = directory / "jett_runtime-0123456789abcdef/lib-jett_runtime.json"
+            fingerprint.parent.mkdir(parents=True)
+            fingerprint.write_text(json.dumps({"rustflags": list(measure.MSVC_RUSTFLAGS)}),
+                                   encoding="utf-8")
+            stale = directory / "jett_runtime-fedcba9876543210/lib-jett_runtime.json"
+            stale.parent.mkdir()
+            stale.write_bytes(b'{"rustflags":[]}')
+            snapshots = root / "evidence"
+            records = measure.msvc_fingerprint_records(
+                directory, snapshots, selected_filename="jett_runtime-0123456789abcdef")
+            copied = snapshots / fingerprint.parent.name / fingerprint.name
+            self.assertEqual(records, [{**measure.artifact(copied),
+                                       "raw_json_utf8": fingerprint.read_text(encoding="utf-8")}])
+            self.assertFalse((snapshots / stale.parent.name).exists())
+            for selected in ("jett_runtime-1111111111111111", "../0123456789abcdef",
+                             "-0123456789abcdef", "", "*", "/absolute"):
+                with self.subTest(selected=selected), self.assertRaises(measure.MeasurementError):
+                    measure.msvc_fingerprint_records(directory, selected_filename=selected)
+
+
+class StructReplaceMeasurementTests(unittest.TestCase):
+    source = '''macro_rules! leaves {
+    ($( $variant:ident, $name:ident, $cleanup:literal, ($($arg:ident: $rust:ty => $abi:ident),*), $ret:ty => $retabi:ident, $body:expr; )*) => {
+        pub fn parameters(self) -> &'static [AbiScalar] { match self { $( Self::$variant => &[AbiScalar::Pointer, $( AbiScalar::$abi, )*], )* } }
+        pub unsafe extern "C" fn $name(context: *const JettRuntimeContextV1, $( $arg: $rust ),*) -> $ret {
+            leaf(context, $cleanup, $body)
+        }
+    }
+}
+leaves! {
+    StructReplaceOccupied, jett_rt_v1_struct_replace_occupied, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, owned: u32 => I32, depth: u64 => I64), u64 => I64,
+        |s| { if owned > 1 { return Err(INVALID_STRUCT); }
+            Ok(s.replace_struct_field(value, index, NativeField { bits, owned: owned != 0, pending_depth: depth })?.bits) };
+}
+'''
+
+    def test_only_exact_ordinary_replace_signature_and_context_are_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            values = root / "crates/jett_runtime/src/native_abi/values.rs"
+            values.parent.mkdir(parents=True)
+            values.write_text(self.source, encoding="utf-8")
+            measure.checked_struct_replace_leaf(root)
+            invalid = [
+                self.source.replace("leaves! {", "unused! {"),
+                self.source.replace("    StructReplaceOccupied,", "/*\n    StructReplaceOccupied,")
+                    .replace("        |s| {", "*/\n        |s| {"),
+                self.source.replace("StructReplaceOccupied,", "AnotherVariant,"),
+                self.source.replace("jett_rt_v1_struct_replace_occupied,", "jett_rt_v1_foreign,"),
+                self.source.replace("occupied, false,", "occupied, true,"),
+                self.source.replace("value: u64 => I64", "value: u32 => I64"),
+                self.source.replace("index: u64 => I64", "index: u64 => I32"),
+                self.source.replace("bits: u64 => I64", "bits: u32 => I32"),
+                self.source.replace("owned: u32 => I32", "owned: u64 => I64"),
+                self.source.replace("depth: u64 => I64", "depth: u32 => I64"),
+                self.source.replace("owned: u32 => I32, depth: u64 => I64",
+                                    "depth: u64 => I64, owned: u32 => I32"),
+                self.source.replace(", depth: u64 => I64", ""),
+                self.source.replace("), u64 => I64,", "), u32 => I32,"),
+                self.source.replace("context: *const JettRuntimeContextV1", "context: u64"),
+                self.source.replace("context: *const JettRuntimeContextV1",
+                                    "context: *mut JettRuntimeContextV1"),
+                self.source + self.source,
+            ]
+            row = next(line for line in self.source.splitlines()
+                       if line.strip().startswith("StructReplaceOccupied,"))
+            invalid.append(self.source.replace(row + "\n", "") + row + "\n")
+            for text in invalid:
+                values.write_text(text, encoding="utf-8")
+                with self.subTest(source=text), self.assertRaises(measure.MeasurementError):
+                    measure.checked_struct_replace_leaf(root)
+
+    def test_replace_requires_one_exact_global_text_symbol(self) -> None:
+        symbol = "jett_rt_v1_struct_replace_occupied"
+        valid = f"archive[member.o]:\n{symbol} T 0 10\nother_leaf T 0 10\n"
+        measure.check_struct_replace_symbols(valid)
+        for text in ("", valid.replace(symbol, symbol + "_foreign"),
+                     valid + f"{symbol} T 0 10\n", valid.replace(f"{symbol} T", f"{symbol} D"),
+                     valid.replace(f"{symbol} T", f"{symbol} W")):
+            with self.subTest(symbols=text), self.assertRaises(measure.MeasurementError):
+                measure.check_struct_replace_symbols(text)
+
 
 if __name__ == "__main__":
     unittest.main()

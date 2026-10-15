@@ -741,7 +741,8 @@ impl Coercions<'_> {
                 StatementKind::Let { local, value } => {
                     self.expected(value, self.locals[local.index() as usize], handled)
                 }
-                StatementKind::Assign { target, value } => {
+                StatementKind::Assign { target, value }
+                | StatementKind::UpdateField { target, value, .. } => {
                     self.expression(target, handled);
                     self.expected(value, target.ty, handled);
                 }

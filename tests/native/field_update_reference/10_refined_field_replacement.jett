@@ -1,0 +1,18 @@
+namespace app
+type NonZero = int64 where value != 0
+struct Record:
+    divisor: NonZero
+    label: string
+function report() returns string:
+    NonZero initial = 2 handle error:
+        return error
+    NonZero replacement = 5 handle error:
+        return error
+    mutable Record record = Record(divisor: initial, label: "stable") handle error:
+        return error
+    record.divisor = replacement
+    return "{10 / record.divisor}:{record.label}"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "{report()}\n")
+verify whole_refined_field:
+    assert report() == "2:stable"

@@ -67,6 +67,24 @@ impl PartialEq for ReflectedFieldDispatchProof {
 impl Eq for ReflectedFieldDispatchProof {}
 
 impl ReflectedFieldDispatchProof {
+    /// Read-only membership in one exact original checked ordinal body. This
+    /// observes no runtime metadata and supplies no Resource custody/provider.
+    pub fn matches_field_update_scope(
+        &self,
+        scope: &crate::RequiredScopeIdentity,
+        binding: &crate::ScopedTypeBinding,
+    ) -> bool {
+        let CheckedComptimeTypeSelection::ReflectedIteration(ordinal) = scope.selection else {
+            return false;
+        };
+        self.data.binding_span == scope.owner
+            && self.validate_original()
+            && self.data.selected.get(ordinal).is_some_and(|selected| {
+                selected.checked_index == scope.index
+                    && selected.bound_type == binding.ty
+                    && selected.reflection == binding.reflection
+            })
+    }
     pub fn function(&self) -> FunctionId {
         self.data.function
     }

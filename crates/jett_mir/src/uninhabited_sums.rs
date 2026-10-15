@@ -112,6 +112,7 @@ pub fn prepare_native_uninhabited_sums(program: &mut Program, types: &TypeIntern
         let before = (crate::resource_ownership::has_records(function)
             || function.reflected_callable.is_some()
             || crate::ordinary_borrowed_sums::has_records(function)
+            || crate::field_updates::has_records(function)
             || !function.breakpoint_regions.is_empty()
             || crate::call_owner_generations::has_records(function))
         .then(|| function.clone());
@@ -189,7 +190,9 @@ pub fn prepare_native_uninhabited_sums(program: &mut Program, types: &TypeIntern
             // Every nested tag has its own checked source type, so one scan
             // selects all eligible arms before a single dense compaction.
             let regions_valid = before.as_ref().is_none_or(|before| {
-                crate::call_owner_generations::sum_transition(function, before, types).is_ok()
+                crate::field_updates::sum_transition(function, before, types).is_ok()
+                    && crate::call_owner_generations::sum_transition(function, before, types)
+                        .is_ok()
                     && crate::breakpoint_regions::sum_transition(function, before, types).is_ok()
             });
             if !regions_valid

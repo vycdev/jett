@@ -1,62 +1,23 @@
-# Projected field assignment
+# Projected field assignment: selected local owner updates
 
-Field assignment has no implemented execution contract. A checked probe with a
-owned mutable struct containing an integer and string accepts `item.value = 9` and
-`item.label = "after"`. Reference execution then fails with
-`only simple variable assignment is supported in comptime`, including during
-ordinary runtime execution. MIR ownership planning rejects the same shape as a
-nonlocal assignment requiring place ownership/materialization.
+Status: decided on 2026-10-15 after the user delegated language choices to fit Jett's philosophy. Checked updates through owned mutable values are selected. Implementation and verified acceptance are tracked in the [native acceptance audit](../active/native_acceptance_audit.md); this selection alone is not evidence that either backend executes projected writes.
 
-The checker enforces the prerequisites shared by both possible contracts:
-projected writes through immutable bindings or temporary values report E0404,
-and writes through known views report E0401. A mutable flag cannot authorize a
-write through a view. These checks also apply to actor handlers, inline
-functions, explicit comptime evaluation, verify blocks, and property bodies.
+Jett's imperative/local-mutability and small logical diff goals favor `record.field = value` for an exact live mutable owner, rather than rebuilding every unrelated constructor field for a one-field repair. Immutable defaults, explicit consuming transforms and read-only views remain. The full selected contract and implementation obligations live in [owned mutable field updates](../active/owned_mutable_field_updates.md).
 
-Assignment facts use resolved declaration identity, so an expired mutable local
-does not authorize a later immutable binding with the same name. Explicit view
-initializers and aliases of known move-only views preserve read-only status.
-Ordinary field initializers and clones produce owned copies in the current
-implementation; the checker does not treat a fresh field copy as an assignment
-to its parent. These facts enforce assignment prerequisites, not a complete
-borrow-provenance analysis.
-The facts do not infer borrowing from calls or returned values, or interpret a
-named alias whose declaration wraps a view type. Those ownership combinations
-require a separate audit before extending projected updates.
+The eligible place is a finite checked field path with exact resolved binding, nominal/generic owners and field types. Existing state qualification or checked narrowing may supply an exact machine field; no state transition is implied. No view, mutable reference, temporary, consumed owner or outstanding dependent loan authorizes a write. No qualifier peeling or structural field match supplies ownership proof.
 
-Rebinding an owned mutable local, including a parenthesized target, from a known
-move-only view also reports
-E0401; an explicit clone is required. Otherwise an assignment could erase the
-read-only fact established at declaration and later appear to authorize a field
-write. This check follows the existing prohibition on consuming views, rather
-than updating declaration facts as though every branch executed. Copyable view
-values and ordinary field copies retain their existing behavior. Native ownership
-planning already rejects a move-only view escaping into an owning assignment;
-the interpreter's incidental value cloning is not an ownership conversion.
+An enclosing nominal refinement is replaced and validated as a whole instead of edited internally. A complete refined field may be replaced under its existing checked conversion rules. Bitfields retain their constructor-and-rebind contract, including declared width validation; the former table entry proposing direct masked assignment is superseded.
 
-Owned mutable roots still pass these checks, but neither backend executes their
-projected updates. Acceptance does not establish safe mutation behavior.
+The existing compiler-produced reflection metadata authority is preserved.
+Projected writes do not enter canonical builtin metadata owners to edit their
+fields. Capture exact builtin identities at creation and retain them through
+type-table cloning/remapping; aliases, qualification and user holders cannot
+remove the boundary. Whole genuine metadata fields remain replaceable in user
+holders, and user types with similar names remain ordinary records. This
+selection precedes implementation and introduces no new observer-provenance API.
 
-The design currently has competing statements: mutable bindings provide local
-consume-and-rebind, and views are read-only; the bitfield operation table also
-promises direct field assignment. Select a contract before implementing writes
-in the interpreter or native runtime:
+Preflight the place and ancestor readiness/state before the RHS. Existing pending inspection errors remain runtime behavior for admitted pending transport; no implicit join or payload read is added. Evaluate the RHS once, preserve the old field on precommit failure, and transfer/retire replacement ownership exactly once. Preserve untouched fields, metadata, task depth and logical clone independence. Resource-bearing paths need their authenticated custody protocol and cannot use an ordinary update as a bypass.
 
-- Implement projected updates rooted in an owned mutable local, preserving
-  read-only views and rejecting writes through immutable or temporary roots.
-- Reject projected assignment at compile time and express changes by constructing
-  a new value and rebinding an owned mutable local. Update the bitfield promise
-  to match that selected language surface.
+Historical baseline: the owned mutable integer/String probe passed checking, while reference execution reported `only simple variable assignment is supported in comptime` and MIR rejected a nonlocal assignment without materialized ownership. Existing immutable/view/temporary rejection and projected-read/reconstruction controls remain authoritative. Their retained Source bytes and historical receipts must not be rewritten to turn this decision into a pass.
 
-An implementation of updates additionally needs explicit rules for nested
-projections, an already-consumed root, outstanding views, replacement of owned
-fields, RHS evaluation order, pending values, and failure cleanup. Refinements
-of an enclosing aggregate must remain valid; bitfield values must still obey
-their declared widths. Do not silently bypass either validation or introduce
-masking/truncation as a new assignment rule. These requirements must be resolved
-before the feature can count toward native parity.
-
-No execution option is selected by this note. The implemented read-only checks
-follow existing immutable-binding and view rules; they do not select projected
-updates. Runtime failure in both backends is not evidence that those updates
-are supported.
+Ordinary-record and exact-state machine updates now have checked reference, required-comptime and bounded Source-absent native acceptance. Actor handler state, Resource-bearing replacement and wider reflected/generic compositions remain implementation work. Full coherent workspace, inventory and supported-host acceptance remain separate gates; the audit records their actual revision and scope.

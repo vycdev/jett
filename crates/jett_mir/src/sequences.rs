@@ -77,6 +77,8 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
         let before_pass = (crate::resource_ownership::has_records(function)
             || function.reflected_callable.is_some()
             || crate::ordinary_borrowed_sums::has_records(function)
+            || crate::field_updates::has_records(function)
+            || crate::match_bindings::has_records(function)
             || !function.breakpoint_regions.is_empty()
             || crate::call_owner_generations::has_records(function))
         .then(|| function.clone());
@@ -155,7 +157,9 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             let before_iteration = (crate::resource_ownership::has_records(function)
                 || !function.breakpoint_regions.is_empty()
                 || crate::call_owner_generations::has_records(function)
-                || crate::ordinary_borrowed_sums::has_records(function))
+                || crate::ordinary_borrowed_sums::has_records(function)
+                || crate::field_updates::has_records(function)
+                || crate::match_bindings::has_records(function))
             .then(|| function.clone());
             let mut region_edit = crate::breakpoint_regions::SequenceEdit {
                 header,
@@ -266,6 +270,20 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                     )
                     .is_err()
                         || crate::call_owner_generations::sequence_transition(
+                            function,
+                            before_iteration,
+                            &region_edit,
+                            types,
+                        )
+                        .is_err()
+                        || crate::field_updates::sequence_transition(
+                            function,
+                            before_iteration,
+                            &region_edit,
+                            types,
+                        )
+                        .is_err()
+                        || crate::match_bindings::sequence_transition(
                             function,
                             before_iteration,
                             &region_edit,
@@ -440,6 +458,20 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                     )
                     .is_err()
                     || crate::call_owner_generations::sequence_transition(
+                        function,
+                        before_iteration,
+                        &region_edit,
+                        types,
+                    )
+                    .is_err()
+                    || crate::field_updates::sequence_transition(
+                        function,
+                        before_iteration,
+                        &region_edit,
+                        types,
+                    )
+                    .is_err()
+                    || crate::match_bindings::sequence_transition(
                         function,
                         before_iteration,
                         &region_edit,

@@ -12,7 +12,7 @@ pub use jett_intrinsics::IntrinsicId;
 use jett_parser::ast::{self, Expr, Item, Module, Stmt};
 use jett_resolve::{DefId, DefKind, ResolveResult};
 use jett_typecheck::{
-    CheckResult, CheckedBindingFact, CheckedBindingMode, CheckedBodyFacts,
+    CheckResult, CheckedAssignmentPlace, CheckedBindingFact, CheckedBindingMode, CheckedBodyFacts,
     CheckedCallArgumentOrder, CheckedCallOwnership, CheckedCalleeAccess,
     CheckedComptimeTypeBinding, CheckedComptimeTypeSelection, CheckedGenericCall,
     CheckedGenericFunctionInstantiation, CheckedGenericSpecialization, CheckedInterfaceCall,
@@ -25,6 +25,12 @@ use jett_types::{
     ReflectionTypeInfo, ReflectionVariantInfo, Type, TypeId, TypeInterner,
 };
 
+mod field_updates;
+pub use field_updates::{FieldUpdateOccurrence, FieldUpdatePlace, field_update_places};
+pub use jett_typecheck::CheckedComptimeTypeSelection as FieldUpdateScopeSelection;
+pub use jett_typecheck::{
+    CheckedFieldOwner as FieldUpdateOwner, CheckedFieldProjection as FieldUpdateProjection,
+};
 mod ordinary_required_values;
 pub use ordinary_required_values::bake_required_values;
 mod native_verify_suite;
@@ -55,6 +61,10 @@ pub use resource_manifest::{
 pub use resource_materialization::materialize_checked_required_values;
 pub use resource_source::{RequiredMaterialization, ResourceSourceArchive};
 mod iteration_bindings;
+mod match_bindings;
+pub use match_bindings::{MatchBinding, checked_match_binding};
+#[cfg(test)]
+mod borrowed_match_tests;
 pub use iteration_bindings::{IterationPart, ViewIterationBinding, checked_view_iteration_binding};
 #[cfg(test)]
 mod borrowed_sum_view_tests;
@@ -311,6 +321,12 @@ pub enum StatementKind {
     Assign {
         target: Expression,
         value: Expression,
+    },
+    /// Exact checked Source place; no expression-shaped write inference.
+    UpdateField {
+        target: Expression,
+        value: Expression,
+        place: FieldUpdatePlace,
     },
     Return(Option<Expression>),
     /// Yield a fallback value to the nearest enclosing handle expression.
@@ -779,7 +795,8 @@ impl Validator<'_> {
                 self.check_local(*local, statement.span);
                 self.expression(value);
             }
-            StatementKind::Assign { target, value } => {
+            StatementKind::Assign { target, value }
+            | StatementKind::UpdateField { target, value, .. } => {
                 self.expression(target);
                 self.expression(value);
             }
@@ -1614,6 +1631,7 @@ impl<'a> Lowerer<'a> {
             if let Some(original) = &self.reflected_checked_program
                 && (self.authenticated_resource_lowering
                     || has_reflected_callable_plans(&program)
+                    || field_updates::requires_original_reflected_archive(&program)
                     || self
                         .check
                         .interner
@@ -1856,6 +1874,7 @@ impl<'a> Lowerer<'a> {
             self.check.binding_modes.clone(),
             self.check.call_ownership.clone(),
             self.check.binding_facts.clone(),
+            self.check.assignment_places.clone(),
             self.check.generic_calls.clone(),
             self.check.intrinsic_ids.clone(),
             self.check.intrinsic_type_arguments.clone(),
@@ -1956,6 +1975,7 @@ impl<'a> Lowerer<'a> {
             binding_modes,
             call_ownership,
             binding_facts,
+            assignment_places,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -1981,6 +2001,7 @@ impl<'a> Lowerer<'a> {
                 instantiation.binding_modes.clone(),
                 instantiation.call_ownership.clone(),
                 instantiation.binding_facts.clone(),
+                instantiation.assignment_places.clone(),
                 instantiation.generic_calls.clone(),
                 instantiation.intrinsic_ids.clone(),
                 instantiation.intrinsic_type_arguments.clone(),
@@ -2007,6 +2028,7 @@ impl<'a> Lowerer<'a> {
                 self.check.binding_modes.clone(),
                 self.check.call_ownership.clone(),
                 self.check.binding_facts.clone(),
+                self.check.assignment_places.clone(),
                 self.check.generic_calls.clone(),
                 self.check.intrinsic_ids.clone(),
                 self.check.intrinsic_type_arguments.clone(),
@@ -2061,6 +2083,7 @@ impl<'a> Lowerer<'a> {
                 self.check.binding_modes.clone(),
                 self.check.call_ownership.clone(),
                 self.check.binding_facts.clone(),
+                self.check.assignment_places.clone(),
                 self.check.generic_calls.clone(),
                 self.check.intrinsic_ids.clone(),
                 self.check.intrinsic_type_arguments.clone(),
@@ -2096,6 +2119,7 @@ impl<'a> Lowerer<'a> {
             binding_modes,
             call_ownership,
             binding_facts,
+            assignment_places,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -2110,7 +2134,12 @@ impl<'a> Lowerer<'a> {
             static_selections,
             comptime_type_bindings,
         );
-        if body_lowerer.parent.authenticated_resource_lowering
+        if (body_lowerer.parent.authenticated_resource_lowering
+            || (body_lowerer.parent.reflected_checked_program.is_some()
+                && field_updates::checked_function_has_updates(
+                    body_lowerer.parent.check,
+                    source.function.span,
+                )))
             && source.instantiation.is_none()
             && source.method.is_none()
             && source.function.type_params.is_empty()
@@ -2281,6 +2310,7 @@ impl<'a> Lowerer<'a> {
             self.check.binding_modes.clone(),
             self.check.call_ownership.clone(),
             self.check.binding_facts.clone(),
+            self.check.assignment_places.clone(),
             self.check.generic_calls.clone(),
             self.check.intrinsic_ids.clone(),
             self.check.intrinsic_type_arguments.clone(),
@@ -2500,6 +2530,7 @@ impl<'a> Lowerer<'a> {
         let binding_modes = self.check.binding_modes.clone();
         let call_ownership = self.check.call_ownership.clone();
         let binding_facts = self.check.binding_facts.clone();
+        let assignment_places = self.check.assignment_places.clone();
         let generic_calls = self.check.generic_calls.clone();
         let intrinsic_ids = self.check.intrinsic_ids.clone();
         let intrinsic_type_arguments = self.check.intrinsic_type_arguments.clone();
@@ -2523,6 +2554,7 @@ impl<'a> Lowerer<'a> {
             binding_modes,
             call_ownership,
             binding_facts,
+            assignment_places,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -2714,6 +2746,7 @@ impl<'a> Lowerer<'a> {
             self.check.binding_modes.clone(),
             self.check.call_ownership.clone(),
             self.check.binding_facts.clone(),
+            self.check.assignment_places.clone(),
             self.check.generic_calls.clone(),
             self.check.intrinsic_ids.clone(),
             self.check.intrinsic_type_arguments.clone(),
@@ -2813,6 +2846,8 @@ struct BodyLowerer<'lowerer, 'program> {
     binding_modes: HashMap<Span, CheckedBindingMode>,
     call_ownership: HashMap<Span, CheckedCallOwnership>,
     binding_facts: HashMap<Span, CheckedBindingFact>,
+    assignment_places: HashMap<Span, CheckedAssignmentPlace>,
+    next_field_update_occurrence: u64,
     generic_calls: HashMap<Span, CheckedGenericCall>,
     intrinsic_ids: HashMap<Span, IntrinsicId>,
     intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -2840,6 +2875,7 @@ struct BodyLowerer<'lowerer, 'program> {
     ownership_context: jett_typecheck::CheckedOwnershipContext,
     view_parameter_locals: HashSet<LocalId>,
     view_iteration_bindings: HashMap<LocalId, ViewIterationBinding>,
+    match_bindings: HashMap<LocalId, MatchBinding>,
 }
 
 impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
@@ -2852,6 +2888,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         binding_modes: HashMap<Span, CheckedBindingMode>,
         call_ownership: HashMap<Span, CheckedCallOwnership>,
         binding_facts: HashMap<Span, CheckedBindingFact>,
+        assignment_places: HashMap<Span, CheckedAssignmentPlace>,
         generic_calls: HashMap<Span, CheckedGenericCall>,
         intrinsic_ids: HashMap<Span, IntrinsicId>,
         intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -2876,6 +2913,8 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             binding_modes,
             call_ownership,
             binding_facts,
+            assignment_places,
+            next_field_update_occurrence: 0,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -2903,6 +2942,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             ownership_context: jett_typecheck::CheckedOwnershipContext::Ordinary,
             view_parameter_locals: HashSet::new(),
             view_iteration_bindings: HashMap::new(),
+            match_bindings: HashMap::new(),
         }
     }
 
@@ -3056,13 +3096,21 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
     fn lower_statement(&mut self, statement: &Stmt) -> Option<Statement> {
         let (kind, span) = match statement {
             Stmt::VarDecl(decl) => self.lower_local_declaration(decl)?,
-            Stmt::Assign(assign) => (
-                StatementKind::Assign {
-                    target: self.lower_expression(&assign.target)?,
-                    value: self.lower_expression(&assign.value)?,
-                },
-                assign.span,
-            ),
+            Stmt::Assign(assign) => {
+                let target = self.lower_expression(&assign.target)?;
+                let value = self.lower_expression(&assign.value)?;
+                let kind = if matches!(target.kind, ExpressionKind::Local(_)) {
+                    StatementKind::Assign { target, value }
+                } else {
+                    let place = field_updates::authenticate(self, assign, &target)?;
+                    StatementKind::UpdateField {
+                        target,
+                        value,
+                        place,
+                    }
+                };
+                (kind, assign.span)
+            }
             Stmt::Return(ret) => {
                 let value = match &ret.value {
                     Some(value) => {
@@ -3647,6 +3695,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             binding_modes,
             call_ownership,
             binding_facts,
+            assignment_places,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -3670,6 +3719,8 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         let saved_binding_modes = std::mem::replace(&mut self.binding_modes, binding_modes);
         let saved_call_ownership = std::mem::replace(&mut self.call_ownership, call_ownership);
         let saved_binding_facts = std::mem::replace(&mut self.binding_facts, binding_facts);
+        let saved_assignment_places =
+            std::mem::replace(&mut self.assignment_places, assignment_places);
         let saved_generic_calls = std::mem::replace(&mut self.generic_calls, generic_calls);
         let saved_intrinsic_ids = std::mem::replace(&mut self.intrinsic_ids, intrinsic_ids);
         let saved_intrinsic_type_arguments =
@@ -3710,6 +3761,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         self.binding_modes = saved_binding_modes;
         self.call_ownership = saved_call_ownership;
         self.binding_facts = saved_binding_facts;
+        self.assignment_places = saved_assignment_places;
         self.generic_calls = saved_generic_calls;
         self.intrinsic_ids = saved_intrinsic_ids;
         self.intrinsic_type_arguments = saved_intrinsic_type_arguments;
@@ -4236,9 +4288,11 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 view_params.iter().copied().collect(),
             );
             let enclosing_iteration_bindings = std::mem::take(&mut self.view_iteration_bindings);
+            let enclosing_match_bindings = std::mem::take(&mut self.match_bindings);
             let body = self.lower_block(body);
             self.view_parameter_locals = enclosing_view_parameters;
             self.view_iteration_bindings = enclosing_iteration_bindings;
+            self.match_bindings = enclosing_match_bindings;
             self.ownership_context = enclosing_context;
             self.return_type = enclosing_return_type;
             self.visible_bindings.pop();
@@ -6688,6 +6742,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         let mut arms = Vec::with_capacity(match_stmt.arms.len());
         for arm in &match_stmt.arms {
             self.visible_bindings.push(HashMap::new());
+            let saved_match_bindings = self.match_bindings.clone();
             let (variant, source_bindings, field_types) = match &arm.pattern {
                 ast::Pattern::Ident(name) => {
                     let Some(index) = enum_definition
@@ -6736,7 +6791,24 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     binding.span,
                 ));
             }
+            let proofs = match match_bindings::checked_match_arm_bindings(
+                &self.parent.check.interner,
+                match_stmt.span,
+                scrutinee.ty,
+                variant,
+                arm.span,
+                &bindings,
+                |id| self.ownership_local_info(id),
+            ) {
+                Ok(proofs) => proofs,
+                Err(message) => {
+                    self.parent.error(arm.span, message);
+                    return None;
+                }
+            };
+            self.match_bindings.extend(proofs);
             let body = self.lower_block(&arm.body);
+            self.match_bindings = saved_match_bindings;
             self.visible_bindings.pop();
             arms.push(MatchArm {
                 variant,
@@ -7725,7 +7797,7 @@ function count_to(limit: int64) returns int64:
         };
         assert!(matches!(
             body.statements[0].kind,
-            StatementKind::Assign { .. }
+            StatementKind::Assign { .. } | StatementKind::UpdateField { .. }
         ));
     }
 
@@ -8122,7 +8194,7 @@ actor Counter:
             handler.body.statements.as_slice(),
             [
                 Statement {
-                    kind: StatementKind::Assign { .. },
+                    kind: StatementKind::Assign { .. } | StatementKind::UpdateField { .. },
                     ..
                 },
                 Statement {

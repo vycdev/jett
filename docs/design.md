@@ -1213,14 +1213,14 @@ A mutable variable that gets reassigned on lines 5, 12, and 23 requires the LLM 
 
 Immutable variables eliminate this entirely. `trimmed_name` has one value, forever, from the line it is defined. There is no timeline to track. The LLM's attention head links the name to one definition and one value — done.
 
-**Mutability is local only — no mutable references.** There is no way for a function to modify the caller's data. When a value is passed to a function, it is either consumed (moved) or borrowed read-only via `view`. There is no `param: mutable T` — no mutable references exist in the language. If a function needs to transform a value, it takes ownership, transforms it, and returns the new value. The caller rebinds:
+**Mutability is local only: no mutable references.** A function cannot modify a caller's data through a view. Values are consumed or borrowed read-only; no mutable reference escapes. A consuming transform returns its new value for the caller to bind:
 
 ```
 mutable int64 x = 5
 x = transform(x)    # transform consumes x, returns new value, x is rebound
 ```
 
-This guarantees that reading a mutable variable's current value never requires looking at function implementations. The only place `x` can change is at explicit rebinding statements in the same scope.
+An owned mutable local may also replace a checked field with `record.field = value`, including finite nested paths. This is an explicit local owner update, not mutation through a shared reference. Whole-name and field assignments are the only statements that can change that local value; calls receiving views cannot do so. See [owned mutable field updates](active/owned_mutable_field_updates.md).
 
 ### Rule Set 7: Syntactically Enforced Modularity (Chunking)
 
@@ -2139,7 +2139,7 @@ The `clone` keyword is explicit and visible. The LLM (and any reader) can see ex
 
 **Auto-view for field access:**
 
-Field access on a value implicitly creates a view of the parent. `self.x` is equivalent to `(view self).x`. Accessing `user.name` does NOT consume `user` — it reads the field through an implicit view. Only passing the entire value to a function (as an owned parameter) consumes it.
+Reading a field implicitly views its parent: `self.x` reads through `(view self).x` and does not consume `self`. A field read grants no write authority. A selected field assignment instead requires a live mutable owned root and the checked replacement rules below; it neither creates a mutable view nor permits changing a caller's borrowed data.
 
 This means code like the following is valid:
 
@@ -2157,7 +2157,7 @@ primitive: `bytes` is primitive but move-only, as are compound owned values.
 
 **Rebinding semantics for mutable variables:**
 
-The `mutable` keyword allows a variable name to be rebound after its previous value is consumed. This is not mutation — it is consume-and-rebind:
+The `mutable` keyword permits a local name to receive a replacement value. Whole-name assignment consumes/rebinds the old value; a checked field assignment performs the corresponding replacement within that same owned root. Both preserve single ownership. Immutable names and views remain non-writable, and an enclosing nominal refinement must be reconstructed and validated as a whole.
 
 ```
 mutable int64 total = 0
@@ -5735,7 +5735,7 @@ function make_color(r: int64, g: int64, b: int64) returns result[ColorChannel, s
     return ok(color)
 ```
 
-There is no field-level mutation — bitfields follow the same ownership rules as structs (Rule Set 6). To change a field, construct a new bitfield value.
+Bitfields retain constructor-and-rebind updates: to change a field, construct a new bitfield value and apply its existing width and refinement checks. The owned mutable field-update contract for ordinary records does not introduce bitfield projected writes or implicit masking/truncation.
 
 This is consistent with refinement types (Rule Set 3) — compile-time values are checked at compile time, runtime values are checked at runtime and require error handling.
 
@@ -5769,16 +5769,19 @@ A `list[uint8]` field captures everything after the fixed-size fields as a raw b
 |--------------------------|----------------------------|
 | `(value >> 4) & 0x0F` | `header.version` (4-bit field) |
 | `value \| (1 << 5)` | `TcpFlags(..., ack: 1, ...)` — construct a new TcpFlags with the modified field |
-| `value & ~(0xFF << 8)` | Direct field assignment — compiler handles masking |
+| `value & ~(0xFF << 8)` | Construct a replacement bitfield value with checked field widths |
 | `htons(port)` / `ntohs(port)` | Compiler handles byte order based on `network` modifier |
 | `memcpy(&header, buffer, sizeof(header))` | `Header.from_bytes(buffer)` |
 | `0x1F`, `0b00011111`, `31` | A field width: `field: 5 bits` |
 
-Direct field assignment in this table is a design proposal whose execution and
-ownership contract remains [unresolved](open_design/projected_field_assignment.md).
-The checker rejects projected writes through immutable or temporary roots with
-E0404 and through known views with E0401. Owned mutable roots remain admitted,
-but neither the interpreter nor native lowering implements those updates.
+Bitfield updates use construction and whole-value rebinding. For ordinary records, the selected [owned mutable field-update contract](active/owned_mutable_field_updates.md) permits checked finite field paths rooted in a live mutable owned binding. Immutable/temporary/view roots remain rejected, as do paths through an enclosing nominal refinement. Checked reference, required-comptime and native execution implement ordinary-record and exact-state machine updates under that contract. Actor handler and Resource-bearing updates remain implementation obligations; local acceptance is recorded in the native audit.
+
+Compiler-produced reflection metadata retains its inspect-and-pass contract.
+Projected writes cannot enter the exact builtin metadata record identities to
+change their fields, including through an alias, secret qualification or a user
+holder. A user holder may replace a complete metadata field with another genuine
+metadata value. This preserves the compiler's construction/authority boundary;
+ordinary user records with similar names remain writable under the local rule.
 
 No hex literals, no binary literals, no shift operators, no mask operators. The LLM works entirely in base-10 integers and field names.
 
@@ -5963,11 +5966,11 @@ field copies that do not contain Resource data, and owned call results remain
 valid. A Resource-bearing field cannot be acquired by copying its owner or view;
 use an explicit nonowning field view or a genuine owned transfer instead.
 
-Views also forbid projected writes: a field assignment through a known view
-reports E0401, even when its binding is marked `mutable`. An immutable binding
-or temporary assignment root reports E0404. These existing restrictions do not
-select an execution contract for field updates through an owned mutable root;
-that contract remains [open](open_design/projected_field_assignment.md).
+Field assignment through a known view reports E0401 even when its binding is marked `mutable`; an immutable or temporary root reports E0404. Checked finite field paths through a live mutable owned record, or an already exact-state-qualified machine owner, use the selected [local replacement contract](active/owned_mutable_field_updates.md). Outstanding dependent views, consumed roots, paths through enclosing nominal refinements and bitfield writes are rejected. An update preserves exact owner/state/field metadata and does not change a machine's state. Pending ancestors retain the existing typed runtime inspection refusal before RHS effects; no implicit join or blanket new pending-transport Source restriction is introduced. Ordinary-record and exact-state machine updates have bounded reference and native acceptance; actor handler and Resource-bearing updates remain open. See the [acceptance audit](active/native_acceptance_audit.md#owned-mutable-field-updates-bounded-msvc-acceptance).
+Move-only enum payloads extracted by matching a view retain their borrowed,
+read-only origin. Forwarded payload aliases, parentheses, explicit `coarsen`
+and `declassify` do not acquire ownership. Matching an owned enum retains owned
+payload transfer; implicitly copyable payloads retain ordinary copying.
 Rebinding an owned mutable value from a known move-only view reports E0401;
 use an explicit clone to acquire ownership. Copyable values retain implicit
 copying.
@@ -6016,9 +6019,11 @@ aliases are non-owning and carry no cleanup obligation. Explicit clones acquire
 independent ownership, and ordinary owned field initializers retain their copy
 behavior. Carrier-preserving `coarsen` and `declassify` aliases retain the same
 backing owner and existing representation checks. Temporary-backed source local
-aliases, mutable alias chains, projected mutation, allocating conversions, and
-owner consumption or rebinding after source alias creation remain native
-implementation limits. These limits do not select loan expiry or lifetime
+aliases, mutable alias chains, allocating conversions, and owner consumption or
+rebinding after source alias creation remain native implementation limits. A
+read-only alias grants no write authority, and a retained dependent loan blocks
+changes to its owner. Selected field updates to a live mutable owned local
+without a conflicting loan follow the checked replacement contract. These limits do not select loan expiry or lifetime
 extension, change the checker rules above, or claim every projected owner kind
 is supported; see the
 [local view implementation note](active/native_local_view_aliases.md) and

@@ -1,0 +1,14 @@
+namespace app
+struct Inner:
+    value: int64
+struct Record:
+    inner: Inner
+    label: string
+function replacement(view stdout: Stdout) returns int64:
+    Stdout.write(view stdout, "rhs-must-not-run\n")
+    return 9
+function main(stdout: Stdout) returns nothing:
+    mutable Record record = Record(inner: run run Inner(value: 1), label: "before")
+    Stdout.write(view stdout, "before:inner\n")
+    record.inner.value = replacement(view stdout)
+    Stdout.write(view stdout, "after-must-not-run\n")

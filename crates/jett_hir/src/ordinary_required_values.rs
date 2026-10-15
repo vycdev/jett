@@ -149,7 +149,7 @@ impl Baker<'_> {
                 | S::Expression(value)
                 | S::HandleDefault(value)
                 | S::Respond(value) => self.expression(value),
-                S::Assign { target, value } => {
+                S::Assign { target, value } | S::UpdateField { target, value, .. } => {
                     self.expression(target);
                     self.expression(value);
                 }

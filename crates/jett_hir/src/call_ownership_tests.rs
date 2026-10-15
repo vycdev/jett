@@ -807,6 +807,7 @@ fn generated_stages_keep_private_acquisition_and_snapshot_authority() {
             view_source: (id == LocalId::new(2)).then_some(LocalId::new(1)),
             is_view_parameter: false,
             view_iteration: None,
+            match_binding: None,
         })
     };
     validate_operand_ownership(&packet, &[list], &[0], &types, local, false)
@@ -1104,6 +1105,7 @@ fn generated_zero_argument_adapters_bind_and_remap_the_actual_capture() {
             view_source: None,
             is_view_parameter: false,
             view_iteration: None,
+            match_binding: None,
         })
     };
     validate_operand_ownership(&ownership, &[], &[], &types, local, true)
@@ -1177,6 +1179,7 @@ fn generated_zero_argument_adapters_bind_and_remap_the_actual_capture() {
                 view_source: None,
                 is_view_parameter: false,
                 view_iteration: None,
+                match_binding: None,
             })
         },
         true,
@@ -1326,6 +1329,7 @@ fn generated_owned_operand_cannot_acquire_a_logical_viewed_iteration_binding() {
         view_source: None,
         is_view_parameter: false,
         view_iteration: Some(proof),
+        match_binding: None,
     };
     let error = validate_generated_operand_tree(&value, &generated.arguments[0], &[local])
         .expect_err("generated acquisition cannot relabel logical source view");
@@ -2806,6 +2810,7 @@ fn generated_conversion_locals(function: &Function) -> Vec<OwnershipLocalInfo> {
                 .iter()
                 .any(|param| param.local == local.id && param.mode == ParamMode::View),
             view_iteration: None,
+            match_binding: None,
         })
         .collect()
 }

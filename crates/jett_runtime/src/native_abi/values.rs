@@ -20,6 +20,8 @@ mod actor_graph_import;
 mod checked_graph_hooks;
 mod debug_equal;
 mod debug_format;
+#[cfg(test)]
+mod field_update_tests;
 mod graphics_decode;
 pub mod interface_conversion;
 mod ordinary_attempts;
@@ -4589,6 +4591,89 @@ impl NativeValues {
         }
         Ok(identity)
     }
+    // This operation grants no Source mutation or Resource custody authority.
+    // The checked backend fixes nominal identity and ordinal. Every fallible
+    // registry/occupancy check precedes the single nonallocating occupied swap.
+    fn replace_struct_field(
+        &mut self,
+        id: u64,
+        index: u64,
+        replacement: NativeField,
+    ) -> LeafResult<NativeField> {
+        if self.actors.contains_key(&id)
+            || self.builders.contains_key(&id)
+            || self.checked_graph_hooks.contains_key(&id)
+            || self.actor_graph_imports.contains_key(&id)
+        {
+            return Err(INVALID_STRUCT);
+        }
+        let index = usize::try_from(index).map_err(|_| INVALID_STRUCT)?;
+        let record = self.structs.get(&id).ok_or(INVALID_STRUCT)?;
+        if record.pending_depth != 0 || record.fields.iter().any(Option::is_none) {
+            return Err(INVALID_STRUCT);
+        }
+        let displaced = record
+            .fields
+            .get(index)
+            .copied()
+            .flatten()
+            .ok_or(INVALID_STRUCT)?;
+        if displaced.owned != replacement.owned
+            || (replacement.owned && replacement.pending_depth != 0)
+        {
+            return Err(INVALID_STRUCT);
+        }
+        // Owned fields must still name live ordinary registry values. Actor
+        // identities are never ordinary owning handles; graph hooks remain
+        // opaque owning children and are retired by their existing Drop path.
+        for field in record
+            .fields
+            .iter()
+            .flatten()
+            .chain(std::iter::once(&replacement))
+        {
+            if field.owned {
+                if field.bits == id || self.actors.contains_key(&field.bits) {
+                    return Err(INVALID_STRUCT);
+                }
+                self.owned_pending_depth(field.bits)?;
+            }
+        }
+        // A live registry handle is not a second unique owner. The old slot
+        // remains owned until its returned value is retired, and siblings keep
+        // their ownership throughout. Only immutable strings share an ID after
+        // an explicit retain; function copies have distinct cloned descriptors.
+        // This checks direct edges, not whole-heap ownership or custody.
+        if replacement.owned {
+            let existing_edges = record
+                .fields
+                .iter()
+                .flatten()
+                .filter(|field| field.owned && field.bits == replacement.bits)
+                .count();
+            if let Some(string) = self.strings.get(&replacement.bits) {
+                let required = u64::try_from(existing_edges)
+                    .ok()
+                    .and_then(|edges| edges.checked_add(1))
+                    .ok_or(INVALID_STRUCT)?;
+                if string.references < required {
+                    return Err(INVALID_STRUCT);
+                }
+            } else if existing_edges != 0 {
+                return Err(INVALID_STRUCT);
+            }
+        }
+        let slot = self
+            .structs
+            .get_mut(&id)
+            .and_then(|record| record.fields.get_mut(index))
+            .ok_or(INVALID_STRUCT)?;
+        let Some(current) = slot.as_mut() else {
+            return Err(INVALID_STRUCT);
+        };
+        Ok(std::mem::replace(current, replacement))
+    }
+
     fn take_struct_field(&mut self, id: u64, index: u64) -> LeafResult<NativeField> {
         self.structs
             .get_mut(&id)
@@ -5815,6 +5900,9 @@ leaves! {
     MachineExpectState, jett_rt_v1_machine_expect_state, false, (value: u64 => I64, state: u64 => I64), u32 => I32,
         |s| { if s.struct_field(value, 0)?.bits == state { Ok(0) }
             else { Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"machine state does not match narrowed type")) } };
+    StructReplaceOccupied, jett_rt_v1_struct_replace_occupied, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, owned: u32 => I32, depth: u64 => I64), u64 => I64,
+        |s| { if owned > 1 { return Err(INVALID_STRUCT); }
+            Ok(s.replace_struct_field(value, index, NativeField { bits, owned: owned != 0, pending_depth: depth })?.bits) };
     StructTake, jett_rt_v1_struct_take, false, (value: u64 => I64, index: u64 => I64), u64 => I64,
         |s| Ok(s.take_struct_field(value, index)?.bits);
     StructClone, jett_rt_v1_struct_clone, false, (value: u64 => I64), u64 => I64,

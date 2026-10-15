@@ -1,0 +1,6 @@
+namespace app
+bitfield network Header:
+    value: 4 bits
+function main() returns nothing:
+    mutable Header header = Header(value: 1)
+    header.value = 2

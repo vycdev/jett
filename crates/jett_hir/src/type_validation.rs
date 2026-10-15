@@ -34,6 +34,7 @@ pub fn validate_backend_types(
         local_view_initializers: HashSet::new(),
         borrowed_parameters: HashSet::new(),
         iteration_binders: HashSet::new(),
+        match_binders: HashSet::new(),
         errors: Vec::new(),
     };
     if let Err(message) = program.resource_manifest.validate(interner) {
@@ -112,6 +113,7 @@ struct BackendTypeValidator<'a> {
     local_view_initializers: HashSet<crate::LocalId>,
     borrowed_parameters: HashSet<crate::LocalId>,
     iteration_binders: HashSet<crate::LocalId>,
+    match_binders: HashSet<crate::LocalId>,
     errors: Vec<ValidationError>,
 }
 
@@ -125,6 +127,7 @@ impl BackendTypeValidator<'_> {
 
     fn function(&mut self, function: &Function) {
         self.iteration_binders.clear();
+        self.match_binders.clear();
         self.ownership_locals = function
             .locals
             .iter()
@@ -138,6 +141,7 @@ impl BackendTypeValidator<'_> {
                     .iter()
                     .any(|param| param.local == local.id && param.mode == crate::ParamMode::View),
                 view_iteration: None,
+                match_binding: None,
             })
             .collect();
         self.ownership_context = if function.debug_kind == crate::FunctionDebugKind::Inline {
@@ -244,7 +248,8 @@ impl BackendTypeValidator<'_> {
             StatementKind::HandleDefault(value)
             | StatementKind::Expression(value)
             | StatementKind::Respond(value) => self.expression(value, function_name),
-            StatementKind::Assign { target, value } => {
+            StatementKind::Assign { target, value }
+            | StatementKind::UpdateField { target, value, .. } => {
                 self.expression(target, function_name);
                 self.expression(value, function_name);
             }
@@ -278,7 +283,7 @@ impl BackendTypeValidator<'_> {
                 self.expression(iterable, function_name);
                 let saved_locals = self.ownership_locals.clone();
                 for id in [*key].into_iter().chain(*value) {
-                    if !self.iteration_binders.insert(id) {
+                    if !self.iteration_binders.insert(id) || self.match_binders.contains(&id) {
                         self.error(
                             statement.span,
                             "iteration binding is declared more than once in its exact function",
@@ -298,7 +303,7 @@ impl BackendTypeValidator<'_> {
                         .chain(value.map(|value| (value, crate::IterationPart::Value)));
                     for (id, part) in bindings {
                         let result = self.ownership_locals.get(id.index() as usize).copied().ok_or_else(|| "viewed iteration binder is outside its function".to_string()).and_then(|local| {
-                            if local.mutable || local.view_source.is_some() || local.is_view_parameter || local.view_iteration.is_some()
+                            if local.mutable || local.view_source.is_some() || local.is_view_parameter || local.view_iteration.is_some() || local.match_binding.is_some()
                                 || local.span.file != statement.span.file || local.span.start < statement.span.start || local.span.end > statement.span.end {
                                 return Err("viewed iteration binder is not a fresh immutable local in its exact For".into());
                             }
@@ -324,9 +329,37 @@ impl BackendTypeValidator<'_> {
             }
             StatementKind::Match { scrutinee, arms } => {
                 self.expression(scrutinee, function_name);
+                let saved_locals = self.ownership_locals.clone();
                 for arm in arms {
+                    self.ownership_locals = saved_locals.clone();
+                    for &id in &arm.bindings {
+                        if !self.match_binders.insert(id) || self.iteration_binders.contains(&id) {
+                            self.error(
+                                arm.span,
+                                "match payload binding is declared more than once",
+                            );
+                        }
+                    }
+                    match crate::match_bindings::checked_match_arm_bindings(
+                        self.interner,
+                        statement.span,
+                        scrutinee.ty,
+                        arm.variant,
+                        arm.span,
+                        &arm.bindings,
+                        |id| self.ownership_locals.get(id.index() as usize).copied(),
+                    ) {
+                        Ok(proofs) => {
+                            for (id, proof) in proofs {
+                                self.ownership_locals[id.index() as usize].match_binding =
+                                    Some(proof);
+                            }
+                        }
+                        Err(message) => self.error(arm.span, message),
+                    }
                     self.block(&arm.body, function_name);
                 }
+                self.ownership_locals = saved_locals;
             }
             StatementKind::Assert { condition, message } => {
                 self.expression(condition, function_name);
@@ -700,6 +733,7 @@ impl BackendTypeValidator<'_> {
                 let saved_locals = self.ownership_locals.clone();
                 for local in &mut self.ownership_locals {
                     local.view_iteration = None;
+                    local.match_binding = None;
                     local.is_view_parameter = false;
                 }
                 for parameter in params {
@@ -712,8 +746,10 @@ impl BackendTypeValidator<'_> {
                     jett_typecheck::CheckedOwnershipContext::Ordinary,
                 );
                 let enclosing_iteration_binders = std::mem::take(&mut self.iteration_binders);
+                let enclosing_match_binders = std::mem::take(&mut self.match_binders);
                 self.block(body, function_name);
                 self.iteration_binders = enclosing_iteration_binders;
+                self.match_binders = enclosing_match_binders;
                 self.ownership_context = context;
                 self.ownership_locals = saved_locals;
             }

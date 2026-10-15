@@ -1,0 +1,48 @@
+namespace app
+struct Payload:
+    values: list[int64]
+enum Choice:
+    item(data: Payload)
+    empty
+type ValidChoice = Choice where true
+function observe(view data: Payload) returns int64:
+    return list.sum[int64](view data.values)
+function direct(view choice: Choice) returns int64:
+    match choice:
+        item(data):
+            return observe(view data)
+        empty:
+            return 0
+function aliased(view choice: Choice) returns int64:
+    Choice retained = view choice
+    match retained:
+        item(data):
+            Payload forwarded = view data
+            return observe(view forwarded)
+        empty:
+            return 0
+function unqualified(view choice: secret[Choice]) returns int64:
+    match declassify(view choice):
+        item(data):
+            return observe(view data)
+        empty:
+            return 0
+function coarsened(view choice: ValidChoice) returns int64:
+    match coarsen(view choice):
+        item(data):
+            return observe(view data)
+        empty:
+            return 0
+function main(stdout: Stdout) returns nothing:
+    Choice original = Choice.item(Payload(values: list(1, 2, 3)))
+    secret[Choice] protected = clone original
+    ValidChoice validated = clone original handle error:
+        return nothing
+    int64 first = direct(view original)
+    int64 second = aliased(view original)
+    int64 third = unqualified(view protected)
+    int64 fourth = coarsened(view validated)
+    int64 repeated_secret = unqualified(view protected)
+    int64 repeated_refined = coarsened(view validated)
+    int64 repeated_original = direct(view original)
+    Stdout.write(view stdout, "matches:{first}:{second}:{third}:{fourth}:{repeated_secret}:{repeated_refined}:{repeated_original}\n")

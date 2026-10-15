@@ -149,7 +149,9 @@ impl Inventory {
                 | H::HandleDefault(value)
                 | H::Expression(value)
                 | H::Respond(value) => values.push(value),
-                H::Assign { target, value } => values.extend([target, value]),
+                H::Assign { target, value } | H::UpdateField { target, value, .. } => {
+                    values.extend([target, value])
+                }
                 H::Return(value) => values.extend(value.iter()),
                 H::If {
                     condition,

@@ -10,7 +10,9 @@ pub(crate) fn unreachable(function: &mut Function) -> bool {
     let before = (!function.breakpoint_regions.is_empty()
         || crate::call_owner_generations::has_records(function)
         || crate::resource_ownership::has_records(function)
-        || crate::ordinary_borrowed_sums::has_records(function))
+        || crate::ordinary_borrowed_sums::has_records(function)
+        || crate::field_updates::has_records(function)
+        || crate::match_bindings::has_records(function))
     .then(|| function.clone());
     let Ok(cfg) = ControlFlowGraph::analyze(function) else {
         return false;
@@ -53,11 +55,14 @@ pub(crate) fn unreachable(function: &mut Function) -> bool {
         .original_view_iterations
         .retain_mut(|record| record.remap_blocks(&blocks));
 
-    if before.as_ref().is_some_and(|before| {
-        crate::call_owner_generations::remap_blocks(function, before, &blocks).is_err()
-            || crate::resource_ownership::remap_blocks(function, before, &blocks).is_err()
-            || crate::ordinary_borrowed_sums::remap_blocks(function, before, &blocks).is_err()
-    }) || crate::breakpoint_regions::remap_blocks(function, &blocks).is_err()
+    if crate::match_bindings::remap_blocks(function, &blocks).is_err()
+        || before.as_ref().is_some_and(|before| {
+            crate::field_updates::remap_blocks(function, before, &blocks).is_err()
+                || crate::call_owner_generations::remap_blocks(function, before, &blocks).is_err()
+                || crate::resource_ownership::remap_blocks(function, before, &blocks).is_err()
+                || crate::ordinary_borrowed_sums::remap_blocks(function, before, &blocks).is_err()
+        })
+        || crate::breakpoint_regions::remap_blocks(function, &blocks).is_err()
         || !unused_locals(function)
     {
         if let Some(before) = before {
@@ -74,13 +79,15 @@ pub(crate) fn unused_locals(function: &mut Function) -> bool {
     if crate::resource_ownership::constructors::validate_nodes(function).is_err() {
         return false;
     }
-    if crate::actor_graph::has_records(function) {
+    if crate::actor_graph::has_records(function) || crate::field_updates::has_records(function) {
         return true;
     }
     let before = (!function.breakpoint_regions.is_empty()
         || crate::call_owner_generations::has_records(function)
         || crate::resource_ownership::has_records(function)
-        || crate::ordinary_borrowed_sums::has_records(function))
+        || crate::ordinary_borrowed_sums::has_records(function)
+        || crate::field_updates::has_records(function)
+        || crate::match_bindings::has_records(function))
     .then(|| function.clone());
     let mut used = vec![false; function.locals.len()];
     for parameter in &function.params {
@@ -152,10 +159,12 @@ pub(crate) fn unused_locals(function: &mut Function) -> bool {
     function
         .original_view_iterations
         .retain_mut(|record| record.remap_locals(&locals));
-    if before.as_ref().is_some_and(|before| {
-        crate::resource_ownership::remap_locals(function, before, &locals).is_err()
-            || crate::ordinary_borrowed_sums::remap_locals(function, before, &locals).is_err()
-    }) || crate::call_owner_generations::remap_locals(function, &locals).is_err()
+    if crate::match_bindings::remap_locals(function, &locals).is_err()
+        || before.as_ref().is_some_and(|before| {
+            crate::resource_ownership::remap_locals(function, before, &locals).is_err()
+                || crate::ordinary_borrowed_sums::remap_locals(function, before, &locals).is_err()
+        })
+        || crate::call_owner_generations::remap_locals(function, &locals).is_err()
         || crate::breakpoint_regions::remap_locals(function, &locals).is_err()
     {
         if let Some(before) = before {
@@ -265,7 +274,8 @@ fn visit_block_locals(
                 visit(root);
                 visit(rhs_owner);
             }
-            StatementKind::CloseCallOwnerGeneration { .. } => {}
+            StatementKind::PrepareFieldUpdate { .. }
+            | StatementKind::CloseCallOwnerGeneration { .. } => {}
             StatementKind::ReflectedContainerReady { source, .. }
             | StatementKind::ReflectedValueReady { source, .. } => visit(source),
             StatementKind::SequenceLength { source, target } => {
@@ -300,7 +310,8 @@ fn visit_block_locals(
                 expression(value, visit, floor, metadata);
             }
             StatementKind::EndCallView { local } => visit(local),
-            StatementKind::Assign { target, value } => {
+            StatementKind::Assign { target, value }
+            | StatementKind::UpdateField { target, value, .. } => {
                 expression(target, visit, floor, metadata);
                 expression(value, visit, floor, metadata);
             }
@@ -522,7 +533,8 @@ fn hir_block(
                 visit(local);
                 expression(value, visit, floor, metadata);
             }
-            hir::StatementKind::Assign { target, value } => {
+            hir::StatementKind::Assign { target, value }
+            | hir::StatementKind::UpdateField { target, value, .. } => {
                 expression(target, visit, floor, metadata);
                 expression(value, visit, floor, metadata);
             }

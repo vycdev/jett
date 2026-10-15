@@ -102,7 +102,7 @@ impl Interpreter {
             .as_ref()
             .filter(|transport| transport.checked_source_active)
         else {
-            return Ok(None);
+            return self.prepare_checked_field_reflection_loop(source);
         };
         transport
             .checked
@@ -169,6 +169,19 @@ impl Interpreter {
             .checked
             .install_direct_scope(&prepared)
             .map_err(|error| error.to_string())?;
+        let saved_field_cursor =
+            match self.enter_checked_field_body(Some(&prepared.field_reference())) {
+                Ok(saved) => saved,
+                Err(error) => {
+                    self.resource_transport
+                        .as_mut()
+                        .ok_or("missing checked Resource transport")?
+                        .checked
+                        .restore_cursor(saved_cursor)
+                        .map_err(|restore| restore.to_string())?;
+                    return Err(error);
+                }
+            };
         let saved_checked_scope = self.active_checked_scope.replace(projection);
         self.scoped_type_bindings.push(binding);
         self.type_arg_scopes
@@ -185,10 +198,13 @@ impl Interpreter {
                 .map_err(|error| error.to_string()),
             None => Err("missing checked Resource transport".to_string()),
         };
-        match (result, cleanup, restore) {
-            (_, Err(error), _) => Err(error),
-            (Err(error), Ok(()), _) | (_, Ok(()), Err(error)) => Err(error),
-            (Ok(value), Ok(()), Ok(())) => Ok(value),
+        let field_restore = self.restore_checked_field_body(saved_field_cursor);
+        match (result, cleanup, restore, field_restore) {
+            (_, Err(error), _, _) => Err(error),
+            (Err(error), Ok(()), _, _)
+            | (_, Ok(()), Err(error), _)
+            | (_, Ok(()), Ok(()), Err(error)) => Err(error),
+            (Ok(value), Ok(()), Ok(()), Ok(())) => Ok(value),
         }
     }
 
@@ -939,6 +955,18 @@ impl Interpreter {
             .checked
             .install_function_body(&body_reference)
             .map_err(|error| error.to_string())?;
+        let saved_field_cursor = match self.enter_checked_field_body(Some(&body_reference)) {
+            Ok(saved) => saved,
+            Err(error) => {
+                self.resource_transport
+                    .as_mut()
+                    .ok_or("missing checked Resource transport")?
+                    .checked
+                    .restore_cursor(saved_resource_cursor)
+                    .map_err(|restore| restore.to_string())?;
+                return Err(error);
+            }
+        };
         let saved_expression_types =
             std::mem::replace(&mut self.active_checked_function, expression_types);
         let saved_type_arguments = std::mem::replace(&mut self.current_type_arguments, arguments);
@@ -1055,6 +1083,7 @@ impl Interpreter {
                         .map_err(|error| error.to_string())?;
                 }
                 self.set_variable_with_type(&param.name.name, physical, param_ty);
+                self.install_checked_field_binding(&param.name)?;
             }
 
             let result = self.exec_block_inner(&func.body)?;
@@ -1146,10 +1175,13 @@ impl Interpreter {
             .checked
             .restore_cursor(saved_resource_cursor)
             .map_err(|error| error.to_string());
-        match (call_result, cleanup, restore) {
-            (_, Err(error), _) => Err(error),
-            (Err(error), Ok(()), _) | (_, Ok(()), Err(error)) => Err(error),
-            (Ok(value), Ok(()), Ok(())) => Ok(value),
+        let field_restore = self.restore_checked_field_body(saved_field_cursor);
+        match (call_result, cleanup, restore, field_restore) {
+            (_, Err(error), _, _) => Err(error),
+            (Err(error), Ok(()), _, _)
+            | (_, Ok(()), Err(error), _)
+            | (_, Ok(()), Ok(()), Err(error)) => Err(error),
+            (Ok(value), Ok(()), Ok(()), Ok(())) => Ok(value),
         }
     }
 }
@@ -1175,6 +1207,11 @@ impl Interpreter {
         if self.retained_resource_program.is_some() {
             return Err("checked Resource program is already installed".to_string());
         }
+        let field_context = crate::interpreter::field_updates::FieldUpdateContext::new(
+            program.clone(),
+            purpose,
+            self.scopes.len(),
+        )?;
         if !program.checked().resource_hooks.is_empty() {
             self.resource_transport = Some(
                 ResourceTransport::checked_only(program.clone(), purpose, self.scopes.len())
@@ -1182,6 +1219,7 @@ impl Interpreter {
             );
         }
         self.retained_resource_program = Some((program, purpose));
+        self.field_update_context = field_context;
         Ok(())
     }
 
@@ -1216,6 +1254,9 @@ impl Interpreter {
         let previous = std::mem::replace(current, purpose);
         if let Some(transport) = &mut self.resource_transport {
             transport.checked.replace_purpose(purpose);
+        }
+        if let Some(context) = &mut self.field_update_context {
+            context.replace_purpose(purpose);
         }
         Some(previous)
     }

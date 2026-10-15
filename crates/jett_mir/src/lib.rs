@@ -1,5 +1,7 @@
 //! Jett's backend-neutral control-flow graph representation.
 
+mod field_updates;
+pub use field_updates::validate_field_updates;
 mod actor_graph;
 pub use actor_graph::{
     native_graph_metadata_expression, native_graph_metadata_local, validate_native_actor_graphs,
@@ -51,6 +53,7 @@ mod reflected_callable;
 pub use reflected_callable::validate_reflected_callable_plans;
 mod handlers;
 mod iteration_views;
+mod match_bindings;
 pub use generated_functions::prepare_native_generated_functions;
 mod sequences;
 pub use sequences::prepare_native_sequences;
@@ -98,12 +101,14 @@ pub struct Function {
     prepared_present_successes: Vec<uninhabited_sums::PreparedPresentSuccess>,
     prepared_view_iterations: Vec<iteration_views::PreparedViewIteration>,
     original_view_iterations: Vec<iteration_views::OriginalIteration>,
+    match_bindings: Option<match_bindings::Witness>,
     breakpoint_regions: Vec<breakpoint_regions::BreakpointRegion>,
     call_owner_generations: Vec<call_owner_generations::CallOwnerGeneration>,
     resource_lowering: Option<resource_ownership::ResourceLoweringWitness>,
     ordinary_borrowed_sums: Option<ordinary_borrowed_sums::Witness>,
     reflected_callable: Option<reflected_callable::Witness>,
     actor_graph: Option<actor_graph::Witness>,
+    field_updates: Option<field_updates::Witness>,
 }
 
 impl Function {
@@ -299,6 +304,17 @@ pub enum StatementKind {
     Assign {
         target: Expression,
         value: Expression,
+    },
+    /// Check the fixed, sealed owner path before acquiring any RHS value.
+    PrepareFieldUpdate {
+        place: hir::FieldUpdatePlace,
+        begin: bool,
+    },
+    /// Commit only after RHS staging; old field retirement follows transfer.
+    UpdateField {
+        target: Expression,
+        value: Expression,
+        place: hir::FieldUpdatePlace,
     },
     Evaluate(Expression),
     HandleDefault(Expression),
@@ -761,7 +777,8 @@ impl FunctionValidator<'_, '_> {
                 self.check_local(*root, statement.span, "generation root");
                 self.check_local(*rhs_owner, statement.span, "generation acquired RHS");
             }
-            StatementKind::CloseCallOwnerGeneration { .. } => {}
+            StatementKind::PrepareFieldUpdate { .. }
+            | StatementKind::CloseCallOwnerGeneration { .. } => {}
             StatementKind::ReflectedContainerReady { source, .. }
             | StatementKind::ReflectedValueReady { source, .. } => {
                 self.check_local(*source, statement.span, "reflected container source");
@@ -830,7 +847,8 @@ impl FunctionValidator<'_, '_> {
                     );
                 }
             }
-            StatementKind::Assign { target, value } => {
+            StatementKind::Assign { target, value }
+            | StatementKind::UpdateField { target, value, .. } => {
                 self.expression(target);
                 self.expression(value);
             }
@@ -968,7 +986,8 @@ impl FunctionValidator<'_, '_> {
                 self.check_local(*local, statement.span, "nested let statement");
                 self.expression(value);
             }
-            hir::StatementKind::Assign { target, value } => {
+            hir::StatementKind::Assign { target, value }
+            | hir::StatementKind::UpdateField { target, value, .. } => {
                 self.expression(target);
                 self.expression(value);
             }
@@ -1501,6 +1520,7 @@ fn lower_function_body(
     let generation_capture = std::mem::take(&mut builder.generation_capture);
     let resource_capture = std::mem::take(&mut builder.resource_capture);
     let ordinary_sum_capture = std::mem::take(&mut builder.ordinary_sum_capture);
+    let match_capture = std::mem::take(&mut builder.match_capture);
     let mut lowered = Function {
         id: function.id,
         identity: function.identity.clone(),
@@ -1516,12 +1536,14 @@ fn lower_function_body(
         prepared_present_successes: Vec::new(),
         prepared_view_iterations: Vec::new(),
         original_view_iterations: Vec::new(),
+        match_bindings: None,
         breakpoint_regions: Vec::new(),
         call_owner_generations: Vec::new(),
         resource_lowering: None,
         ordinary_borrowed_sums: None,
         reflected_callable: None,
         actor_graph: None,
+        field_updates: None,
     };
     lowered.breakpoint_regions =
         breakpoint_capture
@@ -1551,8 +1573,20 @@ fn lower_function_body(
                 message,
             })?;
     iteration_views::capture_original(&mut lowered, types);
+    lowered.match_bindings =
+        match_capture
+            .finish(&lowered, types)
+            .map_err(|message| LowerError {
+                span: function.span,
+                message,
+            })?;
     lowered.actor_graph =
         actor_graph::seal(function, &lowered, types).map_err(|message| LowerError {
+            span: function.span,
+            message,
+        })?;
+    lowered.field_updates =
+        field_updates::seal(function, &lowered, types).map_err(|message| LowerError {
             span: function.span,
             message,
         })?;
@@ -1570,6 +1604,7 @@ struct Builder<'a> {
     lexical_scopes: Vec<resource_ownership::LexicalScope>,
     reflected_original_prefix: Option<Vec<usize>>,
     call_view_scopes: Vec<Vec<LocalId>>,
+    field_update_scopes: Vec<(hir::FieldUpdatePlace, usize)>,
     resource_call_scopes: Vec<ResourceCallRegionId>,
     resource_constructor_scopes: Vec<ResourceConstructorId>,
     resource_operation_scopes: Vec<resource_ownership::constructors::ResourceOperationRegion>,
@@ -1580,6 +1615,7 @@ struct Builder<'a> {
     generation_capture: call_owner_generations::Capture,
     resource_capture: resource_ownership::Capture,
     ordinary_sum_capture: ordinary_borrowed_sums::Capture,
+    match_capture: match_bindings::Capture,
     reflected_produced_return: bool,
 }
 
@@ -1605,6 +1641,7 @@ impl<'a> Builder<'a> {
             current: BlockId(0),
             loops: Vec::new(),
             call_view_scopes: Vec::new(),
+            field_update_scopes: Vec::new(),
             resource_call_scopes: Vec::new(),
             resource_constructor_scopes: Vec::new(),
             resource_operation_scopes: Vec::new(),
@@ -1616,6 +1653,7 @@ impl<'a> Builder<'a> {
             generation_capture: call_owner_generations::Capture::default(),
             resource_capture: resource_ownership::Capture::default(),
             ordinary_sum_capture: ordinary_borrowed_sums::Capture::default(),
+            match_capture: match_bindings::Capture::default(),
             reflected_produced_return: false,
         }
     }
@@ -1818,6 +1856,44 @@ impl<'a> Builder<'a> {
                     statement.span,
                 );
             }
+            hir::StatementKind::UpdateField {
+                target,
+                value,
+                place,
+            } => {
+                self.push(
+                    StatementKind::PrepareFieldUpdate {
+                        place: place.clone(),
+                        begin: true,
+                    },
+                    statement.span,
+                );
+                self.field_update_scopes
+                    .push((place.clone(), self.loops.len()));
+                let value = self.lower_value(value);
+                self.field_update_scopes.pop();
+                let staged = self.temporary(value.ty, value.span);
+                self.push(
+                    StatementKind::Let {
+                        local: staged,
+                        value,
+                    },
+                    statement.span,
+                );
+                let value = Expression {
+                    kind: hir::ExpressionKind::Local(staged),
+                    ty: target.ty,
+                    span: statement.span,
+                };
+                self.push(
+                    StatementKind::UpdateField {
+                        target: target.clone(),
+                        value,
+                        place: place.clone(),
+                    },
+                    statement.span,
+                );
+            }
             hir::StatementKind::Assign { target, value } => {
                 // Keep the current owner readable throughout the entire RHS.
                 let generation = match target.kind {
@@ -1903,6 +1979,22 @@ impl<'a> Builder<'a> {
                 self.terminate(TerminatorKind::Return(value), statement.span);
             }
             hir::StatementKind::Break => {
+                let abandoned = self
+                    .field_update_scopes
+                    .iter()
+                    .rev()
+                    .filter(|(_, depth)| *depth >= self.loops.len())
+                    .map(|(place, _)| place.clone())
+                    .collect::<Vec<_>>();
+                for place in abandoned {
+                    self.push(
+                        StatementKind::PrepareFieldUpdate {
+                            place,
+                            begin: false,
+                        },
+                        statement.span,
+                    );
+                }
                 if !self.resource_operation_scopes.is_empty() {
                     self.resource_error = Some(LowerError { span: statement.span, message: "pending Resource call region: Break needs its exact operation-depth exit proof".into() });
                 }
@@ -1919,6 +2011,22 @@ impl<'a> Builder<'a> {
                 self.terminate(TerminatorKind::Goto(target), statement.span);
             }
             hir::StatementKind::Continue => {
+                let abandoned = self
+                    .field_update_scopes
+                    .iter()
+                    .rev()
+                    .filter(|(_, depth)| *depth >= self.loops.len())
+                    .map(|(place, _)| place.clone())
+                    .collect::<Vec<_>>();
+                for place in abandoned {
+                    self.push(
+                        StatementKind::PrepareFieldUpdate {
+                            place,
+                            begin: false,
+                        },
+                        statement.span,
+                    );
+                }
                 if !self.resource_operation_scopes.is_empty() {
                     self.resource_error = Some(LowerError { span: statement.span, message: "pending Resource call region: Continue needs its exact operation-depth exit proof".into() });
                 }
@@ -2129,11 +2237,17 @@ impl<'a> Builder<'a> {
                 otherwise = Some(*block);
             }
         }
-        let borrowed = match &scrutinee.kind {
-            hir::ExpressionKind::View(_) | hir::ExpressionKind::Field { .. } => true,
-            hir::ExpressionKind::Local(local) => self.view_params.contains(local),
-            _ => false,
-        };
+        let borrowed =
+            match match_bindings::requires_snapshot(self.types, scrutinee, &self.view_params) {
+                Ok(borrowed) => borrowed,
+                Err(message) => {
+                    self.resource_error = Some(LowerError {
+                        span: statement_span,
+                        message,
+                    });
+                    return;
+                }
+            };
         let scrutinee = self.lower_value(scrutinee);
         let scrutinee = if borrowed {
             Expression {
@@ -2144,6 +2258,7 @@ impl<'a> Builder<'a> {
         } else {
             scrutinee.clone()
         };
+        let match_header = self.current;
         self.terminate(
             TerminatorKind::Switch {
                 scrutinee: scrutinee.clone(),
@@ -2153,11 +2268,33 @@ impl<'a> Builder<'a> {
             scrutinee.span,
         );
 
+        let selector = self.blocks[match_header.index() as usize]
+            .terminator
+            .clone();
+        let mut arm_regions = Vec::with_capacity(arms.len());
         let mut arm_exits = Vec::with_capacity(arms.len());
         for (arm, block) in arms.iter().zip(arm_blocks) {
+            let first_child = self.blocks.len();
             self.current = block;
             self.lower_block(&arm.body);
+            let region = std::iter::once(block)
+                .chain(self.blocks[first_child..].iter().map(|block| block.id))
+                .collect();
+            arm_regions.push((block, region));
             arm_exits.push((self.current, self.open(), arm.span));
+        }
+        if let Err(message) = self.match_capture.record(
+            match_header,
+            selector,
+            statement_span,
+            arm_regions,
+            &self.locals,
+            self.types,
+        ) {
+            self.resource_error = Some(LowerError {
+                span: statement_span,
+                message,
+            });
         }
 
         if arm_exits.iter().any(|(_, falls_through, _)| *falls_through) {

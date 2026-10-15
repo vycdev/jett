@@ -376,7 +376,7 @@ fn binding_metadata(
     Ok(())
 }
 
-fn definitions(function: &Function, id: LocalId) -> usize {
+pub(super) fn definitions(function: &Function, id: LocalId) -> usize {
     let mut count = 0;
     for block in &function.blocks {
         for statement in &block.statements {

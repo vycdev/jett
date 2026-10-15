@@ -235,7 +235,8 @@ fn collect_function_references(function: &Function, references: &mut References<
                 | StatementKind::HandleDefault(value) => {
                     collect_expression_references(value, references);
                 }
-                StatementKind::Assign { target, value } => {
+                StatementKind::Assign { target, value }
+                | StatementKind::UpdateField { target, value, .. } => {
                     collect_expression_references(target, references);
                     collect_expression_references(value, references);
                 }
@@ -254,6 +255,7 @@ fn collect_function_references(function: &Function, references: &mut References<
                 // their immutable Source archives are not callable roots.
                 StatementKind::OpenCallOwnerGeneration { .. }
                 | StatementKind::ReplaceCallOwnerGeneration { .. }
+                | StatementKind::PrepareFieldUpdate { .. }
                 | StatementKind::CloseCallOwnerGeneration { .. }
                 | StatementKind::EndCallView { .. }
                 | StatementKind::ResourceLexicalExit(_)
@@ -300,7 +302,8 @@ fn collect_hir_block_references(block: &hir::Block, references: &mut References<
             | hir::StatementKind::Respond(value) => {
                 collect_expression_references(value, references);
             }
-            hir::StatementKind::Assign { target, value } => {
+            hir::StatementKind::Assign { target, value }
+            | hir::StatementKind::UpdateField { target, value, .. } => {
                 collect_expression_references(target, references);
                 collect_expression_references(value, references);
             }

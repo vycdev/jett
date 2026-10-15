@@ -141,6 +141,11 @@ pub(crate) struct CheckedClosureCapture {
 }
 
 impl CheckedClosureCapture {
+    pub(crate) fn field_original_node(&self) -> Option<&Expr> {
+        let node = original_source::closure_node_in_body(self.origin.body()?, self.body_span)?;
+        let global = original_source::closure_node(&self.origin.checked, self.body_span)?;
+        std::ptr::eq(node, global).then_some(node)
+    }
     pub(crate) fn seal(origin: &OriginalClosureOwner, value: &Value) -> Option<Arc<Self>> {
         let Value::Function {
             type_context,
@@ -242,6 +247,20 @@ pub(crate) fn invocation_origin(
         })
 }
 
+/// Reuse the existing capture snapshot; no span/name-only closure authority.
+pub(crate) fn field_invocation_proof(
+    value: &Value,
+    checked: &Arc<CheckedResourceProgram>,
+) -> Option<Arc<CheckedClosureCapture>> {
+    let Value::Function { type_context, .. } = value else {
+        return None;
+    };
+    let proof = type_context.reflected_capture.as_ref()?;
+    proof
+        .validate_source(checked, proof.source_type, value)
+        .then(|| proof.clone())
+}
+
 pub(crate) fn same_snapshot(a: &Value, b: &Value) -> bool {
     value_equal::value(a, b)
 }
@@ -256,4 +275,19 @@ pub(crate) fn original_root_types(
     installed: &crate::checked_types::CheckedExpressionTypes,
 ) -> bool {
     checked_context::root_matches(checked, installed)
+}
+
+/// Compare data projections against one retained concrete body. This does not
+/// grant executable identity or field-write authority by itself.
+pub(crate) fn matches_field_function_projection(
+    current: &crate::checked_types::CheckedFunctionTypes,
+    arguments: &[super::ClosureTypeArgument],
+    original: &jett_typecheck::CheckedGenericFunctionInstantiation,
+    types: &jett_types::TypeInterner,
+) -> bool {
+    let context = super::ClosureTypeContext {
+        arguments: arguments.to_vec(),
+        ..Default::default()
+    };
+    checked_context::function_matches(current, &context, original, types)
 }

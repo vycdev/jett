@@ -204,7 +204,8 @@ impl<'a> Walk<'a> {
             | StatementKind::CheckRefinement { call: value, .. }
             | StatementKind::Evaluate(value)
             | StatementKind::HandleDefault(value) => self.value(value)?,
-            StatementKind::Assign { target, value } => {
+            StatementKind::Assign { target, value }
+            | StatementKind::UpdateField { target, value, .. } => {
                 self.value(target)?;
                 self.value(value)?;
             }
@@ -226,6 +227,7 @@ impl<'a> Walk<'a> {
             | StatementKind::ResourceLexicalExit(_)
             | StatementKind::OpenCallOwnerGeneration { .. }
             | StatementKind::ReplaceCallOwnerGeneration { .. }
+            | StatementKind::PrepareFieldUpdate { .. }
             | StatementKind::CloseCallOwnerGeneration { .. }
             | StatementKind::EndCallView { .. }
             | StatementKind::ReflectedContainerReady { .. }
@@ -265,7 +267,8 @@ impl<'a> Walk<'a> {
             | hir::StatementKind::HandleDefault(value)
             | hir::StatementKind::Expression(value)
             | hir::StatementKind::Respond(value) => self.value(value)?,
-            hir::StatementKind::Assign { target, value } => {
+            hir::StatementKind::Assign { target, value }
+            | hir::StatementKind::UpdateField { target, value, .. } => {
                 self.value(target)?;
                 self.value(value)?;
             }

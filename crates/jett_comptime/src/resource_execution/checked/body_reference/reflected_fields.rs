@@ -5,6 +5,9 @@ use jett_parser::ast::ForStmt;
 use jett_resolve::DefKind;
 use jett_types::ReflectionFieldInfo;
 
+#[path = "reflected_fields/ordinary_field_updates.rs"]
+mod ordinary_field_updates;
+
 pub(crate) struct PreparedReflectedFieldLoop {
     parent: CheckedBodyReference,
     key: CheckedAttemptKey,
@@ -160,13 +163,25 @@ impl CheckedExecution {
         bind: &ComptimeTypeBindStmt,
         iteration: &PreparedReflectedFieldIteration,
     ) -> Result<PreparedDirectScope, ResourceExecutionError> {
+        // Preserve Resource entry eligibility before and after shared Source selection.
+        self.validate_executable_cursor(&iteration.owner.parent.cursor)?;
+        self.validate_executable_cursor(&self.body)?;
+        let prepared = self.prepare_original_reflected_field_scope(bind, iteration)?;
+        self.validate_executable_cursor(&prepared.reference.cursor)?;
+        Ok(prepared)
+    }
+
+    fn prepare_original_reflected_field_scope(
+        &self,
+        bind: &ComptimeTypeBindStmt,
+        iteration: &PreparedReflectedFieldIteration,
+    ) -> Result<PreparedDirectScope, ResourceExecutionError> {
         let proof = &iteration.owner;
-        self.validate_executable_cursor(&proof.parent.cursor)?;
-        if self.attempt_key(&proof.parent.cursor)? != proof.key {
+        if self.field_attempt_key(&proof.parent.cursor)? != proof.key {
             return Err(ResourceExecutionError::MissingCheckedBody);
         }
         if !self
-            .attempt_key(&self.body)?
+            .field_attempt_key(&self.body)?
             .is_lexical_descendant_of(&proof.key)
         {
             return Err(ResourceExecutionError::MissingCheckedBody);
@@ -257,7 +272,6 @@ impl CheckedExecution {
             .ok_or(ResourceExecutionError::MissingCheckedBody)?
             .path
             .push(RegionStep::Scope(original.span));
-        self.validate_executable_cursor(&cursor)?;
         Ok(PreparedDirectScope {
             reference: CheckedBodyReference { cursor },
             projection: scoped_projection(candidate, &self.program.checked().interner),

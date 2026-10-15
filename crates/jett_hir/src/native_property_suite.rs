@@ -448,6 +448,7 @@ fn append_trial(
             view_source: local.view_source,
             is_view_parameter: false,
             view_iteration: None,
+            match_binding: None,
         })
         .collect::<Vec<_>>();
     crate::validate_hir_invocation(

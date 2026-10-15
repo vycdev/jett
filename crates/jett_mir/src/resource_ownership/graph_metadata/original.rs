@@ -93,7 +93,7 @@ fn written(function: &hir::Function) -> HashSet<LocalId> {
     fn walk_block(block: &hir::Block, found: &mut HashSet<LocalId>) {
         for statement in &block.statements {
             match &statement.kind {
-                H::Assign { target, .. } => {
+                H::Assign { target, .. } | H::UpdateField { target, .. } => {
                     let mut base = target;
                     while let E::Field { base: inner, .. } | E::View(inner) = &base.kind {
                         base = inner;
@@ -842,7 +842,7 @@ impl Analysis<'_> {
                         locals.remove(local);
                     }
                 }
-                H::Assign { target, value } => {
+                H::Assign { target, value } | H::UpdateField { target, value, .. } => {
                     self.evaluate(value, function, locals, rows, None);
                     let mut base = target;
                     while let E::Field { base: inner, .. } | E::View(inner) = &base.kind {

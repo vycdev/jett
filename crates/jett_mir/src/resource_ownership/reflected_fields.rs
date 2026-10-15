@@ -103,6 +103,13 @@ impl Capture {
 }
 
 impl FieldDispatch {
+    pub(super) fn matches_field_update_scope(
+        &self,
+        scope: &hir::RequiredScopeIdentity,
+        binding: &hir::ScopedTypeBinding,
+    ) -> bool {
+        self.original.matches_field_update_scope(scope, binding)
+    }
     fn current(
         &self,
         witness: &ResourceLoweringWitness,

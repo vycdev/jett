@@ -103,6 +103,7 @@ impl CopyValuePlan {
         types: &TypeInterner,
         program: PlanningContext<'_>,
     ) -> Result<Self, String> {
+        crate::field_updates::validate_function(function, types)?;
         crate::ordinary_borrowed_sums::validate(function, types)?;
         if program.companion.is_none()
             && (crate::resource_type_pending(types, function.return_type)
@@ -294,6 +295,18 @@ impl CopyValuePlan {
                     StatementKind::CheckRefinement { local, call, .. } => {
                         visit(call, &mut reads, &mut temporaries, types, program, false)?;
                         Some(local.index() as usize)
+                    }
+                    StatementKind::PrepareFieldUpdate { place, begin: true } => {
+                        reads.insert(place.root().index() as usize);
+                        None
+                    }
+                    StatementKind::PrepareFieldUpdate { begin: false, .. } => None,
+                    StatementKind::UpdateField { value, place, .. } => {
+                        reads.insert(place.root().index() as usize);
+                        visit(value, &mut reads, &mut temporaries, types, program, false)?;
+                        // Independent staged acquisition plus displaced-owner slot.
+                        temporaries += 2;
+                        None
                     }
                     StatementKind::Assign { target, value } => {
                         let ExpressionKind::Local(local) = target.kind else {

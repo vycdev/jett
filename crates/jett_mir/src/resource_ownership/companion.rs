@@ -93,7 +93,8 @@ impl<'p> CompanionContext<'p> {
                     | StatementKind::BeginCallView { value, .. }
                     | StatementKind::Evaluate(value)
                     | StatementKind::HandleDefault(value) => remember(value),
-                    StatementKind::Assign { target, value } => {
+                    StatementKind::Assign { target, value }
+                    | StatementKind::UpdateField { target, value, .. } => {
                         remember(target);
                         remember(value);
                     }

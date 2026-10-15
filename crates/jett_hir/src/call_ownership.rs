@@ -72,6 +72,7 @@ pub struct SourceArgumentWitness {
     observation: Option<ObservationProof>,
     handled_result: Option<SourceHandledResult>,
     projection_root: Option<SourceProjectionRoot>,
+    match_origin: Option<(LocalId, crate::MatchBinding)>,
 }
 
 /// Original checked flow occurrence, separate from the owner's stored type.
@@ -159,6 +160,9 @@ impl ArgumentOwnership {
 }
 
 impl SourceArgumentWitness {
+    pub fn match_origin(&self) -> Option<(LocalId, crate::MatchBinding)> {
+        self.match_origin
+    }
     pub fn projection_root(&self) -> Option<(LocalId, Span, TypeId, TypeId)> {
         self.projection_root.map(|root| {
             (
@@ -1548,6 +1552,10 @@ impl CallOwnership {
                         visit(root.occurrence_type);
                         visit(root.storage_type);
                     }
+                    if let Some((_, proof)) = argument.witness.match_origin {
+                        visit(proof.enum_type());
+                        visit(proof.binder_type());
+                    }
                     if let Some(proof) = argument.retained_snapshot {
                         visit(proof.actual_type);
                         visit(proof.occurrence_type);
@@ -1820,6 +1828,9 @@ impl CallOwnership {
                     if let Some(root) = argument.witness.projection_root {
                         visit(root.local);
                     }
+                    if let Some((root, _)) = argument.witness.match_origin {
+                        visit(root);
+                    }
                     if let Some(proof) = argument.observation_proof() {
                         if let Some(purpose) = &proof.purpose {
                             purpose.metadata_locals(&mut visit);
@@ -1886,6 +1897,9 @@ impl CallOwnership {
                 for argument in &mut source.arguments {
                     if let Some(root) = &mut argument.witness.projection_root {
                         root.local = map(root.local)?;
+                    }
+                    if let Some((root, _)) = &mut argument.witness.match_origin {
+                        *root = map(*root)?;
                     }
                     if let Some(proof) = &mut argument.witness.observation {
                         if let Some(purpose) = &mut proof.purpose {
@@ -2234,6 +2248,9 @@ pub struct OwnershipLocalInfo {
     pub is_view_parameter: bool,
     /// Present only while an exact original/prepared viewed loop proves this binding.
     pub view_iteration: Option<crate::ViewIterationBinding>,
+    /// Canonical payload origin, active only inside its exact match arm.
+    /// Source invocation mode separately decides whether the binding is borrowed.
+    pub match_binding: Option<crate::MatchBinding>,
 }
 
 /// Validate structural authority before considering the current operand tree.
@@ -2432,6 +2449,12 @@ pub fn validate_operand_ownership(
                     return Err("call ownership sealed occurrence has no exact expected secret qualification".into());
                 }
                 validate_origin(&argument.origin, &local, types)?;
+                if source_match_origin(&argument.origin, &local)? != witness.match_origin {
+                    return Err(
+                        "call ownership match payload differs from its original scoped origin"
+                            .into(),
+                    );
+                }
                 validate_effect(argument, source.context, types)?;
                 if argument.effect == CheckedCallerEffect::ObserveData {
                     let proof = argument
@@ -2697,6 +2720,39 @@ fn validate_source(
     Ok(())
 }
 
+fn source_match_origin(
+    origin: &CallerOrigin,
+    local: &impl Fn(LocalId) -> Option<OwnershipLocalInfo>,
+) -> Result<Option<(LocalId, crate::MatchBinding)>, String> {
+    let mut id = match origin {
+        CallerOrigin::Binding(fact) => fact.local,
+        CallerOrigin::BorrowedProjection {
+            source: CallerViewSource::Local(id),
+        }
+        | CallerOrigin::OwnedFieldCopy {
+            parent: CallerViewSource::Local(id),
+        } => *id,
+        _ => return Ok(None),
+    };
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        if !seen.insert(id) {
+            return Err("call ownership match payload alias origin is cyclic".into());
+        }
+        let metadata = require_local(id, local)?;
+        if let Some(proof) = metadata.match_binding {
+            if !proof.matches_binding(metadata.ty, metadata.span) {
+                return Err("call ownership match payload changed its exact declaration".into());
+            }
+            return Ok(Some((id, proof)));
+        }
+        match metadata.view_source {
+            Some(source) => id = source,
+            None => return Ok(None),
+        }
+    }
+}
+
 fn validate_origin(
     origin: &CallerOrigin,
     local: &impl Fn(LocalId) -> Option<OwnershipLocalInfo>,
@@ -2734,8 +2790,14 @@ fn validate_origin(
                     let iteration = value
                         .view_iteration
                         .is_some_and(|proof| proof.matches_binding(fact.ty, fact.declaration_span));
+                    let matched = value
+                        .match_binding
+                        .is_some_and(|proof| proof.matches_binding(fact.ty, fact.declaration_span));
                     if value.view_source != expected
-                        || (expected.is_none() && !value.is_view_parameter && !iteration)
+                        || (expected.is_none()
+                            && !value.is_view_parameter
+                            && !iteration
+                            && !matched)
                     {
                         return Err(
                             "call ownership borrowed binding lost its immediate source".into()
@@ -3334,6 +3396,7 @@ impl crate::BodyLowerer<'_, '_> {
                 observation,
                 handled_result: None,
                 projection_root: self.checked_flow_projection_root(fact.source_span, &origin)?,
+                match_origin: source_match_origin(&origin, &|id| self.ownership_local_info(id))?,
             };
             let mut argument = ArgumentOwnership {
                 source_span: fact.source_span,
@@ -3612,7 +3675,7 @@ impl crate::BodyLowerer<'_, '_> {
         }
     }
 
-    fn ownership_local_info(&self, id: LocalId) -> Option<OwnershipLocalInfo> {
+    pub(super) fn ownership_local_info(&self, id: LocalId) -> Option<OwnershipLocalInfo> {
         let local = self
             .locals
             .get(id.index() as usize)
@@ -3625,6 +3688,7 @@ impl crate::BodyLowerer<'_, '_> {
             view_source: local.view_source,
             is_view_parameter,
             view_iteration: self.view_iteration_bindings.get(&id).copied(),
+            match_binding: self.match_bindings.get(&id).copied(),
         })
     }
 

@@ -77,7 +77,7 @@ impl<'a> Inventory<'a> {
                 | H::Expression(value)
                 | H::HandleDefault(value)
                 | H::Respond(value) => self.expression(value)?,
-                H::Assign { target, value } => {
+                H::Assign { target, value } | H::UpdateField { target, value, .. } => {
                     self.expression(target)?;
                     self.expression(value)?;
                 }

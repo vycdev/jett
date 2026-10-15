@@ -95,7 +95,8 @@ impl Extractor<'_> {
                 | StatementKind::HandleDefault(value)
                 | StatementKind::Expression(value)
                 | StatementKind::Respond(value) => self.expression(value, parent),
-                StatementKind::Assign { target, value } => {
+                StatementKind::Assign { target, value }
+                | StatementKind::UpdateField { target, value, .. } => {
                     self.expression(target, parent);
                     self.expression(value, parent);
                 }
@@ -465,6 +466,11 @@ fn block_mentions_local(block: &Block, target: u32, include_bindings: bool) -> b
             StatementKind::Assign {
                 target: place,
                 value,
+            }
+            | StatementKind::UpdateField {
+                target: place,
+                value,
+                ..
             } => {
                 expression_mentions_local(place, target, include_bindings)
                     || expression_mentions_local(value, target, include_bindings)

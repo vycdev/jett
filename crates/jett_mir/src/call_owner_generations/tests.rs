@@ -234,14 +234,24 @@ fn generation_operations_need_exact_private_sites_identity_and_independent_rhs()
                     .iter_mut()
                     .find(|block| {
                         block.statements.iter().any(|s| {
-                            matches!(s.kind, StatementKind::CloseCallOwnerGeneration { .. })
+                            matches!(
+                                s.kind,
+                                StatementKind::PrepareFieldUpdate { .. }
+                                    | StatementKind::CloseCallOwnerGeneration { .. }
+                            )
                         })
                     })
                     .expect("close block");
                 let value = last
                     .statements
                     .iter()
-                    .find(|s| matches!(s.kind, StatementKind::CloseCallOwnerGeneration { .. }))
+                    .find(|s| {
+                        matches!(
+                            s.kind,
+                            StatementKind::PrepareFieldUpdate { .. }
+                                | StatementKind::CloseCallOwnerGeneration { .. }
+                        )
+                    })
                     .unwrap()
                     .clone();
                 last.statements.push(value);
@@ -278,7 +288,13 @@ fn generation_disconnected_copy_and_alternate_scope_entry_are_not_authority() {
         .blocks
         .iter()
         .flat_map(|b| &b.statements)
-        .find(|s| matches!(s.kind, StatementKind::CloseCallOwnerGeneration { .. }))
+        .find(|s| {
+            matches!(
+                s.kind,
+                StatementKind::PrepareFieldUpdate { .. }
+                    | StatementKind::CloseCallOwnerGeneration { .. }
+            )
+        })
         .unwrap()
         .clone();
     let block = BlockId(function.blocks.len() as u32);

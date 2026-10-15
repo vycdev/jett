@@ -1,5 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::assignment_places::{AssignmentContext, AssignmentContextRoot, AssignmentSite};
+use crate::{CheckedAssignmentPlace, CheckedViewSource};
+mod field_updates;
+
 use crate::{
     CheckedBindingFact, CheckedBindingMode, CheckedBodyFacts, CheckedCallOwnership,
     CheckedCallerEffect, CheckedComptimeTypeBinding, CheckedGenericFunctionInstantiation,
@@ -47,6 +51,7 @@ struct VarInfo {
     /// The span where the variable was consumed (for "previously consumed here" labels).
     consumed_span: Option<Span>,
     debug_consumed: bool,
+    borrowed_from: Option<BindingKey>,
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +194,7 @@ enum BindingKey {
 #[derive(Clone, Copy)]
 struct OwnershipBodyFacts<'a> {
     binding_facts: &'a HashMap<Span, CheckedBindingFact>,
+    assignment_places: &'a HashMap<Span, CheckedAssignmentPlace>,
     call_ownership: &'a HashMap<Span, CheckedCallOwnership>,
     type_map: &'a HashMap<Span, TypeId>,
     static_selections: Option<&'a HashMap<Span, CheckedStaticSelection>>,
@@ -199,6 +205,7 @@ impl<'a> OwnershipBodyFacts<'a> {
     fn scoped(body: &'a CheckedBodyFacts) -> Self {
         Self {
             binding_facts: &body.binding_facts,
+            assignment_places: &body.assignment_places,
             call_ownership: &body.call_ownership,
             type_map: &body.type_map,
             static_selections: Some(&body.static_selections),
@@ -208,6 +215,7 @@ impl<'a> OwnershipBodyFacts<'a> {
     fn generic(body: &'a CheckedGenericFunctionInstantiation) -> Self {
         Self {
             binding_facts: &body.binding_facts,
+            assignment_places: &body.assignment_places,
             call_ownership: &body.call_ownership,
             type_map: &body.type_map,
             static_selections: Some(&body.static_selections),
@@ -233,6 +241,10 @@ pub struct OwnershipChecker<'a> {
     resolve: Option<&'a ResolveResult>,
     body_facts: Option<OwnershipBodyFacts<'a>>,
     generic_bodies: &'a [CheckedGenericFunctionInstantiation],
+    assignment_context: AssignmentContext,
+    validated_field_updates: HashSet<AssignmentSite>,
+    field_update_reservations: Vec<BindingKey>,
+    field_update_reservation_errors: HashSet<(BindingKey, Span)>,
 }
 
 impl<'a> OwnershipChecker<'a> {
@@ -246,6 +258,10 @@ impl<'a> OwnershipChecker<'a> {
             resolve: None,
             body_facts: None,
             generic_bodies: &[],
+            assignment_context: AssignmentContext::default(),
+            validated_field_updates: HashSet::new(),
+            field_update_reservations: Vec::new(),
+            field_update_reservation_errors: HashSet::new(),
         }
     }
 
@@ -253,6 +269,7 @@ impl<'a> OwnershipChecker<'a> {
         mut self,
         resolve: &'a ResolveResult,
         binding_facts: &'a HashMap<Span, CheckedBindingFact>,
+        assignment_places: &'a HashMap<Span, CheckedAssignmentPlace>,
         call_ownership: &'a HashMap<Span, CheckedCallOwnership>,
         type_map: &'a HashMap<Span, TypeId>,
         comptime_type_bindings: &'a HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
@@ -261,6 +278,7 @@ impl<'a> OwnershipChecker<'a> {
         self.resolve = Some(resolve);
         self.body_facts = Some(OwnershipBodyFacts {
             binding_facts,
+            assignment_places,
             call_ownership,
             type_map,
             static_selections: None,
@@ -339,6 +357,7 @@ impl<'a> OwnershipChecker<'a> {
                     ),
                     consumed_span: None,
                     debug_consumed: false,
+                    borrowed_from: self.binding_borrow_source(name),
                 },
             );
         }
@@ -374,7 +393,9 @@ impl<'a> OwnershipChecker<'a> {
         };
         let baseline = self.states.clone();
         let mut outcomes = Vec::new();
-        for body in bodies {
+        for (index, body) in bodies.iter().enumerate() {
+            let saved_context = self.assignment_context.clone();
+            self.assignment_context = saved_context.scoped(binding.span, index);
             let saved_facts = self
                 .body_facts
                 .replace(OwnershipBodyFacts::scoped(&body.body));
@@ -384,6 +405,7 @@ impl<'a> OwnershipChecker<'a> {
                 outcomes.push(self.states.clone());
             }
             self.body_facts = saved_facts;
+            self.assignment_context = saved_context;
         }
         self.states = self.merge_fallthrough_states(&baseline, &outcomes);
     }
@@ -405,9 +427,21 @@ impl<'a> OwnershipChecker<'a> {
     }
 
     pub fn check_module_with_debug(
-        mut self,
+        self,
         module: &Module,
     ) -> (Vec<Diagnostic>, HashMap<Span, HashSet<String>>) {
+        let (diagnostics, exclusions, _) = self.check_module_with_field_updates(module);
+        (diagnostics, exclusions)
+    }
+
+    pub(crate) fn check_module_with_field_updates(
+        mut self,
+        module: &Module,
+    ) -> (
+        Vec<Diagnostic>,
+        HashMap<Span, HashSet<String>>,
+        HashSet<AssignmentSite>,
+    ) {
         for item in &module.items {
             match item {
                 Item::Function(func) => {
@@ -415,13 +449,21 @@ impl<'a> OwnershipChecker<'a> {
                         self.check_function(func);
                     } else {
                         let bodies = self.generic_bodies;
-                        for body in bodies {
+                        for (index, body) in bodies.iter().enumerate() {
                             if self.resolve.is_some_and(|resolve| {
                                 resolve.scope_table.def(body.definition).span == func.name.span
                             }) {
                                 let saved =
                                     self.body_facts.replace(OwnershipBodyFacts::generic(body));
+                                let context = std::mem::replace(
+                                    &mut self.assignment_context,
+                                    AssignmentContext {
+                                        root: AssignmentContextRoot::Generic(index),
+                                        scopes: Vec::new(),
+                                    },
+                                );
                                 self.check_function(func);
+                                self.assignment_context = context;
                                 self.body_facts = saved;
                             }
                         }
@@ -455,7 +497,11 @@ impl<'a> OwnershipChecker<'a> {
                 _ => {}
             }
         }
-        (self.diagnostics, self.breakpoint_exclusions)
+        (
+            self.diagnostics,
+            self.breakpoint_exclusions,
+            self.validated_field_updates,
+        )
     }
 
     fn observe_actor_breakpoints(&mut self, actor: &ast::ActorDef) {
@@ -463,6 +509,7 @@ impl<'a> OwnershipChecker<'a> {
         // observations, with state and message bindings local to each handler.
         let saved = std::mem::take(&mut self.states);
         let diagnostics_len = self.diagnostics.len();
+        let validated = self.validated_field_updates.clone();
         for handler in &actor.handlers {
             self.states.clear();
             for field in &actor.state_fields {
@@ -478,6 +525,7 @@ impl<'a> OwnershipChecker<'a> {
                         ),
                         consumed_span: None,
                         debug_consumed: false,
+                        borrowed_from: None,
                     },
                 );
             }
@@ -498,12 +546,14 @@ impl<'a> OwnershipChecker<'a> {
                         ),
                         consumed_span: None,
                         debug_consumed: false,
+                        borrowed_from: None,
                     },
                 );
             }
             self.check_block(&handler.body);
         }
         self.diagnostics.truncate(diagnostics_len);
+        self.validated_field_updates = validated;
         self.states = saved;
     }
 
@@ -545,6 +595,7 @@ impl<'a> OwnershipChecker<'a> {
                     ),
                     consumed_span: None,
                     debug_consumed: false,
+                    borrowed_from: None,
                 },
             );
         }
@@ -633,6 +684,10 @@ impl<'a> OwnershipChecker<'a> {
                     .or_else(|| self.debug_copyable.get(&ident.span).copied())
                     .unwrap_or_else(|| info.is_none_or(|info| self.is_copyable(info.type_id)));
                 if !copyable && info.is_none_or(|info| info.state != OwnershipState::Viewed) {
+                    let key = self.binding_key(&ident.name, ident.span);
+                    if self.reject_reserved_field_update_change(&key, ident.span) {
+                        return;
+                    }
                     self.states
                         .entry(self.binding_key(&ident.name, ident.span))
                         .or_insert(VarInfo {
@@ -642,6 +697,7 @@ impl<'a> OwnershipChecker<'a> {
                             state_qualified_machine: false,
                             consumed_span: None,
                             debug_consumed: false,
+                            borrowed_from: None,
                         })
                         .debug_consumed = true;
                 }
@@ -683,11 +739,24 @@ impl<'a> OwnershipChecker<'a> {
                 state_qualified_machine: matches!(decl.ty, ast::TypeExpr::StateQualified(_, _, _)),
                 consumed_span: None,
                 debug_consumed: false,
+                borrowed_from: self.binding_borrow_source(&decl.name),
             },
         );
     }
 
     fn check_assign(&mut self, assign: &ast::AssignStmt) {
+        if let Some(place) = self
+            .body_facts
+            .and_then(|facts| facts.assignment_places.get(&assign.span))
+            .cloned()
+        {
+            self.check_field_update_assignment(assign, &place);
+            return;
+        }
+        if let Some(ident) = Self::field_assignment_root(&assign.target) {
+            let key = self.binding_key(&ident.name, ident.span);
+            self.reject_reserved_field_update_change(&key, ident.span);
+        }
         let initial_state = self.initial_task_state(&assign.value);
         self.check_expr_ownership(&assign.value);
         self.record_debug_move(&assign.value);
@@ -715,7 +784,15 @@ impl<'a> OwnershipChecker<'a> {
 
     fn check_return(&mut self, ret: &ast::ReturnStmt) {
         if let Some(expr) = &ret.value {
-            self.check_expr_ownership(expr);
+            if self.field_update_reservations.is_empty() {
+                self.check_expr_ownership(expr);
+            } else {
+                // A terminal return abandons every enclosing field commit.
+                // Existing handle flow excludes this state from fallthrough.
+                let reservations = std::mem::take(&mut self.field_update_reservations);
+                self.consume_expr(expr, expr.span());
+                self.field_update_reservations = reservations;
+            }
         }
     }
 
@@ -910,6 +987,11 @@ impl<'a> OwnershipChecker<'a> {
                 state_qualified_machine: false,
                 consumed_span: None,
                 debug_consumed: false,
+                borrowed_from: if for_stmt.view {
+                    self.field_loan_root(&for_stmt.iterable)
+                } else {
+                    self.binding_borrow_source(&for_stmt.variable)
+                },
             },
         );
 
@@ -959,6 +1041,7 @@ impl<'a> OwnershipChecker<'a> {
         self.record_debug_move(&match_stmt.expr);
         let baseline = self.states.clone();
         let mut fallthrough_states = Vec::new();
+        let loan_root = self.field_loan_root(&match_stmt.expr);
 
         let selected = self
             .body_facts
@@ -976,6 +1059,13 @@ impl<'a> OwnershipChecker<'a> {
             if let ast::Pattern::Variant(_, bindings) = &arm.pattern {
                 for binding in bindings {
                     self.register_checked_binding(binding);
+                    let key = self.binding_key(&binding.name, binding.span);
+                    if let Some(info) = self.states.get_mut(&key)
+                        && info.state == OwnershipState::Viewed
+                        && info.borrowed_from.is_none()
+                    {
+                        info.borrowed_from = loan_root.clone();
+                    }
                 }
             }
             self.check_block(&arm.body);
@@ -1168,6 +1258,7 @@ impl<'a> OwnershipChecker<'a> {
                             ),
                             consumed_span: None,
                             debug_consumed: false,
+                            borrowed_from: None,
                         },
                     );
                 }
@@ -1351,9 +1442,36 @@ impl<'a> OwnershipChecker<'a> {
     /// Consume a named variable. Handles all the ownership state transitions
     /// and error reporting.
     fn consume_variable(&mut self, name: &str, name_span: Span, consume_span: Span) {
-        if let Some(info) = self.states.get(&self.binding_key(name, name_span)) {
+        let key = self.binding_key(name, name_span);
+        if self
+            .states
+            .get(&key)
+            .is_some_and(|info| !self.is_copyable(info.type_id))
+            && self.reject_reserved_field_update_change(&key, name_span)
+        {
+            return;
+        }
+        if !self.field_update_reservations.is_empty() && self.has_dependent_field_alias(&key) {
+            self.diagnostics.push(Diagnostic::error(
+                401,
+                format!(
+                    "cannot transfer `{name}` into a field while a dependent local view is retained"
+                ),
+                name_span,
+            ));
+            return;
+        }
+        if let Some(info) = self.states.get(&key) {
             // Implicitly copyable values are never consumed.
             if self.is_copyable(info.type_id) {
+                return;
+            }
+            if !self.field_update_reservations.is_empty() && info.debug_consumed {
+                self.diagnostics.push(use_after_move(
+                    name,
+                    name_span,
+                    info.consumed_span.unwrap_or(consume_span),
+                ));
                 return;
             }
 
@@ -1375,6 +1493,13 @@ impl<'a> OwnershipChecker<'a> {
                         .states
                         .get_mut(&self.binding_key(name, name_span))
                         .unwrap();
+                    info.state = OwnershipState::Consumed;
+                    info.consumed_span = Some(consume_span);
+                }
+                OwnershipState::Pending if !self.field_update_reservations.is_empty() => {
+                    // Storing an admitted pending owned child transfers its
+                    // wrapper once; it does not inspect or implicitly join it.
+                    let info = self.states.get_mut(&key).unwrap();
                     info.state = OwnershipState::Consumed;
                     info.consumed_span = Some(consume_span);
                 }

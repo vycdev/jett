@@ -196,6 +196,7 @@ impl MoveValuePlan {
         {
             return Err("pending ResourceOwnershipPlan: ordinary MoveValuePlan cannot transfer or drop Resource custody".into());
         }
+        crate::field_updates::validate_function(function, types)?;
         validate_local_view_initializers(function, types)?;
         let call_views = crate::call_views::validate(function, types)?;
         // The private companion context already borrows the exact fresh custody
@@ -457,6 +458,43 @@ impl Flow<'_> {
                     self.read(*root, "generation owner")?;
                 }
                 StatementKind::CloseCallOwnerGeneration { .. } => {}
+                StatementKind::PrepareFieldUpdate { place, begin: true } => {
+                    place.validate(place.target(), &self.function.locals, self.types)?;
+                    let root = place.root();
+                    self.read(root, "field update owner preflight")?;
+                    self.require_owned_definition(root)?;
+                    self.reject_aliased_owner_change(root.index() as usize)?;
+                    if self.function.is_view_local(root)
+                        || (self.validate
+                            && self.active.iter().any(|token| {
+                                self.borrow_sources.get(token) == Some(&(root.index() as usize))
+                            }))
+                    {
+                        return Err("cannot update a borrowed field owner".into());
+                    }
+                }
+                StatementKind::PrepareFieldUpdate { begin: false, .. } => {}
+                StatementKind::UpdateField {
+                    target,
+                    value,
+                    place,
+                } => {
+                    place.validate(target, &self.function.locals, self.types)?;
+                    let root = place.root();
+                    self.read(root, "field update owner before commit")?;
+                    self.expr(value, false)?;
+                    self.read(root, "field update owner after RHS")?;
+                    self.require_owned_definition(root)?;
+                    self.reject_aliased_owner_change(root.index() as usize)?;
+                    if self.function.is_view_local(root)
+                        || (self.validate
+                            && self.active.iter().any(|token| {
+                                self.borrow_sources.get(token) == Some(&(root.index() as usize))
+                            }))
+                    {
+                        return Err("cannot commit through a borrowed field owner".into());
+                    }
+                }
                 StatementKind::ReplaceCallOwnerGeneration {
                     generation,
                     root,

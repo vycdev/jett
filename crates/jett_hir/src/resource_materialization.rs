@@ -508,7 +508,7 @@ pub(crate) fn walk_block(
             | S::Expression(value)
             | S::HandleDefault(value)
             | S::Respond(value) => walk_expression(value, visit)?,
-            S::Assign { target, value } => {
+            S::Assign { target, value } | S::UpdateField { target, value, .. } => {
                 walk_expression(target, visit)?;
                 walk_expression(value, visit)?;
             }

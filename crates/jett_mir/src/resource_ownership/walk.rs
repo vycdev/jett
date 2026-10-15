@@ -117,7 +117,7 @@ pub(super) fn hir_block(block: &hir::Block, visit: &mut impl FnMut(&Expression))
             | H::HandleDefault(value)
             | H::Expression(value)
             | H::Respond(value) => expression(value, visit),
-            H::Assign { target, value } => {
+            H::Assign { target, value } | H::UpdateField { target, value, .. } => {
                 expression(target, visit);
                 expression(value, visit);
             }
@@ -185,7 +185,8 @@ pub(crate) fn mir_block(block: &BasicBlock, visit: &mut impl FnMut(&Expression))
             | StatementKind::CheckRefinement { call: value, .. }
             | StatementKind::Evaluate(value)
             | StatementKind::HandleDefault(value) => expression(value, visit),
-            StatementKind::Assign { target, value } => {
+            StatementKind::Assign { target, value }
+            | StatementKind::UpdateField { target, value, .. } => {
                 expression(target, visit);
                 expression(value, visit);
             }
@@ -213,6 +214,7 @@ pub(crate) fn mir_block(block: &BasicBlock, visit: &mut impl FnMut(&Expression))
             | StatementKind::ResourceLexicalExit(_)
             | StatementKind::OpenCallOwnerGeneration { .. }
             | StatementKind::ReplaceCallOwnerGeneration { .. }
+            | StatementKind::PrepareFieldUpdate { .. }
             | StatementKind::CloseCallOwnerGeneration { .. }
             | StatementKind::EndCallView { .. }
             | StatementKind::ReflectedContainerReady { .. }
@@ -374,7 +376,8 @@ pub(super) fn mir_site(block: &BasicBlock, position: usize, visit: &mut impl FnM
             | StatementKind::CheckRefinement { call: value, .. }
             | StatementKind::Evaluate(value)
             | StatementKind::HandleDefault(value) => expression(value, visit),
-            StatementKind::Assign { target, value } => {
+            StatementKind::Assign { target, value }
+            | StatementKind::UpdateField { target, value, .. } => {
                 expression(target, visit);
                 expression(value, visit);
             }
@@ -402,6 +405,7 @@ pub(super) fn mir_site(block: &BasicBlock, position: usize, visit: &mut impl FnM
             | StatementKind::ResourceLexicalExit(_)
             | StatementKind::OpenCallOwnerGeneration { .. }
             | StatementKind::ReplaceCallOwnerGeneration { .. }
+            | StatementKind::PrepareFieldUpdate { .. }
             | StatementKind::CloseCallOwnerGeneration { .. }
             | StatementKind::EndCallView { .. }
             | StatementKind::ReflectedContainerReady { .. }

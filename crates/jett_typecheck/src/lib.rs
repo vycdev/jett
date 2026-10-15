@@ -1,5 +1,11 @@
 // Type checking for the Jett compiler.
 
+pub mod assignment_places;
+pub use assignment_places::{
+    CheckedAssignmentPlace, CheckedAssignmentPlaceError, CheckedFieldOwner, CheckedFieldProjection,
+    CheckedFieldUpdateResourceRequirement, checked_field_owner, field_update_resource_requirement,
+    validate_assignment_place_shape,
+};
 pub mod caller_ownership;
 pub mod capability;
 pub mod checker;

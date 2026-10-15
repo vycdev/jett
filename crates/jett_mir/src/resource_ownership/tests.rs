@@ -688,7 +688,7 @@ fn resource_ownership_self_rebind_and_closed_destination_keep_distinct_exact_rol
             };
             matches!(
                 current.blocks[operation.site().block().index() as usize].statements[index].kind,
-                StatementKind::Assign { .. }
+                StatementKind::Assign { .. } | StatementKind::UpdateField { .. }
             ) && matches!(operation.role(), ResourceOperationRole::Transfer { .. })
         }));
     }
@@ -714,7 +714,12 @@ fn resource_ownership_replacement_and_reseat_reject_changed_public_source_or_hea
                 .blocks
                 .iter_mut()
                 .flat_map(|block| &mut block.statements)
-                .find(|statement| matches!(statement.kind, StatementKind::Assign { .. }))
+                .find(|statement| {
+                    matches!(
+                        statement.kind,
+                        StatementKind::Assign { .. } | StatementKind::UpdateField { .. }
+                    )
+                })
                 .unwrap();
             let StatementKind::Assign { target, value } = &mut assignment.kind else {
                 unreachable!()

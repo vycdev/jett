@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::defs::{
     ActorDef, ActorId, BitfieldDef, BitfieldId, EnumDef, EnumId, InterfaceDef, InterfaceId,
@@ -26,6 +26,8 @@ pub struct TypeInterner {
     types: Vec<Type>,
     /// User-defined struct definitions.
     structs: Vec<StructDef>,
+    /// Exact builtin metadata owners, immutable under Source operations.
+    compiler_metadata_structs: HashSet<StructId>,
     /// User-defined bitfield definitions.
     bitfields: Vec<BitfieldDef>,
     /// User-defined enum definitions.
@@ -98,6 +100,7 @@ impl TypeInterner {
             map: self.map.clone(),
             types: self.types.clone(),
             structs: self.structs.clone(),
+            compiler_metadata_structs: self.compiler_metadata_structs.clone(),
             bitfields: self.bitfields.clone(),
             enums: self.enums.clone(),
             interfaces: self.interfaces.clone(),
@@ -149,6 +152,7 @@ impl TypeInterner {
             types: builtins,
             map,
             structs: Vec::new(),
+            compiler_metadata_structs: HashSet::new(),
             bitfields: Vec::new(),
             enums: Vec::new(),
             interfaces: Vec::new(),
@@ -246,6 +250,20 @@ impl TypeInterner {
         let id = StructId(self.structs.len() as u32);
         self.structs.push(def);
         id
+    }
+
+    /// Allocate a compiler-produced metadata owner with a permanent exact ID.
+    /// Only compiler builtin registration uses this operation; ordinary Source
+    /// structs and user lookalikes continue through `add_struct`.
+    pub fn add_compiler_metadata_struct(&mut self, definition: StructDef) -> StructId {
+        let id = self.add_struct(definition);
+        self.compiler_metadata_structs.insert(id);
+        id
+    }
+
+    /// This is identity policy, independent of names, aliases and field shape.
+    pub fn is_compiler_metadata_struct(&self, id: StructId) -> bool {
+        self.compiler_metadata_structs.contains(&id)
     }
 
     /// Look up a struct definition by its [`StructId`].
@@ -1009,3 +1027,6 @@ mod tests {
         assert_eq!(interner.len(), before + 1);
     }
 }
+
+#[cfg(test)]
+mod compiler_metadata_tests;

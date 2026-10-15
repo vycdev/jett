@@ -83,7 +83,7 @@ pub(super) fn root_matches(
     }
     installed.expressions == expressions && installed.bindings == bindings
 }
-fn function_matches(
+pub(super) fn function_matches(
     current: &CheckedFunctionTypes,
     context: &ClosureTypeContext,
     original: &CheckedGenericFunctionInstantiation,

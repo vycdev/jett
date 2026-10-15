@@ -104,15 +104,17 @@ impl Interpreter {
             if *purpose != prepared.purpose() || !program.checked().resource_hooks.is_empty() {
                 return Err(ResourceExecutionError::WrongPurpose.to_string());
             }
-            return self.eval_closed_comptime_expression(
-                namespace,
-                aliases,
-                prepared.expression().map_err(|error| error.to_string())?,
-                parameters,
-                prepared.function_projection(),
-                prepared.scope_projection(),
-                prepared.bindings(),
-            );
+            return self.with_checked_field_region(prepared.reference(), |interpreter| {
+                interpreter.eval_closed_comptime_expression(
+                    namespace,
+                    aliases,
+                    prepared.expression().map_err(|error| error.to_string())?,
+                    parameters,
+                    prepared.function_projection(),
+                    prepared.scope_projection(),
+                    prepared.bindings(),
+                )
+            });
         }
         if self
             .resource_transport
@@ -201,11 +203,15 @@ impl Interpreter {
             program, original, purpose, namespace,
         )
         .ok_or("checked test capture has no exact original body/purpose/namespace")?;
+        let field_body = self.checked_field_test_body(original, purpose)?;
+        let saved_field = self.enter_checked_field_body(field_body.as_ref())?;
         let previous = self.active_reflected_capture_origin.replace(origin);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(self)));
+        let field_restore = self.restore_checked_field_body(saved_field);
         self.active_reflected_capture_origin = previous;
         match result {
-            Ok(result) => result,
+            Ok(Err(error)) => Err(error),
+            Ok(Ok(value)) => field_restore.map(|()| value),
             Err(panic) => std::panic::resume_unwind(panic),
         }
     }

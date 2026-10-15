@@ -1,0 +1,8 @@
+namespace app
+struct Record:
+    value: int64
+function invalid(view source: Record) returns nothing:
+    mutable Record alias = view source
+    alias.value = 9
+function main() returns nothing:
+    invalid(view Record(value: 1))

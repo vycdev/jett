@@ -1,6 +1,6 @@
 ---
 source: crates/jett_hir/src/lib.rs
-assertion_line: 7203
+assertion_line: 7666
 expression: program
 ---
 Program {
@@ -386,6 +386,7 @@ Program {
                                                         observation: None,
                                                         handled_result: None,
                                                         projection_root: None,
+                                                        match_origin: None,
                                                     },
                                                     retained_snapshot: None,
                                                 },
@@ -438,6 +439,7 @@ Program {
                                                         observation: None,
                                                         handled_result: None,
                                                         projection_root: None,
+                                                        match_origin: None,
                                                     },
                                                     retained_snapshot: None,
                                                 },

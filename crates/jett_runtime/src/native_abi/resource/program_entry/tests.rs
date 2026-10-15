@@ -679,3 +679,32 @@ fn private_scripted_handoff_borrows_only_the_exact_runtime_attempt() {
         });
     }
 }
+
+#[test]
+fn occupied_field_leaf_refuses_genuine_published_graph_hook_without_mutating_custody() {
+    context(|auth| {
+        let wire = layout_with_entry_network(false);
+        let attempt = begin(auth, &wire, entry()).unwrap();
+        let boxed = publish_graph_hook_actor(auth);
+        assert_eq!(
+            unsafe { values::jett_rt_v1_struct_replace_occupied(pointer(auth), boxed, 0, 0, 0, 0) },
+            0
+        );
+        assert_ne!(unsafe { values::jett_rt_v1_value_status(pointer(auth)) }, 0);
+        auth.with_state(|_, state| {
+            assert!(state.values.published_checked_graph_hook(boxed).is_ok());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            unsafe { jett_rt_v1_resource_program_complete(pointer(auth), attempt, 7) },
+            JettRuntimeStatusV1(7)
+        );
+        auth.with_state(|_, state| {
+            assert!(state.values.is_empty());
+            assert!(!state.values.cleanup_failed);
+            Ok(())
+        })
+        .unwrap();
+    });
+}

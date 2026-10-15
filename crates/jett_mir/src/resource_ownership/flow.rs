@@ -1147,7 +1147,7 @@ impl<'p> Analysis<'p> {
                         }
                     }
                 }
-                StatementKind::Assign { target, value } => {
+                StatementKind::Assign { target, value } | StatementKind::UpdateField { target, value, .. } => {
                     let E::Local(local) = target.kind else { return Err("pending ResourceOwnershipPlan: projected replacement needs its aggregate transport".into()); };
                     let result = self.expression(&mut state, value, true)?;
                     if !state.aborted {
@@ -1229,7 +1229,7 @@ impl<'p> Analysis<'p> {
                 StatementKind::BeginCallView { local, value } => {
                     if shape(&self.program.resource_manifest, self.types, self.function.local(*local).ok_or("loan local missing")?.ty)?.is_some() || resource_type_pending(self.types, value.ty) { return Err("pending ResourceOwnershipPlan: ordinary BeginCallView is not a Resource lease constructor".into()); }
                 }
-                StatementKind::EndCallView { .. } | StatementKind::OpenCallOwnerGeneration { .. } | StatementKind::ReplaceCallOwnerGeneration { .. } | StatementKind::CloseCallOwnerGeneration { .. } => {}
+                StatementKind::EndCallView { .. } | StatementKind::OpenCallOwnerGeneration { .. } | StatementKind::ReplaceCallOwnerGeneration { .. } | StatementKind::PrepareFieldUpdate { .. } | StatementKind::CloseCallOwnerGeneration { .. } => {}
                 StatementKind::CheckRefinement { call, .. } => { self.expression(&mut state, call, false)?; }
                 StatementKind::SequenceLength { source, target } => {
                     control_flow::sequence_length(self.function, self.types, source, *target)?;

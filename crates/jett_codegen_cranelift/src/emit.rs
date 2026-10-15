@@ -1,5 +1,6 @@
 mod actor_graph;
 pub(crate) mod debug;
+mod field_updates;
 mod graph_constructors;
 mod graphics;
 pub(super) mod ordinary_borrowed_sums;
@@ -1824,6 +1825,16 @@ impl Translator<'_, '_> {
 
                 self.builder.switch_to_block(continuation);
                 Ok(())
+            }
+            StatementKind::PrepareFieldUpdate { place, begin } => {
+                if !*begin {
+                    return Ok(());
+                }
+                self.field_update_parent(place)?;
+                Ok(())
+            }
+            StatementKind::UpdateField { value, place, .. } => {
+                self.commit_field_update(place, value, statement.span)
             }
             StatementKind::Assign { target, value } => {
                 let ExpressionKind::Local(local) = &target.kind else {
@@ -6484,7 +6495,8 @@ function exercise(flag: bool) returns int64:
                         ),
                         2 | 3 => matches!(
                             statement.kind,
-                            StatementKind::CloseCallOwnerGeneration { .. }
+                            StatementKind::PrepareFieldUpdate { .. }
+                                | StatementKind::CloseCallOwnerGeneration { .. }
                         ),
                         _ => unreachable!(),
                     });
