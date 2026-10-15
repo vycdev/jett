@@ -690,3 +690,12 @@ fn native_mutable_owned_backing_preserves_projected_forwarding_and_independent_c
         ProjectedOutcome::Success("bytes:4142:4142:4142:414243:414244:4142\nitems:2:2:3:2\n"),
     );
 }
+
+#[test]
+fn native_reflected_mutable_owned_backing_preserves_selected_outer_alias_dependencies() {
+    run_case(
+        "12_reflected_mutable_owned_backing",
+        include_str!("local_view_aliases/12_reflected_mutable_owned_backing.jett"),
+        ProjectedOutcome::Success("direct:4142\nint64:4344:4344\nbool:4344:4344\n"),
+    );
+}

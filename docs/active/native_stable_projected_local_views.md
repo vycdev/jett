@@ -72,8 +72,32 @@ Source-deleted executions in paired Source/runtime Debug and Release. The
 [native audit](native_acceptance_audit.md#mutable-owned-local-view-backing-bounded-msvc-acceptance)
 records the full selected matrix: 31 tests, 64 executions and six separate
 publication-boundary checks, alongside 753 affected library tests.
-Mutable View-parameter roots, temporary-backed aliases, missing reflected outer
-root facts and mutable borrowed-sum Handle backing remain unsupported native
-compositions; they are not new Source bans. No runtime ABI, implicit clone,
+Mutable View-parameter roots, temporary-backed aliases and mutable borrowed-sum
+Handle backing remain unsupported native compositions; they are not new Source
+bans. Absent or mismatched selected reflected root facts remain refusal cases.
+No runtime ABI, implicit clone,
 lifetime extension or loan-expiry change is made. The current bounded acceptance
 is separate from the historical receipts above and does not complete native parity.
+
+
+## Reflected outer-owner fact transport
+
+The producer retains only exact transitive dependencies of its
+actual local-view facts from the selected concrete body map. It follows the
+original binding DefId to its declaration and copies the matching fact without
+changing ownership mode, type or mutability. Missing/mismatched facts and cycles
+remain conservative; no flat-map fallback or ownership inference is added.
+
+HIR and MIR admission, finite field proof, immutable alias slots, persistent
+loans, backing liveness and cleanup guards are unchanged. Source12 targets direct,
+generic repeated reflected and nested alias forwarding contexts. Genuine scoped
+fact tests distinguish scalar copies from aggregate views and refuse a corrupted
+child map despite a valid enclosing or other concrete-instance fact.
+
+Source12 passes reference checks and two Source-deleted executions in paired
+Source/runtime Debug and Release. The
+[native audit](native_acceptance_audit.md#reflected-local-view-backing-facts-bounded-msvc-acceptance)
+records the 1,797-test affected-library result and the complete selected matrix:
+32 tests, 66 executions and six separate publication-boundary checks. Earlier
+first-slice receipts retain their own scope. No lifetime, borrowed-sum,
+Resource, Runtime ABI or archive change is included.

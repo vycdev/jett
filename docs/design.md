@@ -6040,10 +6040,13 @@ rebinding after source alias creation remain native implementation limits. A
 read-only alias grants no write authority, and a retained dependent loan blocks
 changes to its owner, including after its last alias read. Selected field
 updates to a live mutable owned local without a conflicting loan follow the
-checked replacement contract. An enclosing mutable owner absent from a reflected
-body's selected fact snapshot remains an implementation gap; flat global facts
-cannot supply that missing proof. Borrowed-sum Handle aliases retain their
-separate immutable-backing proof below. These limits do not select loan expiry
+checked replacement contract. The producer retains the
+transitive binding dependencies of a reflected body's actual local aliases from
+that concrete checked map. It preserves each original fact and adds no owning
+authority. Absent or inconsistent root facts still fail native admission; flat
+global facts cannot supply a missing proof. Focused MSVC acceptance is recorded
+in the local-view note. Borrowed-sum Handle aliases retain their separate
+immutable-backing proof below. These limits do not select loan expiry
 or lifetime extension, change the checker rules above, or claim every projected
 owner kind is supported; see the
 [local view implementation note](active/native_local_view_aliases.md) and

@@ -893,11 +893,15 @@ conversions, flow-narrowed bare-machine origins, and field paths without the
 checked declared-owner proof remain explicit native limitations. Read-only
 aliases grant no write authority, and retained dependent loans block changes to
 their owners, including after the last alias read. Selected owned-local field
-updates follow their checked ownership and loan requirements. Missing enclosing
-mutable-owner facts in reflected body snapshots remain an implementation gap;
-the lowering join cannot fall back to flat global facts. Borrowed-sum Handle
-aliases keep their separate immutable-backing witness. Owner transitions after
-source alias creation follow the same conservative owner-change refusal; see
+updates follow their checked ownership and loan requirements. The producer
+follows retained local-view binding dependencies through only
+the selected concrete fact map, resolving each exact DefId and declaration span
+with bounded cycle detection. Original types, modes and mutable flags remain
+unchanged. HIR still requires the exact root join; missing or inconsistent facts
+cannot fall back to flat global maps. Focused MSVC acceptance is recorded in the
+local-view note. Borrowed-sum Handle aliases keep their separate immutable-backing
+witness. Owner transitions after source alias creation follow the same
+conservative owner-change refusal; see
 [the bounded implementation](active/native_local_view_aliases.md) and
 [the stable projected-view contract](active/native_stable_projected_local_views.md).
 

@@ -322,9 +322,10 @@ liveness and non-owning storage remain unchanged; there is no runtime ABI change
 
 Persistent may-created aliases continue to block owner consumption, rebinding,
 field writes and state changes across CFG joins, including after the last read.
-Temporary roots, mutable alias slots, mutable view-parameter backing, capture
-escape and missing reflected outer-owner facts retain their implementation
-limits. No flat checker-fact fallback, lifetime extension or loan expiry is added.
+Temporary roots, mutable alias slots, mutable view-parameter backing and capture
+escape retain their implementation limits. Absent or mismatched selected
+reflected root facts remain refusal cases. No flat checker-fact fallback,
+lifetime extension or loan expiry is added.
 Borrowed-sum Handle aliases still require their separate immutable backing proof.
 
 Original Source08 is preserved as an executable empty-output control; new
@@ -340,3 +341,29 @@ counts, receipts and limits are recorded in the
 [native audit](native_acceptance_audit.md#mutable-owned-local-view-backing-bounded-msvc-acceptance).
 Historical receipts above retain their original scope. The fixed 207/182
 inventory and full native-codegen goal are unchanged.
+
+
+## Reflected outer-owner fact transport
+
+The producer closes the binding dependencies of actual retained
+local-view facts through only their supplied concrete checked map. Each
+`View { source: Binding(definition) }` resolves its exact declaration and matching
+fact; forwarded aliases retain the transitive chain. A visited DefId set bounds
+malformed cycles. Modes, concrete types and mutable flags are preserved, with no
+`Owned` synthesis, global fallback or unrelated enclosing capture import.
+
+Existing HIR original LocalId/DefId and typed initializer joins, MIR persistent
+loans, liveness and cleanup stay authoritative. Absent or inconsistent selected
+root facts remain refusal cases even if an enclosing or another concrete map has
+a valid fact. Public identical Copy metadata gains no new session brand.
+
+Generic copy/view, repeated/nested reflected snapshots, transitive dependencies,
+spare exclusion and missing/mismatched/cross-context controls accompany Source12.
+It passes reference checks and two Source-deleted executions in paired
+Source/runtime Debug and Release. All 1,797 affected library tests pass. The full
+selected native matrix passes 32 tests, 66 Source-deleted executions and six
+separate publication-boundary checks; exact evidence is recorded in the
+[native audit](native_acceptance_audit.md#reflected-local-view-backing-facts-bounded-msvc-acceptance).
+The accepted first-slice counts above remain specific to that revision. No
+Runtime/ABI/helper or lifetime-policy change is made. Mutable borrowed-sum Handle
+backing remains a separate private-proof extension.

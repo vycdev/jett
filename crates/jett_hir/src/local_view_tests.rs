@@ -1464,3 +1464,136 @@ fn mutable_local_view_backing_requires_its_exact_selected_owned_fact() {
         );
     }
 }
+
+const SCOPED_MUTABLE_ALIAS_SOURCE: &str = r#"namespace app
+struct Holder[T]:
+    value: T
+function inspect[T](mutable source: Holder[T]) returns nothing:
+    comptime type Bound = type.info[T]():
+        T alias = view source.value
+        T forwarded = alias
+        trace forwarded
+    return nothing
+function main() returns nothing:
+    inspect[int64](Holder[int64](value: 7))
+    inspect[list[int64]](Holder[list[int64]](value: list(2, 3)))
+"#;
+
+#[test]
+fn reflected_mutable_aliases_use_only_their_concrete_scoped_root_facts() {
+    let (program, checked) = checked_source(SCOPED_MUTABLE_ALIAS_SOURCE, false).unwrap();
+    validate_backend_types(&program, &checked.interner).unwrap();
+    let functions = program
+        .functions
+        .iter()
+        .filter(|function| function.identity.declaration.name == "inspect")
+        .collect::<Vec<_>>();
+    assert_eq!(functions.len(), 2);
+    for function in functions {
+        let root = local(function, "source");
+        let alias = local(function, "alias");
+        let forwarded = local(function, "forwarded");
+        assert!(root.mutable);
+        if alias.ty == TypeInterner::INT64 {
+            assert!(alias.view_source.is_none());
+            assert!(forwarded.view_source.is_none());
+        } else {
+            assert_eq!(alias.view_source, Some(root.id));
+            assert_eq!(forwarded.view_source, Some(alias.id));
+        }
+    }
+}
+
+#[test]
+fn reflected_mutable_aliases_never_rescue_missing_or_foreign_selected_root_facts() {
+    for invalid in [
+        "missing",
+        "definition",
+        "declaration",
+        "type",
+        "mutable",
+        "mode",
+        "cross instance",
+    ] {
+        let file = FileId::new(0);
+        let parsed = jett_parser::parse(SCOPED_MUTABLE_ALIAS_SOURCE, file);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        let mut checked = jett_typecheck::check(&parsed.module, &resolved);
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .all(|error| error.severity != Severity::Error),
+            "{:?}",
+            checked.diagnostics
+        );
+        let scalar = checked
+            .generic_function_instantiations
+            .iter()
+            .find(|body| body.concrete_args == [TypeInterner::INT64])
+            .unwrap();
+        let foreign = *scalar
+            .binding_facts
+            .values()
+            .find(|fact| fact.mutable)
+            .unwrap();
+        let target = checked
+            .generic_function_instantiations
+            .iter_mut()
+            .find(|body| body.concrete_args != [TypeInterner::INT64])
+            .unwrap();
+        let original = *target
+            .binding_facts
+            .values()
+            .find(|fact| fact.mutable)
+            .unwrap();
+        assert_eq!(original.definition, foreign.definition);
+        assert_eq!(original.declaration_span, foreign.declaration_span);
+        assert_ne!(original.ty, foreign.ty);
+        let selected = &mut target.comptime_type_bindings.values_mut().next().unwrap()[0].body;
+        assert_eq!(
+            selected.binding_facts.get(&original.declaration_span),
+            Some(&original)
+        );
+        let alias = *selected
+            .binding_facts
+            .values()
+            .find(|fact| !fact.mutable)
+            .unwrap();
+        if invalid == "missing" {
+            selected.binding_facts.remove(&original.declaration_span);
+        } else {
+            let fact = selected
+                .binding_facts
+                .get_mut(&original.declaration_span)
+                .unwrap();
+            match invalid {
+                "definition" => fact.definition = alias.definition,
+                "declaration" => fact.declaration_span = alias.declaration_span,
+                "type" => fact.ty = TypeInterner::STRING,
+                "mutable" => fact.mutable = false,
+                "mode" => {
+                    fact.mode = CheckedBindingMode::View {
+                        source: CheckedViewSource::Other,
+                    }
+                }
+                "cross instance" => *fact = foreign,
+                _ => unreachable!(),
+            }
+        }
+        // The valid enclosing concrete map must never rescue the edited child.
+        assert_eq!(
+            target.binding_facts.get(&original.declaration_span),
+            Some(&original)
+        );
+        let origins = HashMap::from([(file, SourceOrigin::Project)]);
+        let errors = lower(&parsed.module, &resolved, &checked, &origins).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message.contains("stable owned backing")),
+            "{invalid}: {errors:?}"
+        );
+    }
+}

@@ -8439,6 +8439,50 @@ impl<'a> TypeChecker<'a> {
         source.retain(|span, _| !Self::span_is_within(*span, owner));
     }
 
+    /// Retain only dependencies of actual local view declarations. The supplied
+    /// map belongs to this concrete body; missing captures remain unsupported.
+    fn retain_local_view_dependencies(
+        &self,
+        bindings: &HashMap<Span, CheckedBindingFact>,
+        facts: &mut HashMap<Span, CheckedBindingFact>,
+    ) {
+        let mut pending = facts.values().copied().collect::<Vec<_>>();
+        let mut visited = HashSet::new();
+        while let Some(fact) = pending.pop() {
+            let CheckedBindingMode::View {
+                source: CheckedViewSource::Binding(definition),
+            } = fact.mode
+            else {
+                continue;
+            };
+            if !visited.insert(definition) {
+                continue;
+            }
+            let Some(declaration) = self
+                .resolve
+                .scope_table
+                .definitions
+                .get(definition.index() as usize)
+                .filter(|declaration| declaration.id == definition)
+            else {
+                continue;
+            };
+            let Some(source) = bindings.get(&declaration.span).filter(|source| {
+                source.definition == definition && source.declaration_span == declaration.span
+            }) else {
+                continue;
+            };
+            if facts
+                .get(&declaration.span)
+                .is_some_and(|retained| retained != source)
+            {
+                continue;
+            }
+            facts.insert(declaration.span, *source);
+            pending.push(*source);
+        }
+    }
+
     fn body_binding_facts(
         &self,
         bindings: &HashMap<Span, CheckedBindingFact>,
@@ -8518,6 +8562,7 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
+        self.retain_local_view_dependencies(bindings, &mut facts);
         facts
     }
 
@@ -26474,6 +26519,306 @@ function main() returns nothing:
                 }
                 assert!(direct && projected && copied);
             }
+        }
+    }
+
+    #[test]
+    fn scoped_local_views_retain_exact_transitive_outer_binding_facts() {
+        let source = r#"namespace app
+struct Packet:
+    values: list[int64]
+function inspect(mutable source: Packet, spare: Packet) returns nothing:
+    Packet borrowed = view source
+    Packet forwarded = borrowed
+    comptime type Outer = type.info[int64]():
+        comptime type Inner = type.info[string]():
+            list[int64] alias = view forwarded.values
+            trace alias
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let outer = result
+                .comptime_type_bindings
+                .values()
+                .flatten()
+                .find(|body| !body.body.comptime_type_bindings.is_empty())
+                .unwrap();
+            let inner = outer
+                .body
+                .comptime_type_bindings
+                .values()
+                .flatten()
+                .next()
+                .unwrap();
+            for body in [&outer.body, &inner.body] {
+                let fact = |name| {
+                    body.binding_facts
+                        .values()
+                        .find(|fact| {
+                            &source[fact.declaration_span.start as usize
+                                ..fact.declaration_span.end as usize]
+                                == name
+                        })
+                        .copied()
+                        .expect("retained exact binding dependency")
+                };
+                let owner = fact("source");
+                let borrowed = fact("borrowed");
+                let forwarded = fact("forwarded");
+                let alias = fact("alias");
+                assert!(owner.mutable);
+                assert_eq!(owner.mode, CheckedBindingMode::Owned);
+                for (view, dependency) in
+                    [(borrowed, owner), (forwarded, borrowed), (alias, forwarded)]
+                {
+                    assert!(!view.mutable);
+                    assert_eq!(
+                        view.mode,
+                        CheckedBindingMode::View {
+                            source: CheckedViewSource::Binding(dependency.definition)
+                        }
+                    );
+                    assert_eq!(
+                        body.binding_facts.get(&dependency.declaration_span),
+                        Some(&dependency)
+                    );
+                }
+                assert!(!body.binding_facts.values().any(|fact| &source
+                    [fact.declaration_span.start as usize..fact.declaration_span.end as usize]
+                    == "spare"));
+            }
+        }
+    }
+
+    #[test]
+    fn scoped_local_views_keep_generic_copy_and_reflected_view_contexts_distinct() {
+        let source = r#"namespace app
+struct Metadata:
+    first: int64
+    second: string
+struct Holder[T]:
+    value: T
+function inspect[T](mutable source: Holder[T], spare: Holder[T]) returns nothing:
+    for field in type.fields[Metadata]():
+        comptime type Field = field.type_info:
+            T alias = view source.value
+            trace alias
+    return nothing
+function main() returns nothing:
+    inspect[int64](Holder[int64](value: 7), Holder[int64](value: 8))
+    inspect[list[int64]](Holder[list[int64]](value: list(1)), Holder[list[int64]](value: list(2)))
+    return nothing
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error)
+        );
+        for release in [false, true] {
+            let result = check_with_options(&parsed.module, &resolved, CheckOptions { release });
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            assert_eq!(result.generic_function_instantiations.len(), 2);
+            let mut copies = 0;
+            let mut views = 0;
+            for instance in &result.generic_function_instantiations {
+                let bodies = instance
+                    .comptime_type_bindings
+                    .values()
+                    .flatten()
+                    .collect::<Vec<_>>();
+                assert_eq!(bodies.len(), 2);
+                for (index, body) in bodies.iter().enumerate() {
+                    assert_eq!(
+                        body.selection,
+                        CheckedComptimeTypeSelection::ReflectedIteration(index)
+                    );
+                    let fact = |name| {
+                        body.body
+                            .binding_facts
+                            .values()
+                            .find(|fact| {
+                                &source[fact.declaration_span.start as usize
+                                    ..fact.declaration_span.end as usize]
+                                    == name
+                            })
+                            .copied()
+                    };
+                    let alias = fact("alias").unwrap();
+                    assert!(!alias.mutable);
+                    assert_eq!(alias.ty, instance.concrete_args[0]);
+                    assert!(fact("spare").is_none());
+                    if alias.ty == TypeInterner::INT64 {
+                        copies += 1;
+                        assert_eq!(alias.mode, CheckedBindingMode::Owned);
+                        assert!(fact("source").is_none());
+                    } else {
+                        views += 1;
+                        assert!(
+                            matches!(result.interner.resolve(alias.ty), Type::List(inner) if *inner == TypeInterner::INT64)
+                        );
+                        let owner = fact("source").unwrap();
+                        assert!(owner.mutable);
+                        assert_eq!(owner.ty, instance.parameter_types[0]);
+                        assert_eq!(owner.mode, CheckedBindingMode::Owned);
+                        assert_eq!(
+                            alias.mode,
+                            CheckedBindingMode::View {
+                                source: CheckedViewSource::Binding(owner.definition)
+                            }
+                        );
+                        assert_eq!(
+                            body.body.binding_facts.get(&owner.declaration_span),
+                            instance.binding_facts.get(&owner.declaration_span)
+                        );
+                    }
+                }
+            }
+            assert_eq!((copies, views), (2, 2));
+            let copy_context = result
+                .generic_function_instantiations
+                .iter()
+                .find(|instance| instance.concrete_args == [TypeInterner::INT64])
+                .unwrap();
+            let view_context = result
+                .generic_function_instantiations
+                .iter()
+                .find(|instance| instance.concrete_args != [TypeInterner::INT64])
+                .unwrap();
+            assert_ne!(
+                copy_context.parameter_types[0],
+                view_context.parameter_types[0]
+            );
+            let copy_body = &copy_context
+                .comptime_type_bindings
+                .values()
+                .flatten()
+                .next()
+                .unwrap()
+                .body;
+            let view_body = &view_context
+                .comptime_type_bindings
+                .values()
+                .flatten()
+                .next()
+                .unwrap()
+                .body;
+            let alias = view_body
+                .binding_facts
+                .values()
+                .find(|fact| {
+                    &source
+                        [fact.declaration_span.start as usize..fact.declaration_span.end as usize]
+                        == "alias"
+                })
+                .copied()
+                .unwrap();
+            let mut checker = TypeChecker::new(&resolved, CheckOptions { release });
+            // Same Source spans and DefIds in another generic context do not
+            // authorize filling a selected copy body's absent view capture.
+            checker.binding_facts = view_context.binding_facts.clone();
+            let mut retained = HashMap::from([(alias.declaration_span, alias)]);
+            checker.retain_local_view_dependencies(&copy_body.binding_facts, &mut retained);
+            assert_eq!(retained, HashMap::from([(alias.declaration_span, alias)]));
+        }
+    }
+
+    #[test]
+    fn scoped_local_view_dependency_retention_never_falls_back_or_invents_ownership() {
+        let source = r#"namespace app
+function inspect(mutable source: list[int64], spare: list[int64]) returns nothing:
+    comptime type Inner = type.info[int64]():
+        list[int64] alias = view source
+        trace alias
+    return nothing
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error)
+        );
+        let result = check(&parsed.module, &resolved);
+        assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+        let body = &result
+            .comptime_type_bindings
+            .values()
+            .flatten()
+            .next()
+            .unwrap()
+            .body;
+        let named = |name| {
+            result
+                .binding_facts
+                .values()
+                .find(|fact| {
+                    &source
+                        [fact.declaration_span.start as usize..fact.declaration_span.end as usize]
+                        == name
+                })
+                .copied()
+                .unwrap()
+        };
+        let owner = named("source");
+        let spare = named("spare");
+        let alias = named("alias");
+        let mut checker = TypeChecker::new(&resolved, CheckOptions::default());
+        // The valid flat root must not rescue an absent selected dependency.
+        checker.binding_facts = result.binding_facts.clone();
+        for invalid in ["missing", "definition", "declaration", "foreign"] {
+            let mut selected = body.binding_facts.clone();
+            selected.remove(&owner.declaration_span);
+            if invalid != "missing" {
+                let mut changed = owner;
+                match invalid {
+                    "definition" => changed.definition = spare.definition,
+                    "declaration" => changed.declaration_span = spare.declaration_span,
+                    "foreign" => changed.definition = DefId::new(u32::MAX),
+                    _ => unreachable!(),
+                }
+                selected.insert(owner.declaration_span, changed);
+            }
+            let mut retained = HashMap::from([(alias.declaration_span, alias)]);
+            checker.retain_local_view_dependencies(&selected, &mut retained);
+            assert_eq!(
+                retained,
+                HashMap::from([(alias.declaration_span, alias)]),
+                "{invalid}"
+            );
+        }
+        let foreign_alias = CheckedBindingFact {
+            mode: CheckedBindingMode::View {
+                source: CheckedViewSource::Binding(DefId::new(u32::MAX)),
+            },
+            ..alias
+        };
+        let mut retained = HashMap::from([(foreign_alias.declaration_span, foreign_alias)]);
+        checker.retain_local_view_dependencies(&body.binding_facts, &mut retained);
+        assert_eq!(retained.len(), 1);
+        for mode in [
+            CheckedBindingMode::View {
+                source: CheckedViewSource::Other,
+            },
+            CheckedBindingMode::View {
+                source: CheckedViewSource::Binding(alias.definition),
+            },
+        ] {
+            let mut selected = body.binding_facts.clone();
+            let changed = CheckedBindingFact { mode, ..owner };
+            selected.insert(owner.declaration_span, changed);
+            let mut retained = HashMap::from([(alias.declaration_span, alias)]);
+            checker.retain_local_view_dependencies(&selected, &mut retained);
+            assert_eq!(retained.get(&owner.declaration_span), Some(&changed));
+            assert_eq!(retained.get(&alias.declaration_span), Some(&alias));
+            assert_eq!(retained.len(), 2);
         }
     }
 

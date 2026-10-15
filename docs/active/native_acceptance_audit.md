@@ -3309,3 +3309,51 @@ lifetime extension, loan expiry or write-through-alias rule. Complete Resource
 transport, full coherent workspace/inventory execution and exact-revision
 supported-host/installed acceptance remain open. The fixed 207-fixture/182-object
 denominators and full 100% native-codegen goal are unchanged.
+
+#### Reflected local-view backing facts: bounded MSVC acceptance
+
+The checked producer retains the transitive binding dependencies of actual
+local-view facts from their supplied concrete body map. Every binding DefId
+joins its exact declaration and matching fact; forwarding and nested reflected
+snapshots preserve original types, ownership modes and mutable flags. A visited
+DefId set bounds malformed cycles. No Owned mode, global fallback, unrelated
+enclosing capture or new session authority is synthesized. Missing or
+inconsistent selected facts still refuse admission even when another enclosing
+or concrete-instance map contains a valid fact. Existing HIR original-local and
+typed-initializer joins, MIR persistent loans, liveness and cleanup remain
+authoritative.
+
+All five affected libraries pass **1,797 tests**: Typecheck 379, Comptime 663,
+HIR 256, MIR 364 and Codegen 135. The three producer and two HIR focused controls
+also pass. Source12 formatting, full Rust formatting and whitespace checks pass.
+Library log: `target/native/reflected-mutable-view-core-libraries-v1.log`,
+SHA-256 `62f7c3649a3c21f8308c149e2735d08f082cdc439d3bd3a679351a78e1d4dcbd`.
+
+Source12 passes reference checks and two Source-deleted executions covering a
+direct scoped mutable root, generic repeated reflected fields and nested
+forwarded aliases. Those executions are included in the passing selected matrix:
+32 native tests and **66 Source-deleted executions**, with six separate
+publication-boundary checks. Fifty-eight executions pair Source Debug/default
+with Runtime Debug and Source Release/optimized with Runtime Release; eight
+older controls use only the Debug harness runtime. Overall runtime counts are
+Debug 37 and Release 29, not a full profile cross-product. Refusals supply no
+execution credit and do not create new Source bans.
+
+Fresh compiler gate:
+`target/native/reflected-mutable-view-gate-compile-v1/gate-acceptance.json`,
+SHA-256 `f7bfc37055da8f4ea9d659d369be1df137561bc18f2d12bed34bf940ed596a8d`.
+Native summary:
+`target/native/reflected-mutable-view-native-execution-v1/execution-summary.json`,
+SHA-256 `abebafba9097acd0e366a9dde03102cbe48380485c8d51bdcc35dd01b44bec38`.
+Before/after guards preserve 1,037 compiler inputs, 68 reused runtime artifacts
+and 33 fixture hashes unchanged. First-slice 753/31/64 evidence retains its
+original revision and scope. Runtime/helper/ABI and measured archives are
+unchanged.
+
+Absent/mismatched selected root facts, mutable alias slots, mutable
+view-parameter backing, temporary roots and mutable borrowed-sum Handle backing
+retain their separate proof/implementation limits. No lifetime extension, loan
+expiry, Resource authority or flat-map fallback is introduced. Full coherent
+workspace/inventory, complete Resource transport and exact-revision
+supported-host/installed acceptance remain open. The fixed
+207-fixture/182-object denominators and full 100% native-codegen goal are unchanged.
