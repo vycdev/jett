@@ -2,6 +2,7 @@ use super::*;
 
 fn actor(type_name: &str, state: i64) -> ActorInstance {
     ActorInstance {
+        checked_origin: None,
         type_name: type_name.into(),
         state: HashMap::from([("count".into(), Value::Int64(state))]),
         capabilities: HashMap::new(),

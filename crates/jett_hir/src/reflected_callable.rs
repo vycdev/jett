@@ -481,6 +481,8 @@ pub(crate) fn adapter(
         identity,
         debug_kind: FunctionDebugKind::Inline,
         source_definition: None,
+        actor_handler: None,
+        actor_state_views: Vec::new(),
         params,
         capture_count: 1,
         return_type: *target_return,

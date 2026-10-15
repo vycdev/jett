@@ -169,6 +169,9 @@ impl OwnershipChecker<'_> {
         // Source clone. Written field reads retain their existing copy rules.
         self.consume_expr(&assign.value, assign.value.span());
         self.field_update_reservations.pop();
+        if !self.actor_reachable() {
+            return;
+        }
         if root_was_live {
             self.check_field_update_live_root(place);
         }

@@ -173,7 +173,7 @@ impl CheckedExpressionTypes {
     }
 }
 
-fn original_body_types(
+pub(crate) fn original_body_types(
     types: &HashMap<Span, jett_types::TypeId>,
     bindings: &HashMap<Span, Vec<jett_typecheck::CheckedComptimeTypeBinding>>,
     interner: &jett_types::TypeInterner,

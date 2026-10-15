@@ -1,5 +1,11 @@
 // Type checking for the Jett compiler.
 
+pub mod actor_messages;
+pub use actor_messages::{
+    CheckedActorBindingRole, CheckedActorHandler, CheckedActorHandlerBinding,
+    CheckedActorHandlerExit, CheckedActorHandlerExitKind, CheckedActorHandlerTarget,
+    CheckedActorMessageCall, CheckedActorMessageKind, CheckedActorMessageRoot,
+};
 pub mod assignment_places;
 pub use assignment_places::{
     CheckedAssignmentPlace, CheckedAssignmentPlaceError, CheckedFieldOwner, CheckedFieldProjection,

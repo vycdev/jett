@@ -250,11 +250,10 @@ fn input(program: &Program, checked: &Arc<CheckedResourceProgram>) -> Result<(),
             .checked_program()
             .is_some_and(|retained| Arc::ptr_eq(retained, checked))
         || !program.resource_manifest.kinds().is_empty()
-        || !crate::has_reflected_callable_plans(program)
     {
         return Err(error(
             span,
-            "native Property transition has no exact ordinary reflected Source archive",
+            "native Property transition has no exact protected ordinary Source archive",
         ));
     }
     program
@@ -667,6 +666,8 @@ fn suite_function(
             specialization: jett_typecheck::CheckedGenericSpecialization::default(),
         },
         source_definition: None,
+        actor_handler: None,
+        actor_state_views: Vec::new(),
         params: Vec::new(),
         capture_count: 0,
         return_type: TypeInterner::NOTHING,

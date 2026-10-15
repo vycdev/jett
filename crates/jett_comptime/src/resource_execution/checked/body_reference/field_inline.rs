@@ -75,16 +75,55 @@ impl CheckedExecution {
             .field_original_node()
             .ok_or(ResourceExecutionError::MissingCheckedBody)?;
         let mut selected = Vec::new();
+        let mut owners = Vec::new();
         for (item, node) in self.program.module().items.iter().enumerate() {
+            match node {
+                Item::Function(function) => {
+                    owners.push((item, node, OriginalRegion::Block(&function.body), None))
+                }
+                Item::Verify(block) => {
+                    owners.push((item, node, OriginalRegion::Block(&block.body), None))
+                }
+                Item::Property(block) => {
+                    owners.push((item, node, OriginalRegion::Block(&block.body), None))
+                }
+                Item::Actor(actor) => {
+                    for (handler_index, handler) in actor.handlers.iter().enumerate() {
+                        if inline_paths(OriginalRegion::Block(&handler.body), target)?.is_empty() {
+                            continue;
+                        }
+                        for actor_target in self.program.checked().actor_handlers.keys() {
+                            if actor_target.handler_index != handler_index {
+                                continue;
+                            }
+                            let Some(info) = self
+                                .program
+                                .resolved()
+                                .scope_table
+                                .definitions
+                                .get(actor_target.actor_definition.index() as usize)
+                            else {
+                                continue;
+                            };
+                            if info.span == actor.name.span {
+                                self.validate_actor_handler_identity(*actor_target, item)?;
+                                owners.push((
+                                    item,
+                                    node,
+                                    OriginalRegion::Block(&handler.body),
+                                    Some(*actor_target),
+                                ));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (item, node, original_region, actor_target) in owners {
             // Identify the retained physical owner before asking it for executable
             // authority. Unrelated Resource hook declarations deliberately reject
             // ordinary entry and must not block a different function's closure.
-            let original_region = match node {
-                Item::Function(function) => OriginalRegion::Block(&function.body),
-                Item::Verify(block) => OriginalRegion::Block(&block.body),
-                Item::Property(block) => OriginalRegion::Block(&block.body),
-                _ => continue,
-            };
             let paths = inline_paths(original_region, target)?;
             if paths.is_empty() {
                 continue;
@@ -93,6 +132,19 @@ impl CheckedExecution {
                 return Err(ResourceExecutionError::MissingCheckedBody);
             };
             let (origin, roots) = match node {
+                Item::Actor(_)
+                    if context.checked_function.is_none() && context.arguments.is_empty() =>
+                {
+                    let target = actor_target.ok_or(ResourceExecutionError::MissingCheckedBody)?;
+                    (
+                        ExecutableOrigin::ActorHandler {
+                            definition: target.actor_definition,
+                            item,
+                            handler: target.handler_index,
+                        },
+                        vec![BodyRoot::ActorHandler(target)],
+                    )
+                }
                 Item::Function(function) => {
                     let definition = self.declaration_definition(function.name.span)?;
                     let roots = if function.type_params.is_empty() {
@@ -225,6 +277,29 @@ impl CheckedExecution {
                             .and_then(|choices| choices.get(selection.index))
                             .ok_or(ResourceExecutionError::MissingCheckedBody)?;
                         Some(scoped_projection(choice, &self.program.checked().interner))
+                    } else if let BodyRoot::ActorHandler(target) = cursor.root {
+                        let handler = self
+                            .program
+                            .checked()
+                            .actor_handler(target)
+                            .ok_or(ResourceExecutionError::MissingCheckedBody)?;
+                        let (expressions, bindings) = crate::checked_types::original_body_types(
+                            &handler.body().type_map,
+                            &handler.body().comptime_type_bindings,
+                            &self.program.checked().interner,
+                        );
+                        Some(Arc::new(CheckedScopedTypes {
+                            bound_type: self
+                                .program
+                                .checked()
+                                .interner
+                                .resolve_actor(target.actor)
+                                .name
+                                .clone(),
+                            reflection: None,
+                            expressions,
+                            bindings,
+                        }))
                     } else {
                         None
                     };

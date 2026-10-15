@@ -1,4 +1,6 @@
 use super::*;
+#[path = "actor_field_update_tests.rs"]
+mod actor_field_update_tests;
 
 fn scalar(bits: u64, pending_depth: u64) -> NativeField {
     NativeField {

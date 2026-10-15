@@ -226,6 +226,8 @@ impl<'p> ProgramValidation<'p> {
                 // MIR has already replaced resolver-session IDs with declaration identity.
                 // The source certificate and exact dispatcher shape remain authoritative.
                 source_definition: None,
+                actor_handler: function.actor_handler_entry().ok().flatten().cloned(),
+                actor_state_views: Vec::new(),
                 params: function.params.clone(),
                 capture_count: function.capture_count,
                 return_type: function.return_type,
@@ -1087,6 +1089,17 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
         }
         self.dominates(defined.site, used)?;
         Ok((value, *defined))
+    }
+
+    fn actor_receiver(
+        &self,
+        current: &Expression,
+        proof: &hir::ActorReceiverProof,
+        site: Site,
+    ) -> Result<(), String> {
+        proof.validate_lowered(current, |value, shape| {
+            self.generated_storage(value, shape, site)
+        })
     }
 
     fn original(
@@ -3172,7 +3185,39 @@ impl<'a, 't, 's> Validator<'a, 't, 's> {
                 self.iteration_scope_enabled = saved;
                 result?;
             }
-            E::ActorMessage { actor, args, .. } => {
+            E::ActorMessage {
+                actor, args, proof, ..
+            } => {
+                proof.validate(
+                    self.signatures,
+                    expression,
+                    &self.locals_at(site),
+                    self.types,
+                    context,
+                    false,
+                )?;
+                self.actor_receiver(actor, proof.receiver_proof(), site)?;
+                for (index, value) in args.iter().enumerate() {
+                    let argument = proof
+                        .argument(index)
+                        .ok_or("actor message lost checked argument")?;
+                    if self
+                        .original(value, argument, &hir::CallBridge::Direct, site)
+                        .is_err()
+                    {
+                        let E::Local(local) = value.kind else {
+                            return Err("actor message operand changed its exact original Source association".into());
+                        };
+                        let (initializer, defined) =
+                            self.storage_let(local, value.ty, site, true)?;
+                        self.original(
+                            initializer,
+                            argument,
+                            &hir::CallBridge::Direct,
+                            defined.site,
+                        )?;
+                    }
+                }
                 self.expression(actor, site, context)?;
                 for value in args {
                     self.expression(value, site, context)?;

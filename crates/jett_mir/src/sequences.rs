@@ -78,6 +78,7 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             || function.reflected_callable.is_some()
             || crate::ordinary_borrowed_sums::has_records(function)
             || crate::field_updates::has_records(function)
+            || crate::actor_handlers::has_records(function)
             || crate::match_bindings::has_records(function)
             || !function.breakpoint_regions.is_empty()
             || crate::call_owner_generations::has_records(function))
@@ -159,6 +160,7 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                 || crate::call_owner_generations::has_records(function)
                 || crate::ordinary_borrowed_sums::has_records(function)
                 || crate::field_updates::has_records(function)
+                || crate::actor_handlers::has_records(function)
                 || crate::match_bindings::has_records(function))
             .then(|| function.clone());
             let mut region_edit = crate::breakpoint_regions::SequenceEdit {
@@ -270,6 +272,13 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                     )
                     .is_err()
                         || crate::call_owner_generations::sequence_transition(
+                            function,
+                            before_iteration,
+                            &region_edit,
+                            types,
+                        )
+                        .is_err()
+                        || crate::actor_handlers::sequence_transition(
                             function,
                             before_iteration,
                             &region_edit,
@@ -458,6 +467,13 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                     )
                     .is_err()
                     || crate::call_owner_generations::sequence_transition(
+                        function,
+                        before_iteration,
+                        &region_edit,
+                        types,
+                    )
+                    .is_err()
+                    || crate::actor_handlers::sequence_transition(
                         function,
                         before_iteration,
                         &region_edit,

@@ -19,9 +19,10 @@ pub use checked::{
     CheckedRequiredScope, CheckedRequiredValue,
 };
 pub(crate) use checked::{
-    CheckedAttemptKey, CheckedBodyCursor, CheckedBodyReference, CheckedExecution,
-    CheckedInvocation, FunctionInvocation, PreparedAbsentBindings, PreparedFieldAssignment,
-    PreparedFieldBinding, PreparedIntrinsicArguments, PreparedOwnedStruct, PreparedPipelineStep,
+    CheckedActorInstanceOrigin, CheckedAttemptKey, CheckedBodyCursor, CheckedBodyReference,
+    CheckedExecution, CheckedInvocation, FunctionInvocation, PreparedAbsentBindings,
+    PreparedActorHandler, PreparedFieldAssignment, PreparedFieldBinding,
+    PreparedIntrinsicArguments, PreparedOwnedStruct, PreparedPipelineStep,
     PreparedReflectedFieldIteration, PreparedReflectedFieldLoop, PreparedRequiredExpression,
 };
 pub(crate) use custody::{

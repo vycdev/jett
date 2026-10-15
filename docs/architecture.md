@@ -579,7 +579,7 @@ Bottom-up type checking of every expression:
   Value-derived types are not overridden, and a result-only parameter remains
   uninferable.
 - **Refinement type assignments:** wrapping a base type in a refinement type is fallible → must have `handle error:`.
-- **Handle blocks:** verify that `handle error:` is used on `result[T, E]` and `handle:` on `optional[T]`. Verify handle blocks end with `return` or `default`. The `default` keyword inside a handle block is part of the `HandleExpr` structure — it provides a fallback value and resumes normal execution.
+- **Handle blocks:** verify that `handle error:` is used on `result[T, E]` and `handle:` on `optional[T]`. Verify handle blocks end with `return` or `default`, or with `respond` inside a responding actor handler. The `default` keyword inside a handle block is part of the `HandleExpr` structure — it provides a fallback value and resumes normal execution.
 - **Coarsen expressions:** `coarsen value` converts a refinement type to an ancestor type. The target type is determined by the variable declaration's type annotation on the left side. The type checker walks the refinement chain to verify the target is a valid ancestor.
 - **Match exhaustiveness:** verify all enum variants are covered.
 - **Constrained generics:** For `function sort[T implements Orderable](...)`, verify that type arguments at call sites implement the required interfaces. Multiple constraints use `and` (e.g., `T implements Orderable and Displayable`). Unconstrained `T` can only be stored and passed around — no operations.
@@ -674,7 +674,7 @@ This sub-phase tracks the ownership state of every variable through the control 
 - **View propagation:** Views propagate through field access and collection element access. `view list[T]` element access yields `view T`, not an owned copy. `clone` is required to get an owned value from a view.
 - **Closure capture analysis:** Anonymous functions may capture only implicitly copyable values from the enclosing scope. Each capture is copied into the closure. Capturing a move-only value is a compile error; it must be passed explicitly as a parameter.
 
-Projected field assignment implements the selected local replacement contract for ordinary records and exact-state machine values in checked reference, required-comptime and native execution. Actor handler and Resource-bearing updates remain implementation obligations. An exact resolved live mutable owned binding may supply a finite checked ordinary-record field path. An existing exact machine-state qualification or checked narrowing may supply that state's fields without changing the state or tag. No mutable reference, caller mutation or structural owner inference is introduced. See [owned mutable field updates](active/owned_mutable_field_updates.md).
+Projected field assignment implements the selected local replacement contract for ordinary records and exact-state machine values in checked reference, required-comptime and native execution. Checked actor-handler updates to ordinary owned state retain original handler identity and persistent-slot ownership through reference and native execution, with bounded MSVC acceptance recorded in the native audit. Resource-bearing updates remain a separate obligation. An exact resolved live mutable owned binding may supply a finite checked ordinary-record field path. An existing exact machine-state qualification or checked narrowing may supply that state's fields without changing the state or tag. No mutable reference, caller mutation or structural owner inference is introduced. See [owned mutable field updates](active/owned_mutable_field_updates.md).
 
 Checked field places retain the original binding, concrete/scoped body and exact
 field identities through HIR and MIR. Preflight precedes RHS staging; commit
@@ -682,7 +682,11 @@ revalidates the place and transfers a complete replacement before retiring the
 old field. The ordinary `StructReplaceOccupied` runtime leaf validates an occupied
 slot atomically and returns the displaced bits without performing cleanup. Its
 caller retains RHS ownership until success and handles terminal cleanup through
-the existing drop plan. Resource custody never follows from this ordinary leaf.
+the existing drop plan. Actor roots use the separate ordinary
+`ActorReplaceOccupied` leaf, which validates a live occupied actor slot and returns
+displaced bits without cleanup. After success, the caller clears the transferred
+staging owner, then retires the displaced owner through the checked cleanup plan.
+Neither ordinary leaf grants Resource custody.
 
 Nonzero facts for field reads use the exact root and checked finite field path.
 A write invalidates affected root facts after evaluating its RHS. Loop backedges
@@ -1527,12 +1531,21 @@ values.
 Actor spawn arguments use their checked lexical evaluation order when handlers
 are extracted. Actor messages capture the target first and then their ordered
 arguments, so a later handler cannot change an earlier message value.
+Actor handler execution retains a private checked session, original actor syntax,
+canonical actor type and handler ordinal. Exact capability, state and message
+roles join checked declaration facts to physical locals; persistent state is
+validated at real exits. Send/Ask facts retain their original outer expression,
+receiver, lexical argument acquisition and checked body/scoped context. Copies
+from another session, handler or scoped occurrence cannot grant this authority.
+The [actor field-update note](active/actor_handler_field_updates.md) records this
+checked contract, bounded MSVC acceptance and remaining obligations.
 Comptime type-bind scopes erase to checked HIR scopes; actor spawn/send/ask
-carry typed operands and message identity. Actor receive
-handlers are deterministic HIR functions whose locals preserve checked
-capability, state, and message bindings; actor construction, persistent state
-layout, scheduling, and dispatch remain actor-runtime work. Remaining source
-constructs are staged by the [initial HIR lowering plan](active/hir_lowering_plan.md).
+carry typed operands and message identity. Generated actor receive bodies retain
+the original handler receipt and exact capability, state and message slots through
+HIR, MIR, construction and synchronous dispatch. Generated function identities do
+not replace original handler authority. Real asynchronous scheduling, authenticated
+Resource transport and wider frozen-graph compositions remain separate obligations.
+Remaining source constructs are staged by the [initial HIR lowering plan](active/hir_lowering_plan.md).
 
 The initial implemented `jett_mir` boundary accepts only HIR that passes the
 HIR structural validator. It lowers top-level `if`, `while`, exhaustive

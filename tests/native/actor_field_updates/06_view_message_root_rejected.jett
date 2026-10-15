@@ -1,0 +1,8 @@
+namespace app
+struct Packet:
+    value: int64
+actor Store:
+    receive change(view mutable supplied: Packet):
+        supplied.value = 9
+function main() returns nothing:
+    return nothing

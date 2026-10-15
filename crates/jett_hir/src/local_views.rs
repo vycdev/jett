@@ -56,7 +56,17 @@ pub(super) fn validate_structure(function: &Function) -> Vec<ValidationError> {
         if local.view_source.is_none() {
             continue;
         }
-        let message = if function.params.iter().any(|param| param.local == local.id) {
+        let message = if function
+            .actor_state_views
+            .iter()
+            .any(|view| view.local() == local.id && view.matches_constructor(function))
+            || function
+                .actor_handler
+                .as_ref()
+                .is_some_and(|entry| entry.allows_state_view(function, local.id))
+        {
+            None
+        } else if function.params.iter().any(|param| param.local == local.id) {
             Some("parameter ownership must use ParamMode, not a local alias origin")
         } else if local_view_root(&function.locals, local.id).is_none() {
             Some("borrowed local origin is outside its function or contains a cycle")

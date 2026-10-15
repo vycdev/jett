@@ -11,7 +11,7 @@ use jett_parser::ast::{
 use jett_resolve::resolver::ResolveResult;
 use jett_resolve::scope::{DefId, DefKind};
 use jett_types::{
-    ActorDef as TypeActorDef, ActorMessageDef, BitfieldDef as TypeBitfieldDef,
+    ActorDef as TypeActorDef, ActorId, ActorMessageDef, BitfieldDef as TypeBitfieldDef,
     BitfieldFieldDef as TypeBitfieldFieldDef, BitfieldFieldKind as TypeBitfieldFieldKind,
     BitfieldId, CapabilityKind, EnumDef as TypeEnumDef, FunctionSig,
     InterfaceDef as TypeInterfaceDef, MachineDef as TypeMachineDef, MachineId,
@@ -22,6 +22,10 @@ use jett_types::{
     StructDef as TypeStructDef, StructId, Type, TypeId, TypeInterner, VariantDef,
 };
 
+use crate::actor_messages::{
+    CheckedActorBindingRole, CheckedActorHandler, CheckedActorHandlerBinding,
+    CheckedActorHandlerTarget, CheckedActorMessageCall, CheckedActorMessageKind,
+};
 use crate::assignment_places::{
     AssignmentContext, AssignmentContextRoot, CheckedAssignmentPlace, CheckedFieldProjection,
     CheckedFieldUpdateResourceRequirement, checked_field_owner, seal_assignment_ownership,
@@ -37,6 +41,7 @@ use crate::capability;
 use crate::errors;
 use crate::resource_hooks::{CheckedResourceHook, ResourceHookError};
 
+mod actor_messages;
 mod graphics_audit;
 mod nonzero_facts;
 
@@ -83,6 +88,7 @@ pub struct CheckedGenericFunctionInstantiation {
     pub binding_facts: HashMap<Span, CheckedBindingFact>,
     pub assignment_places: HashMap<Span, CheckedAssignmentPlace>,
     pub call_ownership: HashMap<Span, CheckedCallOwnership>,
+    pub actor_message_calls: HashMap<Span, CheckedActorMessageCall>,
     /// Nested generic calls selected while checking this concrete body.
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
     /// Closed compiler operation selected for each accepted intrinsic call.
@@ -161,6 +167,7 @@ pub struct CheckedBodyFacts {
     pub binding_facts: HashMap<Span, CheckedBindingFact>,
     pub assignment_places: HashMap<Span, CheckedAssignmentPlace>,
     pub call_ownership: HashMap<Span, CheckedCallOwnership>,
+    pub actor_message_calls: HashMap<Span, CheckedActorMessageCall>,
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
     pub intrinsic_ids: HashMap<Span, IntrinsicId>,
     pub intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -287,6 +294,8 @@ pub struct CheckedStructConstruction {
 pub struct CheckResult {
     // Original checked implementation identities for readonly conversion admission.
     ordinary_interface_implementations: HashSet<(TypeId, TypeId)>,
+    pub(crate) actor_check_session: crate::actor_messages::ActorCheckSession,
+    pub(crate) actor_message_sites: crate::actor_messages::ActorMessageSites,
     pub release: bool,
     /// Source bindings unavailable for observation after checked consumption.
     pub breakpoint_exclusions: HashMap<Span, HashSet<String>>,
@@ -303,12 +312,14 @@ pub struct CheckResult {
     pub binding_facts: HashMap<Span, CheckedBindingFact>,
     pub assignment_places: HashMap<Span, CheckedAssignmentPlace>,
     pub call_ownership: HashMap<Span, CheckedCallOwnership>,
+    pub actor_message_calls: HashMap<Span, CheckedActorMessageCall>,
     /// Session-local resolved definitions and their checked types.
     ///
     /// Lowering uses this map with the resolver's `DefId` join keys. Durable
     /// HIR identity is derived separately from source origin and canonical
     /// declaration metadata.
     pub definition_types: HashMap<DefId, TypeId>,
+    pub actor_handlers: HashMap<CheckedActorHandlerTarget, CheckedActorHandler>,
     /// Privileged exact hook identities; empty for ordinary checking.
     pub resource_hooks: HashMap<DefId, CheckedResourceHook>,
     /// Generic calls made outside generic function bodies, keyed by call span.
@@ -518,7 +529,7 @@ fn finish_check(
     };
 
     // Run ownership analysis (linear type checking) after type checking.
-    let (ownership_diagnostics, breakpoint_exclusions, mut validated_field_updates) =
+    let (ownership_diagnostics, breakpoint_exclusions, mut validated_field_updates, actor_reports) =
         if checked_bodies {
             crate::ownership::OwnershipChecker::new(&checker.interner)
                 .with_checked_facts(
@@ -526,13 +537,15 @@ fn finish_check(
                     &checker.binding_facts,
                     &checker.assignment_places,
                     &checker.call_ownership,
+                    &checker.actor_message_calls,
                     &checker.type_map,
                     &checker.comptime_type_bindings,
                     &checker.generic_function_instantiations,
+                    &checker.actor_handlers,
                 )
                 .check_module_with_field_updates(module)
         } else {
-            (Vec::new(), HashMap::new(), HashSet::new())
+            (Vec::new(), HashMap::new(), HashSet::new(), HashMap::new())
         };
 
     let reflection_metadata = Arc::new(checker.build_reflection_metadata());
@@ -590,6 +603,27 @@ fn finish_check(
     {
         validated_field_updates.clear();
     }
+    let program_valid = !diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error);
+    for (target, handler) in &mut checker.actor_handlers {
+        if let Some(report) = actor_reports.get(target) {
+            handler.record_exits(report.exits.clone());
+            if program_valid && report.validated {
+                let body = handler.body_mut();
+                seal_assignment_ownership(
+                    &mut body.assignment_places,
+                    &mut body.comptime_type_bindings,
+                    &AssignmentContext {
+                        root: AssignmentContextRoot::ActorHandler(*target),
+                        scopes: Vec::new(),
+                    },
+                    &validated_field_updates,
+                );
+                handler.authorize_ownership();
+            }
+        }
+    }
     seal_assignment_ownership(
         &mut checker.assignment_places,
         &mut checker.comptime_type_bindings,
@@ -620,7 +654,7 @@ fn finish_check(
         .map(|&index| checker.method_definitions[index].source_span)
         .collect();
 
-    CheckResult {
+    let mut result = CheckResult {
         ordinary_interface_implementations: checker.interface_impls.keys().copied().collect(),
         release: options.release,
         breakpoint_exclusions,
@@ -632,6 +666,10 @@ fn finish_check(
         binding_facts: checker.binding_facts,
         assignment_places: checker.assignment_places,
         call_ownership: checker.call_ownership,
+        actor_message_calls: checker.actor_message_calls,
+        actor_handlers: checker.actor_handlers,
+        actor_check_session: checker.actor_check_session,
+        actor_message_sites: crate::actor_messages::ActorMessageSites::default(),
         definition_types: checker.type_env,
         resource_hooks: checker.resource_hooks,
         generic_calls: checker.generic_calls,
@@ -652,7 +690,9 @@ fn finish_check(
         comptime_type_bindings: checker.comptime_type_bindings,
         interner: checker.interner,
         reflection_metadata,
-    }
+    };
+    result.freeze_actor_message_sites();
+    result
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
@@ -730,6 +770,7 @@ struct ActiveGenericInstantiation {
     binding_facts: HashMap<Span, CheckedBindingFact>,
     assignment_places: HashMap<Span, CheckedAssignmentPlace>,
     call_ownership: HashMap<Span, CheckedCallOwnership>,
+    actor_message_calls: HashMap<Span, CheckedActorMessageCall>,
     invocation_signatures: HashMap<Span, (Vec<TypeId>, TypeId)>,
     generic_calls: HashMap<Span, CheckedGenericCall>,
     intrinsic_ids: HashMap<Span, IntrinsicId>,
@@ -938,6 +979,7 @@ struct TypeChecker<'a> {
     binding_facts: HashMap<Span, CheckedBindingFact>,
     assignment_places: HashMap<Span, CheckedAssignmentPlace>,
     call_ownership: HashMap<Span, CheckedCallOwnership>,
+    actor_message_calls: HashMap<Span, CheckedActorMessageCall>,
     invocation_signatures: HashMap<Span, (Vec<TypeId>, TypeId)>,
     /// Checked struct constructions outside generic bodies.
     struct_constructions: HashMap<Span, CheckedStructConstruction>,
@@ -955,6 +997,10 @@ struct TypeChecker<'a> {
     specialize_reflection_branches: bool,
 
     // -- Actor support --
+    actor_check_session: crate::actor_messages::ActorCheckSession,
+    actor_definitions: HashMap<ActorId, DefId>,
+    actor_message_modes: HashMap<CheckedActorHandlerTarget, Vec<bool>>,
+    actor_handlers: HashMap<CheckedActorHandlerTarget, CheckedActorHandler>,
     /// The expected `responds T` type for the receive handler being checked.
     /// `None` when not inside a receive handler.
     current_respond_type: Option<TypeId>,
@@ -1058,6 +1104,7 @@ impl<'a> TypeChecker<'a> {
             binding_facts: HashMap::new(),
             assignment_places: HashMap::new(),
             call_ownership: HashMap::new(),
+            actor_message_calls: HashMap::new(),
             invocation_signatures: HashMap::new(),
             struct_constructions: HashMap::new(),
             pipeline_step_input_types: HashMap::new(),
@@ -1066,6 +1113,10 @@ impl<'a> TypeChecker<'a> {
             active_generic_instantiations: Vec::new(),
             specialize_reflection_branches: false,
             current_respond_type: None,
+            actor_check_session: crate::actor_messages::ActorCheckSession::new(),
+            actor_definitions: HashMap::new(),
+            actor_message_modes: HashMap::new(),
+            actor_handlers: HashMap::new(),
         };
         checker.install_builtin_metadata_types();
         checker
@@ -6159,6 +6210,7 @@ impl<'a> TypeChecker<'a> {
         self.register_trusted_stdlib_named_type(&trusted_name, ty, def.name.span);
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
             self.type_env.insert(def_id, ty);
+            self.actor_definitions.insert(aid, def_id);
         }
     }
 
@@ -6337,6 +6389,22 @@ impl<'a> TypeChecker<'a> {
             })
             .collect();
 
+        if let Some(&actor_definition) = self.actor_definitions.get(&aid) {
+            for (handler_index, handler) in def.handlers.iter().enumerate() {
+                self.actor_message_modes.insert(
+                    CheckedActorHandlerTarget {
+                        actor_definition,
+                        actor: aid,
+                        handler_index,
+                    },
+                    handler
+                        .params
+                        .iter()
+                        .map(|param| param.view || Self::type_is_view(&param.ty))
+                        .collect(),
+                );
+            }
+        }
         self.interner.update_actor(
             aid,
             TypeActorDef {
@@ -6356,104 +6424,132 @@ impl<'a> TypeChecker<'a> {
         let Type::Actor(aid) = *self.interner.resolve(actor_ty) else {
             return;
         };
+        let Some(&actor_definition) = self.actor_definitions.get(&aid) else {
+            return;
+        };
         let actor_def = self.interner.resolve_actor(aid).clone();
+        let mut captures = Vec::new();
 
-        // Register state fields and capability params in a fresh type env scope.
-        let mut local_env: HashMap<String, TypeId> = HashMap::new();
-        for (name, ty) in &actor_def.capability_params {
-            local_env.insert(name.clone(), *ty);
-        }
-        for (name, ty) in &actor_def.state_fields {
-            local_env.insert(name.clone(), *ty);
-        }
-
-        for (param_ast, (_, param_ty)) in def
+        for (parameter, (param, (_, ty))) in def
             .capability_params
             .iter()
-            .zip(actor_def.capability_params.iter())
+            .zip(&actor_def.capability_params)
+            .enumerate()
         {
-            if let Some(def_id) = self.declaration_def_id(param_ast.name.span) {
-                self.record_debug_type_name(&param_ast.name, &param_ast.ty);
-                self.type_env.insert(def_id, *param_ty);
+            self.record_debug_type_name(&param.name, &param.ty);
+            if let Some(definition) = self.declaration_def_id(param.name.span) {
+                self.type_env.insert(definition, *ty);
+                self.record_expression_type(param.name.span, *ty);
             }
             self.record_assignment_binding(
-                &param_ast.name,
-                param_ast.mutable,
-                param_ast.view || Self::type_is_view(&param_ast.ty),
+                &param.name,
+                param.mutable,
+                param.view || Self::type_is_view(&param.ty),
             );
+            if let Some(&fact) = self.binding_facts.get(&param.name.span) {
+                captures.push(CheckedActorHandlerBinding {
+                    role: CheckedActorBindingRole::Capability { parameter },
+                    fact,
+                });
+            }
         }
 
-        // Type-check state field initializers.
-        for field in &def.state_fields {
+        // Resolve/check sequential initializers before installing their own
+        // binding, exactly as the resolver's top-to-bottom actor scope does.
+        for (field_index, (field, (_, declared_ty))) in def
+            .state_fields
+            .iter()
+            .zip(&actor_def.state_fields)
+            .enumerate()
+        {
             self.record_debug_type_name(&field.name, &field.ty);
-            let declared_ty = self.resolve_type_expr(&field.ty);
-            let init_ty = self.check_expr_for_expected(&field.value, declared_ty, true);
+            let init_ty = self.check_expr_for_expected(&field.value, *declared_ty, true);
+            let mode = self.checked_binding_mode(field, init_ty);
+            if let Some(definition) = self.declaration_def_id(field.name.span) {
+                self.type_env.insert(definition, *declared_ty);
+                self.record_expression_type(field.name.span, *declared_ty);
+            }
+            self.record_binding_mode(field.name.span, mode);
             self.record_assignment_binding(
                 &field.name,
                 field.mutable,
-                Self::type_is_view(&field.ty) || self.initializer_is_view(&field.value),
+                matches!(mode, CheckedBindingMode::View { .. }),
             );
+            if let Some(&fact) = self.binding_facts.get(&field.name.span) {
+                captures.push(CheckedActorHandlerBinding {
+                    role: CheckedActorBindingRole::State { field: field_index },
+                    fact,
+                });
+            }
             if init_ty != TypeInterner::ERROR
-                && declared_ty != TypeInterner::ERROR
-                && !self.types_compatible(declared_ty, init_ty)
+                && *declared_ty != TypeInterner::ERROR
+                && !self.types_compatible(*declared_ty, init_ty)
             {
                 self.sink.emit(errors::type_mismatch(
-                    &self.type_name(declared_ty),
+                    &self.type_name(*declared_ty),
                     &self.type_name(init_ty),
                     field.value.span(),
                 ));
             }
         }
 
-        // Type-check each handler body.
         let prev_return = self.current_return_type;
         let prev_respond = self.current_respond_type;
         let prev_function_name = self.current_function_name.clone();
-
-        for (handler_ast, handler_def) in def.handlers.iter().zip(actor_def.messages.iter()) {
-            // Set up respond type.
-            let responds_ty = if handler_def.responds == TypeInterner::NOTHING {
-                None
-            } else {
-                Some(handler_def.responds)
-            };
-            self.current_respond_type = responds_ty;
+        for (handler_index, (handler, message)) in
+            def.handlers.iter().zip(&actor_def.messages).enumerate()
+        {
+            self.current_respond_type =
+                (message.responds != TypeInterner::NOTHING).then_some(message.responds);
             self.current_return_type = None;
-            self.current_function_name =
-                Some(format!("{}.{}", actor_def.name, handler_ast.name.name));
-
-            // Register message params in the type env temporarily.
-            for (param_ast, (_, param_ty)) in
-                handler_ast.params.iter().zip(handler_def.params.iter())
+            self.current_function_name = Some(format!("{}.{}", actor_def.name, handler.name.name));
+            let mut bindings = captures.clone();
+            for (parameter, (param, (_, ty))) in
+                handler.params.iter().zip(&message.params).enumerate()
             {
-                if let Some(def_id) = self.declaration_def_id(param_ast.name.span) {
-                    self.record_debug_type_name(&param_ast.name, &param_ast.ty);
-                    self.type_env.insert(def_id, *param_ty);
+                self.record_debug_type_name(&param.name, &param.ty);
+                if let Some(definition) = self.declaration_def_id(param.name.span) {
+                    self.type_env.insert(definition, *ty);
+                    self.record_expression_type(param.name.span, *ty);
                 }
                 self.record_assignment_binding(
-                    &param_ast.name,
-                    param_ast.mutable,
-                    param_ast.view || Self::type_is_view(&param_ast.ty),
+                    &param.name,
+                    param.mutable,
+                    param.view || Self::type_is_view(&param.ty),
                 );
-            }
-
-            // Register local_env vars into type_env using resolve declarations.
-            for field in &def.state_fields {
-                if let Some(def_id) = self.declaration_def_id(field.name.span) {
-                    let ty = self.resolve_type_expr(&field.ty);
-                    self.type_env.insert(def_id, ty);
+                if let Some(&fact) = self.binding_facts.get(&param.name.span) {
+                    bindings.push(CheckedActorHandlerBinding {
+                        role: CheckedActorBindingRole::Message { parameter },
+                        fact,
+                    });
                 }
             }
-            for cap in &def.capability_params {
-                if let Some(def_id) = self.declaration_def_id(cap.name.span) {
-                    let ty = self.resolve_type_expr(&cap.ty);
-                    self.type_env.insert(def_id, ty);
-                }
+            self.check_block(&handler.body);
+            let mut body = self.checked_body_facts(handler.body.span);
+            for binding in &bindings {
+                body.binding_facts
+                    .insert(binding.fact.declaration_span, binding.fact);
+                body.binding_modes
+                    .insert(binding.fact.declaration_span, binding.fact.mode);
             }
-
-            self.check_block(&handler_ast.body);
+            let target = CheckedActorHandlerTarget {
+                actor_definition,
+                actor: aid,
+                handler_index,
+            };
+            self.actor_handlers.insert(
+                target,
+                CheckedActorHandler::new(
+                    target,
+                    handler.body.span,
+                    bindings,
+                    message.responds,
+                    body,
+                    self.actor_check_session.clone(),
+                    def,
+                ),
+            );
         }
-
         self.current_return_type = prev_return;
         self.current_respond_type = prev_respond;
         self.current_function_name = prev_function_name;
@@ -7387,6 +7483,7 @@ impl<'a> TypeChecker<'a> {
                         binding_facts: HashMap::new(),
                         assignment_places: HashMap::new(),
                         call_ownership: HashMap::new(),
+                        actor_message_calls: HashMap::new(),
                         generic_calls: HashMap::new(),
                         intrinsic_ids: HashMap::new(),
                         intrinsic_type_arguments: HashMap::new(),
@@ -7438,6 +7535,7 @@ impl<'a> TypeChecker<'a> {
                     binding_facts: HashMap::new(),
                     assignment_places: HashMap::new(),
                     call_ownership: HashMap::new(),
+                    actor_message_calls: HashMap::new(),
                     invocation_signatures: HashMap::new(),
                     generic_calls: HashMap::new(),
                     intrinsic_ids: HashMap::new(),
@@ -7473,6 +7571,7 @@ impl<'a> TypeChecker<'a> {
                 entry.binding_facts.extend(active.binding_facts);
                 entry.assignment_places.extend(active.assignment_places);
                 entry.call_ownership.extend(active.call_ownership);
+                entry.actor_message_calls.extend(active.actor_message_calls);
                 entry.generic_calls.extend(active.generic_calls);
                 entry.intrinsic_ids.extend(active.intrinsic_ids);
                 entry
@@ -8360,11 +8459,43 @@ impl<'a> TypeChecker<'a> {
                 facts.insert(place.root.declaration_span, place.root);
             }
         }
-        for (_, call) in calls
+        let actor_calls = self
+            .active_generic_instantiations
+            .last()
+            .map(|active| &active.actor_message_calls)
+            .unwrap_or(&self.actor_message_calls);
+        for (_, call) in actor_calls
             .iter()
             .filter(|(span, _)| Self::span_is_within(**span, owner))
         {
-            for argument in &call.arguments {
+            // Receiver expressions can be projected or computed. Retain only
+            // their actual resolver references from this selected fact scope.
+            for (_, definition) in self
+                .resolve
+                .resolutions
+                .iter()
+                .filter(|(span, _)| Self::span_is_within(**span, call.receiver_span))
+            {
+                let declaration = self.resolve.scope_table.def(*definition).span;
+                if let Some(fact) = bindings
+                    .get(&declaration)
+                    .filter(|fact| fact.definition == *definition)
+                {
+                    facts.insert(declaration, *fact);
+                }
+            }
+        }
+        let call_arguments = calls
+            .iter()
+            .map(|(span, call)| (span, &call.arguments))
+            .chain(
+                actor_calls
+                    .iter()
+                    .map(|(span, call)| (span, &call.arguments)),
+            );
+        for (_, arguments) in call_arguments.filter(|(span, _)| Self::span_is_within(**span, owner))
+        {
+            for argument in arguments {
                 match &argument.origin {
                     CheckedCallerOrigin::Binding(fact) => {
                         facts.insert(fact.declaration_span, *fact);
@@ -8403,6 +8534,7 @@ impl<'a> TypeChecker<'a> {
             Self::clear_facts_in_span(&mut active.binding_facts, owner);
             Self::clear_facts_in_span(&mut active.assignment_places, owner);
             Self::clear_facts_in_span(&mut active.call_ownership, owner);
+            Self::clear_facts_in_span(&mut active.actor_message_calls, owner);
             Self::clear_facts_in_span(&mut active.invocation_signatures, owner);
             Self::clear_facts_in_span(&mut active.generic_calls, owner);
             Self::clear_facts_in_span(&mut active.intrinsic_ids, owner);
@@ -8423,6 +8555,7 @@ impl<'a> TypeChecker<'a> {
             Self::clear_facts_in_span(&mut self.binding_facts, owner);
             Self::clear_facts_in_span(&mut self.assignment_places, owner);
             Self::clear_facts_in_span(&mut self.call_ownership, owner);
+            Self::clear_facts_in_span(&mut self.actor_message_calls, owner);
             Self::clear_facts_in_span(&mut self.invocation_signatures, owner);
             Self::clear_facts_in_span(&mut self.generic_calls, owner);
             Self::clear_facts_in_span(&mut self.intrinsic_ids, owner);
@@ -8452,6 +8585,7 @@ impl<'a> TypeChecker<'a> {
                     owner,
                 ),
                 call_ownership: Self::facts_in_span(&active.call_ownership, owner),
+                actor_message_calls: Self::facts_in_span(&active.actor_message_calls, owner),
                 assignment_places: Self::facts_in_span(&active.assignment_places, owner),
                 generic_calls: Self::facts_in_span(&active.generic_calls, owner),
                 intrinsic_ids: Self::facts_in_span(&active.intrinsic_ids, owner),
@@ -8491,6 +8625,7 @@ impl<'a> TypeChecker<'a> {
                 owner,
             ),
             call_ownership: Self::facts_in_span(&self.call_ownership, owner),
+            actor_message_calls: Self::facts_in_span(&self.actor_message_calls, owner),
             assignment_places: Self::facts_in_span(&self.assignment_places, owner),
             generic_calls: Self::facts_in_span(&self.generic_calls, owner),
             intrinsic_ids: Self::facts_in_span(&self.intrinsic_ids, owner),
@@ -9870,6 +10005,13 @@ impl<'a> TypeChecker<'a> {
             }
             Some(expected) => {
                 let val_ty = self.check_expr_for_expected(&resp.value, expected, false);
+                if (Self::is_explicit_view(&resp.value)
+                    || !crate::ownership::is_implicitly_copyable(&self.interner, val_ty))
+                    && self.initializer_is_view(&resp.value)
+                {
+                    self.sink
+                        .emit(crate::ownership::cannot_return_view(resp.value.span()));
+                }
                 if val_ty != TypeInterner::ERROR
                     && expected != TypeInterner::ERROR
                     && !self.types_compatible(expected, val_ty)
@@ -11728,11 +11870,13 @@ impl<'a> TypeChecker<'a> {
             Expr::Pipeline(initial, steps, _) => self.check_pipeline(initial, steps),
             Expr::At(inner, state, span) => self.check_machine_state_check(inner, state, *span),
             Expr::Spawn(inner, _) => self.check_spawn(inner),
-            Expr::Send(inner, _) => {
-                self.check_send_ask_inner(inner);
+            Expr::Send(inner, span) => {
+                self.check_send_ask_inner(inner, *span, CheckedActorMessageKind::Send);
                 TypeInterner::NOTHING
             }
-            Expr::Ask(inner, _) => self.check_send_ask_inner(inner),
+            Expr::Ask(inner, span) => {
+                self.check_send_ask_inner(inner, *span, CheckedActorMessageKind::Ask)
+            }
             Expr::Clone(inner, span) => {
                 let inner_ty = self
                     .check_expr_with_resource_projection(inner, ResourceProjectionMode::Borrowed);
@@ -12772,7 +12916,12 @@ impl<'a> TypeChecker<'a> {
         TypeInterner::ERROR
     }
 
-    fn check_send_ask_inner(&mut self, inner: &Expr) -> TypeId {
+    fn check_send_ask_inner(
+        &mut self,
+        inner: &Expr,
+        outer_span: Span,
+        kind: CheckedActorMessageKind,
+    ) -> TypeId {
         // inner is `actor_expr.handler_name` or `actor_expr.handler_name(args)`
         // We check the actor expression and any args, and return the responds type.
         let (actor_expr, message_name, message_span, args) = match inner {
@@ -12800,8 +12949,24 @@ impl<'a> TypeChecker<'a> {
         // Look up the handler and return its responds type.
         if let Type::Actor(aid) = *self.interner.resolve(actor_ty) {
             let actor_def = self.interner.resolve_actor(aid).clone();
-            if let Some(msg) = actor_def.messages.iter().find(|m| m.name == *message_name) {
+            if let Some((handler_index, msg)) = actor_def
+                .messages
+                .iter()
+                .enumerate()
+                .find(|(_, m)| m.name == *message_name)
+            {
                 self.check_actor_message_args(&actor_def.name, msg, args, inner.span());
+                self.record_actor_message_call(
+                    outer_span,
+                    kind,
+                    inner,
+                    actor_expr,
+                    actor_ty,
+                    aid,
+                    handler_index,
+                    msg.responds,
+                    args.unwrap_or(&[]),
+                );
                 return msg.responds;
             }
             self.sink.emit(errors::type_has_no_member(
@@ -16633,6 +16798,7 @@ impl<'a> TypeChecker<'a> {
 
         match last_stmt {
             Stmt::Return(_) => {}
+            Stmt::Respond(_) if self.current_respond_type.is_some() => {}
             Stmt::Expr(expr_stmt) => {
                 if let Expr::Default(default_value, _) = &expr_stmt.expr {
                     if success_ty != TypeInterner::ERROR {

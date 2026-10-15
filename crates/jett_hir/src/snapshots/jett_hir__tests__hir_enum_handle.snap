@@ -41,6 +41,8 @@ Program {
                     52,
                 ),
             ),
+            actor_handler: None,
+            actor_state_views: [],
             params: [
                 Param {
                     local: LocalId(
@@ -207,6 +209,8 @@ Program {
                     53,
                 ),
             ),
+            actor_handler: None,
+            actor_state_views: [],
             params: [],
             capture_count: 0,
             return_type: TypeId(

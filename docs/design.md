@@ -944,7 +944,7 @@ Config config = read_config(view fs, "app.conf") handle error:
 
 The `handle error:` block executes only when the result is `fail`. If the result is `ok`, the coarsened value is bound to the variable on the left (`config`). The error variable is always available inside the block.
 
-**Every handle block must end with either `return` or `default`** — there is no implicit value. This rule applies to both `handle error:` (for `result`) and bare `handle:` (for `optional`). A handle block that does neither is a compile error:
+**Every handle block must end with `return` or `default`; inside a responding actor handler, it may instead end with `respond`** — there is no implicit value. This rule applies to both `handle error:` (for `result`) and bare `handle:` (for `optional`). A handle block that does neither is a compile error:
 
 ```
 # result — COMPILE ERROR:
@@ -2429,6 +2429,17 @@ function main(stdout: Stdout) returns nothing:
 - `send` delivers a message asynchronously. The sender does not wait.
 - `ask` delivers a message and waits for a response. Used when the sender needs a value back.
 - Because variables are linear (Rule Set 10), when a value is sent to an actor, it is consumed in the sender's scope. **No two threads can ever hold the same mutable data.** Race conditions are structurally impossible.
+
+A receive handler keeps its captured state and capabilities available at every
+normal exit. Moving state into a helper is valid when its owned replacement is
+installed before the handler exits. A response may copy a Copy value or transfer
+an owned message/local value; a borrowed value cannot escape as a reply. Mutable
+owned state may use the same checked field-update rule as an ordinary owned
+local. The no-shadowing rule also applies to message parameters and state names.
+A `respond` at the end of a Handle block exits the receive handler; it does not
+supply a fallback value or commit an interrupted field assignment. The current
+implementation and unresolved response-exit cases are tracked in
+[checked actor handler field updates](active/actor_handler_field_updates.md).
 
 **How actors receive capabilities:**
 
@@ -5774,7 +5785,7 @@ A `list[uint8]` field captures everything after the fixed-size fields as a raw b
 | `memcpy(&header, buffer, sizeof(header))` | `Header.from_bytes(buffer)` |
 | `0x1F`, `0b00011111`, `31` | A field width: `field: 5 bits` |
 
-Bitfield updates use construction and whole-value rebinding. For ordinary records, the selected [owned mutable field-update contract](active/owned_mutable_field_updates.md) permits checked finite field paths rooted in a live mutable owned binding. Immutable/temporary/view roots remain rejected, as do paths through an enclosing nominal refinement. Checked reference, required-comptime and native execution implement ordinary-record and exact-state machine updates under that contract. Actor handler and Resource-bearing updates remain implementation obligations; local acceptance is recorded in the native audit.
+Bitfield updates use construction and whole-value rebinding. For ordinary records, the selected [owned mutable field-update contract](active/owned_mutable_field_updates.md) permits checked finite field paths rooted in a live mutable owned binding. Immutable/temporary/view roots remain rejected, as do paths through an enclosing nominal refinement. Checked reference, required-comptime and native execution implement ordinary-record and exact-state machine updates under that contract. Checked actor-handler updates to ordinary owned state retain original handler identity and persistent-state ownership, with bounded MSVC acceptance recorded in the native audit. Resource-bearing updates remain a separate obligation.
 
 Compiler-produced reflection metadata retains its inspect-and-pass contract.
 Projected writes cannot enter the exact builtin metadata record identities to
@@ -5966,7 +5977,7 @@ field copies that do not contain Resource data, and owned call results remain
 valid. A Resource-bearing field cannot be acquired by copying its owner or view;
 use an explicit nonowning field view or a genuine owned transfer instead.
 
-Field assignment through a known view reports E0401 even when its binding is marked `mutable`; an immutable or temporary root reports E0404. Checked finite field paths through a live mutable owned record, or an already exact-state-qualified machine owner, use the selected [local replacement contract](active/owned_mutable_field_updates.md). Outstanding dependent views, consumed roots, paths through enclosing nominal refinements and bitfield writes are rejected. An update preserves exact owner/state/field metadata and does not change a machine's state. Pending ancestors retain the existing typed runtime inspection refusal before RHS effects; no implicit join or blanket new pending-transport Source restriction is introduced. Ordinary-record and exact-state machine updates have bounded reference and native acceptance; actor handler and Resource-bearing updates remain open. See the [acceptance audit](active/native_acceptance_audit.md#owned-mutable-field-updates-bounded-msvc-acceptance).
+Field assignment through a known view reports E0401 even when its binding is marked `mutable`; an immutable or temporary root reports E0404. Checked finite field paths through a live mutable owned record, or an already exact-state-qualified machine owner, use the selected [local replacement contract](active/owned_mutable_field_updates.md). Outstanding dependent views, consumed roots, paths through enclosing nominal refinements and bitfield writes are rejected. An update preserves exact owner/state/field metadata and does not change a machine's state. Pending ancestors retain the existing typed runtime inspection refusal before RHS effects; no implicit join or blanket new pending-transport Source restriction is introduced. Ordinary-record, exact-state machine and checked actor-handler updates to ordinary owned state have bounded reference and native acceptance. Actor updates retain original handler identity and persistent-state ownership; Resource-bearing updates remain open. See the [acceptance audit](active/native_acceptance_audit.md#checked-actor-handler-field-updates-bounded-msvc-acceptance).
 Move-only enum payloads extracted by matching a view retain their borrowed,
 read-only origin. Forwarded payload aliases, parentheses, explicit `coarsen`
 and `declassify` do not acquire ownership. Matching an owned enum retains owned

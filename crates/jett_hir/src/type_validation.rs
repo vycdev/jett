@@ -162,6 +162,18 @@ impl BackendTypeValidator<'_> {
             .collect();
         self.local_types = function.locals.iter().map(|local| local.ty).collect();
         self.local_view_initializers.clear();
+        for view in &function.actor_state_views {
+            if let Err(message) = view.validate(&function.locals, self.interner) {
+                self.error(function.span, message);
+            }
+        }
+        if let Some(entry) = &function.actor_handler {
+            for parameter in &function.params {
+                if entry.allows_state_view(function, parameter.local) {
+                    self.local_view_initializers.insert(parameter.local);
+                }
+            }
+        }
         self.borrowed_parameters = function
             .params
             .iter()
@@ -203,6 +215,15 @@ impl BackendTypeValidator<'_> {
             );
         }
         self.block(&function.body, function_name);
+        for view in &function.actor_state_views {
+            let matches=function.body.statements.iter().filter(|statement|matches!(&statement.kind,StatementKind::Let{local,value} if *local==view.local() && value==view.initializer())).count();
+            if matches != 1 {
+                self.error(
+                    function.span,
+                    "actor constructor view lost its original initializer",
+                );
+            }
+        }
         for local in &function.locals {
             if local.view_source.is_some() && !self.local_view_initializers.contains(&local.id) {
                 self.error(local.span, "borrowed local has no validated initializer");
@@ -760,6 +781,15 @@ impl BackendTypeValidator<'_> {
                 }
             }
             ExpressionKind::ActorMessage { actor, args, .. } => {
+                if let Err(message) = crate::validate_hir_invocation(
+                    self.functions,
+                    &self.ownership_locals,
+                    expression,
+                    self.interner,
+                    self.ownership_context,
+                ) {
+                    self.error(expression.span, message);
+                }
                 self.expression(actor, function_name);
                 for argument in args {
                     self.expression(argument, function_name);
@@ -1124,6 +1154,8 @@ mod tests {
                     specialization: Default::default(),
                 },
                 source_definition: None,
+                actor_handler: None,
+                actor_state_views: Vec::new(),
                 debug_kind: crate::FunctionDebugKind::named("test", "main"),
                 params: Vec::new(),
                 capture_count: 0,

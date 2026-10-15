@@ -717,61 +717,31 @@ fn actor_handler_state_range(
     types: &TypeInterner,
     symbol: &str,
 ) -> Result<Option<(usize, usize)>, CodegenError> {
-    if function.identity.declaration.kind != jett_hir::DeclarationKind::ActorHandler {
+    let entry = function
+        .actor_handler_entry()
+        .map_err(|message| contract_error(symbol, function.span, message))?;
+    let Some(entry) = entry else {
         return Ok(None);
-    }
-    let Some((owner, _)) = function.identity.declaration.name.rsplit_once('.') else {
+    };
+    let definition = types.resolve_actor(entry.target().actor);
+    let start = definition.capability_params.len();
+    let end = start + definition.state_fields.len();
+    if function.capture_count != end || entry.roles().len() != function.params.len() {
         return Err(contract_error(
             symbol,
             function.span,
-            "actor handler has no owner name",
-        ));
-    };
-    let namespace = &function.identity.declaration.namespace;
-    let canonical = if namespace.is_empty() {
-        owner.to_owned()
-    } else {
-        format!("{namespace}.{owner}")
-    };
-    let Some(actor) = types.type_ids().find_map(|ty| match types.resolve(ty) {
-        Type::Actor(id) if types.resolve_actor(*id).name == canonical => {
-            Some(types.resolve_actor(*id))
-        }
-        _ => None,
-    }) else {
-        return Err(contract_error(
-            symbol,
-            function.span,
-            "actor handler type is absent",
-        ));
-    };
-    let start = actor.capability_params.len();
-    let end = start + actor.state_fields.len();
-    if function.capture_count != end {
-        return Err(contract_error(
-            symbol,
-            function.span,
-            "actor handler capture layout changed",
+            "actor original capture projection changed",
         ));
     }
-    for (index, (_, expected)) in actor
-        .capability_params
-        .iter()
-        .chain(&actor.state_fields)
-        .enumerate()
-    {
-        let Some(parameter) = function.params.get(index) else {
+    for (index, role) in entry.roles().iter().enumerate() {
+        if role.local().index() as usize != index
+            || function.params[index].local != role.local()
+            || function.params[index].ty != role.fact().ty
+        {
             return Err(contract_error(
                 symbol,
                 function.span,
-                "actor handler capture is absent",
-            ));
-        };
-        if parameter.local.index() as usize != index || parameter.ty != *expected {
-            return Err(contract_error(
-                symbol,
-                parameter.span,
-                "actor handler capture layout changed",
+                "actor original role/local projection changed",
             ));
         }
     }
@@ -916,7 +886,12 @@ fn translate_function_with_storage(
             }
         })
         .collect::<Vec<_>>();
-    let temporary_slots = (0..ownership.temporary_slots)
+    let actor_extra = if actor_state_range.is_some() {
+        function.capture_count + 2
+    } else {
+        0
+    };
+    let temporary_slots = (0..ownership.temporary_slots + actor_extra)
         .map(|_| {
             builder.create_sized_stack_slot(ir::StackSlotData::new(
                 ir::StackSlotKind::ExplicitSlot,
@@ -1202,6 +1177,36 @@ fn translate_function_with_storage(
             } else {
                 2_usize
             };
+            if actor_state_range.is_some() {
+                let mut message_index = incoming_index;
+                for parameter in function.params.iter().skip(function.capture_count) {
+                    if variables[parameter.local.index() as usize].is_none() {
+                        continue;
+                    }
+                    let value = *incoming.get(message_index).ok_or_else(|| {
+                        contract_error(
+                            symbol,
+                            parameter.span,
+                            "actor incoming message value absent",
+                        )
+                    })?;
+                    message_index += 1;
+                    if pending_variables[parameter.local.index() as usize].is_some() {
+                        message_index += 1;
+                    }
+                    if is_linear(types, parameter.ty) {
+                        let slot =
+                            local_slots[parameter.local.index() as usize].ok_or_else(|| {
+                                contract_error(
+                                    symbol,
+                                    parameter.span,
+                                    "actor incoming owner lacks cleanup storage",
+                                )
+                            })?;
+                        translator.builder.ins().stack_store(value, slot, 0);
+                    }
+                }
+            }
             for (index, parameter) in function.params.iter().enumerate() {
                 let variable =
                     variable_for(&variables, parameter.local.index(), parameter.span, symbol)?;
@@ -1334,6 +1339,45 @@ fn translate_function_with_storage(
                         translator.leaf(NativeLeaf::Retain, &[v], true)?
                     };
                     translator.builder.ins().stack_store(owned, slot, 0);
+                }
+            }
+            if actor_state_range.is_some() {
+                for parameter in function.params.iter().take(function.capture_count) {
+                    if function
+                        .actor_state_view(parameter.local)
+                        .map_err(|message| contract_error(symbol, parameter.span, message))?
+                    {
+                        let initializer = function
+                            .actor_handler_entry()
+                            .map_err(|message| contract_error(symbol, parameter.span, message))?
+                            .and_then(|entry| {
+                                entry
+                                    .roles()
+                                    .iter()
+                                    .find(|role| role.local() == parameter.local)
+                            })
+                            .and_then(|role| role.state_view())
+                            .map(|view| view.initializer())
+                            .ok_or_else(|| {
+                                contract_error(
+                                    symbol,
+                                    parameter.span,
+                                    "actor state alias lost its original typed initializer",
+                                )
+                            })?;
+                        let lowered = translator.expression(initializer)?;
+                        let value = translator.scalar(lowered, parameter.span)?;
+                        translator.builder.def_var(
+                            variables[parameter.local.index() as usize].ok_or_else(|| {
+                                contract_error(
+                                    symbol,
+                                    parameter.span,
+                                    "actor alias variable absent",
+                                )
+                            })?,
+                            value,
+                        );
+                    }
                 }
             }
         }
@@ -1996,14 +2040,8 @@ impl Translator<'_, '_> {
             return Ok(());
         };
         let actor = self.builder.use_var(self.environment_variable);
+        let mut displaced = Vec::new();
         for index in start..end {
-            if index >= self.local_types.len() {
-                return Err(contract_error(
-                    self.symbol,
-                    span,
-                    "actor state local is absent",
-                ));
-            }
             let (value, owned) = if let Some(slot) = self.local_slots[index] {
                 (self.builder.ins().stack_load(ir::types::I64, slot, 0), true)
             } else {
@@ -2017,20 +2055,31 @@ impl Translator<'_, '_> {
             } else {
                 self.payload_bits(LoweredValue::Scalar(value)).0
             };
-            let field = self.builder.ins().iconst(ir::types::I64, index as i64);
-            if let Some(pending_variable) = self.pending_variables[index] {
-                let depth = self.builder.use_var(pending_variable);
-                self.leaf(
-                    NativeLeaf::ActorReplaceScalarTask,
-                    &[actor, field, bits, depth],
-                    true,
-                )?;
+            let depth = if let Some(variable) = self.pending_variables[index] {
+                self.builder.use_var(variable)
             } else {
-                let owns = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
-                self.leaf(NativeLeaf::ActorReplace, &[actor, field, bits, owns], true)?;
-            }
+                self.builder.ins().iconst(ir::types::I64, 0)
+            };
+            let field = self.builder.ins().iconst(ir::types::I64, index as i64);
+            let owns = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
+            let old = self.leaf(
+                NativeLeaf::ActorReplaceOccupied,
+                &[actor, field, bits, owns, depth],
+                true,
+            )?;
+            // Successful swap transfers incoming ownership before ANY fallible cleanup.
             if let Some(slot) = self.local_slots[index] {
                 self.clear_slot(slot);
+            }
+            if owned {
+                displaced.push(self.own(old)?);
+            }
+        }
+        // All persistent aliases now point at the new owner generation. Keep old
+        // owners alive until every dependent nonowning actor slot is published.
+        for value in displaced {
+            if let LoweredValue::Owned(_, slot) = value {
+                self.drop_slot(slot)?;
             }
         }
         Ok(())
@@ -2051,11 +2100,26 @@ impl Translator<'_, '_> {
             } else {
                 NativeLeaf::Retain
             };
-            result = LoweredValue::Scalar(self.leaf(leaf, &[v], true)?);
+            let acquired = self.leaf(leaf, &[v], true)?;
+            result = if self.actor_state_range.is_some() {
+                self.own(acquired)?
+            } else {
+                LoweredValue::Scalar(acquired)
+            };
         }
-        if let LoweredValue::Owned(v, slot) = result {
-            self.clear_slot(slot);
-            result = LoweredValue::Scalar(v);
+        let actor_reply = if self.actor_state_range.is_some() {
+            match result {
+                LoweredValue::Owned(_, slot) => Some(slot),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if actor_reply.is_none() {
+            if let LoweredValue::Owned(v, slot) = result {
+                self.clear_slot(slot);
+                result = LoweredValue::Scalar(v);
+            }
         }
         let primitive_return = match value {
             Some(expression) => is_task_scalar(self.types, expression.ty)?,
@@ -2067,7 +2131,12 @@ impl Translator<'_, '_> {
             None
         };
         self.flush_actor_state(span)?;
-        self.drop_all()?;
+        if let Some(slot) = actor_reply {
+            self.drop_all_except(slot)?;
+            self.clear_slot(slot);
+        } else {
+            self.drop_all()?;
+        }
         if let Some((bits, depth)) = primitive {
             self.builder.ins().return_(&[bits, depth]);
         } else {
@@ -3052,6 +3121,7 @@ impl Translator<'_, '_> {
                 args,
                 evaluation_order,
                 kind,
+                proof,
             } => {
                 let Type::Actor(actor_id) = self.types.resolve(actor.ty) else {
                     return Err(contract_error(
@@ -3061,12 +3131,23 @@ impl Translator<'_, '_> {
                     ));
                 };
                 let definition = self.types.resolve_actor(*actor_id);
+                if proof.target().actor != *actor_id {
+                    return Err(contract_error(
+                        self.symbol,
+                        expression.span,
+                        "actor message changed original actor target",
+                    ));
+                }
                 let responds = definition
                     .messages
-                    .iter()
-                    .find(|entry| entry.name == *message)
+                    .get(proof.target().handler_index)
+                    .filter(|entry| entry.name == *message)
                     .ok_or_else(|| {
-                        contract_error(self.symbol, expression.span, "actor message is absent")
+                        contract_error(
+                            self.symbol,
+                            expression.span,
+                            "actor original message ordinal absent",
+                        )
                     })?
                     .responds;
                 let captured = definition.capability_params.len() + definition.state_fields.len();
@@ -3081,6 +3162,7 @@ impl Translator<'_, '_> {
                     environment,
                     captured,
                     responds,
+                    Some(proof),
                 )?;
                 if *kind == jett_hir::ActorMessageKind::Send {
                     Ok(self.nothing())
@@ -3223,6 +3305,7 @@ impl Translator<'_, '_> {
             environment,
             0,
             expression.ty,
+            None,
         )
     }
 
@@ -3235,6 +3318,7 @@ impl Translator<'_, '_> {
         environment: Value,
         captured: usize,
         result_type: TypeId,
+        actor_message: Option<&jett_hir::ActorMessageProof>,
     ) -> Result<LoweredValue, CodegenError> {
         let invalid_order = || {
             contract_error(
@@ -3258,7 +3342,9 @@ impl Translator<'_, '_> {
             &indexed,
             evaluation_order,
             |(index, argument)| {
-                if modes[*index] == jett_mir::ParamMode::Owned
+                if actor_message.is_some() {
+                    self.argument(argument, false)
+                } else if modes[*index] == jett_mir::ParamMode::Owned
                     && is_linear(self.types, argument.ty)
                     && matches!(argument.kind, ExpressionKind::View(_))
                 {
@@ -3298,7 +3384,7 @@ impl Translator<'_, '_> {
                 LoweredValue::Scalar(value) => native_args.push(value),
                 LoweredValue::ScalarTask(value, _) => native_args.push(value),
                 LoweredValue::Owned(value, slot) => {
-                    if modes[index] == jett_mir::ParamMode::Owned
+                    if (actor_message.is_some() || modes[index] == jett_mir::ParamMode::Owned)
                         && is_linear(self.types, argument.ty)
                     {
                         self.clear_slot(slot);

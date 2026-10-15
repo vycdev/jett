@@ -1,0 +1,33 @@
+namespace app
+struct Inner:
+    values: list[int64]
+    label: string
+struct State:
+    inner: Inner
+    stamp: int64
+actor Store(seed: int64):
+    mutable State state = State(inner: Inner(values: list(seed), label: "start"), stamp: seed)
+    receive replace(values: list[int64], label: string):
+        state.inner.values = values
+        state.inner.label = label
+    receive append(value: int64):
+        state.inner.values = list.append[int64](clone state.inner.values, value)
+        state.inner.label = "{state.inner.label}!"
+    receive read responds string:
+        respond "{list.length(view state.inner.values)}:{list.sum[int64](view state.inner.values)}:{state.inner.label}:{state.stamp}"
+function main(stdout: Stdout) returns nothing:
+    Store first = spawn Store(seed: 2)
+    Store second = spawn Store(seed: 9)
+    list[int64] supplied = list(3, 4)
+    string caption = "left"
+    send first.replace(clone supplied, caption)
+    send first.append(5)
+    send first.append(6)
+    string changed = ask first.read
+    string independent = ask second.read
+    Stdout.write(view stdout, "first:{changed}|{independent}|sender:{list.length(view supplied)}:{list.sum[int64](view supplied)}:{caption}\n")
+    send second.replace(supplied, "right")
+    string retained = ask first.read
+    string replaced = ask second.read
+    Stdout.write(view stdout, "after:{retained}|{replaced}\n")
+    return nothing

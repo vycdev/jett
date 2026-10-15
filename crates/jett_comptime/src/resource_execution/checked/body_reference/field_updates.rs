@@ -380,3 +380,38 @@ impl CheckedExecution {
         Ok(())
     }
 }
+
+impl CheckedExecution {
+    pub(crate) fn prepare_actor_binding(
+        &self,
+        handler: &super::actor_handlers::PreparedActorHandler,
+        role: jett_typecheck::CheckedActorBindingRole,
+    ) -> Result<PreparedFieldBinding, ResourceExecutionError> {
+        self.validate_field_executable_cursor(&self.body)?;
+        let BodyRoot::ActorHandler(target) = self.body.root else {
+            return Err(ResourceExecutionError::InvalidOwner);
+        };
+        if target != handler.target()
+            || self.field_body_key()? != self.field_attempt_key(&handler.reference().cursor)?
+        {
+            return Err(ResourceExecutionError::InvalidOwner);
+        }
+        let mut matching = handler
+            .metadata()?
+            .bindings()
+            .iter()
+            .filter(|binding| binding.role == role);
+        let binding = matching
+            .next()
+            .ok_or(ResourceExecutionError::InvalidOwner)?;
+        if matching.next().is_some()
+            || handler.role_name(role)?.span != binding.fact.declaration_span
+        {
+            return Err(ResourceExecutionError::InvalidOwner);
+        }
+        Ok(PreparedFieldBinding {
+            fact: binding.fact,
+            key: self.field_body_key()?,
+        })
+    }
+}

@@ -12,6 +12,7 @@ pub(crate) fn unreachable(function: &mut Function) -> bool {
         || crate::resource_ownership::has_records(function)
         || crate::ordinary_borrowed_sums::has_records(function)
         || crate::field_updates::has_records(function)
+        || crate::actor_handlers::has_records(function)
         || crate::match_bindings::has_records(function))
     .then(|| function.clone());
     let Ok(cfg) = ControlFlowGraph::analyze(function) else {
@@ -57,7 +58,8 @@ pub(crate) fn unreachable(function: &mut Function) -> bool {
 
     if crate::match_bindings::remap_blocks(function, &blocks).is_err()
         || before.as_ref().is_some_and(|before| {
-            crate::field_updates::remap_blocks(function, before, &blocks).is_err()
+            crate::actor_handlers::remap_blocks(function, before, &blocks).is_err()
+                || crate::field_updates::remap_blocks(function, before, &blocks).is_err()
                 || crate::call_owner_generations::remap_blocks(function, before, &blocks).is_err()
                 || crate::resource_ownership::remap_blocks(function, before, &blocks).is_err()
                 || crate::ordinary_borrowed_sums::remap_blocks(function, before, &blocks).is_err()
@@ -79,7 +81,11 @@ pub(crate) fn unused_locals(function: &mut Function) -> bool {
     if crate::resource_ownership::constructors::validate_nodes(function).is_err() {
         return false;
     }
-    if crate::actor_graph::has_records(function) || crate::field_updates::has_records(function) {
+    if function.actor_message_source
+        || crate::actor_graph::has_records(function)
+        || crate::field_updates::has_records(function)
+        || crate::actor_handlers::has_records(function)
+    {
         return true;
     }
     let before = (!function.breakpoint_regions.is_empty()
@@ -87,6 +93,7 @@ pub(crate) fn unused_locals(function: &mut Function) -> bool {
         || crate::resource_ownership::has_records(function)
         || crate::ordinary_borrowed_sums::has_records(function)
         || crate::field_updates::has_records(function)
+        || crate::actor_handlers::has_records(function)
         || crate::match_bindings::has_records(function))
     .then(|| function.clone());
     let mut used = vec![false; function.locals.len()];

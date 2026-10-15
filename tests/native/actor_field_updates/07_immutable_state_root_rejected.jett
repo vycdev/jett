@@ -1,0 +1,11 @@
+namespace app
+struct Packet:
+    value: int64
+actor Store:
+    Packet saved = Packet(value: 1)
+    receive change:
+        saved.value = 9
+function main() returns nothing:
+    Store store = spawn Store()
+    send store.change
+    return nothing

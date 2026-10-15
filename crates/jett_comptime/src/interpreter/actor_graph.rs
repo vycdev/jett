@@ -217,6 +217,13 @@ impl Interpreter {
                     .get(&node.seed)
                     .ok_or("actor seed is not reserved")?,
                 ActorInstance {
+                    checked_origin: Some(
+                        crate::resource_execution::CheckedActorInstanceOrigin::from_checked_actor(
+                            program.clone(),
+                            *owner,
+                        )
+                        .map_err(|error| error.to_string())?,
+                    ),
                     type_name: definition.name.clone(),
                     state,
                     capabilities,

@@ -1918,6 +1918,7 @@ impl Builder<'_> {
             args,
             evaluation_order,
             kind,
+            proof,
         } = &expression.kind
             && (needs_eager_lowering(actor) || args.iter().any(needs_eager_lowering))
             && valid_ordered_owned_values(self.types, &self.locals, args, evaluation_order)
@@ -1946,6 +1947,7 @@ impl Builder<'_> {
                 args,
                 evaluation_order: evaluation_order.clone(),
                 kind: *kind,
+                proof: proof.clone(),
             };
             return Some(lowered);
         }

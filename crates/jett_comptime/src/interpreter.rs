@@ -51,6 +51,7 @@ use crate::debug::{DebugEvent, DebugEventKind};
 use crate::value::{ClosureScopedTypeBinding, ClosureTypeArgument, ClosureTypeContext, Value};
 
 pub mod actor_graph;
+mod actor_handlers;
 mod debug;
 mod field_updates;
 mod generic_inference;
@@ -745,6 +746,7 @@ struct ActorInstance {
     state: HashMap<String, Value>,
     /// Capability values passed at spawn time.
     capabilities: HashMap<String, Value>,
+    checked_origin: Option<crate::resource_execution::CheckedActorInstanceOrigin>,
 }
 
 impl Interpreter {
@@ -3096,17 +3098,9 @@ impl Interpreter {
                 self.eval_expr_flow(inner)
             }
 
-            Expr::Spawn(inner, _) => self.eval_spawn_flow(inner),
+            Expr::Spawn(_, _) => self.eval_spawn_flow(expr),
 
-            Expr::Send(inner, _) => {
-                self.eval_actor_message(inner, false)?;
-                Ok(ExprFlow::Value(Value::Nothing))
-            }
-
-            Expr::Ask(inner, _) => {
-                let val = self.eval_actor_message(inner, true)?;
-                Ok(ExprFlow::Value(val))
-            }
+            Expr::Send(_, _) | Expr::Ask(_, _) => self.eval_actor_message_flow(expr),
 
             // Structured concurrency — sequential simulation:
             // `run call` evaluates immediately and wraps in Pending.
@@ -3169,7 +3163,7 @@ impl Interpreter {
         }
     }
 
-    fn eval_spawn_flow(&mut self, inner: &Expr) -> Result<ExprFlow, String> {
+    fn eval_spawn_flow_unchecked(&mut self, inner: &Expr) -> Result<ExprFlow, String> {
         // `spawn ActorType(cap1: val1, ...)` — create a new actor instance.
         let (source_actor_name, args) = match inner {
             Expr::Call(callee, args, _) => match callee.as_ref() {
@@ -3258,6 +3252,7 @@ impl Interpreter {
                 type_name: actor_name.clone(),
                 state,
                 capabilities,
+                checked_origin: None,
             },
         );
 
@@ -5153,7 +5148,11 @@ impl Interpreter {
     ///
     /// When `is_ask` is true, a `respond value` inside the handler returns
     /// `value` as the result; for `send` the result is always `nothing`.
-    fn eval_actor_message(&mut self, inner: &Expr, is_ask: bool) -> Result<Value, String> {
+    fn eval_actor_message_unchecked(
+        &mut self,
+        inner: &Expr,
+        is_ask: bool,
+    ) -> Result<Value, String> {
         // Decompose `actor_expr.handler_name` or `actor_expr.handler_name(args)`.
         let (actor_expr, handler_name, call_args) = match inner {
             Expr::Call(callee, args, _) => match callee.as_ref() {

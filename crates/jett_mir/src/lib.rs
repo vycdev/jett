@@ -1,5 +1,7 @@
 //! Jett's backend-neutral control-flow graph representation.
 
+mod actor_handlers;
+
 mod field_updates;
 pub use field_updates::validate_field_updates;
 mod actor_graph;
@@ -109,6 +111,9 @@ pub struct Function {
     reflected_callable: Option<reflected_callable::Witness>,
     actor_graph: Option<actor_graph::Witness>,
     field_updates: Option<field_updates::Witness>,
+    actor_handler: Option<actor_handlers::Witness>,
+    actor_state_views: Vec<hir::ActorStateView>,
+    actor_message_source: bool,
 }
 
 impl Function {
@@ -406,6 +411,12 @@ pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
     let mut errors = Vec::new();
     let mut function_ids = std::collections::HashSet::new();
     for (index, function) in program.functions.iter().enumerate() {
+        if let Err(message) = actor_handlers::validate(function) {
+            errors.push(ValidationError {
+                span: function.span,
+                message,
+            });
+        }
         if function.id.index() as usize != index {
             errors.push(ValidationError {
                 span: function.span,
@@ -515,6 +526,12 @@ pub fn validate_call_ownership(
     }
     let validation = call_ownership::ProgramValidation::new(program);
     for function in &program.functions {
+        if let Err(message) = actor_handlers::validate(function) {
+            errors.push(ValidationError {
+                span: function.span,
+                message,
+            });
+        }
         if let Err(message) = ordinary_borrowed_sums::validate(function, types) {
             errors.push(ValidationError {
                 span: function.span,
@@ -605,13 +622,17 @@ impl FunctionValidator<'_, '_> {
                 if source.index() >= local.id.index() || function.view_root(local.id).is_none() {
                     self.error(local.span, "local view source must precede its binding");
                 }
-                if local.mutable || function.parameter_for_local(local.id).is_some() {
+                let actor_state_view = function.actor_state_view(local.id).unwrap_or(false);
+                if local.mutable
+                    || (function.parameter_for_local(local.id).is_some() && !actor_state_view)
+                {
                     self.error(
                         local.span,
                         "local view aliases must be immutable local bindings",
                     );
                 }
-                if !internal_call_views.contains(&local.id)
+                if !actor_state_view
+                    && !internal_call_views.contains(&local.id)
                     && let Some(root) = function.view_root(local.id)
                     && function.local(root).is_some_and(|root| root.mutable)
                 {
@@ -1544,6 +1565,9 @@ fn lower_function_body(
         reflected_callable: None,
         actor_graph: None,
         field_updates: None,
+        actor_handler: None,
+        actor_state_views: function.actor_state_views.clone(),
+        actor_message_source: hir::has_actor_messages(&function.body),
     };
     lowered.breakpoint_regions =
         breakpoint_capture
@@ -1582,6 +1606,11 @@ fn lower_function_body(
             })?;
     lowered.actor_graph =
         actor_graph::seal(function, &lowered, types).map_err(|message| LowerError {
+            span: function.span,
+            message,
+        })?;
+    lowered.actor_handler =
+        actor_handlers::seal(function, &lowered).map_err(|message| LowerError {
             span: function.span,
             message,
         })?;
@@ -2101,8 +2130,20 @@ impl<'a> Builder<'a> {
                 }
             }
             hir::StatementKind::Respond(value) => {
+                // Respond abandons the surrounding acquisition before evaluating
+                // its owned reply, while retaining its distinct actor exit kind.
+                let (resource_scopes, constructor_scopes, operation_scopes) =
+                    self.abandon_resource_calls(statement.span);
                 self.end_call_views_since(0, statement.span);
-                self.terminate(TerminatorKind::Respond(value.clone()), statement.span)
+                let abandoned = std::mem::take(&mut self.call_view_scopes);
+                let generations = self.generation_capture.suspend();
+                let value = self.lower_value(value);
+                self.call_view_scopes = abandoned;
+                self.generation_capture.restore(generations);
+                self.resource_call_scopes = resource_scopes;
+                self.resource_constructor_scopes = constructor_scopes;
+                self.resource_operation_scopes = operation_scopes;
+                self.terminate(TerminatorKind::Respond(value), statement.span)
             }
             hir::StatementKind::Scope(block) => self.lower_block(block),
             hir::StatementKind::ReflectedTypeDispatch { type_info, arms } => {

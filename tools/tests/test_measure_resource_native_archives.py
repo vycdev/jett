@@ -1128,7 +1128,8 @@ class MsvcReceiptTests(unittest.TestCase):
             symbols = root / f"{profile}-symbols.log"
             symbols.write_text("runtime.lib(runtime.o):\n" + "\n".join(
                 f"{name} T 0 10" for name in sorted(
-                    leaves | private | {"main", measure.STRUCT_REPLACE_EXPORT})), encoding="utf-8")
+                    leaves | private | {"main", measure.STRUCT_REPLACE_EXPORT,
+                                        measure.ACTOR_REPLACE_EXPORT})), encoding="utf-8")
             coff = root / f"{profile}-coff.log"
             coff.write_text(MsvcObservationTests.coff_observation(), encoding="utf-8")
             build = root / f"{profile}-build.json"
@@ -1472,6 +1473,35 @@ class MsvcReceiptTests(unittest.TestCase):
             expected = self.reauthenticate(receipt)
             with self.assertRaises(measure.MeasurementError):
                 self.verify(receipt, root, environment, expected)
+
+
+    def test_reauthenticated_receipt_rejects_missing_duplicate_and_nontext_actor_export(self) -> None:
+        symbol = measure.ACTOR_REPLACE_EXPORT
+        mutations = ("missing", "duplicate", "data", "weak", "local")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                receipt, environment = self.fixture(root)
+                self.verify(receipt, root, environment)
+                symbols = root / "debug-symbols.log"
+                original = symbols.read_text(encoding="utf-8")
+                definition = f"{symbol} T 0 10"
+                self.assertEqual(original.splitlines().count(definition), 1)
+                if mutation == "missing":
+                    changed = "\n".join(line for line in original.splitlines() if line != definition)
+                elif mutation == "duplicate":
+                    changed = original + f"\n{definition}\n"
+                else:
+                    kind = {"data": "D", "weak": "W", "local": "t"}[mutation]
+                    changed = original.replace(definition, f"{symbol} {kind} 0 10")
+                symbols.write_text(changed, encoding="utf-8")
+                leaves, private = measure.export_names(root)
+                measure.check_symbols(changed, leaves, private)
+                measure.check_struct_replace_symbols(changed)
+                expected = self.reauthenticate(receipt)
+                with self.assertRaisesRegex(measure.MeasurementError, "ActorReplaceOccupied"):
+                    self.verify(receipt, root, environment, expected)
+
 
 class MsvcGateTests(unittest.TestCase):
     occupied_tests = (
@@ -1973,6 +2003,132 @@ leaves! {
                      valid.replace(f"{symbol} T", f"{symbol} W")):
             with self.subTest(symbols=text), self.assertRaises(measure.MeasurementError):
                 measure.check_struct_replace_symbols(text)
+
+
+
+class ActorReplaceMeasurementTests(unittest.TestCase):
+    source = '''macro_rules! leaves {
+    ($( $variant:ident, $name:ident, $cleanup:literal, ($($arg:ident: $rust:ty => $abi:ident),*), $ret:ty => $retabi:ident, $body:expr; )*) => {
+        pub fn symbol(self) -> &'static str { match self { $( Self::$variant => stringify!($name), )* } }
+        pub fn parameters(self) -> &'static [AbiScalar] { match self { $( Self::$variant => &[AbiScalar::Pointer, $( AbiScalar::$abi, )*], )* } }
+        pub fn result(self) -> AbiScalar { match self { $( Self::$variant => AbiScalar::$retabi, )* } }
+        pub unsafe extern "C" fn $name(context: *const JettRuntimeContextV1, $( $arg: $rust ),*) -> $ret {
+            leaf(context, $cleanup, $body)
+        }
+    }
+}
+leaves! {
+    ActorReplaceOccupied, jett_rt_v1_actor_replace_occupied, false, (actor: u64 => I64, index: u64 => I64, bits: u64 => I64, owned: u32 => I32, depth: u64 => I64), u64 => I64,
+        |s| { Ok(s.replace_actor_field(actor, index, NativeField { bits, owned: owned != 0, pending_depth: depth })?.bits) };
+}
+'''
+
+    def test_actor_replace_authenticates_c_and_abi_widths_order_result_and_context(self) -> None:
+        changes = (
+            ("ActorReplaceOccupied,", "AnotherVariant,"),
+            ("jett_rt_v1_actor_replace_occupied,", "jett_rt_v1_actor_replace_other,"),
+            ("occupied, false,", "occupied, true,"),
+            ("actor: u64 => I64", "actor: u32 => I64"),
+            ("actor: u64 => I64", "actor: u64 => I32"),
+            ("index: u64 => I64", "index: u32 => I32"),
+            ("bits: u64 => I64", "bits: u32 => I32"),
+            ("owned: u32 => I32", "owned: u64 => I32"),
+            ("owned: u32 => I32", "owned: u32 => I64"),
+            ("depth: u64 => I64", "depth: u32 => I32"),
+            ("actor: u64 => I64, index: u64 => I64",
+             "index: u64 => I64, actor: u64 => I64"),
+            ("owned: u32 => I32, depth: u64 => I64",
+             "depth: u64 => I64, owned: u32 => I32"),
+            (", depth: u64 => I64", ""),
+            ("depth: u64 => I64)", "depth: u64 => I64, extra: u64 => I64)"),
+            ("), u64 => I64,", "), u32 => I64,"),
+            ("), u64 => I64,", "), u64 => I32,"),
+            ("context: *const JettRuntimeContextV1", "context: u64"),
+            ("context: *const JettRuntimeContextV1", "context: *mut JettRuntimeContextV1"),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            values = root / "crates/jett_runtime/src/native_abi/values.rs"
+            values.parent.mkdir(parents=True)
+            values.write_text(self.source, encoding="utf-8")
+            measure.checked_actor_replace_leaf(root)
+            for old, new in changes:
+                self.assertIn(old, self.source)
+                values.write_text(self.source.replace(old, new, 1), encoding="utf-8")
+                with self.subTest(forgery=new), self.assertRaises(measure.MeasurementError):
+                    measure.checked_actor_replace_leaf(root)
+
+    def test_actor_replace_authenticates_macro_mappings_and_generated_wrapper(self) -> None:
+        changes = (
+            ("stringify!($name)", '"jett_rt_v1_foreign"'),
+            ("&[AbiScalar::Pointer, $( AbiScalar::$abi, )*]",
+             "&[AbiScalar::I64, $( AbiScalar::$abi, )*]"),
+            ("&[AbiScalar::Pointer, $( AbiScalar::$abi, )*]",
+             "&[AbiScalar::Pointer]"),
+            ("$( AbiScalar::$abi, )*", "$( AbiScalar::I64, )*"),
+            ("Self::$variant => AbiScalar::$retabi", "Self::$variant => AbiScalar::I32"),
+            ('pub unsafe extern "C" fn $name', 'pub unsafe extern "system" fn $name'),
+            ("$( $arg: $rust ),*) -> $ret", "$( $arg: u64 ),*) -> $ret"),
+            ("$( $arg: $rust ),*) -> $ret", "$( $arg: $rust ),*) -> u32"),
+            ("leaf(context, $cleanup, $body)", "leaf(context, true, $body)"),
+            ("leaf(context, $cleanup, $body)", "leaf(context, false, $body)"),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            values = root / "crates/jett_runtime/src/native_abi/values.rs"
+            values.parent.mkdir(parents=True)
+            values.write_text(self.source, encoding="utf-8")
+            measure.checked_actor_replace_leaf(root)
+            for old, new in changes:
+                self.assertIn(old, self.source)
+                values.write_text(self.source.replace(old, new, 1), encoding="utf-8")
+                with self.subTest(forgery=new), self.assertRaises(measure.MeasurementError):
+                    measure.checked_actor_replace_leaf(root)
+
+    def test_actor_replace_row_must_belong_to_one_uncommented_canonical_catalog(self) -> None:
+        row = next(line for line in self.source.splitlines()
+                   if line.strip().startswith("ActorReplaceOccupied,"))
+        invalid = (
+            self.source.replace("leaves! {", "unused! {", 1),
+            self.source.replace(row, "//" + row, 1),
+            self.source.replace(row, "/*\n" + row + "\n*/", 1),
+            self.source.replace(row, row + "\n" + row, 1),
+            self.source.replace(row + "\n", "", 1) + row + "\n",
+            self.source + self.source,
+            self.source.replace("macro_rules! leaves", "macro_rules! unrelated", 1),
+            self.source.replace("        pub fn result", "/*\n        pub fn result", 1)
+                .replace("        pub unsafe", "*/\n        pub unsafe", 1),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            values = root / "crates/jett_runtime/src/native_abi/values.rs"
+            values.parent.mkdir(parents=True)
+            values.write_text(self.source, encoding="utf-8")
+            measure.checked_actor_replace_leaf(root)
+            for changed in invalid:
+                values.write_text(changed, encoding="utf-8")
+                with self.subTest(source=changed), self.assertRaises(measure.MeasurementError):
+                    measure.checked_actor_replace_leaf(root)
+
+    def test_actor_replace_requires_one_exact_global_text_definition(self) -> None:
+        symbol = measure.ACTOR_REPLACE_EXPORT
+        valid = f"runtime.lib(member.o):\n{symbol} T 0 10\nother_leaf T 0 10\n"
+        measure.check_actor_replace_symbols(valid)
+        invalid = (
+            "",
+            valid.replace(symbol, symbol + "_foreign"),
+            valid + f"{symbol} T 0 10\n",
+            valid + f"{symbol} D 0 10\n",
+            valid.replace(f"{symbol} T", f"{symbol} D"),
+            valid.replace(f"{symbol} T", f"{symbol} W"),
+            valid.replace(f"{symbol} T", f"{symbol} U"),
+            valid.replace(f"{symbol} T", f"{symbol} t"),
+            f"{symbol} T\n",
+        )
+        for text in invalid:
+            with self.subTest(symbols=text), self.assertRaises(measure.MeasurementError):
+                measure.check_actor_replace_symbols(text)
+
 
 
 if __name__ == "__main__":

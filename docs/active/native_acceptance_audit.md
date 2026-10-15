@@ -3142,10 +3142,11 @@ exports remain 58, private hooks eight, and ABI version one. Public ordinary
 launchers supply no private Resource-retirement observation. Earlier failed
 attempts retain their own scope and supply no linked acceptance.
 
-Actor handler identity/state ownership, Resource-bearing replacement and wider
-unarchived reflected/generic compositions remain implementation obligations.
-The checked pending-sum secret diagnostic probes establish the next reference
-repair; they have no repaired/native acceptance here. Full coherent workspace,
+This earlier field gate did not execute actor handler updates. The bounded
+checked-actor successor below records their later identity/state acceptance;
+Resource-bearing replacement and wider unarchived reflected/generic compositions
+remain separate obligations. The following typed pending-sum section records its
+separate reference repair and native acceptance. Full coherent workspace,
 fixed-inventory execution/object gates, exact-revision supported-host CI, GNU and
 clean installed-package acceptance remain separate. Earlier workflow
 38685454101 passed all four jobs at its own head; it does not validate this
@@ -3186,3 +3187,78 @@ Resource retirement observation is claimed by these ordinary launchers.
 Full coherent workspace/inventory execution, other remaining language
 compositions and exact-revision supported-host/installed acceptance remain open.
 The fixed 207/182 denominators and full native-codegen goal are unchanged.
+
+
+#### Checked actor handler field updates: bounded MSVC acceptance
+
+Original actor syntax, canonical actor type and handler ordinal retain one private
+checked identity through original Send/Ask joins, handler execution and native
+publication. Exact capability/state/message roles retain declarations, access
+modes and physical slots. An accepting ownership traversal checks persistent
+captures at every real normal exit after acquiring the response. Direct/projected
+persistent views retain their actual backing owner and loan path. Early Respond
+abandons an unfinished field commit; owning Handle replies are acquired before
+publication. Nonresponding Return is sealed only for the original no-response
+declaration, canonical nothing, an absent/exact-nothing operand and no view escape.
+Responding Return and fallthrough, including `responds nothing`, remain unsealed.
+Verify/Property factories retain the exact ordinary checked archive and protected
+function table even without reflected callable plans. No Resource authority or
+function-body exemption follows from these transitions.
+
+All eleven permanent native tests pass: **24 Source-deleted executions**, comprising
+nine main programs in paired Source/runtime profiles (eighteen), Verify/Property
+suites in both paired profiles (four), and the original nested receiver against
+both runtime profiles (two). Main and suite controls pair Source Debug/default
+with Runtime Debug and Source Release/optimized with Runtime Release. The original
+receiver keeps Debug Source policy because it uses println. Exact stdout/stderr,
+exit status and Source absence are checked; this is not the full profile
+cross-product. **48 publication refusals** pass separately: eight invalid Sources
+across Main, Verify and Property roots with both Source options, rejected during
+checking before archive lookup while preserving the sentinel publication.
+Refusals supply no process-execution credit.
+
+The fresh compiler gate is `target/native/actor-field-gate-compile-v2/gate-acceptance.json`,
+SHA-256 `dff2c66924781008aa15566c025eac6286ef8837df45abe0e4465dd2aa5d9033`.
+The execution summary is `actor-field-native-execution-v2/execution-summary.json`,
+SHA-256 `3e8a2da1d475964aee5aec4e8d810bc5686f6f56f0b56aea19f6bfb0e8ccb41f`.
+These paths use the primary checkout's shared `target/native`. Before/after guards
+preserve 1,035 compiler inputs, 68 runtime artifacts and eighteen fixture hashes:
+sixteen actor fixtures, unchanged original24, and the original nested receiver.
+Actor Source03 is unchanged and also supplies the Verify/Property bodies. Source16
+pins nothing-valued helper returns after state updates, abandoned field commits,
+and independent instances. The failed predecessor matrix remains historical and
+grants no accepted execution count.
+
+Fresh normal/private MSVC Debug/Release measurements bind the new ordinary
+`ActorReplaceOccupied` leaf alongside `StructReplaceOccupied`. The normal receipt
+is `actor-field-normal-msvc-v1/receipt.json`, SHA-256
+`2b2b9cd529c451c216072dc2b563253149f409bd3ef9ea867a1a86da1c637069`;
+the private receipt is `actor-field-private-msvc-v1/receipt.json`, SHA-256
+`35db08fbe46f339dad36731e24998497fdd77b459b0a283ed236cd124638db60`.
+Resource exports remain 58, private hooks eight and ABI version one. Ordinary
+launchers supply no private Resource-retirement observation. Measurements alone
+supply no Source execution credit.
+
+All 21 non-Driver library targets pass 2,572 tests; the Driver library passes all
+97 controls in a separate invocation. The seven core affected libraries total
+2,211 tests: Codegen 135, Comptime 663, HIR 251, MIR 362, Runtime 389, Typecheck 376 and
+Types 35. Resolve also passes all 56. All ten actor reference/frontend tests and all
+eight backend-lowering tests pass, including all 182 run-pass fixtures. Original
+checked initializer/capture Graph controls additionally pass four Source-deleted
+executions using the Debug runtime with both Source options; original Source and
+Support are removed before launch. Their hook descriptors retain exact checked
+program identity, without live custody or handler Resource entry. Logs:
+`actor-workspace-libs-except-driver-v4.log`, SHA-256
+`63d63df60d1431db6a9e8a4be1f9b9d5895263a7a1a7b00258e089d8383448f0`,
+and `actor-driver-libs-reference-lowering-v2.log`, SHA-256
+`69e73107d884c4dc29adc5dd6e681bc5426da23a14e746668a445f2348b4a78f`.
+The unchanged measurement helper passes 98 controls; formatting and whitespace
+checks pass. These independent library runs are not the full workspace/inventory
+execution gate.
+
+Resource-bearing replacement, wider generic/reflected and frozen-graph
+compositions, real asynchronous scheduling, complete fixed-inventory execution,
+exact-revision GNU/MSVC CI and clean installed-distribution acceptance remain
+separate obligations. Responding-handler Return/fallthrough remain identified in
+the actor note. The fixed 207-fixture/182-object denominators and full native-codegen
+goal are unchanged.

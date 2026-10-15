@@ -83,6 +83,7 @@ GRAPH_DESCRIPTOR_SIGNATURE = (
     "*const JettRuntimeContextV1", "u64", "u32", "u64", "*mut u64",
 )
 STRUCT_REPLACE_EXPORT = "jett_rt_v1_struct_replace_occupied"
+ACTOR_REPLACE_EXPORT = "jett_rt_v1_actor_replace_occupied"
 PIN_ENV = "JETT_RESOURCE_NATIVE_TEST_ARCHIVE_EXPECTED_SHA256_V1"
 RECEIPT_ENV = "JETT_RESOURCE_NATIVE_TEST_ARCHIVE_RECEIPT_V1"
 TEST = ("resource_execution::"
@@ -759,6 +760,49 @@ def check_struct_replace_symbols(text: str) -> None:
             "StructReplaceOccupied must have exactly one global text definition")
 
 
+def checked_actor_replace_leaf(repo: Path) -> None:
+    text = (repo / "crates/jett_runtime/src/native_abi/values.rs").read_text(encoding="utf-8")
+    macros = re.findall(r"(?ms)^macro_rules! leaves \{\n(.*?)^\}", text)
+    invocations = re.findall(r"(?ms)^leaves! \{\n(.*?)^\}\s*$", text)
+    require(len(macros) == len(invocations) == 1,
+            "ordinary actor leaf must retain one canonical macro and invocation")
+    macro, body = macros[0], invocations[0]
+    require(all("/*" not in part and "*/" not in part for part in (macro, body)),
+            "actor leaf signature observation requires its uncommented canonical catalog")
+    rows = re.findall(r"(?m)^[ \t]*ActorReplaceOccupied,[^\n]*", body)
+    expected = (
+        r"\s*ActorReplaceOccupied,\s*jett_rt_v1_actor_replace_occupied,\s*false,\s*\("
+        r"actor:\s*u64\s*=>\s*I64,\s*index:\s*u64\s*=>\s*I64,\s*"
+        r"bits:\s*u64\s*=>\s*I64,\s*owned:\s*u32\s*=>\s*I32,\s*"
+        r"depth:\s*u64\s*=>\s*I64\),\s*u64\s*=>\s*I64,\s*"
+    )
+    require(len(rows) == 1 and re.fullmatch(expected, rows[0]) is not None,
+            "ActorReplaceOccupied must retain its exact ordinary C/ABI signature and cleanup mode")
+    contracts = {
+        "symbol": "pub fn symbol(self) -> &'static str { match self { $( Self::$variant => stringify!($name), )* } }",
+        "parameters": "pub fn parameters(self) -> &'static [AbiScalar] { match self { $( Self::$variant => &[AbiScalar::Pointer, $( AbiScalar::$abi, )*], )* } }",
+        "result": "pub fn result(self) -> AbiScalar { match self { $( Self::$variant => AbiScalar::$retabi, )* } }",
+    }
+    for name, contract in contracts.items():
+        declarations = re.findall(rf"(?m)^[ \t]*pub fn {name}\(self\)[^\n]*", macro)
+        require([" ".join(row.split()) for row in declarations] == [contract],
+                f"actor leaf must retain the exact NativeLeaf {name} mapping")
+    wrappers = re.findall(r'(?m)^[ \t]*pub unsafe extern "C" fn \$name[^\n]*', macro)
+    require([" ".join(row.split()) for row in wrappers] == [
+        'pub unsafe extern "C" fn $name(context: *const JettRuntimeContextV1, $( $arg: $rust ),*) -> $ret {'],
+        "actor leaf must retain its exact leading context pointer and generated C signature")
+    dispatches = re.findall(r"(?m)^[ \t]*leaf\(context,[^\n]*", macro)
+    require([" ".join(row.split()) for row in dispatches] == ["leaf(context, $cleanup, $body)"],
+            "actor leaf macro must preserve the selected cleanup mode")
+
+
+def check_actor_replace_symbols(text: str) -> None:
+    definitions = [line.split()[1] for line in text.splitlines()
+                   if len(line.split()) >= 3 and line.split()[0] == ACTOR_REPLACE_EXPORT]
+    require(definitions == ["T"],
+            "ActorReplaceOccupied must have exactly one global text definition")
+
+
 def fingerprint_records(directory: Path) -> list[Json]:
     paths = sorted(directory.glob("jett_runtime-*/lib-jett_runtime.json"))
     require(bool(paths), "runtime Cargo fingerprint is missing")
@@ -960,6 +1004,7 @@ def measure_msvc_profile(tools: MsvcTools, repo: Path, output: Path, profile: st
                   repo, environment, symbols)
     check_symbols(text, leaves, private)
     check_struct_replace_symbols(text)
+    check_actor_replace_symbols(text)
     coff = output / f"{profile}-archive-coff.log"
     text = logged([str(tools.readobj), "--file-headers", "--coff-directives", str(archive)],
                   repo, environment, coff)
@@ -1014,6 +1059,7 @@ def prepare_msvc(repo: Path, output: Path, nm: str = "llvm-nm", readobj: str = "
         cache = bounded_msvc_build_cache(cache_root, build_target_dir, output)
     checked_layout_wire(repo)
     checked_struct_replace_leaf(repo)
+    checked_actor_replace_leaf(repo)
     leaves, private = export_names(repo)
     checked_measurement_source(repo)
     environment = msvc_build_environment()
@@ -1039,6 +1085,7 @@ def prepare_msvc(repo: Path, output: Path, nm: str = "llvm-nm", readobj: str = "
     checked_measurement_source(repo)
     require(sources(repo) == inputs, "runtime inputs changed across matched archive profiles")
     checked_struct_replace_leaf(repo)
+    checked_actor_replace_leaf(repo)
     receipt = output / "receipt.json"
     write_json(receipt, {"version": 1, "scope": "Measured compiler-test MSVC static CRT archives; not Source execution",
                          "archives": archives})
@@ -1183,7 +1230,9 @@ def checked_msvc_receipt(row: dict[str, Json], build: dict[str, Json],
     leaves, private = export_names(repo)
     check_symbols(symbols.read_text(encoding="utf-8"), leaves, private)
     checked_struct_replace_leaf(repo)
+    checked_actor_replace_leaf(repo)
     check_struct_replace_symbols(symbols.read_text(encoding="utf-8"))
+    check_actor_replace_symbols(symbols.read_text(encoding="utf-8"))
 
 def receipt_sources(receipt: Path, expected: str, repo: Path, *, target: str = TARGET) -> None:
     require(target in (TARGET, MSVC_TARGET), "unsupported archive receipt target")

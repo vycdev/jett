@@ -1,0 +1,40 @@
+namespace app
+struct Inner:
+    value: int64
+    label: string
+struct Outer:
+    prefix: int64
+    inner: Inner
+    suffix: string
+struct Envelope:
+    marker: string
+    outer: Outer
+    stamp: int64
+struct Progress:
+    total: int64
+function make(seed: int64) returns Envelope:
+    Inner leaf = Inner(value: seed, label: "inner-{seed}")
+    Outer middle = Outer(prefix: seed + 100, inner: leaf, suffix: "outer-{seed}")
+    return Envelope(marker: "envelope-{seed}", outer: middle, stamp: seed + 1000)
+actor Store(seed: int64):
+    Envelope envelope = make(seed)
+    Inner projected = view envelope.outer.inner
+    Inner transitive = view projected
+    mutable Progress progress = Progress(total: seed)
+    receive advance(amount: int64):
+        progress.total = progress.total + amount + transitive.value
+    receive read responds string:
+        respond "{envelope.marker}:{envelope.outer.prefix}:{envelope.outer.inner.value}:{envelope.outer.inner.label}:{envelope.outer.suffix}:{envelope.stamp}|{projected.value}:{projected.label}|{transitive.value}:{transitive.label}|{progress.total}"
+function main(stdout: Stdout) returns nothing:
+    Store first = spawn Store(seed: 2)
+    Store second = spawn Store(seed: 7)
+    string first_before = ask first.read
+    string second_before = ask second.read
+    Stdout.write(view stdout, "before-first:{first_before}\nbefore-second:{second_before}\n")
+    send first.advance(3)
+    send first.advance(4)
+    send second.advance(1)
+    string first_after = ask first.read
+    string second_after = ask second.read
+    Stdout.write(view stdout, "after-first:{first_after}\nafter-second:{second_after}\n")
+    return nothing

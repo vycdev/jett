@@ -26,6 +26,8 @@ enum Owner {
     Closure(Span),
     Verify(usize),
     Property(usize),
+    ActorHandler(jett_typecheck::CheckedActorHandlerTarget),
+    ActorClosure(jett_typecheck::CheckedActorHandlerTarget, Span),
 }
 
 #[derive(Debug, Clone)]
@@ -111,6 +113,52 @@ impl OriginalClosureOwner {
         None
     }
 
+    pub(crate) fn actor_handler(
+        checked: &Arc<CheckedResourceProgram>,
+        target: jett_typecheck::CheckedActorHandlerTarget,
+        namespace: Option<&str>,
+    ) -> Option<Self> {
+        let info = checked
+            .resolved()
+            .scope_table
+            .definitions
+            .get(target.actor_definition.index() as usize)?;
+        if info.id != target.actor_definition
+            || info.kind != DefKind::Actor
+            || info.namespace.as_deref() != namespace
+        {
+            return None;
+        }
+        let metadata = checked.checked().actor_handler(target)?;
+        let mut matching = checked.module().items.iter().filter_map(|item| {
+            let Item::Actor(actor) = item else {
+                return None;
+            };
+            let handler = actor.handlers.get(target.handler_index)?;
+            (actor.name.span == info.span
+                && handler.body.span == metadata.body_span()
+                && metadata.matches_source_actor(actor))
+            .then_some(handler)
+        });
+        matching.next()?;
+        if matching.next().is_some() {
+            return None;
+        }
+        Some(Self {
+            checked: checked.clone(),
+            owner: Owner::ActorHandler(target),
+            namespace: namespace.map(str::to_owned),
+            definition: None,
+        })
+    }
+
+    fn actor_target(&self) -> Option<jett_typecheck::CheckedActorHandlerTarget> {
+        match self.owner {
+            Owner::ActorHandler(target) | Owner::ActorClosure(target, _) => Some(target),
+            _ => None,
+        }
+    }
+
     fn body(&self) -> Option<&Block> {
         match self.owner {
             Owner::Named(definition) => original_source::named_function(&self.checked, definition)
@@ -123,6 +171,31 @@ impl OriginalClosureOwner {
                 Item::Verify(block) => Some(&block.body),
                 _ => None,
             },
+            Owner::ActorHandler(target) => {
+                let info = self
+                    .checked
+                    .resolved()
+                    .scope_table
+                    .definitions
+                    .get(target.actor_definition.index() as usize)?;
+                let metadata = self.checked.checked().actor_handler(target)?;
+                self.checked.module().items.iter().find_map(|item| {
+                    let Item::Actor(actor) = item else {
+                        return None;
+                    };
+                    let handler = actor.handlers.get(target.handler_index)?;
+                    (actor.name.span == info.span
+                        && handler.body.span == metadata.body_span()
+                        && metadata.matches_source_actor(actor))
+                    .then_some(&handler.body)
+                })
+            }
+            Owner::ActorClosure(_, span) => {
+                match original_source::closure_node(&self.checked, span)? {
+                    Expr::InlineFn(_, _, body, _) => Some(body),
+                    _ => None,
+                }
+            }
             Owner::Property(index) => match self.checked.module().items.get(index)? {
                 Item::Property(block) => Some(&block.body),
                 _ => None,
@@ -241,7 +314,12 @@ pub(crate) fn invocation_origin(
         .validate_source(checked, proof.source_type, value.payload())
         .then(|| OriginalClosureOwner {
             checked: checked.clone(),
-            owner: Owner::Closure(proof.body_span),
+            owner: proof
+                .origin
+                .actor_target()
+                .map_or(Owner::Closure(proof.body_span), |target| {
+                    Owner::ActorClosure(target, proof.body_span)
+                }),
             namespace: proof.origin.namespace.clone(),
             definition: proof.origin.definition,
         })

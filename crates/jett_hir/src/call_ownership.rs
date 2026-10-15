@@ -1196,6 +1196,27 @@ impl GeneratedProducerShape {
     }
 }
 
+/// Original actor receiver shape only. This grants no call-parameter acquisition,
+/// borrowed storage, Resource custody or runtime instance authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActorReceiverProof {
+    shape: GeneratedProducerShape,
+}
+impl ActorReceiverProof {
+    pub(super) fn original(value: &Expression, types: &TypeInterner) -> Self {
+        let mut shape = GeneratedProducerShape::from_expression(value);
+        shape.certify_handle_sources(types);
+        Self { shape }
+    }
+    pub fn validate_lowered<'a>(
+        &'a self,
+        value: &Expression,
+        mut storage: impl FnMut(&Expression, GeneratedOriginalShape<'a>) -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.shape.validate_lowered(value, &mut storage)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeneratedArgumentWitness {
     actual_type: TypeId,
@@ -2814,6 +2835,71 @@ fn validate_origin(
     Ok(())
 }
 
+pub(super) fn validate_actor_arguments(
+    arguments: &[ArgumentOwnership],
+    args: &[Expression],
+    order: &[usize],
+    context: CheckedOwnershipContext,
+    locals: &[OwnershipLocalInfo],
+    types: &TypeInterner,
+    initial: bool,
+) -> Result<(), String> {
+    if arguments.len() != args.len() || order.len() != args.len() {
+        return Err("actor argument cardinality changed".into());
+    }
+    let lookup = |id: LocalId| locals.get(id.index() as usize).copied();
+    let mut seen = vec![false; args.len()];
+    for (index, argument) in arguments.iter().enumerate() {
+        let witness = &argument.witness;
+        if argument.source_span != witness.source_span
+            || argument.source_index != witness.source_index
+            || argument.parameter_index != index
+            || witness.parameter_index != index
+            || argument.actual_type != witness.actual_type
+            || argument.parameter_type != witness.parameter_type
+            || argument.syntax != witness.syntax
+            || argument.origin != witness.origin
+            || argument.callee_access != witness.callee_access
+            || argument.physical_access != witness.callee_access
+            || argument.effect != witness.effect
+            || context != witness.context
+            || argument.staging != ArgumentStaging::Original
+            || argument.source_index >= args.len()
+            || seen[argument.source_index]
+            || order.get(argument.source_index) != Some(&index)
+        {
+            return Err("actor argument changed its original checked occurrence".into());
+        }
+        seen[argument.source_index] = true;
+        validate_origin(&argument.origin, &lookup, types)?;
+        if source_match_origin(&argument.origin, &lookup)? != witness.match_origin {
+            return Err("actor argument changed scoped matched payload origin".into());
+        }
+        validate_effect(argument, context, types)?;
+        if argument.syntax != CheckedCallerSyntax::Bare
+            || !matches!(
+                argument.effect,
+                CheckedCallerEffect::Copy
+                    | CheckedCallerEffect::TransferOwned
+                    | CheckedCallerEffect::RelinquishOwned
+            )
+        {
+            return Err("actor message requires its own incoming value".into());
+        }
+        if initial {
+            validate_source_operand(&args[index], argument, &CallBridge::Direct, locals, types)?;
+        } else if !source_parameter_matches(
+            argument,
+            args[index].ty,
+            argument.parameter_type,
+            types,
+        ) {
+            return Err("actor argument changed checked operand type".into());
+        }
+    }
+    Ok(())
+}
+
 fn validate_effect(
     argument: &ArgumentOwnership,
     context: CheckedOwnershipContext,
@@ -3316,14 +3402,69 @@ impl crate::BodyLowerer<'_, '_> {
             return Err("checked caller ownership source operand count changed".into());
         }
         let target = self.checked_ownership_target(&checked.target, &checked.shape)?;
+        let arguments = self.build_source_arguments(
+            span,
+            args,
+            evaluation_order,
+            &checked.arguments,
+            checked.context,
+        )?;
+        let shape = checked.shape.clone();
+        let context = checked.context;
+        let result_type = self
+            .pipeline_step_call_types
+            .get(&span)
+            .or_else(|| self.expression_types.get(&span))
+            .copied()
+            .ok_or("source invocation has no exact checked result type")?;
+        let ownership = CallOwnership::Source(SourceCallOwnership {
+            target: target.clone(),
+            shape: shape.clone(),
+            context,
+            arguments,
+            bridge: CallBridge::Direct,
+            generated_operands: Vec::new(),
+            certificate: SourceCallCertificate {
+                target,
+                shape,
+                context,
+                bridge: CallBridge::Direct,
+                result_type,
+                generated_operands: Vec::new(),
+            },
+        });
+        validate_operand_ownership(
+            &ownership,
+            &args.iter().map(|arg| arg.ty).collect::<Vec<_>>(),
+            evaluation_order,
+            &self.parent.check.interner,
+            |id| self.ownership_local_info(id),
+            true,
+        )?;
+        Ok(ownership)
+    }
+
+    pub(super) fn build_source_arguments(
+        &self,
+        span: Span,
+        args: &[Expression],
+        evaluation_order: &[usize],
+        checked_arguments: &[jett_typecheck::CheckedArgumentOwnership],
+        context: CheckedOwnershipContext,
+    ) -> Result<Vec<ArgumentOwnership>, String> {
+        if context != self.ownership_context
+            || checked_arguments.len() != args.len()
+            || evaluation_order.len() != args.len()
+        {
+            return Err("actor/source argument context or arity changed".into());
+        }
         let mut arguments = Vec::with_capacity(args.len());
         for parameter_index in 0..args.len() {
-            let fact = checked
-                .arguments
+            let fact = checked_arguments
                 .iter()
                 .find(|fact| fact.parameter_index == parameter_index)
                 .ok_or("checked caller ownership has no exact formal occurrence")?;
-            if checked.arguments.get(fact.source_index) != Some(fact)
+            if checked_arguments.get(fact.source_index) != Some(fact)
                 || evaluation_order.get(fact.source_index) != Some(&parameter_index)
             {
                 return Err("checked caller ownership source/formal join changed".into());
@@ -3392,7 +3533,7 @@ impl crate::BodyLowerer<'_, '_> {
                 origin: origin.clone(),
                 callee_access: fact.callee_access,
                 effect: fact.effect,
-                context: checked.context,
+                context,
                 observation,
                 handled_result: None,
                 projection_root: self.checked_flow_projection_root(fact.source_span, &origin)?,
@@ -3438,39 +3579,7 @@ impl crate::BodyLowerer<'_, '_> {
             }
             arguments.push(argument);
         }
-        let shape = checked.shape.clone();
-        let context = checked.context;
-        let result_type = self
-            .pipeline_step_call_types
-            .get(&span)
-            .or_else(|| self.expression_types.get(&span))
-            .copied()
-            .ok_or("source invocation has no exact checked result type")?;
-        let ownership = CallOwnership::Source(SourceCallOwnership {
-            target: target.clone(),
-            shape: shape.clone(),
-            context,
-            arguments,
-            bridge: CallBridge::Direct,
-            generated_operands: Vec::new(),
-            certificate: SourceCallCertificate {
-                target,
-                shape,
-                context,
-                bridge: CallBridge::Direct,
-                result_type,
-                generated_operands: Vec::new(),
-            },
-        });
-        validate_operand_ownership(
-            &ownership,
-            &args.iter().map(|arg| arg.ty).collect::<Vec<_>>(),
-            evaluation_order,
-            &self.parent.check.interner,
-            |id| self.ownership_local_info(id),
-            true,
-        )?;
-        Ok(ownership)
+        Ok(arguments)
     }
 
     fn checked_flow_projection_root(
@@ -4010,6 +4119,9 @@ pub fn validate_hir_invocation(
     types: &TypeInterner,
     context: CheckedOwnershipContext,
 ) -> Result<(), String> {
+    if let ExpressionKind::ActorMessage { proof, .. } = &expression.kind {
+        return proof.validate(functions, expression, locals, types, context, true);
+    }
     let (ownership, args, order) = match &expression.kind {
         ExpressionKind::Call {
             ownership,

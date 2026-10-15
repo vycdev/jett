@@ -1,0 +1,29 @@
+namespace app
+struct Inner:
+    value: int64
+struct State:
+    inner: Inner
+    label: string
+function update(mutable item: State, value: int64) returns State:
+    item.inner.value = value
+    item.label = "helper"
+    return item
+actor Store:
+    mutable State state = State(inner: Inner(value: 1), label: "initial")
+    receive shadow(mutable incoming_state: State) responds int64:
+        incoming_state.inner.value = incoming_state.inner.value + 10
+        respond incoming_state.inner.value
+    receive change(value: int64):
+        state = update(state, value)
+    receive read responds string:
+        respond "{state.inner.value}:{state.label}"
+function main(stdout: Stdout) returns nothing:
+    Store store = spawn Store()
+    int64 first_reply = ask store.shadow(State(inner: Inner(value: 100), label: "message"))
+    string before = ask store.read
+    send store.change(9)
+    string changed = ask store.read
+    int64 second_reply = ask store.shadow(State(inner: Inner(value: 200), label: "other"))
+    string retained = ask store.read
+    Stdout.write(view stdout, "message:{first_reply}|{before}|{changed}|{second_reply}|{retained}\n")
+    return nothing

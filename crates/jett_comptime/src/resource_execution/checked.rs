@@ -9,9 +9,9 @@ pub use body_reference::{
     CheckedRequiredScope, CheckedRequiredValue,
 };
 pub(crate) use body_reference::{
-    CheckedAttemptKey, CheckedBodyReference, PreparedAbsentBindings, PreparedDirectScope,
-    PreparedFieldAssignment, PreparedFieldBinding, PreparedIntrinsicArguments,
-    PreparedNamedCallable, PreparedOwnedStruct, PreparedPipelineStep,
+    CheckedActorInstanceOrigin, CheckedAttemptKey, CheckedBodyReference, PreparedAbsentBindings,
+    PreparedActorHandler, PreparedFieldAssignment, PreparedFieldBinding,
+    PreparedIntrinsicArguments, PreparedNamedCallable, PreparedOwnedStruct, PreparedPipelineStep,
     PreparedReflectedFieldIteration, PreparedReflectedFieldLoop, PreparedRequiredExpression,
 };
 use std::collections::HashMap;
@@ -20,6 +20,7 @@ use std::sync::Arc;
 use jett_common::Span;
 use jett_resolve::DefId;
 use jett_runtime::ResourceTypeId;
+use jett_typecheck::actor_messages::{CheckedActorHandlerTarget, CheckedActorMessageCall};
 use jett_typecheck::{
     CheckedArgumentOwnership, CheckedBindingFact, CheckedBodyFacts, CheckedCallOwnership,
     CheckedComptimeTypeBinding, CheckedComptimeTypeSelection, CheckedGenericCall,
@@ -43,6 +44,7 @@ pub enum ExecutionPurpose {
 enum BodyRoot {
     Ordinary,
     Generic(usize),
+    ActorHandler(CheckedActorHandlerTarget),
 }
 
 #[derive(Debug, Clone)]
@@ -197,6 +199,8 @@ struct BodyFacts<'a> {
     assignment_places: &'a HashMap<Span, jett_typecheck::assignment_places::CheckedAssignmentPlace>,
     selections: Option<&'a HashMap<Span, jett_typecheck::CheckedStaticSelection>>,
     calls: &'a HashMap<Span, CheckedCallOwnership>,
+    actor_messages: &'a HashMap<Span, CheckedActorMessageCall>,
+    argument_orders: &'a HashMap<Span, jett_typecheck::CheckedCallArgumentOrder>,
     bindings: &'a HashMap<Span, CheckedBindingFact>,
     types: &'a HashMap<Span, TypeId>,
     source_types: &'a HashMap<Span, TypeId>,
@@ -215,6 +219,8 @@ impl<'a> BodyFacts<'a> {
             assignment_places: &body.assignment_places,
             selections: Some(&body.static_selections),
             calls: &body.call_ownership,
+            actor_messages: &body.actor_message_calls,
+            argument_orders: &body.call_argument_orders,
             bindings: &body.binding_facts,
             types: &body.type_map,
             source_types: &body.source_type_map,
@@ -382,6 +388,8 @@ impl CheckedExecution {
                 assignment_places: &checked.assignment_places,
                 selections: None,
                 calls: &checked.call_ownership,
+                actor_messages: &checked.actor_message_calls,
+                argument_orders: &checked.call_argument_orders,
                 bindings: &checked.binding_facts,
                 types: &checked.type_map,
                 source_types: &checked.source_type_map,
@@ -402,6 +410,8 @@ impl CheckedExecution {
                     assignment_places: &body.assignment_places,
                     selections: Some(&body.static_selections),
                     calls: &body.call_ownership,
+                    actor_messages: &body.actor_message_calls,
+                    argument_orders: &body.call_argument_orders,
                     bindings: &body.binding_facts,
                     types: &body.type_map,
                     source_types: &body.source_type_map,
@@ -413,6 +423,12 @@ impl CheckedExecution {
                     intrinsic_reflections: &body.intrinsic_reflection_arguments,
                     constructions: &body.struct_constructions,
                 }
+            }
+            BodyRoot::ActorHandler(target) => {
+                let handler = checked
+                    .actor_handler(target)
+                    .ok_or(ResourceExecutionError::MissingCheckedBody)?;
+                BodyFacts::scoped(handler.body())
             }
         };
         for selection in &cursor.scopes {

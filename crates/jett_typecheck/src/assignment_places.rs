@@ -103,6 +103,7 @@ pub(crate) enum AssignmentContextRoot {
     #[default]
     Ordinary,
     Generic(usize),
+    ActorHandler(crate::CheckedActorHandlerTarget),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]

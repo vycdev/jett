@@ -3313,6 +3313,81 @@ impl NativeValues {
     ) -> LeafResult<u32> {
         self.replace_actor_field_depth(id, index, bits, 0, owned)
     }
+    // Publication transfers the incoming slot only after all checks succeed.
+    // The caller clears that slot before separately retiring the displaced value.
+    // This physical swap supplies no Source mutation or Resource authority.
+    fn replace_actor_field_occupied(
+        &mut self,
+        id: u64,
+        index: u64,
+        replacement: NativeField,
+    ) -> LeafResult<NativeField> {
+        let (identity, depth) = self.actor_identity_parts(id)?;
+        if identity.instance != id
+            || depth != 0
+            || self.builders.contains_key(&id)
+            || self.checked_graph_hooks.contains_key(&id)
+            || self.actor_graph_imports.contains_key(&id)
+        {
+            return Err(INVALID_ACTOR);
+        }
+        let index = usize::try_from(index).map_err(|_| INVALID_ACTOR)?;
+        let record = self.structs.get(&id).ok_or(INVALID_ACTOR)?;
+        let displaced = record
+            .fields
+            .get(index)
+            .copied()
+            .flatten()
+            .ok_or(INVALID_ACTOR)?;
+        if displaced.owned != replacement.owned {
+            return Err(INVALID_ACTOR);
+        }
+        for field in record
+            .fields
+            .iter()
+            .flatten()
+            .chain(std::iter::once(&replacement))
+        {
+            if field.owned {
+                if field.pending_depth != 0
+                    || field.bits == id
+                    || self.actors.contains_key(&field.bits)
+                {
+                    return Err(INVALID_ACTOR);
+                }
+                self.owned_pending_depth(field.bits)
+                    .map_err(|_| INVALID_ACTOR)?;
+            }
+        }
+        // The displaced edge remains owned until its caller-held value is
+        // retired. Only explicitly retained strings may share a direct edge.
+        if replacement.owned {
+            let existing_edges = record
+                .fields
+                .iter()
+                .flatten()
+                .filter(|field| field.owned && field.bits == replacement.bits)
+                .count();
+            if let Some(string) = self.strings.get(&replacement.bits) {
+                let required = u64::try_from(existing_edges)
+                    .ok()
+                    .and_then(|edges| edges.checked_add(1))
+                    .ok_or(INVALID_ACTOR)?;
+                if string.references < required {
+                    return Err(INVALID_ACTOR);
+                }
+            } else if existing_edges != 0 {
+                return Err(INVALID_ACTOR);
+            }
+        }
+        let current = self
+            .structs
+            .get_mut(&id)
+            .and_then(|record| record.fields.get_mut(index))
+            .and_then(Option::as_mut)
+            .ok_or(INVALID_ACTOR)?;
+        Ok(std::mem::replace(current, replacement))
+    }
     fn replace_actor_field_depth(
         &mut self,
         id: u64,
@@ -5813,6 +5888,9 @@ leaves! {
     ActorReplace, jett_rt_v1_actor_replace, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, owned: u32 => I32), u32 => I32,
         |s| { if owned > 1 { return Err(INVALID_ACTOR); }
             s.replace_actor_field(value, index, bits, owned != 0) };
+    ActorReplaceOccupied, jett_rt_v1_actor_replace_occupied, false, (actor: u64 => I64, index: u64 => I64, bits: u64 => I64, owned: u32 => I32, depth: u64 => I64), u64 => I64,
+        |s| { if owned > 1 { return Err(INVALID_ACTOR); }
+            Ok(s.replace_actor_field_occupied(actor, index, NativeField { bits, owned: owned != 0, pending_depth: depth })?.bits) };
     ActorReplaceScalarTask, jett_rt_v1_actor_replace_scalar_task, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, depth: u64 => I64), u32 => I32,
         |s| s.replace_actor_field_depth(value, index, bits, depth, false);
     ReflectedFieldIndex, jett_rt_v1_reflected_field_index, false, (actual: u64 => I64, expected: u64 => I64), u64 => I64,

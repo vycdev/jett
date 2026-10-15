@@ -1560,6 +1560,33 @@ impl Translator<'_, '_> {
         }
         Ok(())
     }
+    pub(super) fn drop_all_except(&mut self, reply: ir::StackSlot) -> Result<(), CodegenError> {
+        for &slot in &self.temporary_slots[..self.next_temporary] {
+            if slot != reply {
+                self.drop_slot(slot)?;
+            }
+        }
+        for &slot in self.local_slots.iter().flatten() {
+            if slot != reply {
+                self.drop_slot(slot)?;
+            }
+        }
+        for index in (0..self.graph_constructor_slots.len()).rev() {
+            let slot = self.graph_constructor_slots[index].slot;
+            if slot != reply {
+                self.drop_slot(slot)?;
+            }
+        }
+        for index in 0..self.generation_slots.len() {
+            let storage = self.generation_slots[index];
+            if storage.owner_slot != reply {
+                self.drop_slot(storage.owner_slot)?;
+            }
+            self.clear_slot(storage.retired_slot);
+        }
+        self.next_temporary = 0;
+        Ok(())
+    }
     pub(super) fn static_data(&mut self, bytes: &[u8]) -> Result<(Value, Value), CodegenError> {
         self.static_data_with_functions(bytes, &[])
     }

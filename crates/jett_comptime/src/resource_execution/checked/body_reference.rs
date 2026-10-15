@@ -12,8 +12,11 @@ use crate::checked_types::{CheckedScopedBindings, CheckedScopedTypes};
 #[path = "body_reference/field_updates.rs"]
 mod field_updates;
 pub(crate) use field_updates::{PreparedFieldAssignment, PreparedFieldBinding};
+#[path = "body_reference/actor_handlers.rs"]
+mod actor_handlers;
 #[path = "body_reference/field_inline.rs"]
 mod field_inline;
+pub(crate) use actor_handlers::{CheckedActorInstanceOrigin, PreparedActorHandler};
 
 #[path = "body_reference/absent_generated.rs"]
 mod absent_generated;
@@ -21,12 +24,32 @@ pub(crate) use absent_generated::PreparedAbsentBindings;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ExecutableOrigin {
-    Function { definition: DefId, item: usize },
-    ActorInitializer { item: usize, field: usize },
-    NamespaceInitializer { item: usize },
-    RefinementPredicate { definition: DefId, item: usize },
-    Verify { item: usize },
-    Property { item: usize },
+    Function {
+        definition: DefId,
+        item: usize,
+    },
+    ActorInitializer {
+        item: usize,
+        field: usize,
+    },
+    ActorHandler {
+        definition: DefId,
+        item: usize,
+        handler: usize,
+    },
+    NamespaceInitializer {
+        item: usize,
+    },
+    RefinementPredicate {
+        definition: DefId,
+        item: usize,
+    },
+    Verify {
+        item: usize,
+    },
+    Property {
+        item: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -150,6 +173,18 @@ impl CheckedBodyReference {
                     ),
                     _ => return Err(ResourceExecutionError::MissingCheckedBody),
                 }
+            }
+            ExecutableOrigin::ActorHandler { item, handler, .. } => {
+                let Some(Item::Actor(actor)) = identity.program.module().items.get(item) else {
+                    return Err(ResourceExecutionError::MissingCheckedBody);
+                };
+                OriginalRegion::Block(
+                    &actor
+                        .handlers
+                        .get(handler)
+                        .ok_or(ResourceExecutionError::MissingCheckedBody)?
+                        .body,
+                )
             }
             ExecutableOrigin::Verify { item } => match identity.program.module().items.get(item) {
                 Some(Item::Verify(value)) => OriginalRegion::Block(&value.body),
@@ -422,6 +457,7 @@ impl CheckedExecution {
                     return Err(ResourceExecutionError::InvalidInvocation);
                 }
             }
+            BodyRoot::ActorHandler(_) => return Err(ResourceExecutionError::InvalidInvocation),
         }
         if let Some(source) = invocation.source() {
             if source.arguments().len() != params.len()
@@ -478,6 +514,9 @@ impl CheckedExecution {
             .ok_or(ResourceExecutionError::MissingCheckedBody)?;
         if !Arc::ptr_eq(&identity.program, &self.program) {
             return Err(ResourceExecutionError::ForeignProgram);
+        }
+        if matches!(identity.origin, ExecutableOrigin::ActorHandler { .. }) {
+            return Err(ResourceExecutionError::WrongPurpose);
         }
         if (matches!(
             identity.origin,
@@ -541,8 +580,24 @@ impl CheckedExecution {
                             return Err(ResourceExecutionError::MissingCheckedBody);
                         }
                     }
+                    BodyRoot::ActorHandler(_) => {
+                        return Err(ResourceExecutionError::MissingCheckedBody);
+                    }
                     BodyRoot::Ordinary => {}
                 }
+            }
+            ExecutableOrigin::ActorHandler {
+                definition,
+                item,
+                handler,
+            } => {
+                let BodyRoot::ActorHandler(target) = cursor.root else {
+                    return Err(ResourceExecutionError::MissingCheckedBody);
+                };
+                if target.actor_definition != definition || target.handler_index != handler {
+                    return Err(ResourceExecutionError::MissingCheckedBody);
+                }
+                self.validate_actor_handler_identity(target, item)?;
             }
             ExecutableOrigin::RefinementPredicate { definition, item } => {
                 let Some(Item::TypeAlias(alias)) = self.program.module().items.get(item) else {

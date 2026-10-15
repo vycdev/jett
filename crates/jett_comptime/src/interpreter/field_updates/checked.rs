@@ -24,8 +24,8 @@ struct InstalledFieldBinding {
 }
 
 pub(in crate::interpreter) struct FieldUpdateContext {
-    checked: CheckedExecution,
-    active: bool,
+    pub(in crate::interpreter) checked: CheckedExecution,
+    pub(in crate::interpreter) active: bool,
     slots: Vec<HashMap<DefId, InstalledFieldBinding>>,
     next_generation: Option<u64>,
 }
@@ -51,7 +51,8 @@ impl FieldUpdateContext {
     ) -> Result<Option<Self>, String> {
         let checked = program.checked();
         let any = |_: &CheckedAssignmentPlace| true;
-        if checked.assignment_places.is_empty()
+        if checked.actor_handlers.is_empty()
+            && checked.assignment_places.is_empty()
             && !scoped_place_matches(&checked.comptime_type_bindings, &any)
             && !checked
                 .generic_function_instantiations
@@ -677,5 +678,42 @@ impl Interpreter {
         slot.generation = ticket.commit_generation;
         drop(displaced);
         Ok(None)
+    }
+}
+
+impl Interpreter {
+    pub(in crate::interpreter) fn install_checked_actor_binding(
+        &mut self,
+        handler: &crate::resource_execution::PreparedActorHandler,
+        role: jett_typecheck::CheckedActorBindingRole,
+    ) -> Result<(), String> {
+        let context = self
+            .field_update_context
+            .as_mut()
+            .filter(|context| context.active)
+            .ok_or("actor binding has no checked handler context")?;
+        let checked = context
+            .checked
+            .prepare_actor_binding(handler, role)
+            .map_err(|error| error.to_string())?;
+        let name = handler.role_name(role).map_err(|error| error.to_string())?;
+        let generation = context.fresh_generation()?;
+        let fact = checked.fact();
+        let scope = context
+            .slots
+            .last_mut()
+            .ok_or("actor binding has no physical scope")?;
+        if scope.values().any(|binding| binding.name == name.name) {
+            return Err("actor captured binding repeated a declaration in one scope".to_string());
+        }
+        scope.insert(
+            fact.definition,
+            InstalledFieldBinding {
+                checked,
+                name: name.name.clone(),
+                generation,
+            },
+        );
+        Ok(())
     }
 }

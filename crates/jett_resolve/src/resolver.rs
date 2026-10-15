@@ -714,6 +714,7 @@ impl Resolver {
 
         // State fields are in scope for handlers.
         for field in &actor.state_fields {
+            self.resolve_type_expr(&field.ty, item_index);
             self.resolve_expr(&field.value, item_index);
             self.declare_local(&field.name.name, DefKind::Variable, field.name.span);
         }
@@ -3680,5 +3681,58 @@ function main() returns int64:
             .get(&resource.name.span)
             .expect("resource declaration should resolve to a definition");
         assert_eq!(result.scope_table.def(*def_id).kind, DefKind::Resource);
+    }
+    #[test]
+    fn actor_state_annotations_resolve_prior_nominal_types_in_their_namespace() {
+        let module = parse_module(
+            "namespace app\nstruct Inner:\n    value: int64\nactor Store:\n    mutable Inner inner = Inner(value: 1)\n    receive read responds int64:\n        respond inner.value\n",
+        );
+        let result = resolve(&module);
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        let Item::Struct(record) = &module.items[1] else {
+            panic!("record");
+        };
+        let Item::Actor(actor) = &module.items[2] else {
+            panic!("actor");
+        };
+        let TypeExpr::Named(annotation) = &actor.state_fields[0].ty else {
+            panic!("nominal type");
+        };
+        let resolved = result
+            .resolutions
+            .get(&annotation.span)
+            .expect("checked state annotation");
+        assert_eq!(result.scope_table.def(*resolved).span, record.name.span);
+        assert_eq!(result.scope_table.def(*resolved).kind, DefKind::Struct);
+    }
+
+    #[test]
+    fn actor_state_annotations_keep_top_to_bottom_type_visibility() {
+        let module = parse_module(
+            "namespace app\nactor Store:\n    mutable Later inner = Later(value: 1)\n    receive read responds int64:\n        respond inner.value\nstruct Later:\n    value: int64\n",
+        );
+        let result = resolve(&module);
+        let Item::Actor(actor) = &module.items[1] else {
+            panic!("actor");
+        };
+        let TypeExpr::Named(annotation) = &actor.state_fields[0].ty else {
+            panic!("nominal type");
+        };
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == Severity::Error
+                    && diagnostic.span == annotation.span),
+            "{:?}",
+            result.diagnostics
+        );
     }
 }

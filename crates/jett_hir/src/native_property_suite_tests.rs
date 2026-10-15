@@ -446,3 +446,126 @@ fn checked_property_authenticates_every_emitted_nested_callback_capture() {
     };
     assert!(authenticate_callbacks(&program, &forged_holder, holder_ty, &checked).is_err());
 }
+
+const ACTOR_WITHOUT_CALLBACKS: &str = r#"namespace app
+struct Record:
+    value: int64
+actor Store:
+    mutable Record item = Record(value: 0)
+    receive set(amount: int64):
+        item.value = amount
+    receive read responds int64:
+        respond item.value
+property actor_values:
+    given value: int64
+    Store store = spawn Store()
+    send store.set(value)
+    int64 actual = ask store.read
+    assert actual == value
+"#;
+
+#[test]
+fn checked_property_actor_inputs_keep_the_protected_archive_without_callable_plans() {
+    let (mut program, checked, values, cases) = fixture(ACTOR_WITHOUT_CALLBACKS);
+    assert!(!crate::has_reflected_callable_plans(&program));
+    assert!(program.resource_manifest.kinds().is_empty());
+    assert!(program.resource_source.belongs_to(&checked));
+    assert!(
+        program
+            .resource_source
+            .checked_program()
+            .is_some_and(|retained| { Arc::ptr_eq(retained, &checked) })
+    );
+    assert!(crate::reflected_callable::baked::same_required_cache(
+        &program, &values
+    ));
+    let before = program.clone();
+    let plan = append_checked_native_property_suite(&mut program, &checked, FileId::new(0), &cases)
+        .unwrap()
+        .unwrap();
+    assert_eq!(plan.trials().len(), PROPERTY_DEFAULT_ITERATIONS);
+    assert_eq!(program.functions.len(), before.functions.len() + 1);
+    assert!(crate::resource_materialization::functions_equal(
+        &before.functions,
+        &program.functions[..before.functions.len()]
+    ));
+    let suite = &program.functions[plan.entry().index() as usize];
+    assert_eq!(calls(suite).len(), PROPERTY_DEFAULT_ITERATIONS);
+    for (iteration, trial) in plan.trials().iter().enumerate() {
+        assert_eq!(trial.case().iteration, iteration);
+        assert!(matches!(
+            trial.case().arguments.as_slice(),
+            [Value::Int64(_)]
+        ));
+    }
+    convert(&mut program, &checked);
+    let selected = plan.trials()[7..9]
+        .iter()
+        .map(|trial| trial.case().clone())
+        .collect::<Vec<_>>();
+    let mut replay = rebuild_checked_native_property_replay(
+        &program,
+        &plan,
+        &selected,
+        &checked.checked().interner,
+    )
+    .unwrap();
+    assert_eq!(
+        calls(&replay.functions[plan.entry().index() as usize]).len(),
+        2
+    );
+    convert(&mut replay, &checked);
+}
+
+#[test]
+fn checked_property_without_callable_plans_refuses_table_and_case_forgery_atomically() {
+    let (program, checked, _, cases) = fixture(ACTOR_WITHOUT_CALLBACKS);
+    let (_, _, _, foreign_cases) = fixture(ACTOR_WITHOUT_CALLBACKS);
+    assert!(!crate::has_reflected_callable_plans(&program));
+    let property = program
+        .functions
+        .iter()
+        .position(|function| function.identity.declaration.kind == DeclarationKind::Property)
+        .unwrap();
+    for mutation in 0..3 {
+        let mut changed = program.clone();
+        match mutation {
+            0 => {
+                let mut extra = changed.functions[property].clone();
+                extra.id = FunctionId::new(u32::try_from(changed.functions.len()).unwrap());
+                changed.functions.push(extra);
+            }
+            1 => changed.functions[property].body.statements.clear(),
+            2 => {}
+            _ => unreachable!(),
+        }
+        let before = changed.clone();
+        let selected = if mutation == 2 {
+            &foreign_cases
+        } else {
+            &cases
+        };
+        assert!(
+            append_checked_native_property_suite(&mut changed, &checked, FileId::new(0), selected,)
+                .is_err(),
+            "mutation {mutation}"
+        );
+        assert!(crate::resource_materialization::functions_equal(
+            &before.functions,
+            &changed.functions,
+        ));
+        assert_eq!(before.resource_source, changed.resource_source);
+        if mutation != 2 {
+            assert!(
+                crate::complete_value_conversions(&mut changed, &checked.checked().interner,)
+                    .is_err(),
+                "edited protected table {mutation}"
+            );
+            assert!(crate::resource_materialization::functions_equal(
+                &before.functions,
+                &changed.functions,
+            ));
+            assert_eq!(before.resource_source, changed.resource_source);
+        }
+    }
+}

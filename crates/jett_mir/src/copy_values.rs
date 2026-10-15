@@ -977,7 +977,8 @@ fn visit(
                     .params
                     .get(target.capture_count + index)
                     .ok_or("actor message argument is absent from its handler")?;
-                let borrowed = parameter.mode == crate::ParamMode::View;
+                let _ = parameter;
+                let borrowed = false; // Actor boundary transfers its private incoming owner.
                 visit(argument, reads, temporaries, types, program, borrowed)?;
                 if !borrowed
                     && matches!(argument.kind, ExpressionKind::View(_))

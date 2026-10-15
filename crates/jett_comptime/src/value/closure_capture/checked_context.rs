@@ -161,7 +161,37 @@ pub(super) fn callable_type(
 ) -> Option<TypeId> {
     let checked = origin.checked.checked();
     let mut found = Vec::new();
-    if let Some(current) = &context.checked_function {
+    if let Some(target) = origin.actor_target() {
+        if context.checked_function.is_some() || !context.arguments.is_empty() {
+            return None;
+        }
+        let handler = checked.actor_handler(target)?;
+        let current = context.checked_scope.as_ref()?;
+        let (expressions, bindings) = projection(
+            &handler.body().type_map,
+            &handler.body().comptime_type_bindings,
+            &checked.interner,
+        );
+        let expected = CheckedScopedTypes {
+            bound_type: checked.interner.resolve_actor(target.actor).name.clone(),
+            reflection: None,
+            expressions,
+            bindings,
+        };
+        if current.as_ref() == &expected {
+            if let Some(ty) = handler.body().type_map.get(&span) {
+                found.push(*ty);
+            }
+        } else {
+            scoped_types(
+                current,
+                span,
+                &handler.body().comptime_type_bindings,
+                &checked.interner,
+                &mut found,
+            );
+        }
+    } else if let Some(current) = &context.checked_function {
         for original in &checked.generic_function_instantiations {
             if Some(original.definition) != origin.definition
                 || !function_matches(current, context, original, &checked.interner)

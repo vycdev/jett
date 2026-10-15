@@ -25,6 +25,10 @@ use jett_types::{
     ReflectionTypeInfo, ReflectionVariantInfo, Type, TypeId, TypeInterner,
 };
 
+mod actor_handlers;
+pub use actor_handlers::{
+    ActorHandlerEntry, ActorHandlerRole, ActorMessageProof, ActorStateView, has_actor_messages,
+};
 mod field_updates;
 pub use field_updates::{FieldUpdateOccurrence, FieldUpdatePlace, field_update_places};
 pub use jett_typecheck::CheckedComptimeTypeSelection as FieldUpdateScopeSelection;
@@ -84,8 +88,8 @@ pub use reflected_callable::{
 mod type_validation;
 
 pub use call_ownership::{
-    ArgumentOwnership, ArgumentStaging, CallBridge, CallOwnership, CallTarget, CallerBindingFact,
-    CallerBindingMode, CallerOrigin, CallerViewSource, GeneratedAcquisition,
+    ActorReceiverProof, ArgumentOwnership, ArgumentStaging, CallBridge, CallOwnership, CallTarget,
+    CallerBindingFact, CallerBindingMode, CallerOrigin, CallerViewSource, GeneratedAcquisition,
     GeneratedArgumentOwnership, GeneratedArgumentStaging, GeneratedArgumentWitness,
     GeneratedCallOwnership, GeneratedHandleShape, GeneratedOperation, GeneratedOriginalShape,
     GeneratedSnapshotProof, ObservationProof, OwnershipLocalInfo, SourceArgumentWitness,
@@ -242,6 +246,8 @@ pub struct Function {
     pub identity: FunctionIdentity,
     pub debug_kind: FunctionDebugKind,
     pub source_definition: Option<DefId>,
+    pub actor_handler: Option<ActorHandlerEntry>,
+    pub actor_state_views: Vec<ActorStateView>,
     pub params: Vec<Param>,
     /// Leading parameters supplied by a closure environment or actor state snapshot.
     pub capture_count: usize,
@@ -601,6 +607,7 @@ pub enum ExpressionKind {
         /// Parameter indexes in lexical source evaluation order.
         evaluation_order: Vec<usize>,
         kind: ActorMessageKind,
+        proof: ActorMessageProof,
     },
     Field {
         base: Box<Expression>,
@@ -712,6 +719,7 @@ pub struct ValidationError {
 /// Validate backend-facing HIR invariants after lowering and before MIR.
 pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
     reflected_callable::validate_program(program)?;
+    actor_handlers::validate_program(program)?;
     let mut validator = Validator {
         program,
         errors: Vec::new(),
@@ -1438,6 +1446,8 @@ struct Lowerer<'a> {
     actor_constructor_ids: HashMap<TypeId, FunctionId>,
     actor_handler_ids: HashMap<(TypeId, String), FunctionId>,
     actor_handlers: Vec<ActorHandlerSource<'a>>,
+    actor_state_view_initializers:
+        HashMap<(DefId, usize), (ActorStateView, HashMap<LocalId, DefId>)>,
     refinement_sources: Vec<RefinementSource<'a>>,
     refinement_function_ids: HashMap<TypeId, FunctionId>,
     function_ids: HashMap<FunctionKey, FunctionId>,
@@ -1486,6 +1496,7 @@ impl<'a> Lowerer<'a> {
             actor_constructor_ids: HashMap::new(),
             actor_handler_ids: HashMap::new(),
             actor_handlers: Vec::new(),
+            actor_state_view_initializers: HashMap::new(),
             refinement_sources: Vec::new(),
             refinement_function_ids: HashMap::new(),
             function_ids: HashMap::new(),
@@ -1609,6 +1620,7 @@ impl<'a> Lowerer<'a> {
                 equality_methods,
             };
             interface_values::coerce_program(&mut program, &self.check.interner);
+            actor_handlers::seal_program(&mut program)?;
             reflected_callable::seal_program(&mut program)?;
             validate(&program).map_err(|errors| {
                 errors
@@ -1946,6 +1958,8 @@ impl<'a> Lowerer<'a> {
             },
             debug_kind: FunctionDebugKind::named(namespace, &name.name),
             source_definition: None,
+            actor_handler: None,
+            actor_state_views: Vec::new(),
             params,
             capture_count: 0,
             return_type: TypeInterner::NOTHING,
@@ -2134,6 +2148,27 @@ impl<'a> Lowerer<'a> {
             static_selections,
             comptime_type_bindings,
         );
+        if let Some(instantiation) = &source.instantiation {
+            let checked = body_lowerer.parent.check;
+            let index = checked
+                .generic_function_instantiations
+                .iter()
+                .position(|candidate| {
+                    candidate.definition == instantiation.definition
+                        && candidate.concrete_args == instantiation.concrete_args
+                        && candidate.specialization == instantiation.specialization
+                });
+            let Some(index) = index else {
+                body_lowerer.parent.error(
+                    source.function.span,
+                    "generic actor message root has no original checked context",
+                );
+                return None;
+            };
+            body_lowerer.actor_message_root =
+                jett_typecheck::CheckedActorMessageRoot::Generic(index);
+            body_lowerer.actor_message_calls = instantiation.actor_message_calls.clone();
+        }
         if (body_lowerer.parent.authenticated_resource_lowering
             || (body_lowerer.parent.reflected_checked_program.is_some()
                 && field_updates::checked_function_has_updates(
@@ -2252,6 +2287,8 @@ impl<'a> Lowerer<'a> {
             },
             debug_kind,
             source_definition: source.definition,
+            actor_handler: None,
+            actor_state_views: Vec::new(),
             params,
             capture_count: 0,
             return_type,
@@ -2279,7 +2316,8 @@ impl<'a> Lowerer<'a> {
             );
             return None;
         };
-        let definition = self.check.interner.resolve_actor(*actor_id).clone();
+        let actor_id = *actor_id;
+        let definition = self.check.interner.resolve_actor(actor_id).clone();
         if source.actor.capability_params.len() != definition.capability_params.len()
             || source.actor.state_fields.len() != definition.state_fields.len()
         {
@@ -2393,11 +2431,13 @@ impl<'a> Lowerer<'a> {
             });
             *local = captured;
         }
-        for (field, (_, ty)) in source
+        let mut actor_state_views = Vec::new();
+        for (field_index, (field, (_, ty))) in source
             .actor
             .state_fields
             .iter()
             .zip(&definition.state_fields)
+            .enumerate()
         {
             let value = body_lowerer.lower_expression(&field.value)?;
             let Some(definition_id) = body_lowerer
@@ -2416,6 +2456,50 @@ impl<'a> Lowerer<'a> {
                 field.mutable,
                 field.span,
             );
+            if let Some(fact) = body_lowerer.binding_facts.get(&field.name.span).copied() {
+                if let CheckedBindingMode::View {
+                    source: CheckedViewSource::Binding(backing),
+                } = fact.mode
+                {
+                    let Some(root) = body_lowerer.local_ids.get(&backing).copied() else {
+                        body_lowerer.parent.error(
+                            field.span,
+                            "actor state view initializer has no original backing",
+                        );
+                        return None;
+                    };
+                    body_lowerer.locals[local.index() as usize].view_source = Some(root);
+                    let target = jett_typecheck::CheckedActorHandlerTarget {
+                        actor_definition: source.actor_definition,
+                        actor: actor_id,
+                        handler_index: 0,
+                    };
+                    let Some(receipt) = body_lowerer
+                        .parent
+                        .check
+                        .actor_handler(target)
+                        .cloned()
+                        .filter(|receipt| receipt.matches_source_actor(source.actor))
+                    else {
+                        body_lowerer.parent.error(
+                            field.span,
+                            "actor state view lacks its original actor receipt",
+                        );
+                        return None;
+                    };
+                    let view = ActorStateView::new(receipt, fact, local, root, value.clone());
+                    let definitions = body_lowerer
+                        .local_ids
+                        .iter()
+                        .map(|(definition, local)| (*local, *definition))
+                        .collect();
+                    body_lowerer.parent.actor_state_view_initializers.insert(
+                        (source.actor_definition, field_index),
+                        (view.clone(), definitions),
+                    );
+                    actor_state_views.push(view);
+                }
+            }
             statements.push(Statement {
                 kind: StatementKind::Let { local, value },
                 span: field.span,
@@ -2426,10 +2510,24 @@ impl<'a> Lowerer<'a> {
         body_lowerer.reject_unconsumed_comptime_type_bindings();
         let args = fields
             .into_iter()
-            .map(|(local, ty, span)| Expression {
-                kind: ExpressionKind::Local(local),
-                ty,
-                span,
+            .map(|(local, ty, span)| {
+                let value = Expression {
+                    kind: ExpressionKind::Local(local),
+                    ty,
+                    span,
+                };
+                if body_lowerer.locals[local.index() as usize]
+                    .view_source
+                    .is_some()
+                {
+                    Expression {
+                        kind: ExpressionKind::View(Box::new(value)),
+                        ty,
+                        span,
+                    }
+                } else {
+                    value
+                }
             })
             .collect::<Vec<_>>();
         let evaluation_order = (0..args.len()).collect();
@@ -2462,6 +2560,8 @@ impl<'a> Lowerer<'a> {
             },
             debug_kind,
             source_definition: None,
+            actor_handler: None,
+            actor_state_views,
             params,
             capture_count: 0,
             return_type: source.ty,
@@ -2502,6 +2602,32 @@ impl<'a> Lowerer<'a> {
                 return None;
             }
         };
+        let actor_id = match self.check.interner.resolve(actor_type) {
+            Type::Actor(id) => *id,
+            _ => return None,
+        };
+        let target = jett_typecheck::CheckedActorHandlerTarget {
+            actor_definition: source.actor_definition,
+            actor: actor_id,
+            handler_index: source.message_index,
+        };
+        let receipt = match self.check.actor_handler(target).cloned() {
+            Some(receipt)
+                if receipt.ownership_validated()
+                    && receipt.body_span() == source.handler.body.span
+                    && receipt.matches_source_actor(source.actor) =>
+            {
+                receipt
+            }
+            _ => {
+                self.error(
+                    source.handler.span,
+                    "actor handler lacks its original checked ownership receipt",
+                );
+                return None;
+            }
+        };
+        let facts = receipt.body();
         let message = match actor_definition.messages.get(source.message_index) {
             Some(message) => message.clone(),
             None => {
@@ -2524,27 +2650,26 @@ impl<'a> Lowerer<'a> {
         }
 
         let function_ids = self.function_ids.clone();
-        let expression_types = self.check.type_map.clone();
-        let source_expression_types = self.check.source_type_map.clone();
-        let debug_type_names = self.check.debug_type_names.clone();
-        let binding_modes = self.check.binding_modes.clone();
-        let call_ownership = self.check.call_ownership.clone();
-        let binding_facts = self.check.binding_facts.clone();
-        let assignment_places = self.check.assignment_places.clone();
-        let generic_calls = self.check.generic_calls.clone();
-        let intrinsic_ids = self.check.intrinsic_ids.clone();
-        let intrinsic_type_arguments = self.check.intrinsic_type_arguments.clone();
-        let intrinsic_reflection_arguments = self.check.intrinsic_reflection_arguments.clone();
-        let call_argument_orders = self.check.call_argument_orders.clone();
-        let method_calls = self.check.method_calls.clone();
-        let interface_calls = self.check.interface_calls.clone();
-        let method_values = self.check.method_values.clone();
-        let struct_constructions = self.check.struct_constructions.clone();
-        let pipeline_step_call_types = self.check.pipeline_step_call_types.clone();
-        let pipeline_step_input_types = self.check.pipeline_step_input_types.clone();
-        let static_selections = HashMap::new();
-        let comptime_type_bindings =
-            facts_in_span(&self.check.comptime_type_bindings, source.handler.span);
+        let expression_types = facts.type_map.clone();
+        let source_expression_types = facts.source_type_map.clone();
+        let debug_type_names = facts.debug_type_names.clone();
+        let binding_modes = facts.binding_modes.clone();
+        let call_ownership = facts.call_ownership.clone();
+        let binding_facts = facts.binding_facts.clone();
+        let assignment_places = facts.assignment_places.clone();
+        let generic_calls = facts.generic_calls.clone();
+        let intrinsic_ids = facts.intrinsic_ids.clone();
+        let intrinsic_type_arguments = facts.intrinsic_type_arguments.clone();
+        let intrinsic_reflection_arguments = facts.intrinsic_reflection_arguments.clone();
+        let call_argument_orders = facts.call_argument_orders.clone();
+        let method_calls = facts.method_calls.clone();
+        let interface_calls = facts.interface_calls.clone();
+        let method_values = facts.method_values.clone();
+        let struct_constructions = facts.struct_constructions.clone();
+        let pipeline_step_call_types = facts.pipeline_step_call_types.clone();
+        let pipeline_step_input_types = facts.pipeline_step_input_types.clone();
+        let static_selections = facts.static_selections.clone();
+        let comptime_type_bindings = facts.comptime_type_bindings.clone();
         let mut body_lowerer = BodyLowerer::new(
             self,
             &function_ids,
@@ -2570,6 +2695,9 @@ impl<'a> Lowerer<'a> {
             comptime_type_bindings,
         );
 
+        body_lowerer.actor_message_calls = facts.actor_message_calls.clone();
+        body_lowerer.actor_message_root =
+            jett_typecheck::CheckedActorMessageRoot::ActorHandler(target);
         // Handler state is an input snapshot, not an uninitialized local.
         // Captured parameters are supplied through the actor environment;
         // message parameters follow them in the ordinary call signature.
@@ -2579,11 +2707,13 @@ impl<'a> Lowerer<'a> {
                 + source.handler.params.len(),
         );
 
-        for (param, (_, ty)) in source
+        let mut roles = Vec::new();
+        for (parameter, (param, (_, ty))) in source
             .actor
             .capability_params
             .iter()
             .zip(actor_definition.capability_params.iter())
+            .enumerate()
         {
             let Some(definition) = body_lowerer
                 .parent
@@ -2601,6 +2731,21 @@ impl<'a> Lowerer<'a> {
                 param.mutable,
                 param.span,
             );
+            let role = jett_typecheck::CheckedActorBindingRole::Capability { parameter };
+            let fact = receipt
+                .bindings()
+                .iter()
+                .find(|binding| binding.role == role)
+                .filter(|binding| binding.fact.definition == definition && binding.fact.ty == *ty)
+                .map(|binding| binding.fact);
+            let Some(fact) = fact else {
+                body_lowerer.parent.error(
+                    source.handler.span,
+                    "actor handler role changed its exact checked binding",
+                );
+                return None;
+            };
+            roles.push(ActorHandlerRole::new(role, fact, local));
             params.push(Param {
                 local,
                 name: param.name.name.clone(),
@@ -2614,11 +2759,12 @@ impl<'a> Lowerer<'a> {
                 span: param.span,
             });
         }
-        for (field, (_, ty)) in source
+        for (field_index, (field, (_, ty))) in source
             .actor
             .state_fields
             .iter()
             .zip(actor_definition.state_fields.iter())
+            .enumerate()
         {
             let Some(definition) = body_lowerer
                 .parent
@@ -2636,17 +2782,86 @@ impl<'a> Lowerer<'a> {
                 field.mutable,
                 field.span,
             );
+            let role = jett_typecheck::CheckedActorBindingRole::State { field: field_index };
+            let fact = receipt
+                .bindings()
+                .iter()
+                .find(|binding| binding.role == role)
+                .filter(|binding| binding.fact.definition == definition && binding.fact.ty == *ty)
+                .map(|binding| binding.fact);
+            let Some(fact) = fact else {
+                body_lowerer.parent.error(
+                    source.handler.span,
+                    "actor handler role changed its exact checked binding",
+                );
+                return None;
+            };
+            roles.push(ActorHandlerRole::new(role, fact, local));
             params.push(Param {
                 local,
                 name: field.name.name.clone(),
                 ty: *ty,
-                mode: ParamMode::Owned,
+                mode: match fact.mode {
+                    CheckedBindingMode::Owned => ParamMode::Owned,
+                    CheckedBindingMode::View { .. } => ParamMode::View,
+                },
                 mutable: field.mutable,
                 span: field.span,
             });
         }
+        for role in &mut roles {
+            if let CheckedBindingMode::View {
+                source: CheckedViewSource::Binding(source_definition),
+            } = role.fact().mode
+            {
+                let Some(backing) = body_lowerer.local_ids.get(&source_definition).copied() else {
+                    body_lowerer.parent.error(
+                        source.handler.span,
+                        "actor state view has no earlier captured backing",
+                    );
+                    return None;
+                };
+                body_lowerer.locals[role.local().index() as usize].view_source = Some(backing);
+                let jett_typecheck::CheckedActorBindingRole::State { field } = role.role() else {
+                    body_lowerer.parent.error(
+                        source.handler.span,
+                        "actor capability view cannot invent state dependency",
+                    );
+                    return None;
+                };
+                let Some((original, definitions)) = body_lowerer
+                    .parent
+                    .actor_state_view_initializers
+                    .get(&(source.actor_definition, field))
+                else {
+                    body_lowerer.parent.error(
+                        source.handler.span,
+                        "actor state view has no original typed initializer",
+                    );
+                    return None;
+                };
+                match original.remap(&|id| {
+                    definitions
+                        .get(&id)
+                        .and_then(|definition| body_lowerer.local_ids.get(definition))
+                        .copied()
+                }) {
+                    Ok(view) => role.set_view(view),
+                    Err(message) => {
+                        body_lowerer.parent.error(source.handler.span, message);
+                        return None;
+                    }
+                }
+            }
+        }
         let capture_count = params.len();
-        for (param, (_, ty)) in source.handler.params.iter().zip(message.params.iter()) {
+        for (parameter, (param, (_, ty))) in source
+            .handler
+            .params
+            .iter()
+            .zip(message.params.iter())
+            .enumerate()
+        {
             let Some(definition) = body_lowerer
                 .parent
                 .definition_at(param.name.span, DefKind::Param)
@@ -2663,6 +2878,21 @@ impl<'a> Lowerer<'a> {
                 param.mutable,
                 param.span,
             );
+            let role = jett_typecheck::CheckedActorBindingRole::Message { parameter };
+            let fact = receipt
+                .bindings()
+                .iter()
+                .find(|binding| binding.role == role)
+                .filter(|binding| binding.fact.definition == definition && binding.fact.ty == *ty)
+                .map(|binding| binding.fact);
+            let Some(fact) = fact else {
+                body_lowerer.parent.error(
+                    source.handler.span,
+                    "actor handler role changed its exact checked binding",
+                );
+                return None;
+            };
+            roles.push(ActorHandlerRole::new(role, fact, local));
             params.push(Param {
                 local,
                 name: param.name.name.clone(),
@@ -2703,6 +2933,8 @@ impl<'a> Lowerer<'a> {
             },
             debug_kind: FunctionDebugKind::named(&actor_def.name, &source.handler.name.name),
             source_definition: None,
+            actor_handler: Some(ActorHandlerEntry::new(target, receipt, roles)),
+            actor_state_views: Vec::new(),
             params,
             capture_count,
             return_type: message.responds,
@@ -2790,6 +3022,8 @@ impl<'a> Lowerer<'a> {
                 &source.alias.name.name,
             ),
             source_definition: Some(source.definition),
+            actor_handler: None,
+            actor_state_views: Vec::new(),
             params: vec![Param {
                 local,
                 name: "value".to_string(),
@@ -2845,6 +3079,8 @@ struct BodyLowerer<'lowerer, 'program> {
     debug_type_names: HashMap<Span, String>,
     binding_modes: HashMap<Span, CheckedBindingMode>,
     call_ownership: HashMap<Span, CheckedCallOwnership>,
+    actor_message_calls: HashMap<Span, jett_typecheck::CheckedActorMessageCall>,
+    actor_message_root: jett_typecheck::CheckedActorMessageRoot,
     binding_facts: HashMap<Span, CheckedBindingFact>,
     assignment_places: HashMap<Span, CheckedAssignmentPlace>,
     next_field_update_occurrence: u64,
@@ -2903,6 +3139,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         static_selections: HashMap<Span, CheckedStaticSelection>,
         comptime_type_bindings: HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
     ) -> Self {
+        let actor_message_calls = parent.check.actor_message_calls.clone();
         Self {
             parent,
             function_ids,
@@ -2912,6 +3149,8 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             debug_type_names,
             binding_modes,
             call_ownership,
+            actor_message_calls,
+            actor_message_root: jett_typecheck::CheckedActorMessageRoot::Ordinary,
             binding_facts,
             assignment_places,
             next_field_update_occurrence: 0,
@@ -3696,6 +3935,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             call_ownership,
             binding_facts,
             assignment_places,
+            actor_message_calls,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -3718,6 +3958,8 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             std::mem::replace(&mut self.debug_type_names, debug_type_names);
         let saved_binding_modes = std::mem::replace(&mut self.binding_modes, binding_modes);
         let saved_call_ownership = std::mem::replace(&mut self.call_ownership, call_ownership);
+        let saved_actor_message_calls =
+            std::mem::replace(&mut self.actor_message_calls, actor_message_calls);
         let saved_binding_facts = std::mem::replace(&mut self.binding_facts, binding_facts);
         let saved_assignment_places =
             std::mem::replace(&mut self.assignment_places, assignment_places);
@@ -3761,6 +4003,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         self.binding_modes = saved_binding_modes;
         self.call_ownership = saved_call_ownership;
         self.binding_facts = saved_binding_facts;
+        self.actor_message_calls = saved_actor_message_calls;
         self.assignment_places = saved_assignment_places;
         self.generic_calls = saved_generic_calls;
         self.intrinsic_ids = saved_intrinsic_ids;
@@ -4118,8 +4361,12 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 self.lower_inline_function(params, body, ty, span)?
             }
             Expr::Spawn(inner, _) => self.lower_actor_spawn(inner, ty)?,
-            Expr::Send(inner, _) => self.lower_actor_message(inner, ActorMessageKind::Send)?,
-            Expr::Ask(inner, _) => self.lower_actor_message(inner, ActorMessageKind::Ask)?,
+            Expr::Send(inner, span) => {
+                self.lower_actor_message(inner, *span, ActorMessageKind::Send)?
+            }
+            Expr::Ask(inner, span) => {
+                self.lower_actor_message(inner, *span, ActorMessageKind::Ask)?
+            }
             Expr::View(value, _) => ExpressionKind::View(Box::new(self.lower_expression(value)?)),
             Expr::Clone(value, _) => ExpressionKind::Clone(Box::new(self.lower_expression(value)?)),
             unsupported => {
@@ -4329,6 +4576,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
     fn lower_actor_message(
         &mut self,
         inner: &Expr,
+        source_span: Span,
         kind: ActorMessageKind,
     ) -> Option<ExpressionKind> {
         let (callee, args, call_span) = match inner {
@@ -4351,6 +4599,23 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             return None;
         };
         let (args, evaluation_order) = self.lower_arguments_in_parameter_order(args, call_span)?;
+        let proof = match actor_handlers::message_proof(
+            self,
+            inner,
+            source_span,
+            &actor,
+            &message.name,
+            handler,
+            &args,
+            &evaluation_order,
+            kind,
+        ) {
+            Ok(proof) => proof,
+            Err(message) => {
+                self.parent.error(source_span, message);
+                return None;
+            }
+        };
         Some(ExpressionKind::ActorMessage {
             actor,
             message: message.name.clone(),
@@ -4358,6 +4623,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             args,
             evaluation_order,
             kind,
+            proof,
         })
     }
 

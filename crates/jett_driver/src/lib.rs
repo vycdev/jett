@@ -3059,7 +3059,10 @@ fn lower_file_for_backend_inner(
         None
     };
     let native_property_plan = if mode == BackendLoweringMode::PropertySuite {
-        if jett_hir::has_reflected_callable_plans(&hir) {
+        if jett_hir::has_reflected_callable_plans(&hir)
+            || (hir.resource_manifest.kinds().is_empty()
+                && hir.resource_source.belongs_to(&checked_program))
+        {
             let cases = jett_comptime::verify::collect_checked_property_cases_with_checked_values(
                 checked_program.clone(),
                 explicit_comptime_values.clone(),
@@ -3716,6 +3719,8 @@ fn append_native_verify_suite(
             specialization: jett_typecheck::CheckedGenericSpecialization::default(),
         },
         source_definition: None,
+        actor_handler: None,
+        actor_state_views: Vec::new(),
         params: Vec::new(),
         capture_count: 0,
         return_type: jett_types::TypeInterner::NOTHING,

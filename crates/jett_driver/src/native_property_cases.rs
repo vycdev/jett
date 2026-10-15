@@ -122,6 +122,8 @@ pub(super) fn append_property_suite(
             specialization: jett_typecheck::CheckedGenericSpecialization::default(),
         },
         source_definition: None,
+        actor_handler: None,
+        actor_state_views: Vec::new(),
         params: Vec::new(),
         capture_count: 0,
         return_type: TypeInterner::NOTHING,

@@ -2,7 +2,10 @@ use std::collections::{HashMap, HashSet};
 
 use crate::assignment_places::{AssignmentContext, AssignmentContextRoot, AssignmentSite};
 use crate::{CheckedAssignmentPlace, CheckedViewSource};
+mod actor_handlers;
 mod field_updates;
+use crate::{CheckedActorHandler, CheckedActorHandlerTarget, CheckedActorMessageCall};
+use actor_handlers::{ActorFlow, ActorHandlerReport};
 
 use crate::{
     CheckedBindingFact, CheckedBindingMode, CheckedBodyFacts, CheckedCallOwnership,
@@ -39,7 +42,7 @@ pub enum OwnershipState {
 // ---------------------------------------------------------------------------
 
 /// Information about a tracked variable.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct VarInfo {
     state: OwnershipState,
     /// Whether the variable was declared `mutable`.
@@ -196,6 +199,7 @@ struct OwnershipBodyFacts<'a> {
     binding_facts: &'a HashMap<Span, CheckedBindingFact>,
     assignment_places: &'a HashMap<Span, CheckedAssignmentPlace>,
     call_ownership: &'a HashMap<Span, CheckedCallOwnership>,
+    actor_message_calls: &'a HashMap<Span, CheckedActorMessageCall>,
     type_map: &'a HashMap<Span, TypeId>,
     static_selections: Option<&'a HashMap<Span, CheckedStaticSelection>>,
     comptime_type_bindings: &'a HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
@@ -207,6 +211,7 @@ impl<'a> OwnershipBodyFacts<'a> {
             binding_facts: &body.binding_facts,
             assignment_places: &body.assignment_places,
             call_ownership: &body.call_ownership,
+            actor_message_calls: &body.actor_message_calls,
             type_map: &body.type_map,
             static_selections: Some(&body.static_selections),
             comptime_type_bindings: &body.comptime_type_bindings,
@@ -217,6 +222,7 @@ impl<'a> OwnershipBodyFacts<'a> {
             binding_facts: &body.binding_facts,
             assignment_places: &body.assignment_places,
             call_ownership: &body.call_ownership,
+            actor_message_calls: &body.actor_message_calls,
             type_map: &body.type_map,
             static_selections: Some(&body.static_selections),
             comptime_type_bindings: &body.comptime_type_bindings,
@@ -241,6 +247,9 @@ pub struct OwnershipChecker<'a> {
     resolve: Option<&'a ResolveResult>,
     body_facts: Option<OwnershipBodyFacts<'a>>,
     generic_bodies: &'a [CheckedGenericFunctionInstantiation],
+    actor_handlers: Option<&'a HashMap<CheckedActorHandlerTarget, CheckedActorHandler>>,
+    actor_reports: HashMap<CheckedActorHandlerTarget, ActorHandlerReport>,
+    actor_flow: Option<ActorFlow>,
     assignment_context: AssignmentContext,
     validated_field_updates: HashSet<AssignmentSite>,
     field_update_reservations: Vec<BindingKey>,
@@ -258,6 +267,9 @@ impl<'a> OwnershipChecker<'a> {
             resolve: None,
             body_facts: None,
             generic_bodies: &[],
+            actor_handlers: None,
+            actor_reports: HashMap::new(),
+            actor_flow: None,
             assignment_context: AssignmentContext::default(),
             validated_field_updates: HashSet::new(),
             field_update_reservations: Vec::new(),
@@ -271,20 +283,24 @@ impl<'a> OwnershipChecker<'a> {
         binding_facts: &'a HashMap<Span, CheckedBindingFact>,
         assignment_places: &'a HashMap<Span, CheckedAssignmentPlace>,
         call_ownership: &'a HashMap<Span, CheckedCallOwnership>,
+        actor_message_calls: &'a HashMap<Span, CheckedActorMessageCall>,
         type_map: &'a HashMap<Span, TypeId>,
         comptime_type_bindings: &'a HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
         generic_bodies: &'a [CheckedGenericFunctionInstantiation],
+        actor_handlers: &'a HashMap<CheckedActorHandlerTarget, CheckedActorHandler>,
     ) -> Self {
         self.resolve = Some(resolve);
         self.body_facts = Some(OwnershipBodyFacts {
             binding_facts,
             assignment_places,
             call_ownership,
+            actor_message_calls,
             type_map,
             static_selections: None,
             comptime_type_bindings,
         });
         self.generic_bodies = generic_bodies;
+        self.actor_handlers = Some(actor_handlers);
         self
     }
 
@@ -380,6 +396,10 @@ impl<'a> OwnershipChecker<'a> {
     }
 
     fn check_scoped_type_body(&mut self, binding: &ast::ComptimeTypeBindStmt) {
+        if self.actor_flow.is_some() {
+            self.check_actor_scoped_type_body(binding);
+            return;
+        }
         let Some(bodies) = self
             .body_facts
             .and_then(|facts| facts.comptime_type_bindings.get(&binding.span))
@@ -430,7 +450,7 @@ impl<'a> OwnershipChecker<'a> {
         self,
         module: &Module,
     ) -> (Vec<Diagnostic>, HashMap<Span, HashSet<String>>) {
-        let (diagnostics, exclusions, _) = self.check_module_with_field_updates(module);
+        let (diagnostics, exclusions, _, _) = self.check_module_with_field_updates(module);
         (diagnostics, exclusions)
     }
 
@@ -441,6 +461,7 @@ impl<'a> OwnershipChecker<'a> {
         Vec<Diagnostic>,
         HashMap<Span, HashSet<String>>,
         HashSet<AssignmentSite>,
+        HashMap<CheckedActorHandlerTarget, ActorHandlerReport>,
     ) {
         for item in &module.items {
             match item {
@@ -479,7 +500,13 @@ impl<'a> OwnershipChecker<'a> {
                         self.check_function(method);
                     }
                 }
-                Item::Actor(actor) => self.observe_actor_breakpoints(actor),
+                Item::Actor(actor) => {
+                    if self.resolve.is_some() {
+                        self.check_actor_handlers(actor);
+                    } else {
+                        self.observe_actor_breakpoints(actor);
+                    }
+                }
                 Item::VarDecl(decl) => self.check_var_decl(decl),
                 Item::Verify(verify) if self.resolve.is_some() => {
                     let saved = self.states.clone();
@@ -501,6 +528,7 @@ impl<'a> OwnershipChecker<'a> {
             self.diagnostics,
             self.breakpoint_exclusions,
             self.validated_field_updates,
+            self.actor_reports,
         )
     }
 
@@ -612,6 +640,9 @@ impl<'a> OwnershipChecker<'a> {
 
     fn check_block(&mut self, block: &Block) {
         for stmt in &block.stmts {
+            if !self.actor_reachable() {
+                break;
+            }
             self.check_stmt(stmt);
             if Self::stmt_definitely_exits(stmt) {
                 break;
@@ -640,9 +671,15 @@ impl<'a> OwnershipChecker<'a> {
             Stmt::Breakpoint(breakpoint_stmt) => self.check_breakpoint(breakpoint_stmt),
             Stmt::Match(match_stmt) => self.check_match(match_stmt),
             Stmt::Respond(resp) => {
-                self.check_expr_ownership(&resp.value);
+                if self.actor_flow.is_some() {
+                    self.check_actor_respond(resp);
+                } else {
+                    self.check_expr_ownership(&resp.value);
+                }
             }
-            Stmt::Use(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
+            Stmt::Break(span) => self.check_actor_loop_jump(*span, false),
+            Stmt::Continue(span) => self.check_actor_loop_jump(*span, true),
+            Stmt::Use(_) => {}
         }
     }
 
@@ -685,6 +722,9 @@ impl<'a> OwnershipChecker<'a> {
                     .unwrap_or_else(|| info.is_none_or(|info| self.is_copyable(info.type_id)));
                 if !copyable && info.is_none_or(|info| info.state != OwnershipState::Viewed) {
                     let key = self.binding_key(&ident.name, ident.span);
+                    if self.reject_actor_loan_change(&key, ident.span) {
+                        return;
+                    }
                     if self.reject_reserved_field_update_change(&key, ident.span) {
                         return;
                     }
@@ -723,6 +763,9 @@ impl<'a> OwnershipChecker<'a> {
         } else {
             self.check_expr_ownership(&decl.value);
         }
+        if !self.actor_reachable() {
+            return;
+        }
         self.record_debug_move(&decl.value);
 
         let type_id = self.binding_type(&decl.name, &decl.ty);
@@ -756,9 +799,13 @@ impl<'a> OwnershipChecker<'a> {
         if let Some(ident) = Self::field_assignment_root(&assign.target) {
             let key = self.binding_key(&ident.name, ident.span);
             self.reject_reserved_field_update_change(&key, ident.span);
+            self.reject_actor_loan_change(&key, ident.span);
         }
         let initial_state = self.initial_task_state(&assign.value);
         self.check_expr_ownership(&assign.value);
+        if !self.actor_reachable() {
+            return;
+        }
         self.record_debug_move(&assign.value);
 
         // If the target is an identifier, check if it's mutable and handle rebinding.
@@ -783,6 +830,10 @@ impl<'a> OwnershipChecker<'a> {
     }
 
     fn check_return(&mut self, ret: &ast::ReturnStmt) {
+        if self.actor_flow.is_some() {
+            self.check_actor_return(ret);
+            return;
+        }
         if let Some(expr) = &ret.value {
             if self.field_update_reservations.is_empty() {
                 self.check_expr_ownership(expr);
@@ -813,6 +864,10 @@ impl<'a> OwnershipChecker<'a> {
     }
 
     fn check_if(&mut self, if_stmt: &ast::IfStmt) {
+        if self.actor_flow.is_some() {
+            self.check_actor_if(if_stmt);
+            return;
+        }
         self.check_expr_ownership(&if_stmt.condition);
         if let Some(selection) = self
             .body_facts
@@ -955,6 +1010,10 @@ impl<'a> OwnershipChecker<'a> {
     }
 
     fn check_for(&mut self, for_stmt: &ast::ForStmt) {
+        if self.actor_flow.is_some() {
+            self.check_actor_for(for_stmt);
+            return;
+        }
         // Check the iterable expression.
         // If `view` is used, the iterable stays owned; otherwise it is consumed.
         if for_stmt.view {
@@ -1019,6 +1078,10 @@ impl<'a> OwnershipChecker<'a> {
     }
 
     fn check_while(&mut self, while_stmt: &ast::WhileStmt) {
+        if self.actor_flow.is_some() {
+            self.check_actor_while(while_stmt);
+            return;
+        }
         self.check_expr_ownership(&while_stmt.condition);
         let entry_state = self.states.clone();
         let body_state = self.check_block_from_state(&entry_state, &while_stmt.body);
@@ -1037,6 +1100,10 @@ impl<'a> OwnershipChecker<'a> {
     }
 
     fn check_match(&mut self, match_stmt: &ast::MatchStmt) {
+        if self.actor_flow.is_some() {
+            self.check_actor_match(match_stmt);
+            return;
+        }
         self.check_expr_ownership(&match_stmt.expr);
         self.record_debug_move(&match_stmt.expr);
         let baseline = self.states.clone();
@@ -1085,18 +1152,37 @@ impl<'a> OwnershipChecker<'a> {
     /// traversal that verifies variable states are valid but does NOT consume
     /// anything (consumption happens explicitly through `consume_expr`).
     fn check_expr_ownership(&mut self, expr: &Expr) {
+        if !self.actor_reachable() {
+            return;
+        }
         match expr {
+            Expr::Binary(lhs, ast::BinOp::And | ast::BinOp::Or, rhs, _)
+                if self.actor_flow.is_some() =>
+            {
+                self.check_expr_ownership(lhs);
+                if !self.actor_reachable() {
+                    return;
+                }
+                let baseline = self.states.clone();
+                self.check_expr_ownership(rhs);
+                let mut outcomes = vec![baseline.clone()];
+                if self.actor_reachable() {
+                    outcomes.push(self.states.clone());
+                }
+                self.states = self.merge_fallthrough_states(&baseline, &outcomes);
+                self.set_actor_reachable(true);
+            }
             Expr::Ident(ident) => {
                 // Reading a variable: check if it has been consumed.
                 if let Some(info) = self.states.get(&self.binding_key(&ident.name, ident.span)) {
-                    if info.state == OwnershipState::Consumed {
-                        if let Some(consumed_span) = info.consumed_span {
-                            self.diagnostics.push(use_after_move(
-                                &ident.name,
-                                ident.span,
-                                consumed_span,
-                            ));
-                        }
+                    if info.state == OwnershipState::Consumed
+                        || (self.actor_flow.is_some() && info.debug_consumed)
+                    {
+                        self.diagnostics.push(use_after_move(
+                            &ident.name,
+                            ident.span,
+                            info.consumed_span.unwrap_or(ident.span),
+                        ));
                     }
                 }
             }
@@ -1139,6 +1225,10 @@ impl<'a> OwnershipChecker<'a> {
                 }
             }
             Expr::Handle(target, error_name, body, _) => {
+                if self.actor_flow.is_some() {
+                    self.check_actor_handle(target, error_name.as_ref(), body);
+                    return;
+                }
                 self.check_expr_ownership(target);
                 self.record_debug_move(target);
                 let success_state = self.states.clone();
@@ -1210,6 +1300,10 @@ impl<'a> OwnershipChecker<'a> {
                     }
                     self.check_expr_ownership(callee);
                     if let Some(handle) = &step.handle {
+                        if self.actor_flow.is_some() {
+                            self.check_actor_handle_body(handle.error_name.as_ref(), &handle.body);
+                            continue;
+                        }
                         let success_state = self.states.clone();
                         if let Some(name) = &handle.error_name {
                             self.register_checked_binding(name);
@@ -1228,16 +1322,16 @@ impl<'a> OwnershipChecker<'a> {
             Expr::At(inner, _, _) => {
                 self.check_expr_ownership(inner);
             }
-            Expr::Spawn(inner, _)
-            | Expr::Send(inner, _)
-            | Expr::Ask(inner, _)
-            | Expr::Clone(inner, _)
-            | Expr::Run(inner, _) => {
+            Expr::Send(inner, span) | Expr::Ask(inner, span) => {
+                self.check_actor_message_ownership(inner, *span);
+            }
+            Expr::Spawn(inner, _) | Expr::Clone(inner, _) | Expr::Run(inner, _) => {
                 self.check_expr_ownership(inner);
             }
             Expr::Join(inner, span) => self.check_task_control("join", inner, *span, true),
             Expr::Cancel(inner, span) => self.check_task_control("cancel", inner, *span, false),
             Expr::InlineFn(params, _, body, _) => {
+                let actor_flow = self.actor_flow.take();
                 let saved = std::mem::take(&mut self.states);
 
                 for param in params {
@@ -1265,6 +1359,7 @@ impl<'a> OwnershipChecker<'a> {
 
                 self.check_block(body);
                 self.states = saved;
+                self.actor_flow = actor_flow;
             }
             // Literals and other leaves have no ownership effects.
             Expr::IntLiteral(_, _)
@@ -1410,6 +1505,9 @@ impl<'a> OwnershipChecker<'a> {
     /// non-copyable variable, mark it as consumed. If it was already consumed,
     /// emit a use-after-move error.
     fn consume_expr(&mut self, expr: &Expr, span: Span) {
+        if !self.actor_reachable() {
+            return;
+        }
         if self
             .body_facts
             .is_some_and(|facts| facts.type_map.get(&expr.span()) == Some(&TypeInterner::ERROR))
@@ -1443,6 +1541,9 @@ impl<'a> OwnershipChecker<'a> {
     /// and error reporting.
     fn consume_variable(&mut self, name: &str, name_span: Span, consume_span: Span) {
         let key = self.binding_key(name, name_span);
+        if self.reject_actor_loan_change(&key, name_span) {
+            return;
+        }
         if self
             .states
             .get(&key)

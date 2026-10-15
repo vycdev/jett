@@ -114,6 +114,7 @@ fn each_activation_is_fresh_with_shared_aliases_and_frozen_post_message_state() 
     interpreter.actor_instances.insert(
         0,
         ActorInstance {
+            checked_origin: None,
             type_name: "app.Counter".into(),
             state: HashMap::from([("count".into(), Value::Int64(99))]),
             capabilities: HashMap::new(),

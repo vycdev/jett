@@ -1,0 +1,22 @@
+namespace app
+struct Inner:
+    value: int64
+function maybe_values(valid: bool, value: int64) returns result[list[int64], string]:
+    if valid:
+        return ok(list(value, value + 1))
+    return fail("unavailable")
+actor Store:
+    mutable Inner inner = Inner(value: 1)
+    receive snapshot(valid: bool) responds list[int64]:
+        inner.value = inner.value + 1
+        respond maybe_values(valid, inner.value) handle error:
+            default list(9)
+    receive read responds int64:
+        respond inner.value
+function main(stdout: Stdout) returns nothing:
+    Store store = spawn Store()
+    list[int64] success = ask store.snapshot(true)
+    list[int64] fallback = ask store.snapshot(false)
+    int64 stored = ask store.read
+    Stdout.write(view stdout, "reply:{list.length[int64](view success)}:{list.sum[int64](view success)}|{list.length[int64](view fallback)}:{list.sum[int64](view fallback)}|{stored}\n")
+    return nothing

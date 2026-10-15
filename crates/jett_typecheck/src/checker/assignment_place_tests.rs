@@ -11,6 +11,7 @@ use jett_types::Type;
 
 const DECLARATIONS: &str = "namespace app\nstruct Inner:\n    value: int64\nstruct Record:\n    inner: Inner\n    label: string\nenum Choice:\n    wrapped(record: Record)\nfunction make() returns Record:\n    return Record(inner: Inner(value: 1), label: \"before\")\n";
 
+mod actor_handler_tests;
 mod metadata_tests;
 mod ownership_tests;
 

@@ -6,7 +6,7 @@ use crate::resource_execution::{
 };
 
 impl Interpreter {
-    pub(crate) fn eval_checked_actor_initializer(
+    pub(in crate::interpreter) fn eval_checked_actor_initializer(
         &mut self,
         reference: &CheckedBodyReference,
     ) -> Result<ExprFlow, String> {

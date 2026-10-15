@@ -210,6 +210,20 @@ impl MoveValuePlan {
             Some(context) => CopyValuePlan::analyze_companion(context)?,
             None => CopyValuePlan::analyze_storage(function, types, Some(program))?,
         };
+        if let Some(entry) = function.actor_handler_entry()? {
+            for role in entry.roles() {
+                if matches!(
+                    role.role(),
+                    jett_typecheck::CheckedActorBindingRole::Message { .. }
+                ) && (is_linear(types, role.fact().ty) || is_copy_owned(types, role.fact().ty))
+                {
+                    let index = role.local().index() as usize;
+                    if !plan.owned_locals.contains(&index) {
+                        plan.owned_locals.push(index);
+                    }
+                }
+            }
+        }
         if function.identity.declaration.kind == jett_hir::DeclarationKind::ActorHandler {
             // Captured state is written back after a return/respond terminator.
             // Keep its owning slots live even when the source body stops reading it.
@@ -261,6 +275,16 @@ impl MoveValuePlan {
                 alias_sources.insert(local.id.index() as usize, root.index() as usize);
             }
         }
+        let parameter_aliases = function
+            .params
+            .iter()
+            .filter(|parameter| {
+                function
+                    .local(parameter.local)
+                    .is_some_and(|local| local.view_source.is_some())
+            })
+            .map(|parameter| parameter.local.index() as usize)
+            .collect::<Set>();
         let incoming_loans = |id, outgoing: &[Set]| {
             cfg.predecessors(id)
                 .iter()
@@ -298,7 +322,11 @@ impl MoveValuePlan {
                     state,
                     loans: Set::new(),
                     active: incoming_loans(id, &outgoing_loans),
-                    aliases: incoming_loans(id, &outgoing_aliases),
+                    aliases: if id == function.entry {
+                        parameter_aliases.clone()
+                    } else {
+                        incoming_loans(id, &outgoing_aliases)
+                    },
                     borrow_sources: &borrow_sources,
                     alias_sources: &alias_sources,
                     call_views: &call_views,
@@ -327,7 +355,11 @@ impl MoveValuePlan {
                 state: incoming(id, &outgoing),
                 loans: Set::new(),
                 active: incoming_loans(id, &outgoing_loans),
-                aliases: incoming_loans(id, &outgoing_aliases),
+                aliases: if id == function.entry {
+                    parameter_aliases.clone()
+                } else {
+                    incoming_loans(id, &outgoing_aliases)
+                },
                 borrow_sources: &borrow_sources,
                 alias_sources: &alias_sources,
                 call_views: &call_views,
@@ -351,6 +383,14 @@ pub fn validate_local_view_initializers(
     crate::ordinary_borrowed_sums::validate(function, types)?;
     let stages = crate::call_views::validate(function, types)?;
     let mut initialized = Set::new();
+    for view in &function.actor_state_views {
+        view.validate(&function.locals, types)?;
+    }
+    for parameter in &function.params {
+        if function.actor_state_view(parameter.local)? {
+            initialized.insert(parameter.local.index() as usize);
+        }
+    }
     for (block, index, statement) in function.blocks.iter().flat_map(|block| {
         block
             .statements
@@ -404,6 +444,17 @@ pub fn validate_local_view_initializers(
         let Some(definition) = function.local(*local) else {
             continue;
         };
+        if let Some(view) = function
+            .actor_state_views
+            .iter()
+            .find(|view| view.local() == *local)
+        {
+            if value != view.initializer() {
+                return Err(
+                    "actor constructor changed original persistent view initializer".into(),
+                );
+            }
+        }
         let Some(source) = definition.view_source else {
             continue;
         };
@@ -1090,6 +1141,20 @@ impl Flow<'_> {
                 constructor,
                 ..
             } => {
+                if let Some(transferred)=self.function.actor_constructor_view_transfers(value,self.types)? {
+                    let saved=self.loans.clone();
+                    // Every operand is a privately sealed Local/View(Local), so
+                    // this preflight has no effects or intervening Source calls.
+                    for &index in evaluation_order {self.expr(&args[index],true)?;}
+                    self.loans=saved.clone();
+                    for alias in &transferred {self.aliases.remove(&(alias.index() as usize));}
+                    for &index in evaluation_order {
+                        if !matches!(args[index].kind,ExpressionKind::View(_)) {self.expr(&args[index],false)?;}
+                    }
+                    for alias in transferred {self.state.remove(&(alias.index() as usize));}
+                    self.loans=saved;
+                    return Ok(());
+                }
                 let saved = self.loans.clone();
                 for &index in evaluation_order {
                     let view = constructor.is_some_and(|id| {
@@ -1104,16 +1169,17 @@ impl Flow<'_> {
             }
             ExpressionKind::ActorMessage {
                 actor,
-                handler,
+                proof,
                 args,
                 evaluation_order,
                 ..
             } => {
                 self.expr(actor, false)?;
-                let target = &self.program.functions[handler.index() as usize];
+                self.function.actor_handler_entry()?;
                 let saved = self.loans.clone();
                 for &index in evaluation_order {
-                    let view = target.params[target.capture_count + index].mode == ParamMode::View;
+                    let argument=proof.argument(index).ok_or("actor message lost exact checked argument")?;
+                    let view=matches!(argument.effect,jett_typecheck::CheckedCallerEffect::RetainBorrow);
                     let explicit_view = matches!(args[index].kind, ExpressionKind::View(_))
                         && is_linear(self.types, args[index].ty);
                     self.expr(&args[index], view || explicit_view)?;

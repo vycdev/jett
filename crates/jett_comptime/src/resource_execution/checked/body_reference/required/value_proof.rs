@@ -287,9 +287,13 @@ impl CheckedRequiredResourceHook {
 impl CheckedAttemptKey {
     fn cursor(&self) -> CheckedBodyCursor {
         CheckedBodyCursor {
-            root: match self.node.generic {
-                Some(index) => BodyRoot::Generic(index),
-                None => BodyRoot::Ordinary,
+            root: if let Some(target) = self.node.actor {
+                BodyRoot::ActorHandler(target)
+            } else {
+                match self.node.generic {
+                    Some(index) => BodyRoot::Generic(index),
+                    None => BodyRoot::Ordinary,
+                }
             },
             scopes: self
                 .node
@@ -318,7 +322,7 @@ impl CheckedAttemptKey {
 
     fn region(&self, path: &[RegionStep]) -> Result<OriginalRegion<'_>, ResourceExecutionError> {
         let mut region = match self.node.origin {
-            ExecutableOrigin::ActorInitializer { .. } => {
+            ExecutableOrigin::ActorInitializer { .. } | ExecutableOrigin::ActorHandler { .. } => {
                 return Err(ResourceExecutionError::MissingCheckedBody);
             }
             ExecutableOrigin::Function { item, .. } => {
@@ -406,7 +410,7 @@ impl CheckedAttemptKey {
             CheckedExecution::new(self.program.clone(), ExecutionPurpose::ExplicitComptime)?;
         checked.validate_executable_cursor(&self.cursor())?;
         let owner = match self.node.origin {
-            ExecutableOrigin::ActorInitializer { .. } => {
+            ExecutableOrigin::ActorInitializer { .. } | ExecutableOrigin::ActorHandler { .. } => {
                 return Err(ResourceExecutionError::MissingCheckedBody);
             }
             ExecutableOrigin::Function { definition, item } => {

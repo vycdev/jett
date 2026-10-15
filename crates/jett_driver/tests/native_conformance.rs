@@ -8946,3 +8946,6 @@ fn native_whole_machine_rebinding_preserves_owned_payloads_pending_depth_and_sou
 
 #[path = "native_conformance/reflected_iteration_controls.rs"]
 mod reflected_iteration_controls;
+
+#[path = "native_conformance/actor_field_updates.rs"]
+mod actor_field_updates;

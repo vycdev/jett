@@ -18,6 +18,7 @@ struct AttemptNode {
     origin: ExecutableOrigin,
     path: Vec<RegionStep>,
     generic: Option<usize>,
+    actor: Option<jett_typecheck::CheckedActorHandlerTarget>,
     scopes: Vec<(Span, usize, TypeId, Option<usize>, ReflectionTypeInfo)>,
 }
 
@@ -35,6 +36,7 @@ impl CheckedAttemptKey {
         Arc::ptr_eq(&self.program, &parent.program)
             && self.node.origin == parent.node.origin
             && self.node.generic == parent.node.generic
+            && self.node.actor == parent.node.actor
             && self
                 .node
                 .path
@@ -138,6 +140,11 @@ impl CheckedExecution {
                 generic: match cursor.root {
                     BodyRoot::Ordinary => None,
                     BodyRoot::Generic(index) => Some(index),
+                    BodyRoot::ActorHandler(_) => None,
+                },
+                actor: match cursor.root {
+                    BodyRoot::ActorHandler(target) => Some(target),
+                    _ => None,
                 },
                 scopes: cursor
                     .scopes
@@ -187,6 +194,7 @@ impl CheckedExecution {
         let function = match cursor.root {
             BodyRoot::Ordinary => None,
             BodyRoot::Generic(index) => Some(function_projection(self, index)?),
+            BodyRoot::ActorHandler(_) => return Err(ResourceExecutionError::WrongPurpose),
         };
         let scope = if cursor.scopes.is_empty() {
             None

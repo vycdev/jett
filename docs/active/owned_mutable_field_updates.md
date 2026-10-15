@@ -97,13 +97,15 @@ updates require their authenticated custody/loan/replacement protocol. Ordinary
 record support cannot bypass that protocol; incomplete Resource transport stays
 an implementation obligation, not a new semantic exclusion.
 
-Ordinary structs and exact-state machine owners now have bounded checked
-reference, required-comptime and native acceptance, including named/generic,
-inline and reflected-iteration bodies. Original actor handler identity and
-persistent state ownership, authenticated Resource-bearing replacement, wider
-reflected/generic compositions, and full workspace/platform acceptance remain
-open obligations. The native audit separates the executed matrix from those
-remaining cases.
+Ordinary structs and exact-state machine owners have bounded checked reference,
+required-comptime and native acceptance, including named/generic, inline and
+reflected-iteration bodies. Checked actor-handler updates to ordinary owned state
+have separate bounded reference and MSVC native acceptance under original handler
+identity and persistent-state ownership. See the [actor handoff](actor_handler_field_updates.md)
+for its exact controls and limits. Authenticated Resource-bearing replacement,
+wider reflected/generic and frozen-graph compositions, real asynchronous
+scheduling, and full workspace/platform acceptance remain separate obligations.
+The native audit keeps the executed matrices distinct.
 
 ## Verification handoff
 
