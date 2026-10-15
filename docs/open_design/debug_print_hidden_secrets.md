@@ -37,19 +37,36 @@ That disclosure is a defect observation, not a parity oracle. Compare exact
 public and secret-bearing Source output through real reference execution and
 Source-deleted linked executables; object emission alone does not close the gap.
 
-## Open: pending-value terminal diagnostics
+## Pending-value terminal diagnostics
 
 Print/Println rendering and terminal failure output are separate observation
 paths. The direct-field diagnostic successor below applies the existing secret
 non-disclosure contract to its demonstrated receiver failure. Other terminal
 paths retain their existing native typed guards and need separate parity evidence.
 
-Pending-sum extraction errors are another raw-value observation boundary. The
-reference `handle` diagnostic uses raw `Value` display, while the native pending
-check uses the checked layout and preserves redaction. Public pending values
-have differential coverage. Secret non-disclosure is already required; a checked
-secret-bearing failure witness and matching execution evidence are still needed
-to establish any additional gap and its repair.
+Three original checked pending-sum probes demonstrated a reference disclosure:
+`01_pending_secret_error.jett`, `02_pending_optional_secret_field.jett`, and
+`03_pipeline_pending_secret_error.jett`. They reached the terminal failure after
+only `before\n` stdout and no debug events, exposing the secret child through
+raw `Value` display. Their original Source bytes remain unchanged.
+
+Direct target types are now captured before evaluation, and pipeline steps carry
+their full result type separately from the handler error-child type. Unsupported
+sum receivers render from their original wrapped values before consumption,
+preserving public pending depth and redacting only secret subtrees. Ready sums,
+handler error typing, earlier target failures and once-only effects retain their
+behavior; diagnostics neither join nor declassify values.
+
+All 659 Comptime tests pass. Six permanent controls cover nine programs and pass
+18 Source-deleted native executions against normal Debug and Release runtimes.
+They include the original three leak witnesses, ready/error-order controls, a
+parenthesized view of a named callable, a named view-parameter pipeline, and a
+retained view-parameter callback. Both existing public borrowed-sum controls pass
+all twelve source cases and 24 Source-deleted native executions with exact public
+messages. Source policy stays at its default independently of runtime profile
+for the new secret controls. These bounded results do not establish every other
+terminal diagnostic or full workspace/platform acceptance; see the
+[native audit](../active/native_acceptance_audit.md#typed-pending-sum-terminal-diagnostics).
 
 Direct field reads from a pending `secret[Struct]` previously exposed raw
 reference data after stripping the typed wrapper, while native field readiness

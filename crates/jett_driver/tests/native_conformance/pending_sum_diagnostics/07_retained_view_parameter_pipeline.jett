@@ -1,0 +1,11 @@
+namespace app
+function delayed(view value: int64) returns result[int64, secret[string]]:
+    return run run fail("pipeline-secret-error")
+function main(stdout: Stdout) returns nothing:
+    function(view int64) returns result[int64, secret[string]] callback = delayed
+    Stdout.write(view stdout, "before\n")
+    int64 unused = 7 into view callback handle error:
+        Stdout.write(view stdout, "unexpected handler\n")
+        return nothing
+    Stdout.write(view stdout, "unexpected success\n")
+    return nothing

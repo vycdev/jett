@@ -59,7 +59,7 @@ coherent-workspace and supported-host gates still prevent a full parity claim.
 
 - [Comptime actor graph materialization](native_comptime_actor_graph.md) implements the selected frozen-graph contract. Current bounded MSVC acceptance passes 32 Source-deleted executions; wider admitted compositions and coherent-revision release gates remain required. Actor closure capture remains rejected with E0402.
 - [Erased interface equality](../open_design/interface_value_equality.md): **selected and implemented.** Interface-typed `==` and `!=` report E0376 before evaluation or lowering; concrete equality and explicit domain comparisons remain available. Recorded frontend, publication-refusal and Source-deleted positive-comparison controls cover this contract. Final-revision workspace and platform acceptance remain separate.
-- [Secrets hidden in debug print values](hidden_secret_debug_print.md): **selected and implemented.** Accepted non-release Print/Println values use recursive typed redaction for secrets hidden by interfaces, aggregates and builders. Direct-secret and Source release restrictions remain unchanged. The recorded nine-program/eighteen-execution gate is bounded acceptance; pending-sum and pipeline terminal diagnostics remain separate.
+- [Secrets hidden in debug print values](hidden_secret_debug_print.md): **selected and implemented.** Accepted non-release Print/Println values use recursive typed redaction for secrets hidden by interfaces, aggregates and builders. Direct-secret and Source release restrictions remain unchanged. The recorded nine-program/eighteen-execution gate is bounded acceptance; pending-sum and pipeline terminal diagnostics have separate bounded acceptance below.
 - [Owned mutable field updates](owned_mutable_field_updates.md): **selected contract.** Checked updates through live mutable owners retain the selected ownership, readiness, replacement and Resource-custody rules. Native implementation and execution acceptance are tracked separately from policy selection; frontend publication refusals do not supply execution evidence.
 - [List summation types](../open_design/list_sum_type_contract.md): **selected and implemented.** `list.sum` and trusted `list.__sum` admit exactly the ten numeric primitives and their transparent aliases. Refinements, secret wrappers and nonnumeric elements report E0300 during checking, including empty and explicit-comptime calls. Checked width, typed zero, borrowing and pending behavior remain unchanged. Recorded focused controls retain their scope; final-revision acceptance is separate.
 - [Reflected field request compatibility](../open_design/reflected_field_request_compatibility.md):
@@ -3151,3 +3151,38 @@ clean installed-package acceptance remain separate. Earlier workflow
 38685454101 passed all four jobs at its own head; it does not validate this
 change. The fixed 207-fixture/182-object denominators and full native-codegen goal
 remain unchanged.
+
+#### Typed pending-sum terminal diagnostics
+
+Direct `handle` and pipeline failures now render the original wrapped receiver
+through the existing typed formatter before consumption. Direct checked target
+types are retained before evaluation; full pipeline result types remain separate
+from ready-handler error payload types. Public pending depth stays visible,
+secret subtrees are redacted, and earlier producer failures/once-only effects,
+ready sum extraction and error typing retain their behavior. No native renderer,
+runtime ABI or Source admission change is part of this reference repair.
+
+All 659 Comptime tests pass. Six permanent native controls cover nine programs
+and pass 18 Source-deleted executions against both normal Runtime profiles,
+with default Source policy. Three original leak witnesses remain byte-exact.
+Additional checked Sources cover parenthesized named-callable views, named
+view-parameter pipelines and retained view-parameter callbacks. Exact stdout,
+stderr and exit status are asserted. Existing public borrowed-sum controls pass
+both tests over twelve Sources and 24 Source-deleted native executions, including
+unchanged public pending some/none/ok/fail messages and owning/view behavior.
+
+The fresh compiler gate is `target/native/pending-sum-gate-compile-v2/gate-acceptance.json`,
+SHA-256 `4cb64bde30e531c6808e2be372e3aff262118fb9cb9b3280a5d5a4bb21f55c65`.
+The secret matrix summary is `pending-sum-native-execution-v2/execution-summary.json`,
+SHA-256 `95d9d1ba48a58799cbb2284013832a0c5320c9dc874240f2a5858b61f083129d`;
+the public matrix summary is `pending-sum-public-regressions-v1/execution-summary.json`,
+SHA-256 `65ec51c31cf7d268a6e35570e21fb0ea787492c42102b08e1cc274df39b58541`.
+Both run under the primary checkout's shared `target/native`; their permanent
+passing test loops establish the respective execution counts. Before/after
+guards preserve 1,019 compiler Source inputs and 68 reused measured runtime
+artifacts, with separate six-secret/twelve-public fixture hashes. No private
+Resource retirement observation is claimed by these ordinary launchers.
+
+Full coherent workspace/inventory execution, other remaining language
+compositions and exact-revision supported-host/installed acceptance remain open.
+The fixed 207/182 denominators and full native-codegen goal are unchanged.

@@ -7864,9 +7864,11 @@ including through aliases and refinements and inside collections, sums, records,
 enums, machines, and builders. Secret payloads and their pending depth never
 appear; public fields and pending wrappers outside a secret retain their usual
 format. Formatting does not consume, finish, or declassify values. Typed runtime
-reflection diagnostics and unsupported direct-field receiver diagnostics use the
-same rule. Direct-field failures retain the checked receiver type before removing
-value wrappers; redaction does not join pending values or change failure order.
+reflection diagnostics, unsupported direct-field receivers, and pending sum
+receivers use the same rule. Direct-field and `handle` failures retain the checked
+receiver type before removing value wrappers; redaction does not join pending
+values or change failure order. A pipeline handler retains its step's result type
+separately from the error payload type used by a ready failure handler.
 The interactive debugger's existing
 metadata-only secret inspection policy remains in force. See
 `docs/completed/secret_debug_output.md`.

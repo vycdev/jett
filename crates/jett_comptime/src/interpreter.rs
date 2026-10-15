@@ -2955,7 +2955,13 @@ impl Interpreter {
             }
 
             Expr::Handle(target, bind_name, body, _) => {
+                let target_type = self
+                    .checked_expression_type(target.span())
+                    .and_then(|name| Self::debug_type(name))
+                    .or_else(|| self.debug_expression_type(target))
+                    .map(|ty| self.substitute_type_expr(&ty));
                 let target_value = value_or_signal!(self, target);
+                self.check_handle_receiver(&target_value, target_type.as_ref())?;
                 match target_value.into_payload() {
                     Value::ResultOk(value) => Ok(ExprFlow::Value(*value)),
                     Value::ResultFail(error) => self.exec_handle_block(
@@ -2966,9 +2972,7 @@ impl Interpreter {
                     ),
                     Value::OptionalSome(value) => Ok(ExprFlow::Value(*value)),
                     Value::OptionalNone => self.exec_handle_block(None, None, body, None),
-                    other => Err(format!(
-                        "handle block requires a result or optional value, got {other}"
-                    )),
+                    _ => unreachable!("sum receiver checked before wrapper consumption"),
                 }
             }
 
@@ -3057,15 +3061,20 @@ impl Interpreter {
                 for step in steps {
                     let result_type = self.debug_pipeline_result_type(step, value_type.as_ref());
                     let args = self.debug_type_args(result_type.as_ref());
+                    value = match self.eval_pipeline_step(
+                        &step,
+                        value,
+                        result_type.as_ref(),
+                        args.get(1),
+                    )? {
+                        ExprFlow::Value(next) => next,
+                        ExprFlow::Resource(_) => return Err("Resource operand has no checked ownership transport for this operation".to_string()),
+                        ExprFlow::Signal(signal) => return Ok(ExprFlow::Signal(signal)),
+                    };
                     value_type = if step.handle.is_some() {
                         args.first().cloned()
                     } else {
                         result_type
-                    };
-                    value = match self.eval_pipeline_step(&step, value, args.get(1))? {
-                        ExprFlow::Value(next) => next,
-                        ExprFlow::Resource(_) => return Err("Resource operand has no checked ownership transport for this operation".to_string()),
-                        ExprFlow::Signal(signal) => return Ok(ExprFlow::Signal(signal)),
                     };
                 }
                 Ok(ExprFlow::Value(value))
@@ -4030,10 +4039,28 @@ impl Interpreter {
         })
     }
 
+    fn check_handle_receiver(&self, value: &Value, ty: Option<&TypeExpr>) -> Result<(), String> {
+        if matches!(
+            value.payload(),
+            Value::ResultOk(_)
+                | Value::ResultFail(_)
+                | Value::OptionalSome(_)
+                | Value::OptionalNone
+        ) {
+            return Ok(());
+        }
+        // Observe the original wrappers without joining a pending receiver.
+        Err(format!(
+            "handle block requires a result or optional value, got {}",
+            self.format_debug_value(value, ty)
+        ))
+    }
+
     fn eval_pipeline_step(
         &mut self,
         step: &PipelineStep,
         piped_value: Value,
+        result_type: Option<&TypeExpr>,
         error_type: Option<&TypeExpr>,
     ) -> Result<ExprFlow, String> {
         let flow = self.eval_pipeline_step_call(step, piped_value)?;
@@ -4050,15 +4077,17 @@ impl Interpreter {
             }
             ExprFlow::Signal(signal) => return Ok(ExprFlow::Signal(signal)),
         };
-        self.eval_pipeline_step_handle(value, handle, error_type)
+        self.eval_pipeline_step_handle(value, handle, result_type, error_type)
     }
 
     fn eval_pipeline_step_handle(
         &mut self,
         step_value: Value,
         handle: &PipelineStepHandle,
+        result_type: Option<&TypeExpr>,
         error_type: Option<&TypeExpr>,
     ) -> Result<ExprFlow, String> {
+        self.check_handle_receiver(&step_value, result_type)?;
         match step_value.into_payload() {
             Value::ResultOk(value) => Ok(ExprFlow::Value(*value)),
             Value::ResultFail(error) => self.exec_handle_block(
@@ -4069,9 +4098,7 @@ impl Interpreter {
             ),
             Value::OptionalSome(value) => Ok(ExprFlow::Value(*value)),
             Value::OptionalNone => self.exec_handle_block(None, None, &handle.body, None),
-            other => Err(format!(
-                "handle block requires a result or optional value, got {other}"
-            )),
+            _ => unreachable!("sum receiver checked before wrapper consumption"),
         }
     }
 

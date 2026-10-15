@@ -1176,8 +1176,11 @@ receivers, mismatched nominal owners, invalid indexes, and forged result types
 remain rejected. Direct-field receiver failures retain the original checked
 receiver type in both execution paths. The reference renderer observes the
 original value before consuming its wrappers and applies the existing typed
-secret redaction, matching native pending receiver diagnostics. It does not
-join pending values, declassify payloads, or change the field failure point.
+secret redaction, matching native pending receiver diagnostics. Unsupported
+`handle` receivers use the same typed formatter before wrapper consumption;
+pipeline steps retain their full result type independently of the handler's
+error-child type. Neither diagnostic joins pending values, declassifies payloads,
+or changes the failure point. Pending-sum controls have bounded reference and native acceptance; other terminal paths retain separate audit obligations.
 
 For refinement boundaries, HIR lowers each checked predicate to a
 compiler-owned pure function. MIR calls unvalidated ancestor predicates in
