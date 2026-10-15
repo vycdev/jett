@@ -1,8 +1,10 @@
 # Native local view aliases
 
 Local aliases of views are an admitted source form with a bounded native
-implementation. This note records its handoff and remaining limits; it adds no
-ownership policy or claim of complete native coverage.
+implementation. This note records its handoff and remaining limits. The
+[temporary-backing decision](native_temporary_local_views.md) selects a later
+lexical lifetime contract; its implementation and cleanup gates are pending.
+Historical receipts below do not establish that extension or complete native coverage.
 
 ## Settled behavior and current gap
 
@@ -230,7 +232,7 @@ native support. The mutable-owned-backing follow-up below has separate bounded
 acceptance; writes with dependent aliases remain refused.
 The actual owner-change group reaches the existing typed ownership refusal
 before archive lookup and preserves the output sentinel in both profiles.
-No source loan-expiry or temporary-lifetime contract is selected.
+That checkpoint selected no source loan-expiry or temporary-lifetime contract.
 
 The accepted a0bf12df frozen workspace and all four supported-host jobs are
 centralized in
@@ -300,15 +302,33 @@ lifetime questions explicit before extending the first domain:
   expiry for source validity is lexical or based on last use.
 - Rebinding a mutable alias itself; current declaration facts remain read-only
   and do not define a general lifetime transition.
-- Views of temporaries, projected temporaries, or allocating conversions. If
-  lifetime extension is selected, they need a hidden owner evaluated once and
-  kept alive for dependent aliases, not an implicit clone of every view.
+- Allocating conversions and temporary origins without an exact checked owned
+  producer proof. The selected ordinary-temporary contract below does not
+  manufacture ownership or conversion authority for those cases.
 
 Some such forms are already admitted by the frontend. Acceptance and incidental
 interpreter cloning do not settle their ownership contract. Keep these forms
 visible as unimplemented native cases; do not silently redefine their lifetime
 rules, permit writes through aliases, or count the first domain as complete view
 support.
+
+## Lexical temporary backing: selected, not implemented
+
+An immutable local view of an ordinary owned temporary retains the whole
+exact producer result in compiler-owned storage until the alias declaration's
+original lexical scope exits. The producer evaluates once; immutable
+forwarding shares its nonowning dependency. No last-use expiry, implicit clone
+or fake Source DefId is selected. Whole-owner cleanup occurs once on each
+scope exit after any owned exit result is acquired. Copyable endpoints and
+existing escape/loan rules retain their behavior. This does not alter internal
+call-view End or grant actor/Resource custody.
+
+The [temporary local-view note](native_temporary_local_views.md) records the
+tradeoff, exact checked initializer/hidden-owner proof and pending gates.
+Original `local_view_aliases/09_temporary_root_boundary.jett` remains unchanged
+and currently native-unsupported. Its unused alias and empty output cannot
+prove backing lifetime or cleanup; used-alias and scope-exit controls are
+required. No implementation or acceptance credit is claimed by this decision.
 
 
 ## Mutable owned backing follow-up

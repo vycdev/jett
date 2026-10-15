@@ -31,10 +31,12 @@ owned. Bytes and lists are executable witnesses, not an endpoint allowlist.
 There is no runtime ABI change or implicit allocation.
 
 Temporary roots, mutable alias slots, mutable view-parameter backing and owner
-changes with dependent aliases retain their implementation boundaries. Missing
-reflected outer-owner facts and borrowed-sum Handle backing keep separate proof
-limits. The mutable-owned-backing extension selects no lifetime extension or
-loan expiry; those questions stay in the existing local-view design note.
+changes with dependent aliases retain their implementation boundaries. Absent or
+mismatched selected reflected root facts and borrowed-sum Handle backing keep
+separate proof limits. The mutable-owned-backing extension selected no lifetime extension or
+loan expiry. The later [temporary-backing contract](native_temporary_local_views.md)
+selects lexical whole-owner retention; its implementation remains pending.
+General loan expiry and other unresolved boundaries stay in the local-view note.
 
 Verification must cover direct and nested paths, forwarded aliases, view
 parameters, exact checked contexts, clone independence, owner liveness, and
@@ -101,3 +103,18 @@ records the 1,797-test affected-library result and the complete selected matrix:
 32 tests, 66 executions and six separate publication-boundary checks. Earlier
 first-slice receipts retain their own scope. No lifetime, borrowed-sum,
 Resource, Runtime ABI or archive change is included.
+
+
+## Temporary backing decision
+
+The selected [temporary local-view contract](native_temporary_local_views.md)
+retains an ordinary owned temporary's whole exact result, evaluated once, in
+compiler-owned storage through the alias declaration's original lexical scope.
+The finite typed projection and immutable forwarding remain nonowning; no
+last-use expiry, implicit clone or invented Source DefId is allowed. Cleanup
+must retire the backing exactly once on each scope exit, after acquiring any
+owned exit result, while preserving copyable endpoints, pending/error order
+and escape/loan rules. Operation-bounded call staging stays separate and no
+actor/Resource authority follows. Implementation, unchanged Source09 execution
+and reference/native cleanup gates are pending. None of the historical or
+current stable-owner receipts above establish temporary-backed execution.

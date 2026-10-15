@@ -887,7 +887,7 @@ temporary-backed aliases and general loan expiry remain outside it. See the
 Native ownership planning conservatively refuses owner consumption or rebinding
 after a persistent move-only source alias may have been created on a reachable
 path. Final copied primitive/String bindings retain the ordinary ownership
-behavior described above. This does not select a source lifetime-expiry rule.
+behavior described above. This does not select general source loan expiry.
 Mutable source alias chains, temporary-backed source aliases, allocating
 conversions, flow-narrowed bare-machine origins, and field paths without the
 checked declared-owner proof remain explicit native limitations. Read-only
@@ -904,6 +904,24 @@ witness. Owner transitions after source alias creation follow the same
 conservative owner-change refusal; see
 [the bounded implementation](active/native_local_view_aliases.md) and
 [the stable projected-view contract](active/native_stable_projected_local_views.md).
+
+The selected temporary-backed local-alias contract requires one compiler-owned
+whole producer result, evaluated once at the original initializer and retained
+to the declaration's original lexical scope exit. Immutable aliases and their
+forwarding chain remain nonowning. A private checked association must join
+the original body/declaration, owned producer and concrete type, finite typed
+projection, generated backing initializer, lexical scope and every cleanup
+edge. `CheckedViewSource::Other`, matching types or synthesized LocalIds alone
+are not proof; generated storage receives no invented Source DefId. Scope
+identity must survive extraction and remapping before pruning. Last-use
+liveness cannot retire this backing early. Each executed loop declaration
+has its own owner; exits retire only crossed scopes, after acquiring any
+owned Return/Respond/Default result. Aliases receive no destructor slots.
+Copyable endpoints, readiness/error order and existing escape/loan rules stay
+unchanged. No actor/Resource authority or call-view End extension follows.
+This is a selected contract, not implemented acceptance: unchanged Source09
+and the reference/native ownership and cleanup gates remain pending in
+[the temporary local-view note](active/native_temporary_local_views.md).
 
 **Implementation strategy:** Abstract interpretation over the control flow graph. At each program point, maintain a mapping from variable → ownership state. At control flow joins (if/else merge points, loop entries), states must be compatible:
 

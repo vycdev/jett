@@ -6046,11 +6046,25 @@ that concrete checked map. It preserves each original fact and adds no owning
 authority. Absent or inconsistent root facts still fail native admission; flat
 global facts cannot supply a missing proof. Focused MSVC acceptance is recorded
 in the local-view note. Borrowed-sum Handle aliases retain their separate
-immutable-backing proof below. These limits do not select loan expiry
-or lifetime extension, change the checker rules above, or claim every projected
+immutable-backing proof below. These implementation limits do not establish
+general loan expiry, change the checker rules above, or claim every projected
 owner kind is supported; see the
 [local view implementation note](active/native_local_view_aliases.md) and
 [typed stable-field contract](active/native_stable_projected_local_views.md).
+
+For an immutable local alias of an ordinary owned temporary, the selected
+lifetime rule evaluates the whole exact producer once and retains it in
+compiler-owned storage until the declaration's original lexical scope exits.
+Immutable forwarding borrows that same backing. There is no last-use expiry,
+implicit clone or fabricated Source binding identity. Aliases own no cleanup;
+the whole backing retires once on every scope exit, after any owned return,
+reply or Default result has been acquired. Copyable endpoints keep their
+existing copy behavior. Escape and dependent-loan rules, checked field types,
+pending checks and failure order are unchanged. This contract does not grant
+actor-state or Resource custody and does not extend operation-bounded call
+loans. Implementation and reference/native cleanup gates, including unchanged
+Source09, remain pending; see the
+[temporary local-view contract](active/native_temporary_local_views.md).
 
 An original explicit call-site view may be evaluated eagerly before a later
 handled argument, then released when the complete consuming operation returns.
