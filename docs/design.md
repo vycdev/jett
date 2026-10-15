@@ -8385,11 +8385,14 @@ the current sequential `cancel` leaves its pending operand unchanged.
 integer sums wrap at the declared width, and floating sums use that width's IEEE
 addition at each step. An empty list returns numeric zero of its declared type.
 The operation borrows the list and preserves existing errors for pending lists
-or elements. This implementation does not add a summation contract for nominal
-refinements or nonnumeric types.
-The [open summation contract](open_design/list_sum_type_contract.md) records the
-still-admitted specializations whose domain, invariant, and result shape need
-to be selected before full native parity.
+or elements. The element type must be an exact numeric primitive or a transparent
+alias of one. The checker rejects nominal refinements, secret wrappers, and
+nonnumeric elements before runtime or explicit compile-time evaluation; neither
+an empty list nor generic inference changes this domain. Refinement invariants
+need not contain zero or survive wrapping addition, and summation never silently
+coarsens a refinement or declassifies a secret. No public addition/identity
+interface is introduced. The [summation decision](open_design/list_sum_type_contract.md)
+records this boundary and its rationale.
 
 The native sequential task path rejects field reads, machine state tests and
 transitions, and enum matches while the aggregate owner remains pending. A

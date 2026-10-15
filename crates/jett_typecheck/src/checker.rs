@@ -35,6 +35,9 @@ use crate::resource_hooks::{CheckedResourceHook, ResourceHookError};
 mod graphics_audit;
 
 #[cfg(test)]
+mod list_sum_domain_tests;
+
+#[cfg(test)]
 mod resource_copy_tests;
 
 /// Resource copy authority for an exact field place, not an evaluation mode.
@@ -5187,7 +5190,25 @@ impl<'a> TypeChecker<'a> {
                 Some((vec![list_ty], TypeInterner::BOOL))
             }
             IntrinsicId::ListSum => {
-                let inner = self.optional_type_arg(&name, type_args, span);
+                let inner = if let [element] = type_args {
+                    self.resolve_type_expr(element)
+                } else {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    TypeInterner::ERROR
+                };
+                // Transparent aliases already resolve to their target TypeId.
+                // Do not coarsen refinements or unwrap secret element types:
+                // neither has a summation identity and closure contract.
+                if inner != TypeInterner::ERROR && !self.is_numeric(inner) {
+                    self.sink.emit(errors::type_mismatch(
+                        "numeric primitive for list.sum",
+                        &self.type_name(inner),
+                        span,
+                    ));
+                }
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], inner))
             }

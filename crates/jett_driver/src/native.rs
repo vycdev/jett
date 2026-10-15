@@ -1664,7 +1664,7 @@ mod tests {
     }
 
     #[test]
-    fn native_entry_refusal_and_codegen_refusal_preserve_frontend_events() {
+    fn native_entry_refusal_keeps_events_and_sum_domain_rejection_prevents_them() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("main.jett");
         fs::write(
@@ -1699,18 +1699,16 @@ verify checking:
         )
         .unwrap();
         let error = emit_host_program_object_for_file(&source).unwrap_err();
-        assert_eq!(error.debug_observations(), compile_observer_oracle());
-        let NativeBuildError::Captured { source: inner, .. } = error else {
-            panic!("codegen refusal should retain captures");
+        assert!(error.debug_observations().is_empty());
+        let NativeBuildError::Lowering { source, .. } = error else {
+            panic!("sum domain must be rejected before frontend evaluation: {error:?}");
         };
-        let NativeBuildError::Codegen { source, .. } = *inner else {
-            panic!("expected selected refined-sum codegen boundary");
-        };
-        let jett_codegen_cranelift::CodegenError::InvalidMirContract { message, .. } = source
-        else {
-            panic!("expected invalid native sum contract");
-        };
-        assert_eq!(message, "invalid native list signature for list.__sum");
+        let built = source
+            .build_result()
+            .expect("sum-domain type checking failure");
+        assert!(built.diagnostics.iter().any(|error| {
+            error.code.code() == 300 && error.message.contains("numeric primitive for list.sum")
+        }));
     }
 
     #[test]

@@ -3660,11 +3660,17 @@ The native `ListSumPrimitive` leaf returns packed value bits for typed unpacking
 fixed-width integers wrap and floating sums round at each addition, including
 binary32. Empty lists return zero of the declared numeric type. The list remains
 borrowed, and outer pending lists or pending elements retain their terminal
-failure checks. This kernel does not introduce summation for nominal refinements
-or nonnumeric element types.
-The unconstrained frontend signature still admits these other types; their
-remaining value-shape, invariant, and secrecy obligations are recorded in the
-[summation contract](open_design/list_sum_type_contract.md).
+failure checks. The checker admits only exact numeric primitive element types;
+transparent aliases already resolve to the same canonical type. The policy is
+attached to the closed `IntrinsicId::ListSum` signature, so public source-facade
+specializations, inferred and pipeline calls, concrete function wrappers, and
+trusted private-kernel calls share it. The private kernel requires its single
+explicit type operand; public inference still selects that operand through the
+source facade. The policy does not recursively coarsen refinements
+or strip secret wrappers. An unsupported domain produces E0300 before required
+values, frontend test bodies, or native publication run. The existing generic
+source signature introduces no public addition/identity interface. See the
+[summation decision](open_design/list_sum_type_contract.md).
 
 `list.sort[T]` selects its runtime carrier through refinement layers over
 numeric primitives, `string`, or `bool`, including nested refinements and
@@ -3673,7 +3679,7 @@ input and result. The existing runtime reorder preserves payload bits, pending
 metadata, and owned string handles; it neither coarsens the public element type
 nor synthesizes values requiring predicate evaluation. Secret and aggregate
 carriers remain ineligible. Sort and sum use separate carrier admission, so
-sorting a refined list does not enable its unresolved summation contract.
+sorting a refined list does not admit it to the numeric-primitive summation domain.
 Indexed sorting and sortedness checks use the same numeric width selection.
 They retain pending strings, selected pending keys, and pending rows as equal
 comparison cases without reading their payloads. Sortedness uses IEEE `<=` for

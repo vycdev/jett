@@ -1,6 +1,32 @@
 # List summation type contract
 
-## Selected behavior and remaining boundary
+## Selected domain
+
+The selected domain is exact numeric primitives and transparent aliases of those
+primitives only.
+Nominal refinements, secret wrappers, and nonnumeric types are rejected during
+checking, including empty lists, inferred/generic specializations, pipelines,
+concrete function wrappers, runtime code, and explicit `comptime` code. The same
+rule applies to public `list.sum` and the private trusted `list.__sum` kernel.
+
+This keeps the result locally predictable: it has the selected primitive width
+and a known zero identity. A refinement is not necessarily closed under wrapping
+addition and may exclude zero. Secret arithmetic needs an explicit secrecy
+contract; admitting it by unwrapping its type would silently cross that boundary.
+There is no public addition/identity interface and no implicit coarsening or
+declassification. Callers can explicitly convert values using existing language
+operations when their intended numeric domain permits it.
+
+The checker owns this policy at the closed intrinsic signature. It checks each
+concrete source-facade body rather than recognizing public call spellings, so
+ordinary generic specialization cannot bypass it. Existing primitive-width,
+typed-zero, pending-input, and borrowing behavior remains unchanged.
+The private kernel requires one explicit type operand, already supplied by the
+public facade, so an omitted operand cannot become an unchecked wildcard.
+
+The probes below record the pre-decision mismatch, not current accepted behavior.
+
+## Existing numeric behavior and historical boundary
 
 The numeric-primitive behavior is selected in [the language design](../design.md)
 and [the architecture](../architecture.md): `list.sum[T]` borrows its list,
@@ -12,9 +38,9 @@ contract. The linked `list_sum_primitives` regression includes an `int8` alias,
 all ten primitive numeric widths, typed empty zero, interface erasure, runtime
 and explicit comptime values, and verify/property bodies.
 
-Those documents explicitly leave nominal refinements and nonnumeric types
-without a summation contract. They do not select a public addition/identity
-interface, a refinement validation result, or secret-wrapper admission.
+The original numeric implementation left nominal refinements and nonnumeric types
+without a summation contract. It selected no public addition/identity interface,
+refinement validation result, or secret-wrapper admission.
 
 The public source signature in `stdlib/list.jett` remains unconstrained:
 
@@ -23,19 +49,21 @@ export function sum[T](view items: list[T]) returns T:
     return list.__sum[T](view items)
 ```
 
-The private kernel signature in `crates/jett_typecheck/src/checker.rs` accepts
-`list[T]` and returns `T` without checking its numeric domain. Native admission
+Before this decision, the private kernel signature in
+`crates/jett_typecheck/src/checker.rs` accepted `list[T]` and returned `T` without
+checking its numeric domain. Native admission
 in `crates/jett_codegen_cranelift/src/values.rs` accepts only an exact numeric
 primitive element and an identical result type. The interpreter's selected
-primitive path uses canonical alias expansion; its older fallback remains
-reachable for other checked types. That fallback chooses an integer or floating
-carrier from the first element and returns `Int64(0)` for any empty list.
+primitive path uses canonical alias expansion; before this decision its older
+fallback remained reachable for other checked types. That fallback chooses an
+integer or floating carrier from the first element and returns `Int64(0)` for any
+empty list.
 
 ## Reproduced accepted gaps
 
 These probes were run with a freshly built CLI at `8fdfa027`, after the primitive
-sum and pending-aggregate fixes. Each direct runtime program passes frontend
-checking. Except for the alias control, native emission rejects them with
+sum and pending-aggregate fixes. Each direct runtime program passed frontend
+checking. Except for the alias control, native emission rejected them with
 `invalid native list signature for list.__sum` before an executable is produced.
 
 | Checked element type and input | Reference outcome | Native outcome |
@@ -92,13 +120,11 @@ boundary. A closed pure helper computing and coarsening that total also returns
 kernel specialization. Neither success establishes a contract for arbitrary
 refinements, empty refined lists, or invariant-breaking overflow.
 
-## Decisions still needed
+## Deferred extensions
 
-The checker and execution paths need one selected domain and matching typed
-results. The following choices remain unresolved:
+The selected domain closes the source-admission gap. Any future extension requires
+a separate design decision; the historical fallback is not its specification:
 
-- Whether the public API admits only exact numeric primitives and transparent
-  aliases, with other specializations rejected during checking.
 - If nominal numeric refinements are admitted, how the result preserves or
   validates their invariant, what return type carries validation failure, and
   what happens when the empty-list zero violates the predicate. Primitive-width
@@ -114,5 +140,6 @@ The implementation must not infer these choices from the fallback's successful
 zero or from the primitive carrier used by a refinement. In particular, applying
 `primitive_base_type_name` to all summation types would silently erase refinement
 and secret boundaries while leaving the return/invariant questions unresolved.
-Until the contract is selected, keep native admission conservative and count
-these accepted specializations as remaining parity obligations.
+The numeric-only frontend admission makes the old fallback unreachable from these
+checked source specializations. Native admission remains conservative; a rejected
+specialization is not an implemented numeric or refinement conversion.

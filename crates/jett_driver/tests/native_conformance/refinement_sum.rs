@@ -23,10 +23,10 @@ function main(stdout: Stdout) returns nothing:
     Stdout.write(view stdout, "after:{public_total}:{message}:{bytes.to_hex(view earlier)}:{list.length(view retained)}\n")
 "#;
 
-// This is an existing reference invariant and a native admission refusal, not
-// linked runtime parity or a new contract for refined list.sum specializations.
+// Keep the original refined-sum program: the selected numeric domain rejects
+// it before its predicate, entry effects, or native publication can run.
 #[test]
-fn refined_sum_results_validate_in_reference_and_preserve_native_refusal() {
+fn refined_sum_domain_rejects_before_reference_execution_and_native_publication() {
     use jett_driver::native::{NativeBuildError, build_host_executable_with_options};
     use jett_driver::{BuildOptions, build_file_with_options};
 
@@ -34,16 +34,11 @@ fn refined_sum_results_validate_in_reference_and_preserve_native_refusal() {
     let source = directory.path().join("main.jett");
     fs::write(&source, EMPTY_REFINED_SUM).unwrap();
     let failure = jett_driver::run_file_capture_outcome(&source)
-        .expect_err("the empty unchecked sum produces zero, which cannot inhabit Positive");
-    assert_eq!(
-        failure.message,
-        "runtime error: refinement type constraint failed for 'app.Positive'"
-    );
-    assert_eq!(failure.output.stdout, "before\n");
-    assert_eq!(
-        debug_trace_lines(&failure.output.debug_events),
-        ["trace marker: string = positive"]
-    );
+        .expect_err("refined sums are rejected during checking");
+    assert!(failure.message.contains("E0300"), "{}", failure.message);
+    assert!(failure.message.contains("numeric primitive for list.sum"));
+    assert!(failure.output.stdout.is_empty());
+    assert!(failure.output.debug_events.is_empty());
 
     let output = directory.path().join("preserved.exe");
     let sentinel = b"existing native publication";
@@ -57,24 +52,28 @@ fn refined_sum_results_validate_in_reference_and_preserve_native_refusal() {
     for release in [false, true] {
         let options = BuildOptions { release };
         let checked = build_file_with_options(&source, options);
+        assert!(checked.has_errors, "refined sum must fail checking");
         assert!(
-            !checked.has_errors,
-            "the source remains frontend-admitted without selecting a refined-sum policy: {:?}",
+            checked.diagnostics.iter().any(|error| {
+                error.code.code() == 300 && error.message.contains("numeric primitive for list.sum")
+            }),
+            "{:?}",
             checked.diagnostics
         );
+        assert!(checked.debug_observations.is_empty());
         let error =
             build_host_executable_with_options(&source, &missing_launcher, &output, options)
                 .expect_err(
                     "native refined summation must fail before archive lookup and publication",
                 );
-        let NativeBuildError::Codegen { source, .. } = error else {
-            panic!("expected conservative native sum admission: {error:?}");
+        assert!(error.debug_observations().is_empty());
+        let NativeBuildError::Lowering { source, .. } = error else {
+            panic!("expected frontend sum-domain rejection: {error:?}");
         };
-        let jett_codegen_cranelift::CodegenError::InvalidMirContract { message, .. } = source
-        else {
-            panic!("expected the unsupported sum signature: {source:?}");
-        };
-        assert_eq!(message, "invalid native list signature for list.__sum");
+        let built = source.build_result().expect("frontend type diagnostic");
+        assert!(built.diagnostics.iter().any(|error| {
+            error.code.code() == 300 && error.message.contains("numeric primitive for list.sum")
+        }));
         assert_eq!(fs::read(&output).unwrap(), sentinel);
         assert!(!missing_launcher.archive_path.exists());
     }
