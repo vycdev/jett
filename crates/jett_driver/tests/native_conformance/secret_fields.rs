@@ -336,38 +336,21 @@ fn native_pending_secret_field_children_preserve_depth_and_first_error_in_both_p
 
 #[test]
 fn native_pending_secret_field_owners_keep_typed_redaction_in_both_profiles() {
-    // Reference field-access errors currently disclose the owner payload. The
-    // hidden-secret observation policy remains open; native typed redaction is
-    // deliberate and must not be weakened to reproduce that disclosure.
-    for (name, setup, pending, reference_message) in [
-        (
-            "pending_owner",
-            "",
-            "run clone original",
-            "runtime error: field access is not supported on pending(app.Item(value: 7))",
-        ),
-        (
-            "nested_pending_owner",
-            "",
-            "run run clone original",
-            "runtime error: field access is not supported on pending(pending(app.Item(value: 7)))",
-        ),
+    // Secret-qualified receiver failures share one typed-redaction contract.
+    // Pending wrappers must not expose the owner payload in either path.
+    let message = "runtime error: field access is not supported on [redacted]";
+    for (name, setup, pending) in [
+        ("pending_owner", "", "run clone original"),
+        ("nested_pending_owner", "", "run run clone original"),
         (
             "partial_pending_owner",
             "    secret[Item] twice = run run clone original\n",
             "join twice handle error:\n        return nothing",
-            "runtime error: field access is not supported on pending(app.Item(value: 7))",
         ),
     ] {
         let body = format!(
             "    Item original = Item(value: 7)\n{setup}    secret[Item] hidden = {pending}\n    int64 copied = declassify hidden.value\n"
         );
-        assert_failure(
-            name,
-            &body,
-            "before\n",
-            reference_message,
-            "runtime error: field access is not supported on [redacted]",
-        );
+        assert_failure(name, &body, "before\n", message, message);
     }
 }
