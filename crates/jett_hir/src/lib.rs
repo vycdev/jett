@@ -3270,6 +3270,53 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         id
     }
 
+    fn mutable_alias_backing_is_owned(&self, root: LocalId) -> bool {
+        let Some(local) = self
+            .locals
+            .get(root.index() as usize)
+            .filter(|local| local.id == root)
+        else {
+            return false;
+        };
+        if self.view_parameter_locals.contains(&root)
+            || self.view_iteration_bindings.contains_key(&root)
+            || self.match_bindings.contains_key(&root)
+        {
+            return false;
+        }
+        let mut definitions = self
+            .local_ids
+            .iter()
+            .filter_map(|(definition, local)| (*local == root).then_some(*definition));
+        let Some(definition) = definitions.next() else {
+            return false;
+        };
+        if definitions.next().is_some() {
+            return false;
+        }
+        let Some(declaration) = self
+            .parent
+            .resolve
+            .scope_table
+            .definitions
+            .get(definition.index() as usize)
+            .filter(|declaration| declaration.id == definition)
+        else {
+            return false;
+        };
+        let Some(fact) = self.binding_facts.get(&declaration.span) else {
+            return false;
+        };
+        fact.definition == definition
+            && fact.declaration_span == declaration.span
+            && fact.ty == local.ty
+            && fact.mutable == local.mutable
+            && fact.mode == CheckedBindingMode::Owned
+            && local.span.file == declaration.span.file
+            && local.span.start <= declaration.span.start
+            && local.span.end >= declaration.span.end
+    }
+
     fn local_view_source(
         &mut self,
         declaration: &ast::VarDecl,
@@ -3297,11 +3344,18 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             );
             return None;
         };
-        if declaration.mutable || !local_views::immutable_view_chain(&self.locals, source) {
-            self.parent.error(
-                declaration.span,
-                "native borrowed alias requires immutable bindings along its stable origin",
-            );
+        let stable_root =
+            local_views::immutable_alias_root(&self.locals, source).is_some_and(|root| {
+                !self.locals[root.index() as usize].mutable
+                    || self.mutable_alias_backing_is_owned(root)
+            });
+        if declaration.mutable || !stable_root {
+            let message = if declaration.mutable {
+                "native borrowed alias requires immutable bindings along its stable origin"
+            } else {
+                "native borrowed alias requires immutable aliases and a stable owned backing"
+            };
+            self.parent.error(declaration.span, message);
             return None;
         }
         if let Err(message) = local_views::validate_local_view_initializer(

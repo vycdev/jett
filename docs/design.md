@@ -5986,9 +5986,14 @@ Rebinding an owned mutable value from a known move-only view reports E0401;
 use an explicit clone to acquire ownership. Copyable values retain implicit
 copying.
 
-Native lowering supports direct and forwarded immutable local views with a
-stable immutable local or view-parameter origin, including finite ordinary-struct,
-bitfield and exactly state-qualified machine field paths rooted in that origin.
+Native lowering keeps direct and forwarded local aliases immutable. A stable
+owned local or owned parameter may back the alias, including a mutable owner
+when its exact owned fact is available in the active checked context; an
+immutable view parameter remains a valid backing. Mutable view-parameter
+backing remains a native implementation limit. This bounded mutable-owner
+extension has focused MSVC acceptance recorded in the local-view note. Finite
+ordinary-struct, bitfield and exactly state-qualified machine field paths retain
+the same typed origin proof.
 Each field step preserves its checked owner,
 field identity, and endpoint type. The endpoint's existing secret, refinement,
 or interface identity is not erased to establish the path. Bytes and lists are
@@ -6033,10 +6038,14 @@ backing owner and existing representation checks. Temporary-backed source local
 aliases, mutable alias chains, allocating conversions, and owner consumption or
 rebinding after source alias creation remain native implementation limits. A
 read-only alias grants no write authority, and a retained dependent loan blocks
-changes to its owner. Selected field updates to a live mutable owned local
-without a conflicting loan follow the checked replacement contract. These limits do not select loan expiry or lifetime
-extension, change the checker rules above, or claim every projected owner kind
-is supported; see the
+changes to its owner, including after its last alias read. Selected field
+updates to a live mutable owned local without a conflicting loan follow the
+checked replacement contract. An enclosing mutable owner absent from a reflected
+body's selected fact snapshot remains an implementation gap; flat global facts
+cannot supply that missing proof. Borrowed-sum Handle aliases retain their
+separate immutable-backing proof below. These limits do not select loan expiry
+or lifetime extension, change the checker rules above, or claim every projected
+owner kind is supported; see the
 [local view implementation note](active/native_local_view_aliases.md) and
 [typed stable-field contract](active/native_stable_projected_local_views.md).
 

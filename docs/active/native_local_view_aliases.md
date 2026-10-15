@@ -26,9 +26,11 @@ retain their existing behavior.
 
 ## Immutable local alias domain
 
-The implementation admits direct aliases and forwarded aliases rooted in an
-immutable owner or immutable view parameter, used for borrowed reads, view
-calls, and explicit clones.
+The bounded implementation admits direct and forwarded immutable aliases rooted
+in a stable owned local/owned parameter or immutable view parameter, used for
+borrowed reads, view calls, and explicit clones. A mutable owned backing requires
+its exact active checked ownership fact. The mutable-owner extension has bounded
+reference and Source-deleted MSVC acceptance recorded below.
 Preserve the checked type, including secret and refinement identity. Do not infer
 view-type semantics from named aliases or turn arbitrary call results into views.
 
@@ -77,9 +79,10 @@ copy semantics in owning contexts.
 
 The [typed stable-field contract](native_stable_projected_local_views.md) records
 this bounded extension before compiler integration. Rule Set 24 already permits
-readonly field views, forwarded aliases, and explicit clones. A field of an
-immutable owner is a stable selected payload even though the payload type differs
-from the whole owner's type; incidental reference cloning is not its ownership
+readonly field views, forwarded aliases, and explicit clones. In this original
+checkpoint, a field of an immutable owner is a stable selected payload even
+though its type differs from the whole owner's type; incidental reference cloning
+is not its ownership
 contract. This extension transports and validates the existing borrow rather
 than selecting a new lifetime rule.
 
@@ -220,9 +223,11 @@ native corpus registers 392 tests. All 15 machine Jett source-format checks and
 Rust formatting checks pass. Broader endpoint/owner combinations retain their
 independent obligations; the examples do not impose an endpoint allowlist.
 
-Bare flow-narrowed machine origins, mutable backing chains, temporary roots,
-projected writes, allocating conversions and owner consume/rebind/transition
-after reachable alias creation remain outside this bounded native support.
+At this machine checkpoint, bare flow-narrowed origins, mutable backing chains,
+temporary roots, projected writes, allocating conversions and owner
+consume/rebind/transition after reachable alias creation were outside the bounded
+native support. The mutable-owned-backing follow-up below has separate bounded
+acceptance; writes with dependent aliases remain refused.
 The actual owner-change group reaches the existing typed ownership refusal
 before archive lookup and preserves the output sentinel in both profiles.
 No source loan-expiry or temporary-lifetime contract is selected.
@@ -286,10 +291,10 @@ The independent projected interface/handler repair remains unapplied.
 
 ## Boundaries requiring a contract
 
-The existing [projected assignment note](../open_design/projected_field_assignment.md)
-states that declaration facts are not complete borrow-provenance analysis and
-that mutation with outstanding views needs a selected contract. Keep these
-related questions explicit before extending the first domain:
+The selected [projected assignment contract](../open_design/projected_field_assignment.md)
+rejects writes through views or with outstanding dependent loans. Declaration
+facts alone are not complete borrow-provenance analysis. Keep these remaining
+lifetime questions explicit before extending the first domain:
 
 - Rebinding or consuming an owner while an alias exists, including whether loan
   expiry for source validity is lexical or based on last use.
@@ -301,5 +306,37 @@ related questions explicit before extending the first domain:
 
 Some such forms are already admitted by the frontend. Acceptance and incidental
 interpreter cloning do not settle their ownership contract. Keep these forms
-visible as unimplemented native cases; do not silently redefine them, implement
-projected mutation, or count the first domain as complete view support.
+visible as unimplemented native cases; do not silently redefine their lifetime
+rules, permit writes through aliases, or count the first domain as complete view
+support.
+
+
+## Mutable owned backing follow-up
+
+The finite alias chain now permits a mutable terminal only when its original
+DefId/LocalId, resolver declaration, concrete type, mutable flag and selected
+`CheckedBindingMode::Owned` agree. Every alias/intermediate slot remains
+immutable. View parameters and borrowed match/iteration binders gain no owning
+authority. Original typed initializers, finite field proofs, readiness, backing
+liveness and non-owning storage remain unchanged; there is no runtime ABI change.
+
+Persistent may-created aliases continue to block owner consumption, rebinding,
+field writes and state changes across CFG joins, including after the last read.
+Temporary roots, mutable alias slots, mutable view-parameter backing, capture
+escape and missing reflected outer-owner facts retain their implementation
+limits. No flat checker-fact fallback, lifetime extension or loan expiry is added.
+Borrowed-sum Handle aliases still require their separate immutable backing proof.
+
+Original Source08 is preserved as an executable empty-output control; new
+Source11 observes nested bytes/list projections, forwarding, borrowed calls,
+explicit clone independence and ordinary field-copy independence. Both pass in
+paired Source/runtime Debug and Release: four executions with Source absent.
+Typed forgery, consistent mutable View-parameter, persistent-loan, liveness and
+actual LocalId-remapping controls also pass. The affected HIR/MIR/Codegen suites
+pass 753 tests. The full selected matrix passes 31 native tests, 64 Source-deleted
+executions and six separate publication-boundary checks; it includes eight older
+Debug-runtime-only executions rather than a full profile cross-product. Exact
+counts, receipts and limits are recorded in the
+[native audit](native_acceptance_audit.md#mutable-owned-local-view-backing-bounded-msvc-acceptance).
+Historical receipts above retain their original scope. The fixed 207/182
+inventory and full native-codegen goal are unchanged.

@@ -425,9 +425,7 @@ function inspect(view source: Packet) returns nothing:
 #[test]
 fn local_views_reject_unstable_native_origins_without_changing_checking() {
     for body in [
-        "mutable list[int64] source = list(1)\n    list[int64] alias = view source",
         "list[int64] alias = view list(1)",
-        "mutable Record source = Record(values: list(1))\n    list[int64] alias = view source.values",
         "list[int64] source = list(1)\n    mutable list[int64] alias = view source",
     ] {
         let source = format!(
@@ -1353,6 +1351,115 @@ function inspect(view source: secret[Payload], view other: secret[Payload], view
         let errors = validate_backend_types(&forged, &checked.interner).unwrap_err();
         assert!(
             errors.iter().any(|error| error.message.contains(expected)),
+            "{invalid}: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn local_views_accept_mutable_owned_backing_without_mutable_aliases() {
+    for (parameters, body) in [
+        ("", "mutable Record source = Record(values: list(1))"),
+        ("mutable source: Record", ""),
+    ] {
+        let body = if body.is_empty() {
+            String::new()
+        } else {
+            format!("    {body}\n")
+        };
+        let source = format!(
+            "namespace app\nstruct Record:\n    values: list[int64]\nfunction inspect({parameters}) returns list[int64]:\n{body}    list[int64] alias = view source.values\n    list[int64] forwarded = alias\n    return clone forwarded\n"
+        );
+        let (program, checked) = checked_source(&source, false).unwrap();
+        validate(&program).unwrap();
+        validate_local_views(&program, &checked.interner).unwrap();
+        let function = &program.functions[0];
+        let root = local(function, "source");
+        assert!(root.mutable);
+        assert!(root.view_source.is_none());
+        assert_eq!(local(function, "alias").view_source, Some(root.id));
+        assert_eq!(
+            local(function, "forwarded").view_source,
+            Some(local(function, "alias").id)
+        );
+        for name in ["alias", "forwarded"] {
+            let mut changed = program.clone();
+            let alias = local(&changed.functions[0], name).id;
+            changed.functions[0].locals[alias.index() as usize].mutable = true;
+            assert!(
+                validate_local_views(&changed, &checked.interner).is_err(),
+                "{name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn local_views_reject_consistently_mutable_view_parameter_backing() {
+    let (mut program, checked) = checked_source("namespace app\nfunction inspect(view source: list[int64]) returns nothing:\n    list[int64] alias = view source\n    trace alias\n    return nothing\n", false).unwrap();
+    let root = local(&program.functions[0], "source").id;
+    program.functions[0].locals[root.index() as usize].mutable = true;
+    program.functions[0].params[0].mutable = true;
+    let errors = validate_local_views(&program, &checked.interner).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("immutable view-parameter backing")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn mutable_local_view_backing_requires_its_exact_selected_owned_fact() {
+    let source = "namespace app\nstruct Record:\n    values: list[int64]\nfunction inspect() returns list[int64]:\n    mutable Record source = Record(values: list(1))\n    Record other = clone source\n    list[int64] alias = view source.values\n    return clone alias\n";
+    for invalid in ["missing", "definition", "view", "type", "mutable"] {
+        let file = FileId::new(0);
+        let parsed = jett_parser::parse(source, file);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        let mut checked = jett_typecheck::check(&parsed.module, &resolved);
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .all(|error| error.severity != Severity::Error),
+            "{:?}",
+            checked.diagnostics
+        );
+        let root = *checked
+            .binding_facts
+            .iter()
+            .find(|(_, fact)| fact.mutable)
+            .unwrap()
+            .0;
+        let other = checked
+            .binding_facts
+            .values()
+            .find(|fact| fact.declaration_span != root && fact.mode == CheckedBindingMode::Owned)
+            .unwrap()
+            .definition;
+        if invalid == "missing" {
+            checked.binding_facts.remove(&root);
+        } else {
+            let fact = checked.binding_facts.get_mut(&root).unwrap();
+            match invalid {
+                "definition" => fact.definition = other,
+                "view" => {
+                    fact.mode = CheckedBindingMode::View {
+                        source: CheckedViewSource::Other,
+                    }
+                }
+                "type" => fact.ty = TypeInterner::STRING,
+                "mutable" => fact.mutable = false,
+                _ => unreachable!(),
+            }
+        }
+        let origins = HashMap::from([(file, SourceOrigin::Project)]);
+        let errors = lower(&parsed.module, &resolved, &checked, &origins).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message.contains("stable owned backing")),
             "{invalid}: {errors:?}"
         );
     }

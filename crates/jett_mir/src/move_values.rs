@@ -1750,6 +1750,59 @@ function inspect(source: result[int8, int64]) returns nothing:
     }
 
     #[test]
+    fn mutable_owned_projected_views_keep_transitive_backing_live_without_owning_aliases() {
+        let source =
+            PROJECTED_ALIASES.replace("    Envelope source =", "    mutable Envelope source =");
+        let (mut program, types) = lower_source(&source);
+        for prepared in [false, true] {
+            if prepared {
+                crate::prepare_native_sequences(&mut program, &types);
+            }
+            crate::validate(&program).unwrap();
+            let function = &program.functions[inspected(&program)];
+            let root = local_named(function, "source");
+            let alias = local_named(function, "borrowed");
+            let forwarded = local_named(function, "forwarded");
+            let plan = MoveValuePlan::analyze(&program, function, &types).unwrap();
+            assert!(function.local(root).unwrap().mutable);
+            assert!(plan.owned_locals.contains(&(root.index() as usize)));
+            assert!(!plan.owned_locals.contains(&(alias.index() as usize)));
+            assert!(!plan.owned_locals.contains(&(forwarded.index() as usize)));
+            let mut observed = false;
+            for live in plan.live_in.iter().chain(&plan.live_out).chain(
+                plan.live_after_statement
+                    .iter()
+                    .flat_map(|block| block.iter()),
+            ) {
+                if live.contains(&(forwarded.index() as usize)) {
+                    observed = true;
+                    assert!(live.contains(&(alias.index() as usize)));
+                    assert!(live.contains(&(root.index() as usize)));
+                }
+            }
+            assert!(observed);
+        }
+    }
+
+    #[test]
+    fn mutable_view_parameter_backing_is_not_an_owned_terminal() {
+        let (mut program, _) = lower_source(
+            "function inspect(view source: list[int64]) returns list[int64]:\n    list[int64] alias = view source\n    return clone alias\n",
+        );
+        let index = inspected(&program);
+        let root = local_named(&program.functions[index], "source");
+        program.functions[index].locals[root.index() as usize].mutable = true;
+        program.functions[index].params[0].mutable = true;
+        let errors = crate::validate(&program).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message.contains("immutable view-parameter backing")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
     fn projected_local_views_validate_path_against_declared_mir_origin() {
         for invalid in [
             "owner",
@@ -1760,7 +1813,10 @@ function inspect(source: result[int8, int64]) returns nothing:
             "clone",
             "forwarded source",
         ] {
-            let (mut program, types) = lower_source(PROJECTED_ALIASES);
+            let (mut program, types) = lower_source(
+                &PROJECTED_ALIASES
+                    .replace("    Envelope source =", "    mutable Envelope source ="),
+            );
             let index = inspected(&program);
             let function = &mut program.functions[index];
             let source = local_named(function, "source");
@@ -1900,8 +1956,11 @@ function inspect(view source: Packet) returns nothing:
 
     #[test]
     fn projected_local_views_preserve_immutable_chains_and_persistent_root_loans() {
-        for mutable in ["source", "borrowed", "forwarded"] {
-            let (mut program, _) = lower_source(PROJECTED_ALIASES);
+        for mutable in ["borrowed", "forwarded"] {
+            let (mut program, _) = lower_source(
+                &PROJECTED_ALIASES
+                    .replace("    Envelope source =", "    mutable Envelope source ="),
+            );
             let index = inspected(&program);
             let local = local_named(&program.functions[index], mutable);
             program.functions[index].locals[local.index() as usize].mutable = true;
@@ -1914,7 +1973,10 @@ function inspect(view source: Packet) returns nothing:
             );
         }
         for invalid in ["root consume", "root rebind", "payload escape"] {
-            let (mut program, types) = lower_source(PROJECTED_ALIASES);
+            let (mut program, types) = lower_source(
+                &PROJECTED_ALIASES
+                    .replace("    Envelope source =", "    mutable Envelope source ="),
+            );
             let index = inspected(&program);
             let function = &mut program.functions[index];
             let source = local_named(function, "source");
@@ -1979,7 +2041,7 @@ function inspect(view source: Packet) returns nothing:
     fn projected_local_views_remap_initializer_root_and_immediate_alias_chain() {
         let source = PROJECTED_ALIASES.replace(
             "    Envelope source =",
-            "    for element in list():\n        trace element\n    Envelope source =",
+            "    for element in list():\n        trace element\n    mutable Envelope source =",
         );
         let (mut program, types) = lower_source(&source);
         let index = inspected(&program);

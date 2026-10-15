@@ -635,10 +635,13 @@ impl FunctionValidator<'_, '_> {
                     && !internal_call_views.contains(&local.id)
                     && let Some(root) = function.view_root(local.id)
                     && function.local(root).is_some_and(|root| root.mutable)
+                    && function
+                        .parameter_for_local(root)
+                        .is_some_and(|parameter| parameter.mode == hir::ParamMode::View)
                 {
                     self.error(
                         local.span,
-                        "native local views require immutable backing bindings",
+                        "native local views require immutable view-parameter backing bindings",
                     );
                 }
             }

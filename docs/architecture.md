@@ -802,9 +802,12 @@ remains a separate gap.
 
 Checked binding facts distinguish owned copies from borrowed local aliases by
 declaration identity in each ordinary, generic, and reflected body. HIR records
-an alias's immediate backing `LocalId`; native admission requires an immutable
-chain to an immutable owner or view parameter. A direct initializer preserves
-the same carrier and interface erasure. A projected initializer uses its existing
+an alias's immediate backing `LocalId`; every alias slot in the finite chain
+remains immutable. Its terminal may be an immutable owner or view parameter, or
+a mutable owned local/owned parameter authenticated by the exact active checked
+binding fact. Mutable view-parameter backing remains unsupported. This bounded
+mutable-owner extension has focused MSVC acceptance recorded in the local-view
+note. A direct initializer preserves the same carrier and interface erasure. A projected initializer uses its existing
 finite typed `Field` nodes to prove each ordinary-struct, bitfield or exact
 declared `MachineState` owner, canonical field index, intermediate type, endpoint type,
 and terminating local identity. A qualified-machine step resolves the exact
@@ -889,10 +892,12 @@ Mutable source alias chains, temporary-backed source aliases, allocating
 conversions, flow-narrowed bare-machine origins, and field paths without the
 checked declared-owner proof remain explicit native limitations. Read-only
 aliases grant no write authority, and retained dependent loans block changes to
-their owners. Selected owned-local field updates follow their checked ownership
-and loan requirements. Owner transitions
-after source alias creation follow the same conservative owner-change refusal;
-see
+their owners, including after the last alias read. Selected owned-local field
+updates follow their checked ownership and loan requirements. Missing enclosing
+mutable-owner facts in reflected body snapshots remain an implementation gap;
+the lowering join cannot fall back to flat global facts. Borrowed-sum Handle
+aliases keep their separate immutable-backing witness. Owner transitions after
+source alias creation follow the same conservative owner-change refusal; see
 [the bounded implementation](active/native_local_view_aliases.md) and
 [the stable projected-view contract](active/native_stable_projected_local_views.md).
 

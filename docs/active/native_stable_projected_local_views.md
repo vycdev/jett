@@ -1,10 +1,12 @@
 # Typed stable projected local views
 
 Rule Set 24 already permits readonly, non-owning field views. Native support
-must preserve the exact checked field type and the lifetime of its immutable
-local or view-parameter owner. The characterized `view packet.data` case passes
-checking and reference execution, but native lowering lost its stable binding
-origin before this repair.
+must preserve the exact checked field type and the lifetime of its backing
+owner. Alias slots remain immutable; a mutable terminal must be an exact checked
+owned local or owned parameter, while view-parameter backing stays immutable.
+The mutable-owner extension below has focused MSVC acceptance. The characterized
+`view packet.data` case passes checking and reference execution, but native
+lowering lost its stable binding origin before this repair.
 
 Keep `CheckedViewSource::Binding` and `Local.view_source` as the immediate
 binding dependency. The typed initializer's existing ordinary-struct `Field`
@@ -28,10 +30,11 @@ apply to projected aliases. Ordinary field copies and explicit clones remain
 owned. Bytes and lists are executable witnesses, not an endpoint allowlist.
 There is no runtime ABI change or implicit allocation.
 
-Temporary roots, mutable backing chains, projected mutation, and owner changes
-after creating an alias retain their current implementation boundaries. This
-repair does not select lifetime extension or loan expiry; those questions stay
-in the existing local-view and projected-assignment design notes.
+Temporary roots, mutable alias slots, mutable view-parameter backing and owner
+changes with dependent aliases retain their implementation boundaries. Missing
+reflected outer-owner facts and borrowed-sum Handle backing keep separate proof
+limits. The mutable-owned-backing extension selects no lifetime extension or
+loan expiry; those questions stay in the existing local-view design note.
 
 Verification must cover direct and nested paths, forwarded aliases, view
 parameters, exact checked contexts, clone independence, owner liveness, and
@@ -46,6 +49,31 @@ now extends the same proof to declared MachineState payloads. Its current
 across a 25-test batch and a separate typed-endpoint test. Exact scope/logs
 are in that note. The new 392-test frozen workspace and supported-host
 acceptance remain required. This preserves exact state/nominal qualification
-and current owner-change boundaries; bare flow-narrowed, mutable or temporary
-origins and broader projected owner/endpoint combinations remain outside the
-bounded proof rather than being counted as complete view support.
+and current owner-change boundaries. At that checkpoint, bare flow-narrowed,
+mutable or temporary origins and broader projected owner/endpoint combinations
+were outside the bounded proof. Those historical counts do not validate the
+mutable-owned-backing follow-up.
+
+
+## Mutable owned backing follow-up
+
+The extension authenticates a mutable terminal through its exact original
+DefId-to-LocalId mapping and active concrete owned binding fact. It does not
+infer ownership from absent alias metadata, a name, or flat global facts.
+Direct and projected aliases retain their immutable immediate dependency chain;
+all field-owner/index/endpoint, nominal qualification and initializer checks
+remain mandatory, including unused and unreachable aliases. Existing persistent
+loan and liveness planning still blocks every owner change while a reachable
+alias may exist, even after its last read.
+
+The unchanged original unused Source08 and observable nested bytes/list
+forwarding and copy-independence Source11 pass reference checks and four
+Source-deleted executions in paired Source/runtime Debug and Release. The
+[native audit](native_acceptance_audit.md#mutable-owned-local-view-backing-bounded-msvc-acceptance)
+records the full selected matrix: 31 tests, 64 executions and six separate
+publication-boundary checks, alongside 753 affected library tests.
+Mutable View-parameter roots, temporary-backed aliases, missing reflected outer
+root facts and mutable borrowed-sum Handle backing remain unsupported native
+compositions; they are not new Source bans. No runtime ABI, implicit clone,
+lifetime extension or loan-expiry change is made. The current bounded acceptance
+is separate from the historical receipts above and does not complete native parity.

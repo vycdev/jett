@@ -1,5 +1,5 @@
-//! Checked local borrow origins. Native admission is limited to immutable
-//! local chains whose initializers preserve the existing backing value.
+//! Checked local borrow origins. Immutable aliases preserve their backing value.
+//! Mutable terminal owners remain subject to persistent loan validation.
 
 use jett_types::{Type, TypeId, TypeInterner};
 
@@ -31,23 +31,20 @@ pub fn is_borrowed_local(locals: &[Local], params: &[Param], id: LocalId) -> boo
             .any(|param| param.local == id && param.mode == ParamMode::View)
 }
 
-pub(super) fn immutable_view_chain(locals: &[Local], mut id: LocalId) -> bool {
+/// Resolve a finite chain whose alias slots are immutable. The terminal
+/// binding's ownership and readiness are checked separately.
+pub(super) fn immutable_alias_root(locals: &[Local], mut id: LocalId) -> Option<LocalId> {
     for _ in 0..locals.len() {
-        let Some(local) = locals
+        let local = locals
             .get(id.index() as usize)
-            .filter(|local| local.id == id)
-        else {
-            return false;
-        };
-        if local.mutable {
-            return false;
-        }
+            .filter(|local| local.id == id)?;
         match local.view_source {
-            Some(source) => id = source,
-            None => return true,
+            Some(source) if !local.mutable => id = source,
+            Some(_) => return None,
+            None => return Some(id),
         }
     }
-    false
+    None
 }
 
 pub(super) fn validate_structure(function: &Function) -> Vec<ValidationError> {
@@ -70,10 +67,18 @@ pub(super) fn validate_structure(function: &Function) -> Vec<ValidationError> {
             Some("parameter ownership must use ParamMode, not a local alias origin")
         } else if local_view_root(&function.locals, local.id).is_none() {
             Some("borrowed local origin is outside its function or contains a cycle")
-        } else if !immutable_view_chain(&function.locals, local.id) {
-            Some("native borrowed alias requires immutable bindings along its stable origin")
+        } else if let Some(root) = immutable_alias_root(&function.locals, local.id) {
+            function
+                .params
+                .iter()
+                .any(|parameter| {
+                    parameter.local == root
+                        && parameter.mode == ParamMode::View
+                        && function.locals[root.index() as usize].mutable
+                })
+                .then_some("native borrowed alias requires immutable view-parameter backing")
         } else {
-            None
+            Some("native borrowed alias requires immutable alias bindings")
         };
         if let Some(message) = message {
             errors.push(ValidationError {

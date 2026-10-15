@@ -176,22 +176,15 @@ fn native_stable_projected_local_view_struct_generic_and_qualified_endpoints_kee
 }
 
 #[test]
-fn native_unstable_projected_local_view_aliases_reject_before_publication() {
+fn native_temporary_projected_local_view_aliases_reject_before_publication() {
     use jett_driver::native::{NativeBuildError, build_host_executable_with_options};
     use jett_driver::{BackendLoweringError, BuildOptions, build_file_with_options};
 
-    let cases = [
-        (
-            "mutable_root",
-            include_str!("local_view_aliases/08_mutable_root_boundary.jett"),
-            "native borrowed alias requires immutable bindings along its stable origin",
-        ),
-        (
-            "temporary_root",
-            include_str!("local_view_aliases/09_temporary_root_boundary.jett"),
-            "native borrowed alias requires a stable local origin; temporary views remain unsupported",
-        ),
-    ];
+    let cases = [(
+        "temporary_root",
+        include_str!("local_view_aliases/09_temporary_root_boundary.jett"),
+        "native borrowed alias requires a stable local origin; temporary views remain unsupported",
+    )];
     for (name, source_text, expected_message) in cases {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join(format!("{name}.jett"));
@@ -677,5 +670,23 @@ fn native_machine_projected_local_view_generic_and_qualified_endpoints_keep_exac
             "bytes:414243:4142:2:3:2:5:11:2:3:2:3:13:2:3:2:5:11:2:3:2:3:13\n",
             "items:3:2:2:3:2:5:11:2:3:2:3:13\n",
         )),
+    );
+}
+
+#[test]
+fn native_mutable_owned_backing_keeps_original_unused_alias_fixture_executable() {
+    run_case(
+        "08_mutable_root_boundary",
+        include_str!("local_view_aliases/08_mutable_root_boundary.jett"),
+        ProjectedOutcome::Success(""),
+    );
+}
+
+#[test]
+fn native_mutable_owned_backing_preserves_projected_forwarding_and_independent_copies() {
+    run_case(
+        "11_mutable_owned_backing",
+        include_str!("local_view_aliases/11_mutable_owned_backing.jett"),
+        ProjectedOutcome::Success("bytes:4142:4142:4142:414243:414244:4142\nitems:2:2:3:2\n"),
     );
 }

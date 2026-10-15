@@ -3262,3 +3262,50 @@ exact-revision GNU/MSVC CI and clean installed-distribution acceptance remain
 separate obligations. Responding-handler Return/fallthrough remain identified in
 the actor note. The fixed 207-fixture/182-object denominators and full native-codegen
 goal are unchanged.
+
+#### Mutable owned local-view backing: bounded MSVC acceptance
+
+An immutable local alias chain may now end at a mutable owned local or owned
+parameter when the exact original DefId-to-LocalId mapping, declaration,
+concrete type, mutable flag and active checked Owned fact agree. Alias slots
+remain immutable. Typed initializer/field proofs, readiness, backing liveness
+and non-owning storage remain mandatory; names, absent alias metadata and flat
+global facts supply no ownership authority. Persistent may-created aliases keep
+blocking owner changes across CFG joins, including after the last read.
+
+The unchanged original Source08 and observable nested bytes/list Source11 pass
+four Source-deleted executions in paired Source/runtime Debug and Release.
+Forwarding, borrowed calls, explicit clones and ordinary owned-field copies
+preserve the original owner and independent copied values. All 753 affected
+library tests pass: HIR 254, MIR 364 and Codegen 135. The log is
+`target/native/mutable-view-hir-mir-codegen-v3.log`, SHA-256
+`856819c888d339a80aed7c8680648bee7713cf3ce56a2b69655204b3d3133983`.
+
+The full selected native matrix passes 31 tests and **64 Source-deleted
+executions**: the complete local-view module, two exact actor persistent-view
+controls and the three-Source ordinary borrowed-sum supplemental packet. The
+four new-fixture executions are included in that total. Fifty-six executions
+pair Source Debug/default with Runtime Debug and Source Release/optimized with
+Runtime Release. Eight older local-view executions use only the Debug harness
+runtime, including default Verify/Property suites. Overall runtime counts are
+Debug 36 and Release 28; this is not a full Source/runtime cross-product.
+Six existing publication-boundary checks pass separately: two temporary-origin
+and four machine-owner-change refusals. They supply no process-execution credit
+and do not turn admitted Source limitations into language bans.
+
+Fresh compiler gate: `target/native/mutable-view-gate-compile-v1/gate-acceptance.json`,
+SHA-256 `b5a9edea952a73a8f945a867fe57e09325361a36c5e4cdc20a0adbdea30c8b0c`.
+Execution summary: `target/native/mutable-view-native-execution-v1/execution-summary.json`,
+SHA-256 `581f6f92ce8ec279d7886017c05155a0fac207d3c4d50b4167b02cfa521e2600`.
+Before/after guards retain 1,036 compiler inputs, 68 reused runtime artifacts and
+32 fixture hashes unchanged. Runtime source/ABI and measured bundles are
+unchanged; no runtime rebuild or additional Resource authority is part of this
+slice.
+
+Temporary roots, mutable alias slots, mutable view-parameter backing, missing
+reflected outer-owner facts and borrowed-sum Handle aliases requiring immutable
+backing remain separate implementation/proof limits. This change selects no
+lifetime extension, loan expiry or write-through-alias rule. Complete Resource
+transport, full coherent workspace/inventory execution and exact-revision
+supported-host/installed acceptance remain open. The fixed 207-fixture/182-object
+denominators and full 100% native-codegen goal are unchanged.
