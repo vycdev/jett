@@ -3059,25 +3059,52 @@ fn lower_file_for_backend_inner(
         None
     };
     let native_property_plan = if mode == BackendLoweringMode::PropertySuite {
-        let cases = collect_property_cases_with_checked_values(
-            module,
-            reflection_metadata.clone(),
-            checked_expression_types.clone(),
-            Arc::new(check_result.breakpoint_exclusions.clone()),
-            explicit_comptime_values.clone(),
-        );
-        native_property_cases::append_property_suite(
-            &mut hir,
-            module,
-            entry_file,
-            &cases,
-            &check_result.interner,
-            &check_result.reflection_metadata,
-            &check_result.method_value_definitions,
-        )
-        .map_err(|errors| {
-            BackendLoweringError::Hir(errors).with_debug_observations(&debug_observations)
-        })?
+        if jett_hir::has_reflected_callable_plans(&hir) {
+            let cases = jett_comptime::verify::collect_checked_property_cases_with_checked_values(
+                checked_program.clone(),
+                explicit_comptime_values.clone(),
+            )
+            .map_err(|errors| {
+                let mut failures = diagnostics.clone();
+                failures.extend(errors);
+                build_failure(
+                    failures,
+                    Some(reflection_metadata.clone()),
+                    Some(checked_expression_types.clone()),
+                    Some(explicit_comptime_values.clone()),
+                    debug_observations.clone(),
+                )
+            })?;
+            native_property_cases::append_checked_property_suite(
+                &mut hir,
+                &checked_program,
+                entry_file,
+                &cases,
+            )
+            .map_err(|errors| {
+                BackendLoweringError::Hir(errors).with_debug_observations(&debug_observations)
+            })?
+        } else {
+            let cases = collect_property_cases_with_checked_values(
+                module,
+                reflection_metadata.clone(),
+                checked_expression_types.clone(),
+                Arc::new(check_result.breakpoint_exclusions.clone()),
+                explicit_comptime_values.clone(),
+            );
+            native_property_cases::append_property_suite(
+                &mut hir,
+                module,
+                entry_file,
+                &cases,
+                &check_result.interner,
+                &check_result.reflection_metadata,
+                &check_result.method_value_definitions,
+            )
+            .map_err(|errors| {
+                BackendLoweringError::Hir(errors).with_debug_observations(&debug_observations)
+            })?
+        }
     } else {
         None
     };
@@ -4712,30 +4739,48 @@ pub fn test_file_capture_outcome(path: &Path) -> Result<TestResult, TestFailure>
             support_errors.join("\n")
         )));
     }
+    let mut source_origins = HashMap::from([(file_id, SourceOrigin::Project)]);
+    source_origins.extend(support_modules.origins);
+    source_origins.extend(project_modules.origins.clone());
     strip_test_items_from_support_modules(&mut support_modules.modules);
     strip_test_items_from_support_modules(&mut project_modules.modules);
     parse_result.module =
         assemble_test_project_module(path, parse_result.module, project_modules).map_err(&fail)?;
     prepend_support_modules(&mut parse_result.module, support_modules.modules);
 
-    let resolve_result = resolve(&parse_result.module);
-    let resolve_errors = error_messages_from_diagnostics(&resolve_result.diagnostics);
-    if !resolve_errors.is_empty() {
-        return Err(fail(format!(
-            "resolution errors:\n{}",
-            resolve_errors.join("\n")
-        )));
-    }
-
-    let check_result = check(&parse_result.module, &resolve_result);
-    let type_errors = error_messages_from_diagnostics(&check_result.diagnostics);
-    if !type_errors.is_empty() {
-        return Err(fail(format!("type errors:\n{}", type_errors.join("\n"))));
-    }
-
-    let checked_expression_types = Arc::new(expression_type_names(&check_result, &resolve_result));
+    let primary_span = parse_result.module.span;
+    let program =
+        CheckedResourceProgram::prepare(parse_result, source_origins, &[], CheckOptions::default())
+            .map(Arc::new)
+            .map_err(|error| {
+                let phase = match &error {
+                    ResourceProgramError::ParseDiagnostics(_) => "parse errors",
+                    ResourceProgramError::ResolveDiagnostics(_)
+                    | ResourceProgramError::ResolveMetadata { .. } => "resolution errors",
+                    ResourceProgramError::CheckDiagnostics(_)
+                    | ResourceProgramError::CheckMetadata { .. } => "type errors",
+                };
+                let mut diagnostics = error.diagnostics().unwrap_or(&[]).to_vec();
+                if matches!(
+                    &error,
+                    ResourceProgramError::ResolveMetadata { .. }
+                        | ResourceProgramError::CheckMetadata { .. }
+                ) {
+                    diagnostics.push(Diagnostic::error(0, error.to_string(), primary_span));
+                }
+                fail(format!(
+                    "{phase}:\n{}",
+                    error_messages_from_diagnostics(&diagnostics).join("\n")
+                ))
+            })?;
+    let module = program.module();
+    let resolve_result = program.resolved();
+    let check_result = program.checked();
+    let mut checked_type_names = expression_type_names(check_result, resolve_result);
+    checked_type_names.resource_program = Some(program.clone());
+    let checked_expression_types = Arc::new(checked_type_names);
     let evaluation = evaluate_explicit_comptime_expressions_capture(
-        &parse_result.module,
+        module,
         check_result.reflection_metadata.clone(),
         checked_expression_types.clone(),
         Arc::new(check_result.breakpoint_exclusions.clone()),
@@ -4753,8 +4798,8 @@ pub fn test_file_capture_outcome(path: &Path) -> Result<TestResult, TestFailure>
         return Err(failure);
     }
     let results = run_verify_blocks_detailed_with_checked_values(
-        &parse_result.module,
-        check_result.reflection_metadata,
+        module,
+        check_result.reflection_metadata.clone(),
         checked_expression_types,
         Arc::new(check_result.breakpoint_exclusions.clone()),
         Arc::new(evaluation.values),

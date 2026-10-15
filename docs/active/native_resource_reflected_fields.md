@@ -369,3 +369,11 @@ compiler-policy ban on existing Source semantics.
 
 The full native-codegen goal remains active at the rough 87% planning estimate.
 The fixed 207-fixture / 182-run-pass inventory denominators do not change.
+
+The ordinary lazy-callback successor also preserves original Verify/Property
+capture owners, immutable CallbackHolder observations and canonical generated
+Property wrappers. Its bounded ordinary-callback acceptance is tracked in
+[the callback coverage plan](native_codegen_parity_plan.md#generated-callback-suite-proof-continuity)
+and [the audit](native_acceptance_audit.md#generated-reflected-callback-suites-bounded-msvc-acceptance).
+That work adds no Resource ordinal, Scope, provider or lifetime acceptance to
+this reflected Resource checkpoint.

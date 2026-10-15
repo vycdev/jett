@@ -16,7 +16,7 @@ pub struct CheckedExpressionTypes {
     pub functions: HashMap<Span, Vec<Arc<CheckedFunctionTypes>>>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CheckedFunctionTypes {
     pub bindings: CheckedScopedBindings,
     pub type_arguments: Vec<String>,
@@ -67,6 +67,72 @@ pub(crate) fn select_scoped_types(
 }
 
 impl CheckedExpressionTypes {
+    /// Canonical mutable projections confer no execution or cache provenance.
+    pub fn from_checked_program(program: &Arc<jett_typecheck::CheckedResourceProgram>) -> Self {
+        Self::from_original_program(program)
+    }
+
+    /// Internal canonical projection for a worker that owns this checked Source.
+    pub(crate) fn from_original_program(
+        program: &Arc<jett_typecheck::CheckedResourceProgram>,
+    ) -> Self {
+        let checked = program.checked();
+        let (mut expressions, bindings) = original_body_types(
+            &checked.type_map,
+            &checked.comptime_type_bindings,
+            &checked.interner,
+        );
+        let mut functions: HashMap<Span, Vec<Arc<CheckedFunctionTypes>>> = HashMap::new();
+        for instance in &checked.generic_function_instantiations {
+            for span in instance.type_map.keys() {
+                expressions.remove(span);
+            }
+            remove_original_scoped_types(&mut expressions, &instance.comptime_type_bindings);
+            let (names, scopes) = original_body_types(
+                &instance.type_map,
+                &instance.comptime_type_bindings,
+                &checked.interner,
+            );
+            let facts = &instance.specialization;
+            functions
+                .entry(program.resolved().scope_table.def(instance.definition).span)
+                .or_default()
+                .push(Arc::new(CheckedFunctionTypes {
+                    bindings: scopes,
+                    type_arguments: instance
+                        .concrete_args
+                        .iter()
+                        .map(|ty| checked.interner.type_name(*ty))
+                        .collect(),
+                    type_argument_reflections: facts.type_argument_reflections.clone(),
+                    type_info_kinds: facts.type_info_kinds.clone(),
+                    type_info_primitives: facts.type_info_primitives.clone(),
+                    type_kind_values: facts.type_kind_values.clone(),
+                    type_primitive_values: facts.type_primitive_values.clone(),
+                    expressions: Arc::new(names),
+                }));
+        }
+        Self {
+            resource_program: Some(program.clone()),
+            bindings,
+            expressions,
+            functions,
+        }
+    }
+
+    pub(crate) fn matches_original_program(
+        &self,
+        program: &Arc<jett_typecheck::CheckedResourceProgram>,
+    ) -> bool {
+        let expected = Self::from_original_program(program);
+        self.resource_program
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, program))
+            && self.expressions == expected.expressions
+            && self.bindings == expected.bindings
+            && self.functions == expected.functions
+    }
+
     pub fn get(&self, span: &Span) -> Option<&String> {
         self.expressions.get(span)
     }
@@ -104,6 +170,61 @@ impl CheckedExpressionTypes {
             return Err("generic invocation has conflicting checked expression types".into());
         }
         Ok(Some(selected.clone()))
+    }
+}
+
+fn original_body_types(
+    types: &HashMap<Span, jett_types::TypeId>,
+    bindings: &HashMap<Span, Vec<jett_typecheck::CheckedComptimeTypeBinding>>,
+    interner: &jett_types::TypeInterner,
+) -> (HashMap<Span, String>, CheckedScopedBindings) {
+    let mut expressions = types
+        .iter()
+        .map(|(span, ty)| (*span, interner.type_name(*ty)))
+        .collect();
+    remove_original_scoped_types(&mut expressions, bindings);
+    let nested = bindings
+        .values()
+        .flatten()
+        .flat_map(|binding| binding.body.comptime_type_bindings.keys().copied())
+        .collect::<std::collections::HashSet<_>>();
+    let scopes = bindings
+        .iter()
+        .filter(|(span, _)| !nested.contains(span))
+        .map(|(span, candidates)| {
+            (
+                *span,
+                candidates
+                    .iter()
+                    .map(|binding| {
+                        let (expressions, bindings) = original_body_types(
+                            &binding.body.type_map,
+                            &binding.body.comptime_type_bindings,
+                            interner,
+                        );
+                        Arc::new(CheckedScopedTypes {
+                            bound_type: interner.type_name(binding.bound_type),
+                            reflection: Some(binding.reflection.clone()),
+                            expressions,
+                            bindings,
+                        })
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    (expressions, scopes)
+}
+
+fn remove_original_scoped_types(
+    expressions: &mut HashMap<Span, String>,
+    bindings: &HashMap<Span, Vec<jett_typecheck::CheckedComptimeTypeBinding>>,
+) {
+    for binding in bindings.values().flatten() {
+        for span in binding.body.type_map.keys() {
+            expressions.remove(span);
+        }
+        remove_original_scoped_types(expressions, &binding.body.comptime_type_bindings);
     }
 }
 

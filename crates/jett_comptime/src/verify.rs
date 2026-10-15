@@ -204,6 +204,12 @@ pub struct PropertyCase {
     pub arguments: Vec<Value>,
 }
 
+#[path = "verify/checked_property_cases.rs"]
+mod checked_property_cases;
+pub use checked_property_cases::{
+    CheckedPropertyCases, collect_checked_property_cases_with_checked_values,
+};
+
 struct VerificationRun {
     results: Vec<VerifyResult>,
     property_cases: Vec<PropertyCase>,
@@ -1012,6 +1018,25 @@ struct PropertyDefinitions<'a> {
     aliases: &'a [PropertyTypeAliasDef],
 }
 
+fn with_property_execution_purpose<T>(
+    interp: &mut Interpreter,
+    body: impl FnOnce(&mut Interpreter) -> T,
+) -> T {
+    let previous_purpose = interp.checked_execution_purpose(crate::ExecutionPurpose::Property);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(interp)));
+    if let Some(purpose) = previous_purpose {
+        interp.checked_execution_purpose(purpose);
+    }
+    match result {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+#[cfg(test)]
+#[path = "verify/property_purpose_tests.rs"]
+mod property_purpose_tests;
+
 fn run_property_block(
     interp: &mut Interpreter,
     namespace: Option<&str>,
@@ -1019,31 +1044,28 @@ fn run_property_block(
     definitions: PropertyDefinitions<'_>,
     collected_cases: Option<&mut Vec<PropertyCase>>,
 ) -> VerifyResult {
-    let previous_purpose = interp.checked_execution_purpose(crate::ExecutionPurpose::Property);
-    let result = match interp.with_checked_property_region(pb, |interp| {
-        Ok(run_property_block_inner(
-            interp,
-            namespace,
-            pb,
-            definitions,
-            collected_cases,
-        ))
-    }) {
-        Ok(result) => result,
-        Err(error) => VerifyResult {
-            name: pb.name.name.clone(),
-            span: pb.name.span,
-            passed: false,
-            error: Some(error),
-            iterations: Some(0),
-            is_property: true,
-            debug_events: interp.take_debug_events(),
-        },
-    };
-    if let Some(purpose) = previous_purpose {
-        interp.checked_execution_purpose(purpose);
-    }
-    result
+    with_property_execution_purpose(interp, |interp| {
+        match interp.with_checked_property_region(pb, namespace, |interp| {
+            Ok(run_property_block_inner(
+                interp,
+                namespace,
+                pb,
+                definitions,
+                collected_cases,
+            ))
+        }) {
+            Ok(result) => result,
+            Err(error) => VerifyResult {
+                name: pb.name.name.clone(),
+                span: pb.name.span,
+                passed: false,
+                error: Some(error),
+                iterations: Some(0),
+                is_property: true,
+                debug_events: interp.take_debug_events(),
+            },
+        }
+    })
 }
 
 fn run_property_block_inner(

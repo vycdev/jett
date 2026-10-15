@@ -29,12 +29,18 @@ mod ordinary_required_values;
 pub use ordinary_required_values::bake_required_values;
 mod native_verify_suite;
 pub use native_verify_suite::append_checked_native_verify_suite;
+mod native_property_suite;
+pub use native_property_suite::{
+    CheckedNativePropertyPlan, CheckedNativePropertyTrial, append_checked_native_property_suite,
+    rebuild_checked_native_property_replay,
+};
 mod actor_graph;
 pub use actor_graph::{
     ActorGraphCaptureBinding, ActorGraphInstruction, ActorGraphOperation, ActorGraphPlan,
     ActorGraphSeeds, materialize_actor_graphs, validate_actor_graph_execution,
     visit_actor_graph_factory_values, visit_actor_graph_plans,
 };
+mod call_observation;
 mod call_ownership;
 mod evaluated_builders;
 pub mod evaluated_values;
@@ -2829,6 +2835,7 @@ struct BodyLowerer<'lowerer, 'program> {
     required_scopes: Vec<RequiredScopeIdentity>,
     reflected_field_root: Option<&'program ast::Block>,
     retained_reflected_bindings: HashSet<Span>,
+    observation_initializers: HashMap<LocalId, call_observation::OriginalBinding>,
     return_type: Option<TypeId>,
     ownership_context: jett_typecheck::CheckedOwnershipContext,
     view_parameter_locals: HashSet<LocalId>,
@@ -2891,6 +2898,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             required_scopes: Vec::new(),
             reflected_field_root: None,
             retained_reflected_bindings: HashSet::new(),
+            observation_initializers: HashMap::new(),
             return_type: None,
             ownership_context: jett_typecheck::CheckedOwnershipContext::Ordinary,
             view_parameter_locals: HashSet::new(),
@@ -3208,6 +3216,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             let local =
                 self.allocate_local(definition, &decl.name.name, ty, decl.mutable, decl.span);
             self.locals[local.index() as usize].view_source = view_source;
+            call_observation::record(self, decl, definition, local, &value);
             (StatementKind::Let { local, value }, decl.span)
         })
     }

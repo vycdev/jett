@@ -142,31 +142,72 @@ impl Interpreter {
         namespace: Option<&str>,
         original: &jett_parser::ast::VerifyBlock,
     ) -> Result<Option<Value>, String> {
-        let Some(transport) = &self.resource_transport else {
-            return self.exec_block_in_namespace(namespace, &original.body);
-        };
-        let reference = transport
-            .checked
-            .prepare_verify_body(original)
-            .map_err(|error| error.to_string())?;
-        self.with_checked_required_region(&reference, |interpreter| {
-            interpreter.exec_block_in_namespace(namespace, &original.body)
-        })
+        self.with_original_test_capture(
+            &original.body,
+            ExecutionPurpose::Verify,
+            namespace,
+            |interpreter| {
+                let Some(transport) = &interpreter.resource_transport else {
+                    return interpreter.exec_block_in_namespace(namespace, &original.body);
+                };
+                let reference = transport
+                    .checked
+                    .prepare_verify_body(original)
+                    .map_err(|error| error.to_string())?;
+                interpreter.with_checked_required_region(&reference, |interpreter| {
+                    interpreter.exec_block_in_namespace(namespace, &original.body)
+                })
+            },
+        )
     }
 
     pub(crate) fn with_checked_property_region<T>(
         &mut self,
         original: &jett_parser::ast::PropertyBlock,
+        namespace: Option<&str>,
         body: impl FnOnce(&mut Self) -> Result<T, String>,
     ) -> Result<T, String> {
-        let Some(transport) = &self.resource_transport else {
+        self.with_original_test_capture(
+            &original.body,
+            ExecutionPurpose::Property,
+            namespace,
+            |interpreter| {
+                let Some(transport) = &interpreter.resource_transport else {
+                    return body(interpreter);
+                };
+                let reference = transport
+                    .checked
+                    .prepare_property_body(original)
+                    .map_err(|error| error.to_string())?;
+                interpreter.with_checked_required_region(&reference, body)
+            },
+        )
+    }
+
+    fn with_original_test_capture<T>(
+        &mut self,
+        original: &jett_parser::ast::Block,
+        purpose: ExecutionPurpose,
+        namespace: Option<&str>,
+        body: impl FnOnce(&mut Self) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let Some((program, selected)) = &self.retained_resource_program else {
             return body(self);
         };
-        let reference = transport
-            .checked
-            .prepare_property_body(original)
-            .map_err(|error| error.to_string())?;
-        self.with_checked_required_region(&reference, body)
+        if *selected != purpose {
+            return Err(ResourceExecutionError::WrongPurpose.to_string());
+        }
+        let origin = crate::value::closure_capture::OriginalClosureOwner::test_body(
+            program, original, purpose, namespace,
+        )
+        .ok_or("checked test capture has no exact original body/purpose/namespace")?;
+        let previous = self.active_reflected_capture_origin.replace(origin);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(self)));
+        self.active_reflected_capture_origin = previous;
+        match result {
+            Ok(result) => result,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
     }
 
     fn with_checked_required_region<T>(

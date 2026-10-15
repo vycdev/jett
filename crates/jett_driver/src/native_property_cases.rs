@@ -133,6 +133,39 @@ pub(super) fn append_property_suite(
         entry: id,
         trials,
         function_values,
+        checked: None,
+    }))
+}
+
+/// The opaque sampler and HIR factory own all typed values, locals and calls.
+/// The ordinary fallback above keeps its existing public behavior.
+pub(super) fn append_checked_property_suite(
+    hir: &mut jett_hir::Program,
+    checked: &std::sync::Arc<jett_typecheck::CheckedResourceProgram>,
+    entry_file: FileId,
+    cases: &jett_comptime::verify::CheckedPropertyCases,
+) -> Result<Option<NativePropertyPlan>, Vec<jett_hir::LowerError>> {
+    let Some(plan) =
+        jett_hir::append_checked_native_property_suite(hir, checked, entry_file, cases)?
+    else {
+        return Ok(None);
+    };
+    let trials = plan
+        .trials()
+        .iter()
+        .map(|trial| NativePropertyTrial {
+            name: trial.name().to_owned(),
+            span: trial.span(),
+            function: trial.function(),
+            given_names: trial.given_names().to_vec(),
+            case: trial.case().clone(),
+        })
+        .collect();
+    Ok(Some(NativePropertyPlan {
+        entry: plan.entry(),
+        trials,
+        function_values: Vec::new(),
+        checked: Some(plan),
     }))
 }
 
@@ -143,6 +176,7 @@ pub struct NativePropertyPlan {
     pub(crate) entry: FunctionId,
     pub(crate) trials: Vec<NativePropertyTrial>,
     function_values: Vec<FunctionValueCandidate>,
+    checked: Option<jett_hir::CheckedNativePropertyPlan>,
 }
 
 #[derive(Clone, Debug)]
@@ -161,6 +195,48 @@ impl NativePropertyPlan {
         trials: &[NativePropertyTrial],
         validate_inputs: bool,
     ) -> Result<jett_mir::Program, crate::BackendLoweringError> {
+        if let Some(plan) = &self.checked {
+            // Public case values select only original trial identities. HIR
+            // rebuilds its private Source graph and validates changed inputs.
+            let mut cases = Vec::with_capacity(trials.len());
+            for trial in trials {
+                let mut selected = plan.trials().iter().filter(|original| {
+                    original.case().property_span == trial.case.property_span
+                        && original.case().iteration == trial.case.iteration
+                });
+                let original = selected.next().ok_or_else(|| {
+                    crate::BackendLoweringError::Hir(error(
+                        trial.span,
+                        "native Property replay lost its original retained trial tuple",
+                    ))
+                })?;
+                if selected.next().is_some()
+                    || trial.name != original.name()
+                    || trial.span != original.span()
+                    || trial.function != original.function()
+                    || trial.given_names != original.given_names()
+                {
+                    return Err(crate::BackendLoweringError::Hir(error(
+                        trial.span,
+                        "native Property replay changed its retained name/span/function/given tuple",
+                    )));
+                }
+                cases.push(trial.case.clone());
+            }
+            let mut hir = jett_hir::rebuild_checked_native_property_replay(
+                &lowered.hir,
+                plan,
+                &cases,
+                &lowered.interner,
+            )
+            .map_err(crate::BackendLoweringError::Hir)?;
+            jett_hir::complete_value_conversions(&mut hir, &lowered.interner)
+                .map_err(crate::BackendLoweringError::Hir)?;
+            let mir = jett_mir::lower(&hir, &lowered.interner)
+                .map_err(crate::BackendLoweringError::Mir)?;
+            jett_mir::validate(&mir).map_err(crate::BackendLoweringError::MirValidation)?;
+            return Ok(mir);
+        }
         let mut hir = lowered.hir.clone();
         let mut locals = Vec::new();
         let mut statements = Vec::new();

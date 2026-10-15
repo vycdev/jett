@@ -163,7 +163,7 @@ pub(super) fn callable_type(
     let mut found = Vec::new();
     if let Some(current) = &context.checked_function {
         for original in &checked.generic_function_instantiations {
-            if original.definition != origin.definition
+            if Some(original.definition) != origin.definition
                 || !function_matches(current, context, original, &checked.interner)
             {
                 continue;

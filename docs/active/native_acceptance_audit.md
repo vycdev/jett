@@ -3038,3 +3038,65 @@ results remain historical. Full coherent-workspace/inventory conformance,
 exact-revision supported-host CI, GNU and clean installed distribution remain
 pending. The separate VerifySuite and capture-owner results retain their existing
 scope. The rough 87% estimate and fixed 207/182 denominators remain unchanged.
+
+#### Generated reflected callback suites: bounded MSVC acceptance
+
+The current successor retains checked Verify/Property closure owners and restores
+capture/purpose metadata on error and panic. HIR authenticates immutable
+CallbackHolder constructors/aliases and their exact callable read. The public
+reference test path retains the checked program. Property sampling now produces
+an opaque same-program/successful-cache witness; the canonical HIR wrapper and
+replay constructor preserve original trial/function order and protected tables.
+Changed shrink inputs are validated before body entry. Public raw wrapper edits,
+lookalike snapshots and matching signatures supply no authority.
+
+The permanent Driver leaf preserves byte-exact Sources19/20. Its three nonignored
+tests require the actual two-block/100-trial reference reports, six ordinary
+Program/Verify/Property objects and twelve Source-deleted normal MSVC
+Debug/Release launches. The existing normal bundle selector remains the CI path;
+supplied measured manifests are available for the controlled local gate. Each
+executable is reaped and removed immediately. No private Resource Main is linked,
+and no ordinary context-retirement counters are fabricated.
+
+All three exact permanent tests now pass. Each original Source's reference
+report passes both blocks and records 100 Property trials. The object-only gate
+emits six Program/Verify/Property objects; the linked gate separately emits six
+objects, deletes each Source before linking/launch and passes twelve actual
+normal MSVC Debug/Release executions. Exact exit0, empty stdout, Program stderr
+`5\n`, empty suite stderr, object/entry/target identities and executable reaping
+and removal are checked. Source checking retains release=false independently of
+the runtime profile. Receipt: `target/native/callback-current-normal-v2/after.json`,
+SHA-256 `0bb9987813fd2bf7735badf637edfe1882c8966f024156c1df535643f827611a`.
+The fresh current compiler gate is
+`target/native/callback-current-compile-v4/gate-acceptance.json`, SHA-256
+`25dde5c3c4b66ce083e98aacf530090e77ee06311dc0b3129d0d0c6ebd13fbcf`.
+Complete compiler/Source, dependency and selected artifact guards remain
+unchanged. Measured normal58 Debug/Release archives are reused unchanged, not
+remeasured. Ordinary public launchers provide no context-retirement observation.
+
+Separately, 20 public reference/test-loading controls pass. Both corrected
+six-test Comptime/HIR groups pass without changing original Sources19/20. All
+eight native Property controls pass, including counterexample shrinking through
+refinements, generic interface owners and float32 inputs, source-absent replay,
+unreproducible failures and timeout handling. The timeout fault uses a canonical
+internal MIR block and still passes ordinary validation before execution.
+
+The five affected compiler libraries pass all 1,664 tests: Codegen 134,
+Comptime 636, HIR 241, MIR 347 and Typecheck 306. Logs are
+`target/native/callback-interface-libraries-v1.log`,
+`target/native/callback-property-replay-other-v1.log` (seven controls) and
+`target/native/callback-property-replay-focused-v3.log` (timeout/replay control).
+Initial failed attempts retain their historical scope; the corrected controls
+now pass.
+
+The test-only Property harness applies faults to freshly lowered MIR for both
+initial execution and replay, then runs the unchanged validators and codegen.
+It does not reseal edited HIR or grant production authority. Existing shrink,
+timeout and initial-MIR-only replay controls retain their original oracles.
+
+Final evidence must bind the corrected test inputs, current compiler/dependencies
+and unchanged measured normal58 archives. Existing receipts retain their own
+revision and scope. Full workspace/inventory conformance, exact-revision CI,
+GNU and installed-distribution acceptance remain separate. The rough 87%
+estimate, fixed 207 fixtures/182 object obligations and full native-codegen goal
+are unchanged.

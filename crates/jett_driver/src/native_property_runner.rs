@@ -233,8 +233,130 @@ pub(super) fn run_lowered(
     launcher: &NativeLauncherBundle,
     options: NativePropertyOptions,
 ) -> Result<NativePropertySuiteResult, NativePropertyRunError> {
-    run_lowered_inner(source_path, lowered, launcher, options)
+    #[cfg(test)]
+    let result = run_lowered_inner(source_path, lowered, launcher, options, None);
+    #[cfg(not(test))]
+    let result = run_lowered_inner(source_path, lowered, launcher, options);
+    result.map_err(|error| error.with_debug_observations(&lowered.debug_observations))
+}
+
+/// Only unit tests can inject a backend fault after canonical checked lowering.
+#[cfg(test)]
+pub(super) fn run_lowered_with_test_fault(
+    source_path: &Path,
+    lowered: &BackendLoweringResult,
+    launcher: &NativeLauncherBundle,
+    fault: TestFault,
+    options: NativePropertyOptions,
+) -> Result<NativePropertySuiteResult, NativePropertyRunError> {
+    run_lowered_inner(source_path, lowered, launcher, options, Some(fault))
         .map_err(|error| error.with_debug_observations(&lowered.debug_observations))
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(super) enum TestFault {
+    IntRight {
+        original: i128,
+        replacement: i128,
+    },
+    FloatRight {
+        original: f64,
+        replacement: f64,
+    },
+    BoolAssertion {
+        original: bool,
+        replacement: bool,
+    },
+    Compare {
+        original: jett_hir::BinaryOp,
+        replacement: jett_hir::BinaryOp,
+    },
+    Loop,
+}
+#[cfg(test)]
+impl TestFault {
+    fn apply(self, program: &mut jett_mir::Program) {
+        let mut changed = 0;
+        for function in &mut program.functions {
+            if function.identity.declaration.kind != jett_hir::DeclarationKind::Property
+                || function
+                    .identity
+                    .declaration
+                    .name
+                    .starts_with("__native_property_suite:")
+            {
+                continue;
+            }
+            if matches!(self, Self::Loop) {
+                let entry = function.entry;
+                let block = function
+                    .blocks
+                    .iter_mut()
+                    .find(|block| block.id != entry)
+                    .expect("timeout fixture retains a canonical internal block");
+                block.terminator.kind = jett_mir::TerminatorKind::Goto(block.id);
+                changed += 1;
+                continue;
+            }
+            for block in &mut function.blocks {
+                for statement in &mut block.statements {
+                    let jett_mir::StatementKind::Assert { condition, .. } = &mut statement.kind
+                    else {
+                        continue;
+                    };
+                    match (self, &mut condition.kind) {
+                        (
+                            Self::IntRight {
+                                original,
+                                replacement,
+                            },
+                            jett_hir::ExpressionKind::Binary { right, .. },
+                        ) if right.kind == jett_hir::ExpressionKind::Int(original) => {
+                            right.kind = jett_hir::ExpressionKind::Int(replacement);
+                            changed += 1;
+                        }
+                        (
+                            Self::FloatRight {
+                                original,
+                                replacement,
+                            },
+                            jett_hir::ExpressionKind::Binary { right, .. },
+                        ) if matches!(right.kind,jett_hir::ExpressionKind::Float(value) if value.to_bits()==original.to_bits()) =>
+                        {
+                            right.kind = jett_hir::ExpressionKind::Float(replacement);
+                            changed += 1;
+                        }
+                        (
+                            Self::BoolAssertion {
+                                original,
+                                replacement,
+                            },
+                            jett_hir::ExpressionKind::Bool(value),
+                        ) if *value == original => {
+                            *value = replacement;
+                            changed += 1;
+                        }
+                        (
+                            Self::Compare {
+                                original,
+                                replacement,
+                            },
+                            jett_hir::ExpressionKind::Binary { op, .. },
+                        ) if *op == original => {
+                            *op = replacement;
+                            changed += 1;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            changed, 1,
+            "the test fault must alter exactly the original scalar Property site"
+        );
+    }
 }
 
 fn run_lowered_inner(
@@ -242,6 +364,7 @@ fn run_lowered_inner(
     lowered: &BackendLoweringResult,
     launcher: &NativeLauncherBundle,
     options: NativePropertyOptions,
+    #[cfg(test)] test_fault: Option<TestFault>,
 ) -> Result<NativePropertySuiteResult, NativePropertyRunError> {
     let plan = lowered.native_property_plan.as_ref().ok_or_else(|| {
         NativePropertyRunError::Build(NativeBuildError::MissingPropertyBodies {
@@ -256,6 +379,8 @@ fn run_lowered_inner(
         options,
         executable: directory.path().join("property-attempt.exe"),
         entry: plan.entry,
+        #[cfg(test)]
+        test_fault,
     };
     let original = runner.execute(&lowered.mir)?;
     if !failed(&original)? {
@@ -342,6 +467,8 @@ struct Runner<'a> {
     options: NativePropertyOptions,
     executable: PathBuf,
     entry: FunctionId,
+    #[cfg(test)]
+    test_fault: Option<TestFault>,
 }
 
 impl Runner<'_> {
@@ -361,6 +488,22 @@ impl Runner<'_> {
     }
 
     fn execute(&self, mir: &jett_mir::Program) -> Result<CommandOutput, NativePropertyRunError> {
+        #[cfg(test)]
+        let injected = self.test_fault.map(|fault| {
+            let mut candidate = mir.clone();
+            fault.apply(&mut candidate);
+            candidate
+        });
+        #[cfg(test)]
+        let mir = injected.as_ref().unwrap_or(mir);
+        // The test-only fault is still subject to the normal typed MIR and
+        // Cranelift gates; no original/current proof is refreshed here.
+        #[cfg(test)]
+        if self.test_fault.is_some() {
+            jett_mir::validate(mir).map_err(|errors| {
+                NativePropertyRunError::Lowering(BackendLoweringError::MirValidation(errors))
+            })?;
+        }
         let emitted = jett_codegen_cranelift::emit_host_program_object_with_options(
             mir,
             &self.lowered.interner,
@@ -519,6 +662,16 @@ mod debug_capture_tests {
         let executable = std::env::current_exe().unwrap();
         let profile_directory = executable.parent().unwrap().parent().unwrap();
         let profile = profile_directory.file_name().unwrap().to_str().unwrap();
+        #[cfg(all(
+            target_arch = "x86_64",
+            any(
+                all(target_os = "windows", target_env = "msvc"),
+                all(target_os = "linux", target_env = "gnu")
+            )
+        ))]
+        if let Some(bundle) = super::super::property_tests::supplied_launcher(profile != "debug") {
+            return bundle;
+        }
         let target = profile_directory
             .parent()
             .unwrap()

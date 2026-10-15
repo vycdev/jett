@@ -139,6 +139,20 @@ pub enum Value {
 }
 
 impl Value {
+    /// Exact readonly observation; ordinary Value equality intentionally erases tags.
+    pub fn same_checked_snapshot(&self, other: &Self) -> bool {
+        closure_capture::same_snapshot(self, other)
+    }
+
+    /// Authenticate a callable descriptor without executing or joining it.
+    pub fn validate_checked_callable_source(
+        &self,
+        program: &Arc<jett_typecheck::CheckedResourceProgram>,
+        actual: jett_types::TypeId,
+    ) -> Result<(), String> {
+        ReflectedCallableValue::authenticate_source(self, program, actual)
+    }
+
     pub(crate) fn contains_live_resource_or_grant(&self) -> bool {
         match self {
             Self::Resource(_) | Self::GrantedNetwork(_) => true,

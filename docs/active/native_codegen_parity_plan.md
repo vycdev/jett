@@ -2633,7 +2633,53 @@ completion, script/event, message and cleanup oracles before one teardown.
 This is bounded local MSVC integration acceptance. Full coherent-workspace and
 native conformance gates, exact-revision supported-host CI, GNU and installed
 distribution remain pending. New nominal/secret proof establishment, protected
-secret observation, broader generic/reflected forms and authenticated generated
-verify/property-suite transitions remain full-goal obligations. No Source
-exclusion or broad language-completion claim follows: the rough 87% estimate,
+secret observation, broader generic/reflected forms and coherent-revision acceptance
+of the generated Verify/Property transitions below remain full-goal obligations.
+No Source exclusion or broad language-completion claim follows: the rough 87% estimate,
 fixed 207-fixture/182-object inventory and full 100% goal remain unchanged.
+
+### Generated callback-suite proof continuity
+
+Checked Verify and Property execution now retain the original test-body owner
+when constructing a closure witness. The owner is joined to the same retained
+checked program, original block and namespace; active capture ownership and
+Property purpose restore on both ordinary errors and panic. Public test-file
+execution installs that same checked program instead of a metadata-only
+projection.
+
+The HIR observation proof separately joins an immutable owned CallbackHolder
+constructor or alias to its exact original binding, callable producer, captures
+and reflected read. Matching types, spans or an edited public body cannot mint
+that association. Existing full Source, current-body and CFG seals remain
+mandatory; this proof grants no runtime Resource or Scope authority.
+
+The ordinary reflected-callable Property path now uses an opaque checked-case
+plan from the original successful evaluator/cache snapshot. Its canonical HIR
+factory builds the ordered 100-trial wrapper and records the exact protected
+transition. Replay reconstructs from the private pre-suite graph, checks the
+retained plan and original trial identities, and validates changed shrink inputs.
+It cannot renew proof around a caller-appended or edited wrapper. Exact sampled
+inputs use full typed snapshots rather than ordinary Value equality. Verify's
+existing canonical factory remains unchanged.
+
+Permanent Driver coverage adds the unchanged named and captured Sources19/20
+under the existing reflected-callable module. The strict reference gate requires
+two passing blocks and the actual 100-trial Property report per Source. Separate
+gates require all six Program/Verify/Property objects and twelve Source-deleted
+executions using normal Debug/Release launchers; executables are reaped and
+removed one at a time. Object hashes, raw streams and actual outputs may be
+retained; ordinary public launchers expose no context-retirement counters.
+
+All three permanent controls now pass on a fresh current compiler gate. Each
+reference report records both passing blocks and 100 Property trials; six
+standalone objects and six separately emitted Source-deleted linked objects pass
+twelve actual normal MSVC Debug/Release executions with unchanged inputs and
+measured archives. Exact output/status, object identity and executable reaping
+are checked. The public launcher supplies no context-retirement observation.
+See the [bounded acceptance receipt](native_acceptance_audit.md#generated-reflected-callback-suites-bounded-msvc-acceptance).
+
+Both six-test Comptime/HIR groups, all eight native Property controls and all
+1,664 tests in the five affected compiler libraries pass. Original fixtures and
+ordinary validation remain intact.
+Full coherent-workspace and platform acceptance are separate gates. The rough
+87% estimate and fixed 207/182 inventory stay unchanged.

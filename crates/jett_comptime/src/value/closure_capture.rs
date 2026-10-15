@@ -2,7 +2,7 @@
 use std::sync::Arc;
 
 use jett_common::Span;
-use jett_parser::ast::{Block, Expr, FunctionDef};
+use jett_parser::ast::{Block, Expr, FunctionDef, Item};
 use jett_resolve::{DefId, DefKind};
 use jett_typecheck::CheckedResourceProgram;
 use jett_types::{Type, TypeId};
@@ -16,10 +16,16 @@ mod checked_context;
 #[path = "closure_capture/value_equal.rs"]
 mod value_equal;
 
+#[cfg(test)]
+#[path = "closure_capture/test_owner_tests.rs"]
+mod test_owner_tests;
+
 #[derive(Debug, Clone, Copy)]
 enum Owner {
     Named(DefId),
     Closure(Span),
+    Verify(usize),
+    Property(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -27,7 +33,7 @@ pub(crate) struct OriginalClosureOwner {
     checked: Arc<CheckedResourceProgram>,
     owner: Owner,
     namespace: Option<String>,
-    definition: DefId,
+    definition: Option<DefId>,
 }
 
 impl OriginalClosureOwner {
@@ -58,8 +64,51 @@ impl OriginalClosureOwner {
             checked: checked.clone(),
             owner: Owner::Named(selected.id),
             namespace: namespace.clone(),
-            definition: selected.id,
+            definition: Some(selected.id),
         })
+    }
+
+    pub(crate) fn test_body(
+        checked: &Arc<CheckedResourceProgram>,
+        original: &Block,
+        purpose: crate::ExecutionPurpose,
+        namespace: Option<&str>,
+    ) -> Option<Self> {
+        let mut lexical_namespace = None;
+        let mut namespace_file = None;
+        for (index, item) in checked.module().items.iter().enumerate() {
+            if let Item::Namespace(declaration) = item {
+                lexical_namespace = Some(declaration.name.name.clone());
+                namespace_file = Some(declaration.name.span.file);
+            }
+            let (body, owner) = match (item, purpose) {
+                (Item::Verify(block), crate::ExecutionPurpose::Verify) => {
+                    (&block.body, Owner::Verify(index))
+                }
+                (Item::Property(block), crate::ExecutionPurpose::Property) => {
+                    (&block.body, Owner::Property(index))
+                }
+                _ => continue,
+            };
+            if !std::ptr::eq(body, original) {
+                continue;
+            }
+            let selected_namespace = if namespace_file == Some(body.span.file) {
+                lexical_namespace
+            } else {
+                None
+            };
+            if selected_namespace.as_deref() != namespace {
+                return None;
+            }
+            return Some(Self {
+                checked: checked.clone(),
+                owner,
+                namespace: selected_namespace,
+                definition: None,
+            });
+        }
+        None
     }
 
     fn body(&self) -> Option<&Block> {
@@ -68,6 +117,14 @@ impl OriginalClosureOwner {
                 .map(|function| &function.body),
             Owner::Closure(span) => match original_source::closure_node(&self.checked, span)? {
                 Expr::InlineFn(_, _, body, _) => Some(body),
+                _ => None,
+            },
+            Owner::Verify(index) => match self.checked.module().items.get(index)? {
+                Item::Verify(block) => Some(&block.body),
+                _ => None,
+            },
+            Owner::Property(index) => match self.checked.module().items.get(index)? {
+                Item::Property(block) => Some(&block.body),
                 _ => None,
             },
         }

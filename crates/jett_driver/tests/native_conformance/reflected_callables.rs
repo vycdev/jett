@@ -485,3 +485,6 @@ fn native_reflected_callable_production_output_matches_with_optimized_objects_wi
         PRODUCTION_CASES.len()
     );
 }
+
+#[path = "reflected_callable_suites.rs"]
+mod generated_suites;

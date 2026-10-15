@@ -1,4 +1,4 @@
-//! Inject a backend-only failure after ordinary frontend validation.
+//! Inject backend-only faults in test MIR after canonical frontend/HIR validation.
 use super::*;
 
 #[test]
@@ -7,24 +7,11 @@ fn native_property_shrinking_preserves_generated_generic_interface_owners() {
     let source = directory.path().join("generic-owners.jett");
     let text = include_str!("../../../tests/native/property_generic_owners.jett");
     fs::write(&source, text).unwrap();
-    let mut lowered = lower_file_for_native_property_suite(&source).unwrap();
-    let mut changed = 0;
-    for function in &mut lowered.hir.functions {
-        if function.identity.declaration.kind != jett_hir::DeclarationKind::Property {
-            continue;
-        }
-        for statement in &mut function.body.statements {
-            if let jett_hir::StatementKind::Assert { condition, .. } = &mut statement.kind {
-                if let jett_hir::ExpressionKind::Binary { right, .. } = &mut condition.kind {
-                    assert_eq!(right.kind, jett_hir::ExpressionKind::Int(3));
-                    right.kind = jett_hir::ExpressionKind::Int(1);
-                    changed += 1;
-                }
-            }
-        }
-    }
-    assert_eq!(changed, 1);
-    lowered.mir = jett_mir::lower(&lowered.hir, &lowered.interner).unwrap();
+    let lowered = lower_file_for_native_property_suite(&source).unwrap();
+    let fault = property_runner::TestFault::IntRight {
+        original: 3,
+        replacement: 1,
+    };
     fs::write(&source, text.replace("<= 3", "<= 1")).unwrap();
     let oracle = crate::test_file(&source).unwrap();
     assert_eq!(oracle.failed, 1);
@@ -37,10 +24,11 @@ fn native_property_shrinking_preserves_generated_generic_interface_owners() {
     fs::remove_file(&source).unwrap();
     let launcher = launcher();
     for optimize in [false, true] {
-        let result = property_runner::run_lowered(
+        let result = property_runner::run_lowered_with_test_fault(
             &source,
             &lowered,
             &launcher,
+            fault,
             NativePropertyOptions {
                 optimize,
                 ..NativePropertyOptions::default()
@@ -71,24 +59,11 @@ fn native_property_shrinking_reports_the_executed_float32_input() {
     let source = directory.path().join("float32-input.jett");
     let text = "namespace app\nproperty domain:\n    given number: float32\n    assert number <= 4.0 \"float32 sentinel\"\n";
     fs::write(&source, text).unwrap();
-    let mut lowered = lower_file_for_native_property_suite(&source).unwrap();
-    let mut changed = 0;
-    for function in &mut lowered.hir.functions {
-        if function.identity.declaration.kind != jett_hir::DeclarationKind::Property {
-            continue;
-        }
-        for statement in &mut function.body.statements {
-            if let jett_hir::StatementKind::Assert { condition, .. } = &mut statement.kind {
-                if let jett_hir::ExpressionKind::Binary { right, .. } = &mut condition.kind {
-                    assert_eq!(right.kind, jett_hir::ExpressionKind::Float(4.0));
-                    right.kind = jett_hir::ExpressionKind::Float(3.0);
-                    changed += 1;
-                }
-            }
-        }
-    }
-    assert_eq!(changed, 1);
-    lowered.mir = jett_mir::lower(&lowered.hir, &lowered.interner).unwrap();
+    let lowered = lower_file_for_native_property_suite(&source).unwrap();
+    let fault = property_runner::TestFault::FloatRight {
+        original: 4.0,
+        replacement: 3.0,
+    };
     fs::write(&source, text.replace("<= 4.0", "<= 3.0")).unwrap();
     let oracle = crate::test_file(&source).unwrap();
     assert_eq!(oracle.failed, 1);
@@ -101,10 +76,11 @@ fn native_property_shrinking_reports_the_executed_float32_input() {
     fs::remove_file(&source).unwrap();
     let launcher = launcher();
     for optimize in [false, true] {
-        let result = property_runner::run_lowered(
+        let result = property_runner::run_lowered_with_test_fault(
             &source,
             &lowered,
             &launcher,
+            fault,
             NativePropertyOptions {
                 optimize,
                 ..NativePropertyOptions::default()
@@ -154,22 +130,11 @@ property refined:
     assert true "property sentinel"
 "#;
     fs::write(&source, text).unwrap();
-    let mut lowered = lower_file_for_native_property_suite(&source).unwrap();
-    let mut changed = 0;
-    for function in &mut lowered.hir.functions {
-        if function.identity.declaration.kind != jett_hir::DeclarationKind::Property {
-            continue;
-        }
-        for statement in &mut function.body.statements {
-            if let jett_hir::StatementKind::Assert { condition, .. } = &mut statement.kind {
-                assert_eq!(condition.kind, jett_hir::ExpressionKind::Bool(true));
-                condition.kind = jett_hir::ExpressionKind::Bool(false);
-                changed += 1;
-            }
-        }
-    }
-    assert_eq!(changed, 1);
-    lowered.mir = jett_mir::lower(&lowered.hir, &lowered.interner).unwrap();
+    let lowered = lower_file_for_native_property_suite(&source).unwrap();
+    let fault = property_runner::TestFault::BoolAssertion {
+        original: true,
+        replacement: false,
+    };
     fs::write(&source, text.replace("assert true", "assert false")).unwrap();
     let oracle = crate::test_file(&source).unwrap();
     assert_eq!(oracle.failed, 1);
@@ -180,10 +145,11 @@ property refined:
     fs::remove_file(&source).unwrap();
     let launcher = launcher();
     for optimize in [false, true] {
-        let result = property_runner::run_lowered(
+        let result = property_runner::run_lowered_with_test_fault(
             &source,
             &lowered,
             &launcher,
+            fault,
             NativePropertyOptions {
                 optimize,
                 ..NativePropertyOptions::default()
@@ -224,24 +190,11 @@ property boundary:
     assert number >= minimum "minimum sentinel"
 "#;
     fs::write(&source, text).unwrap();
-    let mut lowered = lower_file_for_native_property_suite(&source).unwrap();
-    let mut changed = 0;
-    for function in &mut lowered.hir.functions {
-        if function.identity.declaration.kind != jett_hir::DeclarationKind::Property {
-            continue;
-        }
-        for statement in &mut function.body.statements {
-            if let jett_hir::StatementKind::Assert { condition, .. } = &mut statement.kind {
-                if let jett_hir::ExpressionKind::Binary { op, .. } = &mut condition.kind {
-                    assert_eq!(*op, jett_hir::BinaryOp::GreaterEqual);
-                    *op = jett_hir::BinaryOp::NotEqual;
-                    changed += 1;
-                }
-            }
-        }
-    }
-    assert_eq!(changed, 1);
-    lowered.mir = jett_mir::lower(&lowered.hir, &lowered.interner).unwrap();
+    let lowered = lower_file_for_native_property_suite(&source).unwrap();
+    let fault = property_runner::TestFault::Compare {
+        original: jett_hir::BinaryOp::GreaterEqual,
+        replacement: jett_hir::BinaryOp::NotEqual,
+    };
     fs::write(&source, text.replace(">= minimum", "!= minimum")).unwrap();
     let oracle = crate::test_file(&source).unwrap();
     assert_eq!(oracle.failed, 1);
@@ -252,10 +205,11 @@ property boundary:
     fs::remove_file(&source).unwrap();
     let launcher = launcher();
     for optimize in [false, true] {
-        let result = property_runner::run_lowered(
+        let result = property_runner::run_lowered_with_test_fault(
             &source,
             &lowered,
             &launcher,
+            fault,
             NativePropertyOptions {
                 optimize,
                 ..NativePropertyOptions::default()
@@ -287,7 +241,7 @@ fn native_property_runner_shrinks_native_failures_from_the_checked_session() {
     let source = directory.path().join("shrink.jett");
     let text = "namespace app\nproperty first:\n    given value: int8\n    assert value == value\nproperty target:\n    given number: int8\n    given items: list[string]\n    assert number <= 127 \"backend sentinel\"\n";
     fs::write(&source, text).unwrap();
-    let mut lowered = lower_file_for_native_property_suite(&source).unwrap();
+    let lowered = lower_file_for_native_property_suite(&source).unwrap();
     let launcher = launcher();
     let success =
         run_host_property_suite(&source, &launcher, NativePropertyOptions::default()).unwrap();
@@ -295,26 +249,12 @@ fn native_property_runner_shrinks_native_failures_from_the_checked_session() {
     assert_eq!(success.trials, 200);
     assert!(success.stdout.is_empty() && success.stderr.is_empty());
 
-    // Keep frontend validation mandatory, then inject a backend-only failure
-    // into the retained checked HIR. All later executions are native.
-    let mut changed = 0;
-    for function in &mut lowered.hir.functions {
-        if function.identity.declaration.kind != jett_hir::DeclarationKind::Property {
-            continue;
-        }
-        for statement in &mut function.body.statements {
-            if let jett_hir::StatementKind::Assert { condition, .. } = &mut statement.kind {
-                if let jett_hir::ExpressionKind::Binary { right, .. } = &mut condition.kind {
-                    if right.kind == jett_hir::ExpressionKind::Int(127) {
-                        right.kind = jett_hir::ExpressionKind::Int(2);
-                        changed += 1;
-                    }
-                }
-            }
-        }
-    }
-    assert_eq!(changed, 1);
-    lowered.mir = jett_mir::lower(&lowered.hir, &lowered.interner).unwrap();
+    // Frontend/HIR validation stays mandatory. Inject the same typed MIR
+    // backend fault in the initial attempt and each native replay.
+    let fault = property_runner::TestFault::IntRight {
+        original: 127,
+        replacement: 2,
+    };
 
     // The source oracle must reject the corresponding failing property, while
     // a retained native session can replay even after its source is removed.
@@ -328,10 +268,11 @@ fn native_property_runner_shrinks_native_failures_from_the_checked_session() {
     ));
     fs::remove_file(&source).unwrap();
     for optimize in [false, true] {
-        let result = property_runner::run_lowered(
+        let result = property_runner::run_lowered_with_test_fault(
             &source,
             &lowered,
             &launcher,
+            fault,
             NativePropertyOptions {
                 optimize,
                 ..NativePropertyOptions::default()
@@ -363,7 +304,11 @@ fn native_property_runner_shrinks_native_failures_from_the_checked_session() {
 fn native_property_runner_does_not_shrink_timeouts_or_unreproducible_failures() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("replay.jett");
-    fs::write(&source, "property stable:\n    assert true\n").unwrap();
+    fs::write(
+        &source,
+        "property stable:\n    if true:\n        assert true\n",
+    )
+    .unwrap();
     let launcher = launcher();
     let mut lowered = lower_file_for_native_property_suite(&source).unwrap();
     // A fault present only in the initial MIR cannot be reproduced by checked
@@ -408,38 +353,14 @@ fn native_property_runner_does_not_shrink_timeouts_or_unreproducible_failures() 
             .contains("runtime error: property 'stable' trial 1: assertion failed")
     );
 
-    let property = lowered
-        .hir
-        .functions
-        .iter_mut()
-        .find(|function| {
-            function.identity.declaration.kind == jett_hir::DeclarationKind::Property
-                && !function
-                    .identity
-                    .declaration
-                    .name
-                    .starts_with("__native_property_suite:")
-        })
-        .unwrap();
-    property.body.statements.push(jett_hir::Statement {
-        kind: jett_hir::StatementKind::While {
-            condition: jett_hir::Expression {
-                kind: jett_hir::ExpressionKind::Bool(true),
-                ty: jett_types::TypeInterner::BOOL,
-                span: property.span,
-            },
-            body: jett_hir::Block {
-                statements: Vec::new(),
-                span: property.span,
-            },
-        },
-        span: property.span,
-    });
+    // Restore canonical initial MIR after the unreproducible-only fault.
+    // The separate test fault loops each fresh MIR attempt without editing HIR.
     lowered.mir = jett_mir::lower(&lowered.hir, &lowered.interner).unwrap();
-    let error = property_runner::run_lowered(
+    let error = property_runner::run_lowered_with_test_fault(
         &source,
         &lowered,
         &launcher,
+        property_runner::TestFault::Loop,
         NativePropertyOptions {
             attempt_timeout: Duration::from_millis(25),
             ..NativePropertyOptions::default()
@@ -459,6 +380,9 @@ fn launcher() -> NativeLauncherBundle {
     let executable = std::env::current_exe().unwrap();
     let profile_directory = executable.parent().unwrap().parent().unwrap();
     let profile = profile_directory.file_name().unwrap().to_str().unwrap();
+    if let Some(bundle) = supplied_launcher(profile != "debug") {
+        return bundle;
+    }
     let target = profile_directory
         .parent()
         .unwrap()
@@ -582,6 +506,75 @@ property target:
             } else {
                 "runtime error: after suite\n"
             }
+        );
+    }
+}
+
+fn selected_launcher_manifest(
+    debug: Option<std::ffi::OsString>,
+    release: Option<std::ffi::OsString>,
+    use_release: bool,
+) -> Result<Option<PathBuf>, String> {
+    match (debug,release) {
+        (None,None)=>Ok(None),
+        (Some(debug),Some(release))=>{
+            if debug.is_empty() || release.is_empty() { return Err("supplied native test manifests must be nonempty".into()); }
+            let debug=PathBuf::from(debug);let release=PathBuf::from(release);
+            if !debug.is_absolute() || !release.is_absolute() { return Err("supplied native test manifests must be absolute".into()); }
+            Ok(Some(if use_release { release } else { debug }))
+        }
+        _=>Err("JETT_NATIVE_TEST_DEBUG_BUNDLE_MANIFEST and JETT_NATIVE_TEST_RELEASE_BUNDLE_MANIFEST must be supplied together".into()),
+    }
+}
+pub(super) fn supplied_launcher(use_release: bool) -> Option<NativeLauncherBundle> {
+    let path = selected_launcher_manifest(
+        std::env::var_os("JETT_NATIVE_TEST_DEBUG_BUNDLE_MANIFEST"),
+        std::env::var_os("JETT_NATIVE_TEST_RELEASE_BUNDLE_MANIFEST"),
+        use_release,
+    )
+    .expect("explicit native Property test launcher selection")?;
+    Some(
+        NativeLauncherBundle::from_manifest(&path, use_release)
+            .expect("supplied normal native Property test bundle"),
+    )
+}
+#[test]
+fn native_property_launcher_requires_a_complete_absolute_manifest_pair() {
+    assert_eq!(selected_launcher_manifest(None, None, false).unwrap(), None);
+    assert!(selected_launcher_manifest(Some("debug.json".into()), None, false).is_err());
+    assert!(selected_launcher_manifest(None, Some("release.json".into()), true).is_err());
+    assert!(
+        selected_launcher_manifest(
+            Some("debug.json".into()),
+            Some("release.json".into()),
+            false
+        )
+        .is_err()
+    );
+    assert!(
+        selected_launcher_manifest(
+            Some(std::ffi::OsString::new()),
+            Some("release.json".into()),
+            false
+        )
+        .is_err()
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let debug = directory.path().join("debug.json");
+    let release = directory.path().join("release.json");
+    for use_release in [false, true] {
+        assert_eq!(
+            selected_launcher_manifest(
+                Some(debug.clone().into_os_string()),
+                Some(release.clone().into_os_string()),
+                use_release
+            )
+            .unwrap(),
+            Some(if use_release {
+                release.clone()
+            } else {
+                debug.clone()
+            })
         );
     }
 }

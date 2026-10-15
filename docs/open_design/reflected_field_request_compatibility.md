@@ -139,9 +139,47 @@ proof. Ordinary required constants and refinements retain their original
 checking and materialization path; ancestor return transport uses the already
 proved type relation without a new pending inspection or predicate.
 
-This is target-only acceptance of the exact saved candidate. Managed
-integration, broad workspace and successor CI checks remain pending. New
-nominal/secret proof establishment, protected secret observation, generic and
-other reflected forms, and authenticated generated verify/property-suite
-transitions remain full-goal obligations. No Source exclusion, fixture
-denominator change or broad language-completion claim follows from this gate.
+Those isolated results retain their original candidate and scope. The later
+managed eighteen-Source callback integration is recorded in the
+[native coverage plan](../active/native_codegen_parity_plan.md#selected-lazy-reflected-callable-return-validation).
+The generated-suite implementation below has separate bounded local acceptance;
+its focused/replay and coherent-revision gates are not yet complete. New
+nominal/secret proof establishment, protected secret observation,
+generic and other reflected forms remain full-goal obligations. No Source
+exclusion, fixture denominator change or broad completion claim follows.
+
+### Generated callback-suite proof continuity
+
+Checked Verify and Property execution now retain the original test-body owner
+when constructing a closure witness. The owner is joined to the same retained
+checked program, original block and namespace; active capture ownership and
+Property purpose restore on both ordinary errors and panic. Public test-file
+execution installs that same checked program instead of a metadata-only
+projection.
+
+The HIR observation proof separately joins an immutable owned CallbackHolder
+constructor or alias to its exact original binding, callable producer, captures
+and reflected read. Matching types, spans or an edited public body cannot mint
+that association. Existing full Source, current-body and CFG seals remain
+mandatory; this proof grants no runtime Resource or Scope authority.
+
+The ordinary reflected-callable Property path now uses an opaque checked-case
+plan from the original successful evaluator/cache snapshot. Its canonical HIR
+factory builds the ordered 100-trial wrapper and records the exact protected
+transition. Replay reconstructs from the private pre-suite graph, checks the
+retained plan and original trial identities, and validates changed shrink inputs.
+It cannot renew proof around a caller-appended or edited wrapper. Exact sampled
+inputs use full typed snapshots rather than ordinary Value equality. Verify's
+existing canonical factory remains unchanged.
+
+These are implementation and authentication changes under the existing lazy
+return-validation contract, not new reflected request admission. Original
+Sources19/20 and their permanent oracles remain exact. All three controls pass:
+both reference reports record 100 Property trials, six standalone objects emit,
+and six separately emitted Source-deleted objects pass twelve normal MSVC
+Debug/Release launches. The [bounded audit](../active/native_acceptance_audit.md#generated-reflected-callback-suites-bounded-msvc-acceptance)
+records exact current compiler/Source and reused-archive guards. No ordinary
+context-retirement observation is available. Both six-test Comptime/HIR groups,
+all eight native Property controls and all 1,664 affected compiler-library tests
+pass. Full workspace/platform acceptance remains pending. The rough 87% estimate
+and fixed 207/182 inventory do not advance.

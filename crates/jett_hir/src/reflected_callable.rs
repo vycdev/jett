@@ -115,6 +115,32 @@ impl ReflectedCallablePlan {
         self.data.seal.is_some()
     }
 
+    /// Readonly join for original checked test observations. The full current
+    /// getter/source graph is validated separately by validate_program.
+    pub(crate) fn authenticates_observation_read(
+        &self,
+        checked: &Arc<jett_typecheck::CheckedResourceProgram>,
+        span: Span,
+        context: jett_typecheck::CheckedOwnershipContext,
+    ) -> bool {
+        Arc::ptr_eq(&self.data.checked, checked)
+            && self.data.span == span
+            && self.validate_original()
+            && !self.data.materialized
+            && self.data.context.as_ref().is_some_and(|owner| {
+                matches!(
+                    (context, owner.declaration.kind),
+                    (
+                        jett_typecheck::CheckedOwnershipContext::Verify,
+                        DeclarationKind::Verify
+                    ) | (
+                        jett_typecheck::CheckedOwnershipContext::Property,
+                        DeclarationKind::Property
+                    )
+                )
+            })
+    }
+
     pub(crate) fn resolve_return(&mut self, functions: &[Function]) -> Result<(), String> {
         if self.data.materialized && self.data.function.is_none() {
             let returned = returned_plan(

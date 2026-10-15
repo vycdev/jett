@@ -55,9 +55,57 @@ pub struct ExplicitComptimeValues {
     // Private associations, never minted by a public span/context insertion.
     actor_graphs: HashMap<(Span, ComptimeContext), Arc<ActorGraphTemplate>>,
     checked_actor_graphs: HashMap<CheckedAttemptKey, Arc<ActorGraphTemplate>>,
+    // Only an authentic, fully successful evaluator installs this immutable view.
+    successful: Option<Arc<SuccessfulCache>>,
+}
+
+#[derive(Debug)]
+struct SuccessfulCache {
+    program: Arc<jett_typecheck::CheckedResourceProgram>,
+    values: HashMap<(Span, ComptimeContext), Value>,
+    constants: HashMap<Span, Value>,
+    checked_values: HashMap<CheckedAttemptKey, Value>,
+    actor_graphs: HashMap<(Span, ComptimeContext), Arc<ActorGraphTemplate>>,
+    checked_actor_graphs: HashMap<CheckedAttemptKey, Arc<ActorGraphTemplate>>,
 }
 
 impl ExplicitComptimeValues {
+    /// Readonly identity of the successful private cache, including empty success.
+    pub fn same_checked_cache(&self, other: &Self) -> bool {
+        matches!((&self.successful, &other.successful), (Some(left), Some(right)) if Arc::ptr_eq(left, right))
+    }
+
+    fn seal_success(&mut self, program: Arc<jett_typecheck::CheckedResourceProgram>) {
+        self.successful = Some(Arc::new(SuccessfulCache {
+            program,
+            values: self.values.clone(),
+            constants: self.constants.clone(),
+            checked_values: self.checked_values.clone(),
+            actor_graphs: self.actor_graphs.clone(),
+            checked_actor_graphs: self.checked_actor_graphs.clone(),
+        }));
+    }
+
+    /// A private worker reads the frozen successful maps, never public mirrors.
+    pub(crate) fn successful_checked_view(
+        &self,
+        program: &Arc<jett_typecheck::CheckedResourceProgram>,
+    ) -> Result<Self, String> {
+        let snapshot = self
+            .successful
+            .as_ref()
+            .filter(|snapshot| Arc::ptr_eq(&snapshot.program, program))
+            .ok_or("checked property cases require the original successful required-value cache")?;
+        Ok(Self {
+            values: snapshot.values.clone(),
+            constants: snapshot.constants.clone(),
+            checked_values: snapshot.checked_values.clone(),
+            actor_graphs: snapshot.actor_graphs.clone(),
+            checked_actor_graphs: snapshot.checked_actor_graphs.clone(),
+            successful: Some(snapshot.clone()),
+        })
+    }
+
     pub fn has_actor_graphs(&self) -> bool {
         !self.checked_actor_graphs.is_empty()
     }
@@ -219,6 +267,17 @@ pub fn evaluate_explicit_comptime_expressions_capture(
     checked_expression_types: Arc<CheckedExpressionTypes>,
     breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
 ) -> ExplicitComptimeEvaluation {
+    // This is an optional stamp, not a stronger rejection policy for old callers.
+    let authenticated = checked_expression_types
+        .resource_program
+        .as_ref()
+        .filter(|program| {
+            std::ptr::eq(module, program.module())
+                && Arc::ptr_eq(&reflection_metadata, &program.checked().reflection_metadata)
+                && breakpoint_exclusions.as_ref() == &program.checked().breakpoint_exclusions
+                && checked_expression_types.matches_original_program(program)
+        })
+        .cloned();
     let mut expressions = Vec::new();
     collect_module_expressions(module, &mut expressions);
     let span = expressions
@@ -234,11 +293,15 @@ pub fn evaluate_explicit_comptime_expressions_capture(
             })
         });
     let Some(span) = span else {
-        return ExplicitComptimeEvaluation::default();
+        let mut captured = ExplicitComptimeEvaluation::default();
+        if let Some(program) = authenticated {
+            captured.values.seal_success(program);
+        }
+        return captured;
     };
     // Compiler callers may have a smaller stack than reference execution.
     // Keep required comptime evaluation on the same fixed interpreter budget.
-    std::thread::scope(|scope| {
+    let mut captured = std::thread::scope(|scope| {
         match std::thread::Builder::new()
             .name("jett-comptime".into())
             .stack_size(crate::INTERPRETER_STACK_SIZE)
@@ -264,7 +327,13 @@ pub fn evaluate_explicit_comptime_expressions_capture(
                 ..ExplicitComptimeEvaluation::default()
             },
         }
-    })
+    });
+    if captured.diagnostics.is_empty() {
+        if let Some(program) = authenticated {
+            captured.values.seal_success(program);
+        }
+    }
+    captured
 }
 
 fn evaluate_collected_expressions(

@@ -116,6 +116,31 @@ pub struct ObservationProof {
     actual_type: TypeId,
     captures: Vec<(LocalId, TypeId)>,
     descriptor_checked: bool,
+    purpose: Option<crate::call_observation::PurposeProof>,
+}
+
+impl ObservationProof {
+    pub(super) fn purpose(
+        actual_type: TypeId,
+        captures: Vec<(LocalId, TypeId)>,
+        purpose: crate::call_observation::PurposeProof,
+    ) -> Self {
+        Self {
+            actual_type,
+            captures,
+            descriptor_checked: false,
+            purpose: Some(purpose),
+        }
+    }
+
+    pub(super) fn captures(&self) -> &[(LocalId, TypeId)] {
+        &self.captures
+    }
+
+    #[cfg(test)]
+    pub(super) fn purpose_proof(&self) -> Option<&crate::call_observation::PurposeProof> {
+        self.purpose.as_ref()
+    }
 }
 
 impl ArgumentOwnership {
@@ -1533,6 +1558,9 @@ impl CallOwnership {
                     }
                     if let Some(proof) = argument.observation_proof() {
                         visit(proof.actual_type);
+                        if let Some(purpose) = &proof.purpose {
+                            purpose.metadata_types(&mut visit);
+                        }
                         for &(_, ty) in &proof.captures {
                             visit(ty);
                         }
@@ -1793,6 +1821,9 @@ impl CallOwnership {
                         visit(root.local);
                     }
                     if let Some(proof) = argument.observation_proof() {
+                        if let Some(purpose) = &proof.purpose {
+                            purpose.metadata_locals(&mut visit);
+                        }
                         for &(capture, _) in &proof.captures {
                             visit(capture);
                         }
@@ -1857,6 +1888,9 @@ impl CallOwnership {
                         root.local = map(root.local)?;
                     }
                     if let Some(proof) = &mut argument.witness.observation {
+                        if let Some(purpose) = &mut proof.purpose {
+                            purpose.remap_locals(&mut map)?;
+                        }
                         for (capture, _) in &mut proof.captures {
                             *capture = map(*capture)?;
                         }
@@ -2403,13 +2437,14 @@ pub fn validate_operand_ownership(
                     let proof = argument
                         .observation_proof()
                         .ok_or("observing call has no checked data acquisition proof")?;
-                    if proof.actual_type != argument.actual_type
-                        || !(observation_data_type(types, proof.actual_type)
-                            || (proof.descriptor_checked
-                                && matches!(
-                                    types.resolve(proof.actual_type),
-                                    Type::Function { .. }
-                                )))
+                    if proof.actual_type != argument.actual_type {
+                        return Err("observing call acquisition has another original type".into());
+                    }
+                    if let Some(purpose) = &proof.purpose {
+                        purpose.validate(argument, source, types, &local)?;
+                    } else if !(observation_data_type(types, proof.actual_type)
+                        || (proof.descriptor_checked
+                            && matches!(types.resolve(proof.actual_type), Type::Function { .. })))
                     {
                         return Err(
                             "observing call acquisition contains unsupported authority".into()
@@ -3266,7 +3301,21 @@ impl crate::BodyLowerer<'_, '_> {
             }
             let origin = self.checked_caller_origin(&fact.origin)?;
             let observation = if fact.effect == CheckedCallerEffect::ObserveData {
-                Some(self.observation_proof(&args[parameter_index], fact.actual_type)?)
+                Some(
+                    match self.observation_proof(&args[parameter_index], fact.actual_type) {
+                        Ok(proof) => proof,
+                        Err(original) => crate::call_observation::construct(
+                            self,
+                            span,
+                            parameter_index,
+                            fact.source_span,
+                            &origin,
+                            &args[parameter_index],
+                            fact.actual_type,
+                        )?
+                        .ok_or(original)?,
+                    },
+                )
             } else {
                 None
             };
@@ -3682,7 +3731,7 @@ impl crate::BodyLowerer<'_, '_> {
         Some(())
     }
 
-    fn observation_proof(
+    pub(super) fn observation_proof(
         &self,
         expression: &Expression,
         actual_type: TypeId,
@@ -3697,6 +3746,7 @@ impl crate::BodyLowerer<'_, '_> {
                 actual_type,
                 captures: Vec::new(),
                 descriptor_checked: false,
+                purpose: None,
             });
         }
         if !valid_type(types, actual_type)
@@ -3745,6 +3795,7 @@ impl crate::BodyLowerer<'_, '_> {
             actual_type,
             captures,
             descriptor_checked: true,
+            purpose: None,
         })
     }
 }
@@ -3934,6 +3985,12 @@ pub fn validate_hir_invocation(
     match ownership {
         CallOwnership::Source(source) => {
             for (index, argument) in source.arguments.iter().enumerate() {
+                if let Some(purpose) = argument
+                    .observation_proof()
+                    .and_then(|proof| proof.purpose.as_ref())
+                {
+                    purpose.validate_read(expression)?;
+                }
                 if argument
                     .retained_snapshot_span()
                     .is_some_and(|span| span != args[index].span)
