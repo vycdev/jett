@@ -550,6 +550,16 @@ run_pass_fixture!(
     run_pass_explicit_struct_equality,
     "explicit_struct_equality.jett"
 );
+#[test]
+fn interface_explicit_comparisons_preserve_concrete_and_domain_contracts() {
+    let path = fixture_path("native", "interface_explicit_comparison.jett");
+    let output = run_file_capture_output(&path).expect("explicit comparison reference");
+    assert_eq!(output.stdout, "true false\ntrue true\n7 7 8\n");
+    assert!(output.debug_events.is_empty());
+    let tested = test_file(&path).expect("explicit comparison verify block");
+    assert_eq!((tested.total, tested.passed, tested.failed), (1, 1, 0));
+}
+
 run_pass_fixture!(
     run_pass_primitive_collection_hash_types,
     "primitive_collection_hash_types.jett"
@@ -2243,6 +2253,19 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_direct_collection_equality_comptime,
     "direct_collection_equality_comptime.jett"
+);
+compile_fail_fixture!(compile_fail_interface_equality, "interface_equality.jett");
+compile_fail_fixture!(
+    compile_fail_interface_equality_generic,
+    "interface_equality_generic.jett"
+);
+compile_fail_fixture!(
+    compile_fail_interface_equality_comptime,
+    "interface_equality_comptime.jett"
+);
+compile_fail_fixture!(
+    compile_fail_interface_equality_enum_payload,
+    "interface_equality_enum_payload.jett"
 );
 compile_fail_fixture!(
     compile_fail_enum_struct_equality_requires_equatable,

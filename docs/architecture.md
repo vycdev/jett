@@ -605,6 +605,15 @@ Bottom-up type checking of every expression:
   type. Concrete generic bodies and explicit comptime expressions use the same
   check before evaluation or lowering. Enum payload comparison retains its
   separate aggregate path.
+- **Erased interface equality:** `==` and `!=` on interface-typed values
+  report E0376 before evaluation or lowering, including `Equatable`, transparent
+  aliases, nested refinement/secret wrappers, concrete generic bodies and inline
+  functions. The enum equality traversal rejects interface leaves through its
+  recursive aggregate graph, while stopping at an explicit user-struct equality
+  method. A struct method may intentionally ignore an interface-valued field.
+  Existing direct collection diagnostics, concrete equality dispatch and actor
+  identity are unchanged. Explicit domain comparison calls use ordinary method
+  dispatch, ownership and secrecy checks; no dynamic equality vtable is added.
 - **Primitive collection hashing boundary:** Type formation for `map[K, V]`
   and `set[T]` accepts signed/unsigned integers, `string`, `bool`, and
   refinements backed by those types. Other types report E0359 before
@@ -3726,8 +3735,10 @@ preserves left-to-right short-circuit evaluation and rejects malformed cycles
 without imposing a fixed nesting cutoff on finite values. Equal handles do not
 bypass payload comparison: a nested NaN still compares unequal. Comparison
 against a known unit variant checks only the variant tag. User-struct payloads
-invoke their exact explicit `Equatable.equals` implementation. Actor and
-erased-interface equality policies remain separate open design decisions.
+invoke their exact explicit `Equatable.equals` implementation. Erased-interface
+leaves are rejected by the frontend before this comparison path. Concrete actor
+identity retains its separate checked contract; neither rule creates a dynamic
+equality operation for erased payloads.
 
 Internal native `nothing` parameters, returns, locals, and aggregate payloads
 carry an unowned u64 pending depth. Sequential `run` increments that depth and

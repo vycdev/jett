@@ -300,7 +300,10 @@ impl TypeChecker<'_> {
         let Some(&interface) = self.named_types.get("Equatable") else {
             return;
         };
-        for owner in self.aggregate_equality_structs(owner) {
+        for owner in self.aggregate_equality_owners(owner) {
+            if !matches!(self.interner.resolve(owner), Type::Struct(_)) {
+                continue;
+            }
             if let Some(&index) =
                 self.interface_method_definitions
                     .get(&(interface, owner, "equals".to_string()))

@@ -1,0 +1,22 @@
+# ERROR: E0376 x7
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+type Alias = Named
+type Selected = Alias where true
+type Again = Selected where true
+type Hidden = secret[Named] where true
+function equal(view left: Named, view right: Named) returns bool:
+    return left == right
+function unequal(view left: Named, view right: Named) returns bool:
+    return left != right
+function aliased(view left: Alias, view right: Alias) returns bool:
+    return left == right
+function refined(view left: Again, view right: Again) returns bool:
+    return left != right
+function hidden(view left: secret[Named], view right: secret[Named]) returns secret[bool]:
+    return left == right
+function refined_hidden(view left: Hidden, view right: Hidden) returns secret[bool]:
+    return left != right
+function erased_equatable(view left: Equatable, view right: Equatable) returns bool:
+    return left == right

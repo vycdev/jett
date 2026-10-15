@@ -60,6 +60,9 @@ mod equality_results;
 #[path = "native_conformance/actor_identity.rs"]
 mod actor_identity;
 
+#[path = "native_conformance/interface_equality.rs"]
+mod interface_equality;
+
 #[path = "native_conformance/secret_struct_constructors.rs"]
 mod secret_struct_constructors;
 

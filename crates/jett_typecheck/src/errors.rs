@@ -976,6 +976,17 @@ pub fn direct_collection_equality(type_name: &str, op: &str, span: Span) -> Diag
     )
 }
 
+/// E0376: Erasing a concrete type does not provide a dynamic equality contract.
+pub fn erased_interface_equality(type_name: &str, op: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        376,
+        format!(
+            "operator `{op}` is not defined for interface-typed values of `{type_name}`; compare before erasure or call an explicit comparison method"
+        ),
+        span,
+    )
+}
+
 /// E0377: Namespace-level declarations cannot introduce mutable global state.
 pub fn mutable_global(name: &str, span: Span) -> Diagnostic {
     Diagnostic::error(

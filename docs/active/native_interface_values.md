@@ -78,8 +78,9 @@ not introduce structural equality or change the printed struct name.
 
 This does **not** close the full interface gate. Still required:
 
-- Resolve equality of erased interface values; the checker accepts it without
-  a uniform runtime contract. See
+- Verify the selected rejection of equality operators on erased interface
+  values and the retained explicit domain-comparison path in coherent-revision
+  native gates. See
   [interface value equality](../open_design/interface_value_equality.md).
 - Resolve erased calls whose non-receiver arguments require the implementation's
   concrete owner. See

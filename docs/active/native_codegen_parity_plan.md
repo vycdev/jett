@@ -337,7 +337,9 @@ Full coherent native, GNU, installed and exact-revision CI acceptance remain pen
 refinement and pending native Source combinations still need coverage. This
 change preserves the checker's whole-parameter substitution: declared erased
 children such as `list[Pairable]` retain their contract, and recursive Self
-substitution is not introduced. Erased-interface equality remains unresolved.
+substitution is not introduced. The separate erased-interface equality contract
+rejects implicit operators at compile time and retains explicit domain comparison
+calls; see [the decision](../open_design/interface_value_equality.md).
 These bounded gates do not change the rough 87% planning estimate, fixed
 207-fixture/182-object inventory or whole-language completion requirement.
 

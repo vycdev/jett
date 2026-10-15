@@ -56,7 +56,7 @@ separate from parity for existing accepted behavior.
 The following semantic and implementation gaps prevent a full parity claim:
 
 - [Comptime actor graph materialization](native_comptime_actor_graph.md) implements the selected frozen-graph contract. Current bounded MSVC acceptance passes 32 Source-deleted executions; wider admitted compositions and coherent-revision release gates remain required. Actor closure capture remains rejected with E0402.
-- [Erased interface equality](../open_design/interface_value_equality.md): explicit comparison versus a defined dynamic equality contract.
+- [Erased interface equality](../open_design/interface_value_equality.md): the selected contract rejects implicit equality after erasure with E0376; concrete equality and explicit domain comparisons remain available. Focused and coherent-revision validation must be recorded before closing this gate.
 - [Secrets hidden in debug print values](../open_design/debug_print_hidden_secrets.md): extend redaction to erased/builder payloads versus reject potentially secret values.
 - [Projected field assignment](../open_design/projected_field_assignment.md):
   implement safe updates to owned mutable locals versus reject projected writes
@@ -90,8 +90,9 @@ Full coherent native conformance, GNU, installed and exact-revision CI acceptanc
 remain pending. Native Source coverage for refinement and pending combinations remains
 incomplete. Checker substitution remains at whole interface parameters;
 `list[Pairable]` retains its declared erased child contract without recursive
-Self substitution. Erased-interface equality remains an independent unresolved
-contract. These bounded gates leave the rough 87% estimate and fixed inventory
+Self substitution. Erased-interface equality is separately rejected by the
+frontend under the selected explicit-comparison contract. These bounded gates
+leave the rough 87% estimate and fixed inventory
 denominators unchanged.
 
 [Actor identity equality](actor_identity_equality.md) implements the selected
@@ -307,8 +308,9 @@ all int64/float64 forms of the overloaded abs/min/max facades, secret taint from
 either argument, generic wrappers, captured public-value callbacks, wholly baked
 results, and comptime-created callbacks invoked at runtime. It verifies concrete
 owner dispatch through interface collections and exact output in debug/release
-after source removal. These probes strengthen the facade/comptime audit without
-settling the separate erased-interface equality contract. Current concrete-owner
+after source removal. These probes strengthen the facade/comptime audit. The
+separate erased-interface equality contract rejects implicit operators at compile
+time and retains explicit domain comparison calls. Current concrete-owner
 preflight acceptance is recorded above.
 
 The refined-sum audit fixes direct optional/result refinement boundaries to

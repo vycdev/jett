@@ -12850,7 +12850,17 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn aggregate_equality_structs(&self, ty: TypeId) -> Vec<TypeId> {
+    fn is_erased_interface_equality_type(&self, mut ty: TypeId) -> bool {
+        loop {
+            match self.interner.resolve(ty) {
+                Type::Secret(inner) | Type::Refinement { base: inner, .. } => ty = *inner,
+                Type::Interface(_) => return true,
+                _ => return false,
+            }
+        }
+    }
+
+    fn aggregate_equality_owners(&self, ty: TypeId) -> Vec<TypeId> {
         let mut pending = vec![ty];
         let mut seen = HashSet::new();
         let mut owners = Vec::new();
@@ -12859,7 +12869,7 @@ impl<'a> TypeChecker<'a> {
                 continue;
             }
             match self.interner.resolve(ty) {
-                Type::Struct(_) => owners.push(ty),
+                Type::Struct(_) | Type::Interface(_) => owners.push(ty),
                 Type::Secret(inner)
                 | Type::Refinement { base: inner, .. }
                 | Type::List(inner)
@@ -13006,6 +13016,14 @@ impl<'a> TypeChecker<'a> {
                     ));
                     return TypeInterner::ERROR;
                 }
+                if self.is_erased_interface_equality_type(lhs_base) {
+                    self.sink.emit(errors::erased_interface_equality(
+                        &self.type_name(lhs_ty),
+                        Self::binop_str(op),
+                        span,
+                    ));
+                    return TypeInterner::ERROR;
+                }
                 if !self.user_struct_has_explicit_equality(lhs_base) {
                     self.sink.emit(errors::equality_requires_equatable(
                         &self.type_name(lhs_base),
@@ -13018,7 +13036,15 @@ impl<'a> TypeChecker<'a> {
                     self.interner.resolve(self.fully_coarsened_type(lhs_base)),
                     Type::Enum(_)
                 ) {
-                    for owner in self.aggregate_equality_structs(lhs_base) {
+                    for owner in self.aggregate_equality_owners(lhs_base) {
+                        if self.is_erased_interface_equality_type(owner) {
+                            self.sink.emit(errors::erased_interface_equality(
+                                &self.type_name(owner),
+                                Self::binop_str(op),
+                                span,
+                            ));
+                            return TypeInterner::ERROR;
+                        }
                         if !self.user_struct_has_explicit_equality(owner) {
                             self.sink.emit(errors::equality_requires_equatable(
                                 &self.type_name(owner),

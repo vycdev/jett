@@ -7626,6 +7626,19 @@ and `result`, including aliases, refinements, and secret wrappers over those
 types. Compare their contents explicitly. This restriction is checked in
 generic instantiations and explicit comptime expressions too; it does not change
 the separate comparisons of collections nested inside enum payloads.
+
+**Interface equality is explicit through domain operations.** `==` and `!=`
+are rejected after values have an interface type, even `Equatable`. This includes
+transparent aliases, refinements and secret wrappers, concrete generic bodies,
+inline functions and explicit comptime expressions. Compare before erasure or
+call an explicit domain comparison function or interface method. Erasure never
+adds a dynamic equality operation or a handle-identity fallback.
+An enum's implicit payload comparison is also rejected if it would reach an
+interface value through nested containers or other aggregate payloads. The check
+stops at an explicit user-struct `Equatable.equals` method, which can choose its
+own fields and ignore interface-valued data. Explicit calls retain the ordinary
+ownership and secrecy rules. See [the interface equality decision](open_design/interface_value_equality.md).
+
 Finite recursive enum payloads use the same comparisons at every depth. A
 fixed backend traversal limit must not reject an otherwise supported comparison.
 Payload comparison retains its short-circuit order, pending-depth distinctions,
@@ -8756,7 +8769,8 @@ or ownership authority. The reference evaluator and native backend implement thi
 contract. Local MSVC Debug/Release gates pass, including optimized production
 matching/mismatched calls after Source deletion. See
 [exact concrete argument verification](active/native_erased_same_owner_arguments.md)
-for measured scope and remaining work; interface equality is separate.
+for measured scope and remaining work. Interface-typed equality operators are
+rejected by the frontend; explicit domain comparison methods remain available.
 
 ### Selected lazy reflected callable return validation
 

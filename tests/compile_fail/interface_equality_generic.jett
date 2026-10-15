@@ -1,0 +1,16 @@
+# ERROR: E0376 x3
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+function equal[T](view left: T, view right: T) returns bool:
+    return left == right
+function unequal[T](view left: T, view right: T) returns bool:
+    return left != right
+function selected(view left: Named, view right: Named) returns bool:
+    bool same = equal[Named](view left, view right)
+    bool different = unequal[Named](view left, view right)
+    return same or different
+function indirect(view left: Named, view right: Named) returns bool:
+    function(view Named, view Named) returns bool compare = function(view first: Named, view second: Named) returns bool:
+        return first == second
+    return compare(view left, view right)
