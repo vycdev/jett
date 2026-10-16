@@ -118,3 +118,59 @@ normal-launcher custody/reentry, wider carriers, same-local sum reseating,
 aggregate/projected/actor-state replacement and complete workspace/inventory/
 installed-host acceptance remain open. Full acceptance remains false; existing
 rough tracking and fixed denominators are unchanged. GitHub CI stays disabled.
+
+## Pure-suite execution and Source17 regression checkpoint
+
+This follow-up closes the earlier pure-suite execution obligation. The preceding
+checkpoint prose and counts retain their original execution scope.
+
+The shared harness passes **two ordinary controls**, with two native selectors
+ignored by that command. The preparation log is
+target/native/pure-replacement-source17-harness-preparation-v1.log, SHA-256
+0dd64dfbd2619ad2142dfe4ec53e17a0eb4cf147a722ca47a66efeacd0f24e44.
+The actual formatted harness is
+3c912d029957d97426822bb1d333d210dca6415e140b61bff77e1bf0e21ba6f0;
+both original Jett fixture byte sequences remain unchanged.
+
+The v4 compiler-only gate is accepted with 1,111 compiler/Source inputs. Its
+40,891,392-byte image is
+3a0275e71bda3f4bb80af2b9584b829b22bd80374b652a9b97f6cd1ff4260173;
+gate acceptance is
+1e082661879eea5ea76ace2690cd9eb9fb49d74f7d246b0803d6b1c56881433b.
+It grants zero Source/host execution credit. The same six measured archives and
+receipt pins above are reused; no archive remeasurement occurred.
+
+The separate unchanged pure-replacement Source 0801c8… accepts **eight native
+processes**, four emitted object groups/four distinct object hashes, and eight
+measured private entries across Verify/Property and Debug/Release with normal/
+private Runtime links. The private Property runs record **400 actual trial
+calls**: two 100-trial entries per profile, with 2,404 history records/profile;
+private Verify records four history records/profile. Private incomplete flags
+and all five separately measured acquisition/dispatch counters are zero, and
+matched private launchers observe same-context reentry. Normal custody/reentry
+telemetry remains null and unmeasured.
+
+All eight children return zero with empty streams. Written Source and object
+are deleted before launch, the checked-program Weak root and required-value
+input Arc are released, and children are reaped with executable/PDB removal.
+These are bounded observations; individual opaque cache/private retainers and
+per-kind physical lifetime remain open. The outer adapter is quiet/reaped with
+its handle closed, lease released and no guard failures. The accepted leaf is
+native-bounded-pure-replacement-suites-execution-v1/execution-acceptance.json,
+SHA-256 4e3fb063933aa117145a4098f979d34024a3c1e01931bcd287339509d0f449d2.
+
+The separate unchanged Source17 c8e748… regression accepts **eight native
+processes**, four object groups/four distinct hashes and eight private entries
+under the same v4 compiler and reused archives. Private Property again records
+400 actual trial calls, with **6,404 history records/profile**; Verify records
+four/profile. Private flags/five counters are zero and matched same-context
+reentry is observed. All child statuses/streams and release/cleanup observations
+match the pure run; normal custody/reentry remains unmeasured. Its accepted leaf
+is native-bounded-source17-execution-v4/execution-acceptance.json, SHA-256
+984da1c565b2f126fda2241de56fb4dabcb98b6e0d6ce177b8ce297c856bbb5a.
+
+These are two separate current suite observations. They do not enlarge or
+relabel the preceding replacement checkpoint’s execution counts. Per-kind
+physical storage, opaque/private retainers and normal-launcher custody/reentry
+remain open. Full acceptance is false, rough tracking is unchanged and GitHub
+CI stays disabled.

@@ -4100,3 +4100,27 @@ historical scope and do not renew current Source17 coverage. Physical/per-kind
 retainer observations, normal custody/reentry, wider replacement/transport and
 full workspace/inventory/installed-host acceptance remain open. Full acceptance
 stays false; rough tracking is unchanged and CI remains disabled.
+
+#### Pure replacement suite execution and current Source17 regression
+
+This follow-up closes the earlier pure-suite execution obligation; previous
+checkpoint counts retain their scope.
+
+Two ordinary preparation controls pass (two native selectors ignored), and the
+v4 compiler-only gate is accepted with 1,111 inputs. The six measured archives
+are reused, not remeasured. Separate pure-suite execution accepts one unchanged
+Source, eight native processes, four emitted object groups/four distinct hashes
+and eight private entries. Private Property records 400 actual trial calls,
+with 2,404 history records/profile; Verify records four/profile. Flags and all
+five measured counters are zero, with matched private same-context reentry.
+Normal custody/reentry remains null and unmeasured. All child statuses are zero,
+streams empty; Source/object deletion, checked-root/input-Arc release and child/
+executable/PDB cleanup are observed. Exact receipts and remaining limits are in
+the [Resource sum note](native_resource_sum_replacement.md). Separate current
+Source17 regression also accepts eight processes/four object groups/eight
+private entries/400 private Property trial calls, with 6,404 Property history
+records/profile and four Verify records/profile. The same v4 gate and reused
+archives bind both runs. These counts remain separate from the earlier
+replacement checkpoint and historical Source17 receipts. Physical/per-kind
+retainers, normal custody/reentry and full acceptance stay open; rough tracking
+and disabled CI are unchanged.

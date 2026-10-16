@@ -1,4 +1,4 @@
-//! Whole unchanged Source17 canonical suites; available observations only.
+//! Whole unchanged Resource canonical suite fixtures; available observations only.
 //! Deliberately does not award full acceptance without missing runtime telemetry.
 use super::*;
 use jett_comptime::verify::collect_checked_property_cases_with_checked_values;
@@ -19,6 +19,91 @@ const UNMEASURED: &[&str] = &[
     "individual private artifact-retainer counts beyond checked-program and caller input-Arc release",
     "normal-launcher custody counts and same-context reentry",
 ];
+
+const PURE_REPLACEMENTS: &str = include_str!(
+    "../../../../jett_codegen_cranelift/src/emit/resource_execution/replacement/pure_replacement_suites.jett"
+);
+const PURE_REPLACEMENTS_SHA256: &str =
+    "0801c8b24add5deb9ea7071f3fc2ca5a4573dbe00a62df38d1a474fadc3774ab";
+
+#[derive(Clone, Copy)]
+enum Fixture {
+    Source17,
+    PureReplacements,
+}
+impl Fixture {
+    fn source(self) -> &'static str {
+        match self {
+            Self::Source17 => SOURCE17,
+            Self::PureReplacements => PURE_REPLACEMENTS,
+        }
+    }
+    fn sha256(self) -> &'static str {
+        match self {
+            Self::Source17 => SOURCE17_SHA256,
+            Self::PureReplacements => PURE_REPLACEMENTS_SHA256,
+        }
+    }
+    fn file_name(self) -> &'static str {
+        match self {
+            Self::Source17 => "source17.jett",
+            Self::PureReplacements => "pure_replacement_suites.jett",
+        }
+    }
+    fn evidence_env(self) -> &'static str {
+        match self {
+            Self::Source17 => EVIDENCE_ENV,
+            Self::PureReplacements => "JETT_PURE_REPLACEMENT_SUITE_EVIDENCE_V1",
+        }
+    }
+    fn evidence_schema(self) -> &'static str {
+        match self {
+            Self::Source17 => "jett-source17-suite-available-observations-v1",
+            Self::PureReplacements => "jett-pure-replacement-suite-available-observations-v1",
+        }
+    }
+    fn property_name(self) -> &'static str {
+        match self {
+            Self::Source17 => "absent_aggregate_property",
+            Self::PureReplacements => "pure_replacements_trials",
+        }
+    }
+    fn given_name(self) -> &'static str {
+        match self {
+            Self::Source17 => "marker",
+            Self::PureReplacements => "input",
+        }
+    }
+    fn main_count(self) -> usize {
+        match self {
+            Self::Source17 => 0,
+            Self::PureReplacements => 1,
+        }
+    }
+    fn retained_functions(self) -> &'static [&'static str] {
+        match self {
+            Self::Source17 => &[
+                "empty_tokens",
+                "absent_tokens",
+                "empty_map",
+                "absent_map",
+                "empty_result_tokens",
+                "failed_result_tokens",
+                "absent_envelope",
+                "absent_box",
+                "empty_choice",
+                "absent_choice",
+                "absent_state",
+                "absent_exact_state",
+                "refined_shape_contract",
+                "absent_required_controls",
+            ],
+            Self::PureReplacements => {
+                &["optional_marker", "string_marker", "integer_marker", "main"]
+            }
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 enum Purpose {
@@ -41,25 +126,37 @@ struct Prepared {
     expected: Json,
 }
 
-fn checked_suites(project: &Path, support: &Path, release: bool) -> Arc<CheckedResourceProgram> {
+fn checked_suites(
+    fixture: Fixture,
+    project: &Path,
+    support: &Path,
+    release: bool,
+) -> Arc<CheckedResourceProgram> {
     let source = fs::read(project).unwrap();
     let support_source = fs::read_to_string(support).unwrap();
     assert_eq!(
         source,
-        SOURCE17.as_bytes(),
-        "whole Source17 without a main wrapper"
+        fixture.source().as_bytes(),
+        "whole unchanged original Source without a main wrapper"
     );
-    assert_eq!(digest(&source), SOURCE17_SHA256);
+    assert_eq!(digest(&source), fixture.sha256());
     assert_eq!(support_source, SUPPORT);
     let primary = FileId::new(0);
     let support_file = FileId::new(10_000);
     let mut parsed = parse(&support_source, support_file);
-    let source = parse(SOURCE17, primary);
+    let source = parse(fixture.source(), primary);
     assert!(parsed.errors.is_empty() && source.errors.is_empty());
-    assert!(
-        !source.module.items.iter().any(|item| {
-            matches!(item, Item::Function(function) if function.name.name == "main")
-        })
+    assert_eq!(
+        source
+            .module
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(item, Item::Function(function) if function.name.name == "main")
+            })
+            .count(),
+        fixture.main_count(),
+        "retain the original Source main without using it as a suite wrapper"
     );
     let resources = parsed
         .module
@@ -101,6 +198,7 @@ fn checked_suites(project: &Path, support: &Path, release: bool) -> Arc<CheckedR
 }
 
 fn expected_contexts(
+    fixture: Fixture,
     program: &jett_hir::Program,
     plan: &jett_hir::CheckedNativePropertyPlan,
 ) -> Json {
@@ -125,9 +223,9 @@ fn expected_contexts(
         .enumerate()
     {
         let one_based = u64::try_from(trial.case().iteration).unwrap() + 1;
-        assert_eq!(trial.name(), "absent_aggregate_property");
+        assert_eq!(trial.name(), fixture.property_name());
         assert_eq!(trial.case().iteration, ordinal);
-        assert_eq!(trial.given_names(), &["marker".to_owned()]);
+        assert_eq!(trial.given_names(), &[fixture.given_name().to_owned()]);
         assert_eq!(
             pair[0],
             Some(jett_hir::NativePropertyCase {
@@ -145,7 +243,7 @@ fn expected_contexts(
             "checked_arguments": format!("{:?}", trial.case().arguments),
             "checked_argument_int64_bits": trial.case().arguments.iter().map(|value| match value {
                 jett_comptime::Value::Int64(value) => *value as u64,
-                _ => panic!("Source17 marker must retain its checked int64 domain"),
+                _ => panic!("checked given value must retain its int64 domain"),
             }).collect::<Vec<_>>(),
             "context_set_bytes_utf8": format!("property '{}' trial {}: ", trial.name(), one_based),
             "context_clear_after_call": true,
@@ -158,8 +256,8 @@ fn expected_contexts(
     })
 }
 
-fn prepare(project: &Path, support: &Path, release: bool) -> Vec<Prepared> {
-    let checked = checked_suites(project, support, release);
+fn prepare(fixture: Fixture, project: &Path, support: &Path, release: bool) -> Vec<Prepared> {
+    let checked = checked_suites(fixture, project, support, release);
     let checked_weak = Arc::downgrade(&checked);
     let evaluation = jett_driver::evaluate_checked_resource_required_values(&checked);
     assert!(
@@ -172,29 +270,44 @@ fn prepare(project: &Path, support: &Path, release: bool) -> Vec<Prepared> {
     let values_weak = Arc::downgrade(&values);
     values.checked_required_values(&checked).unwrap();
     assert!(!values.is_empty());
-    assert!(
-        values
-            .values()
-            .all(|value| matches!(value, jett_comptime::Value::Int64(17)))
-    );
+    match fixture {
+        Fixture::Source17 => assert!(
+            values
+                .values()
+                .all(|value| matches!(value, jett_comptime::Value::Int64(17)))
+        ),
+        Fixture::PureReplacements => {
+            // Same original-span required-value oracle as the existing object test.
+            assert_eq!(values.len(), 6);
+            let mut constants = 0;
+            for item in &checked.module().items {
+                let Item::VarDecl(declaration) = item else {
+                    continue;
+                };
+                if declaration.name.span.file != FileId::new(0) {
+                    continue;
+                }
+                let expected = match declaration.name.name.as_str() {
+                    "baked_optional" => jett_comptime::Value::Int64(7),
+                    "baked_string" => jett_comptime::Value::String("after".into()),
+                    "baked_integer" => jett_comptime::Value::Int64(23),
+                    name => panic!("unexpected original Source constant: {name}"),
+                };
+                let jett_parser::ast::Expr::Comptime(_, span) = &declaration.value else {
+                    panic!("original required initializer");
+                };
+                assert_eq!(
+                    values.get(*span, &jett_comptime::ComptimeContext::default()),
+                    Some(&expected)
+                );
+                constants += 1;
+            }
+            assert_eq!(constants, 3);
+        }
+    }
     let mut hir = jett_hir::lower_checked_resource_program_with_test_bodies(&checked).unwrap();
     jett_driver::bake_checked_resource_values(&mut hir, &checked, &values).unwrap();
-    for name in [
-        "empty_tokens",
-        "absent_tokens",
-        "empty_map",
-        "absent_map",
-        "empty_result_tokens",
-        "failed_result_tokens",
-        "absent_envelope",
-        "absent_box",
-        "empty_choice",
-        "absent_choice",
-        "absent_state",
-        "absent_exact_state",
-        "refined_shape_contract",
-        "absent_required_controls",
-    ] {
+    for &name in fixture.retained_functions() {
         assert!(
             hir.functions.iter().any(|function| {
                 function.identity.declaration.origin == SourceOrigin::Project
@@ -221,7 +334,7 @@ fn prepare(project: &Path, support: &Path, release: bool) -> Vec<Prepared> {
             .unwrap();
     assert!(values.same_checked_cache(cases.required_values()));
     assert_eq!(plan.trials().len(), cases.cases().len());
-    // This Source17 example uses the current checked default; never truncate a plan to 100.
+    // Each unchanged fixture uses the checked default; never truncate a plan to 100.
     assert_eq!(
         plan.trials().len(),
         jett_comptime::verify::PROPERTY_DEFAULT_ITERATIONS
@@ -239,7 +352,7 @@ fn prepare(project: &Path, support: &Path, release: bool) -> Vec<Prepared> {
                 .all(|(left, right)| left.same_checked_snapshot(right))
         );
     }
-    let property_expected = expected_contexts(&hir, &plan);
+    let property_expected = expected_contexts(fixture, &hir, &plan);
     let verify_targets = checked
         .module()
         .items
@@ -264,7 +377,7 @@ fn prepare(project: &Path, support: &Path, release: bool) -> Vec<Prepared> {
         .unwrap();
     assert_eq!(hir.resource_manifest, manifest);
     drop(manifest);
-    assert_eq!(expected_contexts(&hir, &plan), property_expected);
+    assert_eq!(expected_contexts(fixture, &hir, &plan), property_expected);
     for (id, identity, span) in originals {
         let function = &hir.functions[id.index() as usize];
         assert_eq!(function.id, id);
@@ -444,7 +557,7 @@ fn observe_context_history(observed: &report::Report, purpose: Purpose, expected
             .history
             .iter()
             .all(|event| matches!(event.channel, report::Channel::Attempt(_))),
-        "Source17 has no legacy/session context mutations"
+        "these suites have no legacy/session context mutations"
     );
     let mut attempts = Vec::new();
     for (ordinal, (boundary, attempt)) in telemetry
@@ -574,7 +687,7 @@ fn observe_context_history(observed: &report::Report, purpose: Purpose, expected
                         "call": target_call.call, "scope": target_call.scope,
                         "actual_installed_int64_bits": parameters.iter().map(|parameter|
                             match parameter.value { report::ParameterValue::Int64 { bits } => bits,
-                                report::ParameterValue::Unobserved => panic!("Source17 marker is unobserved") }).collect::<Vec<_>>(),
+                                report::ParameterValue::Unobserved => panic!("checked given value is unobserved") }).collect::<Vec<_>>(),
                         "actual_parameter_shapes": parameters.iter().map(|parameter| parameter.shape).collect::<Vec<_>>(),
                         "exact_context_bytes": entered.context,
                         "nested_resource_calls_retained": nested,
@@ -665,16 +778,15 @@ fn observe_private(observed: &report::Report, purpose: Purpose, expected: &Json)
     })
 }
 
-#[test]
-#[ignore = "requires pinned measured normal/private archives; records available observations only"]
-fn source17_whole_canonical_suites_record_available_native_observations() {
+fn run_whole_canonical_suites(fixture: Fixture) {
     assert!(
         cfg!(windows),
         "candidate pins existing measured MSVC archives"
     );
-    assert_eq!(digest(SOURCE17.as_bytes()), SOURCE17_SHA256);
-    let evidence =
-        PathBuf::from(std::env::var_os(EVIDENCE_ENV).expect("fresh absolute evidence directory"));
+    assert_eq!(digest(fixture.source().as_bytes()), fixture.sha256());
+    let evidence = PathBuf::from(
+        std::env::var_os(fixture.evidence_env()).expect("fresh absolute evidence directory"),
+    );
     assert!(evidence.is_absolute());
     fs::create_dir(&evidence).expect("evidence directory must not already exist");
     let directory = tempfile::tempdir().unwrap();
@@ -682,13 +794,13 @@ fn source17_whole_canonical_suites_record_available_native_observations() {
     let support_dir = directory.path().join("synthetic-stdlib");
     fs::create_dir(&project_dir).unwrap();
     fs::create_dir(&support_dir).unwrap();
-    let project = project_dir.join("source17.jett");
+    let project = project_dir.join(fixture.file_name());
     let support = support_dir.join("resource_probe.jett");
-    fs::write(&project, SOURCE17).unwrap();
+    fs::write(&project, fixture.source()).unwrap();
     fs::write(&support, SUPPORT).unwrap();
     let mut prepared = Vec::new();
     for release in [false, true] {
-        prepared.extend(prepare(&project, &support, release));
+        prepared.extend(prepare(fixture, &project, &support, release));
     }
     assert_eq!(prepared.len(), 4);
     fs::remove_dir_all(&project_dir).unwrap();
@@ -755,10 +867,10 @@ fn source17_whole_canonical_suites_record_available_native_observations() {
             fs::write(
                 case.join("observation.json"),
                 serde_json::to_vec_pretty(&json!({
-                    "schema": "jett-source17-suite-available-observations-v1",
+                    "schema": fixture.evidence_schema(),
                     "full_acceptance": false,
                     "remaining_instrumentation_obligations": UNMEASURED,
-                    "whole_source_sha256": SOURCE17_SHA256,
+                    "whole_source_sha256": fixture.sha256(),
                     "source_deleted_before_launch": !project.exists() && !support.exists(),
                     "source_build_profile": profile,
                     "runtime_profile": runtime.profile,
@@ -800,6 +912,39 @@ fn source17_whole_canonical_suites_record_available_native_observations() {
         "remaining_instrumentation_obligations": UNMEASURED,
         "note": "Successful local test means available measurements passed; it cannot close full acceptance.",
     })).unwrap()).unwrap();
+}
+
+#[test]
+#[ignore = "requires pinned measured normal/private archives; records available observations only"]
+fn source17_whole_canonical_suites_record_available_native_observations() {
+    run_whole_canonical_suites(Fixture::Source17);
+}
+
+#[test]
+fn pure_replacement_canonical_suite_preparation_preserves_original_required_cache() {
+    assert_eq!(
+        digest(PURE_REPLACEMENTS.as_bytes()),
+        PURE_REPLACEMENTS_SHA256
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let project = directory.path().join("pure_replacement_suites.jett");
+    let support = directory.path().join("resource_probe.jett");
+    fs::write(&project, PURE_REPLACEMENTS).unwrap();
+    fs::write(&support, SUPPORT).unwrap();
+    for release in [false, true] {
+        let prepared = prepare(Fixture::PureReplacements, &project, &support, release);
+        assert_eq!(prepared.len(), 2);
+        assert!(matches!(prepared[0].purpose, Purpose::Verify));
+        assert!(matches!(prepared[1].purpose, Purpose::Property));
+        assert_ne!(prepared[0].entry, prepared[1].entry);
+    }
+    directory.close().unwrap();
+}
+
+#[test]
+#[ignore = "requires current measured normal/private archives; unchanged pure replacement suites"]
+fn pure_replacement_whole_canonical_suites_record_available_native_observations() {
+    run_whole_canonical_suites(Fixture::PureReplacements);
 }
 
 #[test]
