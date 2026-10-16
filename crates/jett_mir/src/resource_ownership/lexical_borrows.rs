@@ -37,6 +37,12 @@ impl ResourceLexicalExit {
             .ok_or("Resource lexical exit has no exact function witness")?;
         let mut locals = Vec::new();
         for original in self.declarations() {
+            if let Some(local) = owned_declarations::owner_current_local(witness, original) {
+                if !locals.contains(&local) {
+                    locals.push(local);
+                }
+                continue;
+            }
             let row = witness
                 .borrowed_sums
                 .iter()
@@ -103,12 +109,13 @@ pub(crate) struct LexicalScope {
     path: Vec<usize>,
     pub(crate) active: Vec<LocalId>,
 }
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(super) struct Declaration {
     pub(super) path: Vec<usize>,
     pub(super) scope: Vec<usize>,
     pub(super) local: LocalId,
     pub(super) value: Expression,
+    pub(super) span: Span,
 }
 struct OriginalScope {
     path: Vec<usize>,
@@ -117,6 +124,7 @@ struct OriginalScope {
 #[derive(Default)]
 struct Inventory {
     declarations: Vec<Declaration>,
+    all_declarations: Vec<Declaration>,
     scopes: Vec<OriginalScope>,
 }
 fn child(path: &[usize], kind: usize, index: usize) -> Vec<usize> {
@@ -132,16 +140,20 @@ impl Inventory {
         });
         for (index, statement) in block.statements.iter().enumerate() {
             let at = child(&path, 0, index);
-            if let H::Let { local, value } = &statement.kind
-                && manifest.kind_for_type(value.ty).is_some()
-                && matches!(&value.kind, E::View(handle) if matches!(handle.kind, E::Handle { .. }))
-            {
-                self.declarations.push(Declaration {
+            if let H::Let { local, value } = &statement.kind {
+                let declaration = Declaration {
                     path: at.clone(),
                     scope: path.clone(),
                     local: *local,
                     value: value.clone(),
-                });
+                    span: statement.span,
+                };
+                self.all_declarations.push(declaration.clone());
+                if manifest.kind_for_type(value.ty).is_some()
+                    && matches!(&value.kind, E::View(handle) if matches!(handle.kind, E::Handle { .. }))
+                {
+                    self.declarations.push(declaration);
+                }
             }
             let mut values = Vec::new();
             match &statement.kind {
@@ -302,6 +314,14 @@ fn inventory(witness: &ResourceLoweringWitness) -> Inventory {
 pub(super) fn declarations(witness: &ResourceLoweringWitness) -> Vec<Declaration> {
     inventory(witness).declarations
 }
+pub(super) fn source_declarations(
+    function: &hir::Function,
+    manifest: &hir::ResourceManifest,
+) -> Vec<Declaration> {
+    let mut inventory = Inventory::default();
+    inventory.block(&function.body, Vec::new(), manifest);
+    inventory.all_declarations
+}
 impl Capture {
     pub(crate) fn lexical_scope(&self, block: &hir::Block) -> Result<Option<LexicalScope>, String> {
         self.lexical_scope_under(block, None)
@@ -315,7 +335,7 @@ impl Capture {
             return Ok(None);
         };
         let inventory = inventory(witness);
-        if inventory.declarations.is_empty() {
+        if inventory.declarations.is_empty() && witness.lexical_owners.is_empty() {
             return Ok(None);
         }
         let mut scopes = inventory.scopes.iter().filter(|scope| {
@@ -368,6 +388,7 @@ impl Capture {
 }
 pub(super) fn seal(witness: &mut ResourceLoweringWitness) {
     witness.lexical_seal = witness.lexical_exits.clone();
+    witness.lexical_owner_seal = witness.lexical_owners.clone();
 }
 pub(super) fn current(
     witness: &ResourceLoweringWitness,
@@ -378,7 +399,14 @@ pub(super) fn current(
             "Resource lexical exits changed their independent constructor membership seal".into(),
         );
     }
-    let inventory = inventory(witness);
+    owned_declarations::current(witness, function)?;
+    let mut inventory = inventory(witness);
+    inventory.declarations.extend(
+        witness
+            .lexical_owners
+            .iter()
+            .map(owned_declarations::OwnedDeclaration::declaration),
+    );
     for declaration in &inventory.declarations {
         if !witness
             .lexical_exits
@@ -521,6 +549,7 @@ pub(super) fn remap_blocks(
     witness: &mut ResourceLoweringWitness,
     map: &[Option<BlockId>],
 ) -> Result<(), String> {
+    owned_declarations::remap_blocks(witness, map)?;
     for exit in &mut witness.lexical_exits {
         exit.site.block = map
             .get(exit.site.block.index() as usize)
@@ -560,6 +589,7 @@ impl Function {
 }
 
 pub(super) fn shift_prefix(witness: &mut ResourceLoweringWitness, block: BlockId, count: usize) {
+    owned_declarations::shift_prefix(witness, block, count);
     for exit in &mut witness.lexical_exits {
         if exit.site.block == block
             && let ResourcePosition::Statement(index) = &mut exit.site.position
@@ -567,5 +597,14 @@ pub(super) fn shift_prefix(witness: &mut ResourceLoweringWitness, block: BlockId
             *index += count;
         }
     }
+    seal(witness);
+}
+
+/// Only canonical local compaction moves current headers and endpoints.
+pub(super) fn remap_locals(
+    witness: &mut ResourceLoweringWitness,
+    remap: &mut impl FnMut(&mut LocalId),
+) {
+    owned_declarations::remap_locals(witness, remap);
     seal(witness);
 }

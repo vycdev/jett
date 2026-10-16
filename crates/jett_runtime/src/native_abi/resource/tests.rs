@@ -979,6 +979,9 @@ fn native_resource_replacement_preflight_stale_rhs_handle_has_no_finalizer_effec
 #[path = "borrowed_sum_tests.rs"]
 mod borrowed_sum_tests;
 
+#[path = "sum_replacement_tests.rs"]
+mod sum_replacement_tests;
+
 #[path = "ordinary_attempt_owner_tests.rs"]
 mod ordinary_attempt_owners;
 #[path = "ordinary_error_reentry_tests.rs"]

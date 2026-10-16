@@ -324,3 +324,25 @@ mod reflected_field_positive;
 
 #[path = "native_source_oracles/absent_aggregate_baseline.rs"]
 mod absent_aggregate_baseline;
+
+#[path = "../../../../jett_driver/tests/native_conformance/resource_sum_replacement_cases.rs"]
+mod sum_replacement_cases;
+
+#[test]
+fn native_resource_direct_sum_replacement_shared_scripts_match_real_reference() {
+    assert_eq!(sum_replacement_cases::CASES.len(), 19);
+    run_reference_cases(sum_replacement_cases::CASES);
+}
+
+#[test]
+fn native_resource_direct_sum_replacement_shared_reentry_inputs_match_real_reference() {
+    for release in [false, true] {
+        for first in sum_replacement_cases::CASES {
+            occupied_struct_reentry::original_then_ready(
+                first,
+                sum_replacement_cases::ready_for(first),
+                release,
+            );
+        }
+    }
+}

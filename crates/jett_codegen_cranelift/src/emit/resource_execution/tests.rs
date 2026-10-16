@@ -11,6 +11,8 @@ mod named_indirect;
 mod occupied_structs;
 mod ordinary_entry;
 mod program_entry;
+#[path = "replacement/emission_sums_tests.rs"]
+mod replacement_sums;
 mod returned_hooks;
 mod sum_views;
 const SUPPORT: &str =

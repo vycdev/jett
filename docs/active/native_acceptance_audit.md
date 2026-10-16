@@ -4056,3 +4056,47 @@ revision, runtime and execution scope; neither is relabeled as current Source17
 regression or added to the new actor execution count. Physical actor/callback/queue
 ownership, same-context reentry, changed canonical producers, broader proof
 transport and the full native goal remain open. CI remains disabled.
+
+#### Direct Resource optional/result replacement: local checkpoint
+
+Distinct live owned optional/result Resource shells now use the existing
+composite Replace contract: stage the RHS once, validate both owners and exact
+failure companions, retire old before publication, and retire staged RHS once
+if old cleanup fails. Typed failure packing/extraction preserves scalar versus
+owned representations. Sealed nested lexical owner records supply exact Drop/
+clear behavior through ordinary exits and canonical remapping. Existing Source
+policy, capabilities, ABI 1/layout 3 and private report protocol 2 remain unchanged.
+See the [Resource sum replacement note](native_resource_sum_replacement.md).
+
+The frozen local receipt passes **3,038 distinct checks**: 409 Runtime, 1,976
+compiler/phase, 603 frontend/reference fixtures and 50 CLI tests. Its SHA-256 is
+325751dfe2bf1335c12114667a7a21017bdacb6a449d82abcc5e72991510405f.
+Six fresh normal Runtime/Launcher and private Runtime Debug/Release archives are
+measured. Their normal/private/paired receipt hashes are respectively
+be980ae18006737304ae69af4d254f78cad15c51fe8e6226c6a2b9ca9cf4b6b4,
+454be0bf810ecc500e362fd99de37e02a909ca3abfc4d89c92afb06e8d1cfc50 and
+b725c561901d53bc2fd27b5ae6f5cf07265051be498efc6e4b7a7b1a283395a9.
+Measurement supplies zero Source execution credit.
+
+The fresh compile-only gate is accepted with 1,111 compiler/Source inputs,
+image 03a6ffebbcd1b5a56d986d61bddbaec3ebf164c7af9c480d068df19e2ba4924d,
+and gate receipt f8e0623b59056bf3a6da1b5f94c4bcd54948a83df67863bbfd8c516cfb719be3.
+Quiet/reaped completion, unchanged guards and released leases supply zero
+Source/host execution credit. The separate object-emission control passes all
+six original Sources in Debug/Release and adds no linked Source execution.
+Single entry accepts 38 child rows/38 attempts/12 fresh programs; retained-
+Session reentry accepts 38 child rows/76 attempts/38 fresh programs. Across both
+matrices that is **76 native children, 114 attempts and 50 fresh programs**, with
+a union of six distinct Sources. Each matrix observes 22 child exits zero and
+16 expected status 71, empty streams, zero incomplete report flags, retired
+logical Resources and empty aggregate ordinary storage. Written Source/support
+is absent before launch; single-entry compilation artifacts remain for reuse,
+whereas reentry closes and removes its complete temporary directory. These are
+private observations and do not establish checked-program Weak expiry or
+per-kind physical lifetime. Exact acceptance pins are in the linked note.
+Preserved SDK-preflight and shared-harness import failures receive no accepted
+credit. Prior actor/Runtime receipts retain their
+historical scope and do not renew current Source17 coverage. Physical/per-kind
+retainer observations, normal custody/reentry, wider replacement/transport and
+full workspace/inventory/installed-host acceptance remain open. Full acceptance
+stays false; rough tracking is unchanged and CI remains disabled.

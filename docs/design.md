@@ -2159,6 +2159,10 @@ primitive: `bytes` is primitive but move-only, as are compound owned values.
 
 The `mutable` keyword permits a local name to receive a replacement value. Whole-name assignment consumes/rebinds the old value; a checked field assignment performs the corresponding replacement within that same owned root. Both preserve single ownership. Immutable names and views remain non-writable, and an enclosing nominal refinement must be reconstructed and validated as a whole.
 
+For whole-name Resource replacement from a distinct owned value, evaluate the RHS once and keep it owned while cleaning up the previous value. Publish the replacement only after successful old-value cleanup. An RHS failure preserves the previous value when the RHS has not itself consumed it. If old cleanup fails, retire the staged RHS exactly once, preserve the established cleanup/error priority, and execute no later statement. This whole-name order is separate from the selected field-update publication rule.
+
+A direct `optional[R]` or `result[R, E]`, where `R` is an opaque resource, remains a live owned sum when it contains `none` or `fail`. Absence is not an uninitialized or moved binding; `fail` also owns its ordinary error value. A live shell or payload view prevents replacement even when the shell holds no Resource token. Replacement validates and moves the exact ordinary error shape without an implicit clone; an explicitly cloned ordinary value remains valid. A pure replacement whose old and incoming sums are both absent requires no new capability or Runtime-purpose permission. Occupied Resource operations keep their existing capability restrictions, including in required evaluation, Verify and Property bodies.
+
 ```
 mutable int64 total = 0
 for item in items:

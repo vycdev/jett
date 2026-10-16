@@ -1143,8 +1143,8 @@ impl<'a, 'p> Rows<'a, 'p> {
                     .get(replacement.index())
                     .ok_or_else(|| pending("Replace RHS is outside its exact plan"))?;
                 if destination == replacement
-                    || *old != custody::ResourceOccupancy::Occupied
-                    || !matches!(old_slot.shape(), custody::ResourceShape::Plain { .. })
+                    || (matches!(old_slot.shape(), custody::ResourceShape::Plain { .. })
+                        && *old != custody::ResourceOccupancy::Occupied)
                     || old_slot.shape() != rhs_slot.shape()
                     || !matches!(old_slot.storage(), custody::ResourceSlotStorage::Local { header } if header.mutable)
                     || old_slot.frame() != operation.frame()
@@ -1153,7 +1153,7 @@ impl<'a, 'p> Rows<'a, 'p> {
                         != custody::ResourceFrameRole::Scope
                 {
                     return Err(pending(
-                        "mutable replacement requires distinct occupied plain owners in the exact Scope",
+                        "mutable replacement requires distinct matching owned slots in the exact Scope",
                     ));
                 }
                 vec![

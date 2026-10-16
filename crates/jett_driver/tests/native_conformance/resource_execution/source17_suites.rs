@@ -12,7 +12,7 @@ const SUPPORT: &str = include_str!("../resource/resource_probe.jett");
 const SOURCE17_SHA256: &str = "c8e74848356a5b3d09ab6659318b1e1292718d34443f7f37222bafd6f3eed0ff";
 const NORMAL_RECEIPT_ENV: &str = "JETT_SOURCE17_NORMAL_ARCHIVE_RECEIPT_V1";
 const NORMAL_RECEIPT_SHA256: &str =
-    "4e41eca939e70f4c1ea162639b3f714510726a118a200d38bb89bddc6d575e8c";
+    "be980ae18006737304ae69af4d254f78cad15c51fe8e6226c6a2b9ca9cf4b6b4";
 const EVIDENCE_ENV: &str = "JETT_SOURCE17_SUITE_EVIDENCE_V1";
 const UNMEASURED: &[&str] = &[
     "individual ordinary storage-kind live counts beyond aggregate ordinary_empty",

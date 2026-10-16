@@ -596,7 +596,7 @@ impl NativeResourceState {
         );
         Ok(handle)
     }
-    pub(super) fn replace(
+    pub(super) fn replace_plain(
         &mut self,
         ordinary: &values::NativeValues,
         registry: &mut ResourceRegistry,

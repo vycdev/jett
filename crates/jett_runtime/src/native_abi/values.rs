@@ -25,6 +25,7 @@ mod field_update_tests;
 mod graphics_decode;
 pub mod interface_conversion;
 mod ordinary_attempts;
+mod resource_sum_replacement;
 
 #[cfg(test)]
 mod interface_argument_tests;

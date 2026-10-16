@@ -394,7 +394,7 @@ fn resource_ownership_bitwise_source_archive_and_constructor_capture_reject_repl
     assert!(!crate::breakpoint_regions::expressions_equal(&a, &b));
 }
 #[test]
-fn resource_ownership_pending_nested_region_keeps_source_validity_and_no_fake_root_lifetime() {
+fn resource_ownership_nested_region_uses_exact_retirement_without_fake_root_lifetime() {
     const SOURCE: &str = r#"namespace app
 function scenario(view net: Network) returns nothing:
     use resource_probe
@@ -407,13 +407,41 @@ function scenario(view net: Network) returns nothing:
     for release in [false, true] {
         let original = checked(SOURCE, release);
         let mir = lowered(&original);
+        let plan = validate_resource_ownership(&mir, &original.checked().interner).unwrap();
+        let scenario = named(&plan, "scenario");
+        let token = scenario.owner_slots().iter().find(|slot| {
+            matches!(slot.storage(), ResourceSlotStorage::Local { header } if header.name == "token")
+        }).expect("exact original nested owner slot");
+        let ResourceSlotStorage::Local { header } = token.storage() else {
+            unreachable!()
+        };
+        let function = &mir.functions[scenario.function().index() as usize];
+        let exits = function
+            .blocks
+            .iter()
+            .flat_map(|block| {
+                (0..=block.statements.len())
+                    .filter_map(|index| {
+                        let position = if index == block.statements.len() {
+                            ResourcePosition::Terminator
+                        } else {
+                            ResourcePosition::Statement(index)
+                        };
+                        scenario.lexical_exit(block.id, position)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
         assert!(
-            validate_resource_ownership(&mir, &original.checked().interner)
-                .unwrap_err()
+            exits
                 .iter()
-                .any(|error| error.message.contains("nested Resource declarations"))
+                .any(|exit| exit.clear_locals().contains(&header.id))
         );
-        // This is an implementation prerequisite, never a checker language exclusion.
+        // Explicit close consumed this owner. The exact nested exit clears its
+        // binding, and neither lexical nor root completion can retire it again.
+        assert!(!scenario.operations().iter().any(|operation| {
+            matches!(operation.role(), ResourceOperationRole::Drop { source, .. } if *source == token.id())
+        }));
         validate_call_ownership(&mir, &original.checked().interner).unwrap();
     }
 }

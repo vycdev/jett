@@ -735,6 +735,62 @@ impl ResourceCustody {
         Ok(())
     }
 
+    /// Preflight only a direct-sum whole-binding replacement. Absent shells do
+    /// not fabricate owners; occupied tokens authenticate both real holders.
+    /// No token or reusable transfer permission escapes this reservation.
+    pub(crate) fn preflight_direct_sum_replacement(
+        &mut self,
+        old: Option<&OwnedResourceToken>,
+        replacement: Option<&OwnedResourceToken>,
+        destination: &ResourceHolderToken,
+        source: &ResourceHolderToken,
+        registry: &ResourceRegistry,
+    ) -> Result<(), CustodyError> {
+        let destination_holder = self.holder_token(destination)?;
+        let source_holder = self.holder_token(source)?;
+        if destination_holder == source_holder
+            || self.holder_kind(destination_holder)? != self.holder_kind(source_holder)?
+        {
+            return Err(CustodyError::InvalidOwner);
+        }
+        for (token, holder) in [(old, destination_holder), (replacement, source_holder)] {
+            let Some(token) = token else {
+                self.available(holder)?;
+                continue;
+            };
+            self.runtime_frame(holder.frame)?;
+            let owner = self.owner(token)?;
+            self.validate_registry_owner(owner, registry)?;
+            if owner.holder != holder || self.holder_kind(holder)? != owner.kind {
+                return Err(CustodyError::InvalidOwner);
+            }
+            if self.borrowed(token.owner) {
+                return Err(CustodyError::ActiveBorrow);
+            }
+            if self
+                .owners
+                .iter()
+                .enumerate()
+                .any(|(index, other)| index != token.owner && other.live && other.holder == holder)
+            {
+                return Err(CustodyError::OccupiedHolder);
+            }
+        }
+        match (old, replacement) {
+            (Some(old), Some(replacement)) => {
+                self.preflight_replacement(old, replacement, destination, registry)
+            }
+            (None, Some(replacement)) => {
+                let (holder, _) = self.checked_transfer(replacement, destination, registry)?;
+                self.frames[holder.frame]
+                    .acquisitions
+                    .try_reserve(1)
+                    .map_err(|_| CustodyError::CapacityExhausted)
+            }
+            (Some(_), None) | (None, None) => Ok(()),
+        }
+    }
+
     /// A Source activation reserves its entire exact formal handoff before any
     /// owner moves. References are existing live tokens and registered metadata;
     /// this creates neither ownership nor a reusable transfer permission.

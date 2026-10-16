@@ -10,6 +10,7 @@ mod leaves;
 mod lexical_borrows;
 mod named_indirect;
 mod native_suite;
+mod replacement;
 mod returned_hooks;
 mod sum_views;
 #[cfg(test)]
@@ -1484,8 +1485,13 @@ impl Translator<'_, '_> {
                     unreachable!();
                 };
                 let (context, frame, ordinal) = self.resource_operation(operation)?;
-                let owned = self.own_copy_value(evaluated, inner.ty, inner.span)?;
-                let companion = self.scalar(owned, inner.span)?;
+                let owned =
+                    if is_copy_owned(self.types, inner.ty) || is_linear(self.types, inner.ty) {
+                        self.own_copy_value(evaluated, inner.ty, inner.span)?
+                    } else {
+                        evaluated
+                    };
+                let (companion, _) = self.payload_bits(owned);
                 let value = Leaf::FailureSum.output(
                     self.module,
                     self.builder,
@@ -1629,24 +1635,22 @@ impl Translator<'_, '_> {
                     ));
                 }
                 let bits = if let Some(replace) = replace {
-                    let Role::Replace {
-                        replacement,
-                        old: jett_mir::ResourceOccupancy::Occupied,
-                        ..
-                    } = replace.role()
-                    else {
-                        return Err(pending(
-                            "Resource replacement does not have its occupied old owner",
-                        ));
+                    let Role::Replace { replacement, .. } = replace.role() else {
+                        return Err(pending("Resource replacement lost its exact constructor"));
                     };
-                    if reseat.is_some()
-                        || !matches!(transfer.map(|operation| operation.role()),
-                        Some(Role::Transfer { source, destination: selected }) if source == replacement && *selected == destination)
-                    {
+                    if reseat.is_some() {
                         return Err(pending(
-                            "Resource replacement lost its exact evaluated RHS transfer",
+                            "Resource replacement cannot also reseat its destination",
                         ));
                     }
+                    replacement::validate_rows(
+                        resource.function_plan()?,
+                        &site_only,
+                        replace,
+                        transfer.ok_or_else(|| {
+                            pending("Resource replacement lost its exact evaluated RHS transfer")
+                        })?,
+                    )?;
                     let old = self.resource_owner(destination)?;
                     let rhs = self.resource_owner(*replacement)?;
                     let (context, frame, ordinal) = self.resource_operation(replace)?;
@@ -1772,7 +1776,8 @@ impl Translator<'_, '_> {
                         resource.failure,
                         8,
                     )?;
-                    self.own(bits)?
+                    let ty = self.local_types[target.index() as usize].ty;
+                    self.unpack_payload(bits, ty, statement.span)?
                 };
                 self.clear_slot(resource.owners[source_slot.index()]);
                 self.define_local(*target, lowered, statement.span)?;

@@ -16,6 +16,7 @@ macro_rules! identity {
 }
 mod borrowed_sums;
 mod lexical_borrows;
+mod owned_declarations;
 pub(crate) use lexical_borrows::LexicalScope;
 pub use lexical_borrows::{
     ResourceLexicalExit, ResourceLexicalExitId, ResourceLexicalExitKind, ResourceLexicalExitPlan,
@@ -27,6 +28,8 @@ pub(crate) mod constructors;
 mod execution_frames_tests;
 #[cfg(test)]
 mod lexical_borrows_tests;
+#[cfg(test)]
+mod nested_owners_tests;
 mod normalized_calls;
 pub(crate) use borrowed_sums::BorrowedSumSeed;
 pub use borrowed_sums::{ResourceBorrowedSumProjection, ResourceSumPayloadPath};
@@ -849,6 +852,8 @@ pub(super) struct ResourceLoweringWitness {
     borrowed_seal: Vec<ResourceBorrowedSumProjection>,
     lexical_exits: Vec<ResourceLexicalExit>,
     lexical_seal: Vec<ResourceLexicalExit>,
+    lexical_owners: Vec<owned_declarations::OwnedDeclaration>,
+    lexical_owner_seal: Vec<owned_declarations::OwnedDeclaration>,
     named_callables: Vec<named_callables::NamedCallableBinding>,
     descriptors: returned_descriptors::DescriptorWitness,
     graph_metadata: graph_metadata::Witness,
@@ -919,6 +924,8 @@ impl Capture {
                 borrowed_seal: Vec::new(),
                 lexical_exits: Vec::new(),
                 lexical_seal: Vec::new(),
+                lexical_owners: owned_declarations::capture_owned(function, manifest, types),
+                lexical_owner_seal: Vec::new(),
                 named_callables: named_callables::capture(function, source, types, execution),
                 descriptors: returned_descriptors::capture(function, source),
                 graph_metadata: metadata,
@@ -1102,6 +1109,7 @@ impl Capture {
         if let Some(witness) = &mut self.witness
             && (!witness.constructors.is_empty()
                 || !witness.borrowed_sums.is_empty()
+                || !witness.lexical_owners.is_empty()
                 || entry_scope::capture_needed(&witness.original, &witness.source))
         {
             witness.descriptors.seal_body(function);
@@ -1116,6 +1124,7 @@ impl Capture {
                 .contains(&function.id)
                 || !witness.constructors.is_empty()
                 || !witness.borrowed_sums.is_empty()
+                || !witness.lexical_owners.is_empty()
                 || entry_scope::capture_needed(&witness.original, &witness.source)
                 || witness
                     .source
@@ -1150,6 +1159,7 @@ impl ResourceLoweringWitness {
         graph_metadata::current(&self.graph_metadata, function)?;
         if (!self.constructors.is_empty()
             || !self.borrowed_sums.is_empty()
+            || !self.lexical_owners.is_empty()
             || entry_scope::capture_needed(&self.original, &self.source))
             && !self.descriptors.has_body()
         {
@@ -1254,6 +1264,8 @@ impl ResourceLoweringWitness {
             && self.borrowed_seal == other.borrowed_seal
             && self.lexical_exits == other.lexical_exits
             && self.lexical_seal == other.lexical_seal
+            && owned_declarations::same_owners(&self.lexical_owners, &other.lexical_owners)
+            && owned_declarations::same_owners(&self.lexical_owner_seal, &other.lexical_owner_seal)
             && self
                 .regions
                 .iter()
@@ -1904,6 +1916,7 @@ pub(super) fn remap_locals(
     witness.constructor_seal = constructor_seal.into();
     borrowed_sums::remap_locals(&mut witness.borrowed_sums, &mut remap);
     borrowed_sums::seal(witness);
+    lexical_borrows::remap_locals(witness, &mut remap);
     named_callables::remap_locals(&mut witness.named_callables, &mut remap);
     reflected_fields::remap_locals(witness, &mut remap);
     returned_descriptors::remap_locals(&mut witness.descriptors, map, &mut remap);

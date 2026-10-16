@@ -1,4 +1,4 @@
-//! Emit only constructor-certified lexical loan ends; keep RootScope active.
+//! Emit constructor-certified lexical loan ends and owner drops; keep RootScope active.
 use super::*;
 
 impl Translator<'_, '_> {
@@ -40,7 +40,13 @@ impl Translator<'_, '_> {
                         && !operation.is_expression_operation()
                 })
                 .ok_or_else(|| pending("lexical retirement lost an exact ordered end row"))?;
-            self.resource_end_borrow(operation)?;
+            match operation.role() {
+                Role::EndBorrow { .. } | Role::EndSumBorrow { .. } => {
+                    self.resource_end_borrow(operation)?;
+                }
+                Role::Drop { .. } => self.resource_drop(operation)?,
+                _ => return Err(pending("lexical retirement selected a non-retirement row")),
+            }
         }
         for local in exit.clear_locals() {
             let index = local.index() as usize;
@@ -50,13 +56,14 @@ impl Translator<'_, '_> {
                 .filter(|header| header.id == *local)
                 .ok_or_else(|| pending("lexical retirement lost a current alias header"))?;
             if !resource.layout.plan().type_requires_custody(header.ty)
-                || resource.local_slot(*local)?.is_some()
                 || self.local_slots[index].is_some()
             {
-                return Err(pending(
-                    "lexical alias retirement selected owning or ordinary storage",
-                ));
+                return Err(pending("lexical retirement selected ordinary storage"));
             }
+            // A consumed owner can be the pending Return operand. Its exact
+            // Transfer clears the Resource slot after lexical retirement; Drop
+            // rows above clear slots for owners actually retired here. Only the
+            // dead Source variable is cleared unconditionally.
             let variable = variable_for(self.variables, local.index(), span, self.symbol)?
                 .ok_or_else(|| pending("lexical retirement lost its nonowning scalar local"))?;
             let zero = self.builder.ins().iconst(ir::types::I64, 0);

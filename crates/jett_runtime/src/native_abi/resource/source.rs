@@ -453,7 +453,7 @@ impl NativeResourceState {
         let output = next_handle(&mut ids)?;
         self.move_carrier_reserved(registry, handle, source, destination, frame, output)
     }
-    fn move_carrier_reserved(
+    pub(super) fn move_carrier_reserved(
         &mut self,
         registry: &ResourceRegistry,
         handle: ResourceHandleId,

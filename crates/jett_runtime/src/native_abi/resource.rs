@@ -22,6 +22,7 @@ mod operations;
 pub(super) mod ordinary_reservation_faults;
 mod program_entry;
 mod provider;
+mod sum_replacement;
 pub use program_entry::{
     jett_rt_v1_resource_program_failure, jett_rt_v1_resource_program_failure_copy,
     jett_rt_v1_resource_program_unwind,

@@ -1895,6 +1895,28 @@ impl<'a> Builder<'a> {
                 } else {
                     self.lower_value(value)
                 };
+                if let Some(header) = self.locals.get(local.index() as usize) {
+                    match self.resource_capture.bind_owned_declaration(
+                        statement,
+                        &value,
+                        header,
+                        self.current,
+                        self.blocks[self.current.index() as usize].statements.len(),
+                    ) {
+                        Ok(true) => {
+                            if let Some(scope) = self.lexical_scopes.last_mut() {
+                                scope.active.push(*local);
+                            }
+                        }
+                        Ok(false) => {}
+                        Err(message) => {
+                            self.resource_error = Some(LowerError {
+                                span: statement.span,
+                                message,
+                            });
+                        }
+                    }
+                }
                 self.push(
                     StatementKind::Let {
                         local: *local,

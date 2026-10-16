@@ -554,7 +554,13 @@ impl<'p> Analysis<'p> {
             .ok_or("Resource lexical retirement has no Source witness")?;
         let mut clear_locals = Vec::new();
         let mut loans = BTreeSet::new();
+        let mut owned_locals = Vec::new();
         for original in exit.declarations() {
+            if let Some(local) = owned_declarations::owner_current_local(witness, original) {
+                clear_locals.push(local);
+                owned_locals.push(local);
+                continue;
+            }
             let row = witness
                 .borrowed_sums
                 .iter()
@@ -591,6 +597,31 @@ impl<'p> Analysis<'p> {
             }
             self.end_borrow(self.active_frame, loan);
             state.leases.remove(&loan);
+        }
+        for local in owned_locals {
+            let index = local.index() as usize;
+            if let Some(value) = state.values[index].take() {
+                if value.loan.is_some() {
+                    return Err("Resource owned lexical declaration became a borrowed alias".into());
+                }
+                let source = value
+                    .owner
+                    .ok_or("Resource lexical owner lost its exact slot")?;
+                if state.leases.iter().any(|loan| {
+                    self.plan.loans[loan.index()].source == ResourceLoanSource::Owner(source)
+                }) {
+                    return Err(
+                        "Resource lexical owner has a live lease outside its exact exit".into(),
+                    );
+                }
+                self.operation(
+                    self.plan.slots[source.index()].frame,
+                    ResourceOperationRole::Drop {
+                        source,
+                        occupancy: value.occupancy,
+                    },
+                );
+            }
         }
         for local in &clear_locals {
             state.values[local.index() as usize] = None;
@@ -1402,6 +1433,18 @@ pub(super) fn analyze(
         .borrowed_sums
         .iter()
         .map(|row| row.original_local())
+        .chain(
+            function
+                .resource_lowering
+                .as_ref()
+                .into_iter()
+                .flat_map(|witness| {
+                    witness
+                        .lexical_owners
+                        .iter()
+                        .map(|row| row.original_local())
+                }),
+        )
         .collect::<Vec<_>>();
     if walk::nested_resource_declaration(&original.body, original, types, false, &admitted) {
         return Err("pending ResourceOwnershipPlan: nested Resource declarations need exact constructor Scope records".into());

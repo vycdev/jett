@@ -577,6 +577,14 @@ fn run_native_cases(selected: &[cases::Case]) {
 }
 
 fn run_native_cases_with_support(selected: &[cases::Case], support_source: &str) {
+    run_native_cases_observing(selected, support_source, |_, _| {});
+}
+
+fn run_native_cases_observing(
+    selected: &[cases::Case],
+    support_source: &str,
+    mut observe: impl FnMut(&cases::Case, &report::Report),
+) {
     struct LinkedProgram {
         key: LinkedProgramKey,
         directory: tempfile::TempDir,
@@ -670,6 +678,19 @@ fn run_native_cases_with_support(selected: &[cases::Case], support_source: &str)
                 // linked executable into every transient execution directory.
                 fs::copy(compiled.join("resource.obj"), root.join("resource.obj")).unwrap();
             }
+            let mut lightweight = lightweight_observations::Capture::prepare(
+                "single",
+                case,
+                None,
+                support_source,
+                &archive,
+                &compiled.join("resource.obj"),
+                &program.binary,
+                root,
+                compiled,
+                builds,
+                !reuse,
+            );
             let encoded = script(case);
             let actual = super::run_bounded_with_env(
                 &program.binary,
@@ -679,6 +700,9 @@ fn run_native_cases_with_support(selected: &[cases::Case], support_source: &str)
             let path = root.join("resource-native-report-v1.bin");
             assert!(path.metadata().unwrap().len() <= 16 * 1024 * 1024);
             let bytes = fs::read(path).unwrap();
+            if let Some(capture) = &mut lightweight {
+                capture.save_output(&bytes, &actual);
+            }
             let report = report::decode(&bytes).unwrap();
             assert_eq!(
                 actual.status.code(),
@@ -690,6 +714,11 @@ fn run_native_cases_with_support(selected: &[cases::Case], support_source: &str)
             assert!(actual.stdout.is_empty(), "{actual:?}");
             assert!(actual.stderr.is_empty(), "{actual:?}");
             assert_report(case, &report);
+            observe(case, &report);
+            if let Some(capture) = lightweight {
+                directory.close().unwrap();
+                capture.finish(&report, &actual);
+            }
         }
         eprintln!(
             "Resource native build reuse: profile={}; {} Source-deleted executions; {builds} emitted/linked programs",
@@ -819,3 +848,9 @@ mod source17_suites;
 
 #[path = "resource_execution/observation_controls.rs"]
 mod observation_controls;
+
+#[path = "resource_execution/sum_replacement.rs"]
+mod sum_replacement;
+
+#[path = "resource_execution/lightweight_observations.rs"]
+mod lightweight_observations;

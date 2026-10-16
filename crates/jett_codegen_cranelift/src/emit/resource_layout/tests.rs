@@ -7,6 +7,8 @@ use jett_types::ResourceKernelRecipe;
 use std::{collections::HashMap, sync::Arc};
 #[path = "carrier_tests.rs"]
 mod carrier_tests;
+#[path = "../resource_execution/replacement/layout_sums_tests.rs"]
+mod replacement_sums;
 #[path = "returned_hooks_tests.rs"]
 mod returned_hooks;
 #[path = "sum_views_tests.rs"]
@@ -344,7 +346,7 @@ fn resource_layout_replacement_uses_exact_rhs_tag12_and_reseat_has_no_row() {
 }
 
 #[test]
-fn resource_layout_sum_replacement_stays_a_separate_transport_refusal() {
+fn resource_layout_original_optional_assignment_uses_owned_sum_replacement() {
     const SOURCE: &str = r#"namespace app
 export function main(net: Network) returns nothing:
     use resource_probe
@@ -355,17 +357,47 @@ export function main(net: Network) returns nothing:
     for release in [false, true] {
         let checked = checked(SOURCE, release);
         let program = lower_source(&checked);
-        let error = EmittedResourceLayout::from_program(
+        let layout = EmittedResourceLayout::from_program(
             &program,
             &checked.checked().interner,
             entry(&program),
         )
-        .unwrap_err();
-        assert!(
-            error.to_string().contains(
-                "mutable replacement requires distinct occupied plain owners in the exact Scope"
-            ),
-            "{error:?}"
+        .unwrap();
+        let function = layout.plan().function(entry(&program)).unwrap();
+        let replacements = function
+            .operations()
+            .iter()
+            .filter(|operation| matches!(operation.role(), Role::Replace { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(replacements.len(), 1);
+        let Role::Replace {
+            destination,
+            replacement,
+            old,
+        } = replacements[0].role()
+        else {
+            unreachable!();
+        };
+        assert_eq!(*old, custody::ResourceOccupancy::Empty);
+        assert!(matches!(
+            function.owner_slots()[destination.index()].shape(),
+            custody::ResourceShape::Optional { .. }
+        ));
+        let mut rows = Rows::new(layout.plan()).unwrap();
+        rows.populate().unwrap();
+        let ordinal = layout
+            .operation(function.function(), replacements[0].id())
+            .unwrap();
+        assert_eq!(
+            rows.operations[ordinal as usize].1,
+            [
+                12,
+                layout
+                    .frame(function.function(), replacements[0].frame())
+                    .unwrap(),
+                layout.slot(function.function(), *destination).unwrap(),
+                layout.slot(function.function(), *replacement).unwrap(),
+            ]
         );
     }
 }

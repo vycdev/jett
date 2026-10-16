@@ -1,5 +1,6 @@
 //! Original Source06 first script followed by READY on one retained Session.
 //! Every completion remains observable; exceptional reentry is never exit zero.
+use super::super::lightweight_observations;
 use super::{archive, cases, fs, link, object, report, script};
 
 fn script_bytes(case: &cases::Case) -> Vec<u8> {
@@ -127,6 +128,17 @@ pub(super) fn run_original_then_ready_with_support(
     release: bool,
     support_source: &str,
 ) {
+    run_original_then_ready_observing(first, ready, release, support_source, |_| {});
+}
+
+// The existing event/completion/custody checks remain mandatory before observation.
+pub(super) fn run_original_then_ready_observing(
+    first: &cases::Case,
+    ready: &cases::Case,
+    release: bool,
+    support_source: &str,
+    observe: impl FnOnce(&report::Report),
+) {
     let archive = archive(release);
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
@@ -163,6 +175,19 @@ pub(super) fn run_original_then_ready_with_support(
     fs::remove_dir_all(&project).unwrap();
     fs::remove_dir_all(&stdlib).unwrap();
     assert!(!entry.exists() && !support.exists() && !project.exists() && !stdlib.exists());
+    let mut lightweight = lightweight_observations::Capture::prepare(
+        "reentry",
+        first,
+        Some(ready),
+        support_source,
+        &archive,
+        &object_path,
+        &binary,
+        root,
+        root,
+        1,
+        true,
+    );
     let encoded = original_then_ready_script(first, ready);
     let actual = super::super::super::run_bounded_with_env(
         &binary,
@@ -171,7 +196,11 @@ pub(super) fn run_original_then_ready_with_support(
     );
     let path = root.join("resource-native-report-v1.bin");
     assert!(path.metadata().unwrap().len() <= 16 * 1024 * 1024);
-    let observed = report::decode(&fs::read(path).unwrap()).unwrap();
+    let bytes = fs::read(path).unwrap();
+    if let Some(capture) = &mut lightweight {
+        capture.save_output(&bytes, &actual);
+    }
+    let observed = report::decode(&bytes).unwrap();
     assert_eq!(
         actual.status.code(),
         Some(first.exit),
@@ -184,4 +213,9 @@ pub(super) fn run_original_then_ready_with_support(
         "{actual:?}"
     );
     assert_original_then_ready(first, ready, &observed);
+    observe(&observed);
+    if let Some(capture) = lightweight {
+        directory.close().unwrap();
+        capture.finish(&observed, &actual);
+    }
 }
