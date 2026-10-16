@@ -1624,6 +1624,13 @@ the alias branch before the underlying struct or collection branch; nested
 reflection metadata.
 `type.fields` lowers checked field snapshots into ordinary `TypeField` values
 only for struct and bitfield kinds; an alias remains a distinct total probe.
+The ordinary checked interpreter authenticates the original field intrinsic
+call or pipeline step before selecting the canonical struct or bitfield owner.
+Field metadata and the construction lifecycle use that same canonical owner
+when its generic arguments contain transparent aliases; source-visible names
+and `TypeInfo` still retain those aliases. The ordinary cursor carries no
+Resource custody or refinement proof authority, and its canonical field table
+must exactly match the retained checked program.
 `type.bitfield_layout` and `type.bitfield_fields` likewise lower checked
 bitfield layout snapshots into `TypeBitfield` and `TypeBitfieldField` values;
 other kinds produce an empty layout, including source aliases.

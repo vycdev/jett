@@ -3532,3 +3532,75 @@ That combined invocation had a separate Driver test failure caused by its
 missing required bundle environment; the successful focused rerun does not
 turn that invocation into a fully passing Driver gate. Full workspace/native
 acceptance remains open, and GitHub CI stays disabled.
+
+#### Canonical field owners in checked ordinary reflection
+
+A fresh diagnostic-only probe confirms that the required
+`comptime reflected_generic_secret()` call in `interface_values.jett` failed at
+the existing complete reflected-loop item comparison. The ordinary producer
+stamped the source spelling `Box[Token]`, while the immutable checked loop
+required canonical `Box[secret[string]]`. The probe changed only error context
+and was removed before product verification; its log is
+`target/native/local-regression-interface-probe-check-v1.log`, SHA-256
+`09fa4c39b0963f3036fabb4f21253cf05aa738f6eaefc2a46f861e88d2062280`.
+
+The interface fixture explicitly clones the actor's retained `initial` value
+when initializing its mutable current item. Both actor bindings remain usable,
+preserving the intended original/current behavior under move-only ownership.
+This Source repair removes the earlier moved-value error without changing the
+ownership rule or the fixture's observation oracles.
+
+The ordinary field adapter now validates its original call or physical pipeline
+step and checked body before selecting canonical struct/bitfield owner data.
+The complete canonical field table must match the retained checked program.
+Field enumeration, field access and construction start/put/finish use the same
+owner; later type arguments and existing metadata comparisons remain intact.
+Source-visible alias names and nested `TypeInfo` remain distinct. Top-level
+aliases and refinements keep empty field probes and empty checked loop schemas.
+Reflection-only programs receive the ordinary checked context independently of
+actors, field writes or Resources. No purity marker, Source ban, refinement
+proof, Resource cursor authority, Runtime helper or ABI change is introduced.
+
+Three new controls cover actorless closed comptime and reference construction,
+nested alias metadata, empty outer alias/refinement probes, and rejection of
+copied same-span callees, type-argument slices and pipeline steps. The focused
+selector passes **four tests**, including one existing control. All affected Comptime and Driver
+libraries and the frontend/reference fixture suite pass **1,366 tests**:
+Comptime 666, Driver 97 and fixtures 603. The four focused tests are included in
+the Comptime total. Logs under `target/native/`:
+
+- `canonical-reflection-focused-v1.log`, SHA-256
+  `f4c6d14f7ff235a07db77ccfcdacf80b656e12fd026fdba5036f1d4564651f3c`.
+- `canonical-reflection-comptime-fixtures-v1.log`, SHA-256
+  `d446e34c9b35b65ec564eecd874bc91ab91981bf4db46ca1e948b1e4d62c97ee`.
+
+All **nine CLI capture tests** also pass. A fresh default-profile CLI
+`build --check --agent` of the actual interface fixture passes without E9001,
+and its formatter check passes. The Release check is not accepted: the existing
+fixture's debug-only `println` calls produce 58 E0362 errors. The fixture was
+not changed to obtain Release acceptance; the actorless pure regression above
+separately passes Debug and Release checking. Logs under `target/native/`:
+
+- `canonical-reflection-cli-capture-v1.log`, SHA-256
+  `28f36c537a97ca32e44ef361d34b3f85b39f8c6525967ee74a3151ea5b2618a4`.
+- `canonical-reflection-interface-check-debug-v1.log`, SHA-256
+  `58b8a099048311576253ba2181377581d34273bf274a6e52c54ccf8671ec719a`.
+- `canonical-reflection-interface-check-release-v1.log`, SHA-256
+  `cba8bacb65d80059410fb5a3143e964b64a06e4872c177558af1addb087b0328`.
+- `canonical-reflection-interface-format-v1.log`, SHA-256
+  `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+
+`native_interface_values_match_interpreter` passes with one Source-present
+native execution, default/Debug Source and the normal Debug Runtime. It requires
+successful execution and exact reference/native stdout and diagnostic-stream
+parity. The existing trace oracles retain redaction and the visible generic
+interface value while rejecting hidden-token and `reflection-failed` trace
+text. This is neither a Source-deleted run nor paired Debug/Release execution.
+The log is `target/native/canonical-reflection-interface-native-v1.log`, SHA-256
+`ad3b588d3e58c2b6c4a67ced4e1a585ee7281cc12bbe1a3996c568d8b576a00b`.
+
+This receipt supplies no new Source-deleted execution, complete native corpus,
+full workspace/doc-test, GNU/installed-distribution or complete Resource
+acceptance. The fixed 207-fixture/182-object denominators and remaining native
+coverage obligations are unchanged. GitHub CI remains disabled at the user's
+request.

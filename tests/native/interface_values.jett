@@ -51,7 +51,7 @@ machine Session:
     transitions:
         opened to closed
 actor Catalog(initial: Named):
-    mutable Named item = initial
+    mutable Named item = clone initial
     receive replace(value: Named):
         item = value
     receive read responds string:

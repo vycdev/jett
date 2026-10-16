@@ -74,6 +74,11 @@ impl Interpreter {
                 let [owner] = prepared.types() else {
                     return Err("checked type.fields has no exact owner type".to_string());
                 };
+                let source =
+                    info.ok_or("checked type.fields has no exact source reflection argument")?;
+                if !matches!(source.kind.as_str(), "struct" | "bitfield") {
+                    return Ok(Value::List(Vec::new()));
+                }
                 let owner_name = checked.program().checked().interner.type_name(*owner);
                 let fields = checked
                     .checked_reflection_fields(*owner)

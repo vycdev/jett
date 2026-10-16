@@ -87,6 +87,8 @@ mod intrinsic;
 pub(crate) use intrinsic::PreparedIntrinsicArguments;
 #[path = "body_reference/named_callable.rs"]
 mod named_callable;
+#[path = "body_reference/ordinary_field_reflection.rs"]
+mod ordinary_field_reflection;
 pub(crate) use named_callable::PreparedNamedCallable;
 #[path = "body_reference/owned_struct.rs"]
 mod owned_struct;

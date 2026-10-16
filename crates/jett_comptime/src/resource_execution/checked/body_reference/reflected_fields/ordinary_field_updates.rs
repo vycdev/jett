@@ -29,7 +29,7 @@ impl CheckedExecution {
         // checked packet and concrete operands without Resource entry helpers,
         // which deliberately reject runtime InlineBody cursors.
         let invocation = self.invocation(*occurrence)?;
-        let (intrinsic, types, _) = super::super::intrinsic::intrinsic_records(
+        let (intrinsic, types, reflections) = super::super::intrinsic::intrinsic_records(
             &facts,
             &invocation,
             source_types.len(),
@@ -41,7 +41,10 @@ impl CheckedExecution {
         let [owner] = types else {
             return Err(ResourceExecutionError::MissingCheckedBody);
         };
-        let fields = checked_owner_fields(self.program(), *owner)?;
+        let reflection = reflections
+            .first()
+            .ok_or(ResourceExecutionError::MissingCheckedBody)?;
+        let fields = checked_owner_fields_for_reflection(self.program(), *owner, reflection)?;
         let mut variables = self
             .program
             .resolved()

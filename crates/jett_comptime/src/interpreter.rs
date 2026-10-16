@@ -3744,6 +3744,8 @@ impl Interpreter {
         // Only a fact at this actual result can be reused after the call; an
         // unrelated installed map must not alter metadata-free API validation.
         let checked_producer = self.checked_refinement_source_type(call_span).is_some();
+        let checked_field_owner =
+            self.checked_field_intrinsic_owner(callee, type_args, args, call_span)?;
         let callee = Self::unparenthesized(callee);
         // Check for machine construction/transition BEFORE evaluating args,
         // since state-name arguments are bare identifiers (not variables) and
@@ -3790,12 +3792,18 @@ impl Interpreter {
 
         // Constructor and intrinsic parameters belong to the selected call. Resolve
         // actual arguments in the caller before evaluating nested expressions.
-        let resolved_type_args = inferred_type_args.unwrap_or_else(|| {
+        let mut resolved_type_args = inferred_type_args.unwrap_or_else(|| {
             type_args
                 .iter()
                 .map(|ty| self.substitute_type_expr(ty))
                 .collect()
         });
+        if let Some(owner) = checked_field_owner {
+            let selected = resolved_type_args
+                .first_mut()
+                .ok_or("checked field intrinsic lost its selected owner operand")?;
+            *selected = owner;
+        }
         // Capture caller facts before evaluating any argument or entering a
         // nested generic/reflected body. Reorder each witness with its value;
         // destination parameter types never supply caller proof.
@@ -4106,6 +4114,7 @@ impl Interpreter {
         // establishes checked execution for fresh intrinsic producers; their
         // validation target still comes from the selected actual type argument.
         let checked_producer = self.checked_refinement_source_type(step.span).is_some();
+        let checked_field_owner = self.checked_field_pipeline_intrinsic_owner(step)?;
         let function = match &step.function {
             Expr::View(inner, _) => inner.as_ref(),
             _ => &step.function,
@@ -4141,12 +4150,18 @@ impl Interpreter {
         let inferred_type_args =
             self.inferred_user_function_type_args_from_types(function, type_args, &actual_types);
 
-        let resolved_type_args = inferred_type_args.unwrap_or_else(|| {
+        let mut resolved_type_args = inferred_type_args.unwrap_or_else(|| {
             type_args
                 .iter()
                 .map(|ty| self.substitute_type_expr(ty))
                 .collect()
         });
+        if let Some(owner) = checked_field_owner {
+            let selected = resolved_type_args
+                .first_mut()
+                .ok_or("checked field intrinsic lost its selected owner operand")?;
+            *selected = owner;
+        }
 
         // step.span records the checked inbound type, including a previous
         // step's handled success type. Capture extra argument facts before any
@@ -8249,6 +8264,14 @@ impl Interpreter {
     }
 
     fn checked_type_fields_value(&self, ty: &TypeExpr) -> Option<Value> {
+        if self
+            .reflection_metadata
+            .as_ref()?
+            .get_source_type_info(&type_expr_display(ty))
+            .is_some_and(|info| !matches!(info.kind.as_str(), "struct" | "bitfield"))
+        {
+            return Some(Value::List(Vec::new()));
+        }
         let fields = self.checked_type_fields(ty)?;
         let owner_type = type_expr_display(ty);
         Some(Value::List(

@@ -51,7 +51,22 @@ impl FieldUpdateContext {
     ) -> Result<Option<Self>, String> {
         let checked = program.checked();
         let any = |_: &CheckedAssignmentPlace| true;
-        if checked.actor_handlers.is_empty()
+        if checked
+            .intrinsic_ids
+            .values()
+            .all(|id| !field_reflection_intrinsic(*id))
+            && !scoped_reflection(&checked.comptime_type_bindings)
+            && checked
+                .generic_function_instantiations
+                .iter()
+                .all(|instance| {
+                    instance
+                        .intrinsic_ids
+                        .values()
+                        .all(|id| !field_reflection_intrinsic(*id))
+                        && !scoped_reflection(&instance.comptime_type_bindings)
+                })
+            && checked.actor_handlers.is_empty()
             && checked.assignment_places.is_empty()
             && !scoped_place_matches(&checked.comptime_type_bindings, &any)
             && !checked
@@ -171,7 +186,108 @@ fn scoped_place_matches(
     })
 }
 
+fn field_reflection_intrinsic(id: jett_intrinsics::IntrinsicId) -> bool {
+    matches!(
+        id,
+        jett_intrinsics::IntrinsicId::TypeFields
+            | jett_intrinsics::IntrinsicId::TypeFieldValue
+            | jett_intrinsics::IntrinsicId::TypeConstructStart
+            | jett_intrinsics::IntrinsicId::TypeConstructPut
+            | jett_intrinsics::IntrinsicId::TypeConstructFinish
+    )
+}
+
+fn scoped_reflection(
+    scopes: &HashMap<Span, Vec<jett_typecheck::CheckedComptimeTypeBinding>>,
+) -> bool {
+    scopes.values().flatten().any(|scope| {
+        scope
+            .body
+            .intrinsic_ids
+            .values()
+            .any(|id| field_reflection_intrinsic(*id))
+            || scoped_reflection(&scope.body.comptime_type_bindings)
+    })
+}
+
 impl Interpreter {
+    pub(in crate::interpreter) fn checked_field_intrinsic_owner(
+        &self,
+        callee: &jett_parser::ast::Expr,
+        types: &[jett_parser::ast::TypeExpr],
+        arguments: &[jett_parser::ast::CallArg],
+        span: Span,
+    ) -> Result<Option<jett_parser::ast::TypeExpr>, String> {
+        let Some(context) = self
+            .field_update_context
+            .as_ref()
+            .filter(|context| context.active)
+        else {
+            return Ok(None);
+        };
+        let owner = context
+            .checked
+            .field_intrinsic_owner(callee, types, arguments, span)
+            .map_err(|error| error.to_string())?;
+        self.canonical_field_intrinsic_owner(context, owner)
+    }
+
+    pub(in crate::interpreter) fn checked_field_pipeline_intrinsic_owner(
+        &self,
+        step: &jett_parser::ast::PipelineStep,
+    ) -> Result<Option<jett_parser::ast::TypeExpr>, String> {
+        let Some(context) = self
+            .field_update_context
+            .as_ref()
+            .filter(|context| context.active)
+        else {
+            return Ok(None);
+        };
+        let owner = context
+            .checked
+            .field_pipeline_intrinsic_owner(step)
+            .map_err(|error| error.to_string())?;
+        self.canonical_field_intrinsic_owner(context, owner)
+    }
+
+    fn canonical_field_intrinsic_owner(
+        &self,
+        context: &FieldUpdateContext,
+        owner: Option<jett_types::TypeId>,
+    ) -> Result<Option<jett_parser::ast::TypeExpr>, String> {
+        let Some(owner) = owner else {
+            return Ok(None);
+        };
+        let checked = context.checked.program().checked();
+        let name = checked.interner.type_name(owner);
+        let fields = checked
+            .reflection_metadata
+            .get_type_fields_for_id(owner)
+            .ok_or("checked field intrinsic owner has no canonical field metadata")?;
+        let expected_kind = match checked.interner.resolve(owner) {
+            Type::Struct(_) => "struct",
+            Type::Bitfield(_) => "bitfield",
+            _ => return Err("checked field intrinsic owner is not a struct or bitfield".into()),
+        };
+        let metadata = self
+            .reflection_metadata
+            .as_ref()
+            .ok_or("checked field intrinsic owner has no installed reflection metadata")?;
+        if metadata.get_type_fields(&name) != Some(fields)
+            || metadata
+                .get_type_info(&name)
+                .is_none_or(|info| info.kind != expected_kind)
+        {
+            return Err(
+                "checked field intrinsic owner has conflicting canonical reflection metadata"
+                    .into(),
+            );
+        }
+        Self::debug_type(&name)
+            .map(Some)
+            .ok_or("checked field intrinsic owner has no canonical interpreter type".into())
+    }
+
     pub(in crate::interpreter) fn prepare_checked_field_inline(
         &self,
         source: &Value,

@@ -130,7 +130,11 @@ impl CheckedExecution {
         let [owner] = prepared.types() else {
             return Err(ResourceExecutionError::MissingCheckedBody);
         };
-        let fields = checked_owner_fields(self.program(), *owner)?;
+        let reflection = prepared
+            .reflections()
+            .first()
+            .ok_or(ResourceExecutionError::MissingCheckedBody)?;
+        let fields = checked_owner_fields_for_reflection(self.program(), *owner, reflection)?;
         let variables = self
             .program
             .resolved()
@@ -278,6 +282,23 @@ impl CheckedExecution {
             reflection: candidate.reflection.clone(),
         })
     }
+}
+
+fn checked_owner_fields_for_reflection(
+    program: &CheckedResourceProgram,
+    owner: TypeId,
+    source: &ReflectionTypeInfo,
+) -> Result<Vec<(TypeId, ReflectionFieldInfo)>, ResourceExecutionError> {
+    if super::ordinary_field_reflection::checked_field_reflection_owner(
+        &program.checked().interner,
+        owner,
+        source,
+    )?
+    .is_none()
+    {
+        return Ok(Vec::new());
+    }
+    checked_owner_fields(program, owner)
 }
 
 fn checked_owner_fields(
