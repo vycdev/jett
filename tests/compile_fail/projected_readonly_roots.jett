@@ -1,5 +1,5 @@
-# ERROR: E0404 x14
-# ERROR: E0401 x9
+# ERROR: E0404 x13
+# ERROR: E0401 x10
 namespace app
 struct Inner:
     value: int64

@@ -3475,3 +3475,36 @@ This local regression receipt supplies no new Source-deleted executions or
 full workspace, inventory, GNU/installed-distribution or Resource acceptance.
 The remaining coverage obligations and fixed 207-fixture/182-object denominators
 are unchanged. GitHub CI remains disabled at the user's request.
+
+#### Frontend regression expectations after owned-view support
+
+The Driver HIR-failure capture test now uses a nested temporary field view in
+place of the supported mutable-owned local view. It retains the exact ordered
+comptime/Verify observations, absent BuildResult, HIR diagnostic prefix, current
+stable-local-origin diagnostic and error source chain. The nested temporary
+case records a current HIR implementation limit; it does not prohibit valid
+Source or change the selected temporary-backing lifetime contract.
+
+The readonly-root fixture changes only its expected diagnostic distribution:
+E0404 x13 and E0401 x10 still require all 23 errors. A payload matched from a
+viewed enum retains its borrowed origin, so its field write reports E0401. This
+matches the existing isolated borrowed-match control and the design's read-only
+view rule. No compiler policy or fixture body changes.
+
+Focused Driver capture and compile-fail fixture tests each pass. All four
+projected-assignment integration tests and the full **603-test fixture suite**
+pass. The fixture suite supplies reference/frontend evidence, not full native
+execution acceptance. Logs under `target/native/`:
+
+- `local-regression-driver-hir-capture-v1.log`, SHA-256
+  `792dc6b6ab7b7f06285025c4c3532f65384c0ca9de433fcc41681d159dc06465`.
+- `local-regression-projected-fixture-v1.log`, SHA-256
+  `db6da58cb0332c43b32039a2908a29869710feef1e4515c5c0c1b9d990b74081`.
+- `local-regression-projected-assignment-v1.log`, SHA-256
+  `be4be8393b246b8ffae2f7bff72e636c6fedd521b37325ff9bcffd3ca7373d1d`.
+- `local-regression-fixture-suite-v1.log`, SHA-256
+  `df7168797468b39cc14403ab1398d69600faab17af85d3ba5c01fd333dbbee1b`.
+
+This is regression maintenance, with no new native execution or full
+workspace/inventory acceptance. Coverage denominators and remaining obligations
+are unchanged. GitHub CI remains disabled at the user's request.

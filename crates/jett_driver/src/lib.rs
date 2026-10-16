@@ -5959,10 +5959,12 @@ function observe() returns int64:
     return 7
 struct Packet:
     data: bytes
+function make_packet() returns Packet:
+    return Packet(data: bytes.new())
 function main() returns nothing:
     int64 baked = comptime observe()
-    mutable Packet item = Packet(data: bytes.new())
-    bytes borrowed = view item.data
+    if baked == 7:
+        bytes borrowed = view make_packet().data
 verify checking:
     println("checked")
     assert true
@@ -5971,7 +5973,7 @@ verify checking:
         .unwrap();
         let failure = match lower_file_for_backend(&path) {
             Err(failure) => failure,
-            Ok(_) => panic!("mutable borrowed origin must fail after frontend observations"),
+            Ok(_) => panic!("nested temporary origin must fail after frontend observations"),
         };
         assert_eq!(
             failure.debug_observations(),
@@ -5989,7 +5991,7 @@ verify checking:
         assert!(
             failure
                 .to_string()
-                .contains("native borrowed alias requires immutable bindings")
+                .contains("native borrowed alias requires a stable local origin; temporary views remain unsupported")
         );
         assert!(std::error::Error::source(&failure).is_some());
     }
