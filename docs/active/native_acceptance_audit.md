@@ -3812,3 +3812,95 @@ actor/Resource temporary authority, full connected lifetime contract,
 Resource/Graph integration, suite-factory, full native inventory/corpus,
 workspace/doc-test, installed-host or whole-goal acceptance. The fixed 207/182
 denominators and rough planning estimate remain unchanged. CI remains disabled.
+
+#### Canonical value conversions: bounded compiler and native regression acceptance — 2026-10-16
+
+The [canonical conversion note](native_canonical_value_conversions.md) records
+a private receipt around completion's single actual canonical coercer execution. It
+retains complete immutable before/after Programs and the same borrowed type
+arena, then replays the actual occurrence-specific callable tokens and adapters.
+It does not independently remint expected output or accept a caller-provided
+current table. Actor, mutable-sum and temporary peers retain original-proof
+checks and exact current-operation comparisons. Graph, baked and temporary
+joins see the same unchanged-before archive. Completion publishes its local
+candidate only after all peer, callable-sealing, HIR and backend-type checks
+succeed. No Runtime, ABI, provider, custody or Source semantics change.
+
+The first positive attempt fails 0/1 before conversion because its authored
+main-body asserts are invalid Source (E0340). The fixture-only repair replaces
+them with typed call/coarsen locals for both required occurrences. All Rust
+proof assertions remain intact, including exact distinct sealed plans, one
+genuine temporary owner, unchanged original Source inventory and repeated
+completion. The corrected positive passes one test in Debug and Release
+checking; all **nine focused receipt controls** and the existing **one genuine
+Graph/baked/temporary composition control** pass. The positive is included in
+the nine, not added to them. Synthetic hidden-archive and NaN comparisons
+remain private comparison evidence, without Source or native execution credit.
+
+- canonical-conversion-compound-positive-v1.log (failed), SHA-256
+  f4891373dff5eacdf2c9a1e175f8eb67f6eff0ca6f33324bcd812334142f1c99.
+- canonical-conversion-compound-positive-v2.log, SHA-256
+  fa986958329d859de65978f79ec9ea14a815a77c66fa0533f890b1023f01abca.
+- canonical-conversion-focused-v1.log, SHA-256
+  38c3a8d6d82b51e86113dfb633525d6242c1531d6200c67f31f71a04e5ddaf5c.
+- canonical-conversion-graph-baked-temporary-v1.log, SHA-256
+  fb2129d0a82a5e1c62b7dcd2c13859a9add435fad6e18e83bca3604d79d08f06.
+
+Broader successors pass **1,856 compiler library tests** (Codegen 135, Comptime
+683, HIR 280, MIR 379 and Typecheck 379), **603 frontend/reference fixtures**
+and **nine CLI capture tests**, all with zero failures. Focused compiler
+controls are included in the HIR total. Exact logs under target/native/:
+
+- canonical-conversion-core-v1.log, SHA-256
+  b712b29d7f69f505131282b590218c5242e3af5ede42494b01717b45b14691a0.
+- canonical-conversion-fixtures-v1.log, SHA-256
+  89dd139d83b8821d845158c2a74fd644270155f87cee02da2c54c1c182c5f94f.
+- canonical-conversion-cli-v1.log, SHA-256
+  45cafe79af2294857dbb443e83c7b4db81e728c3cfa0e7ae4ae821b8d26ef279.
+
+The outer sequence reports command-input-too-long warnings while repeating VS
+setup on its fourth/fifth wrapper calls. The actual Cargo gates and overall
+sequence exit zero using the initialized environment. This is not fresh
+installed-host evidence.
+
+The fresh MSVC compile-only gate then passes with zero Source execution credit.
+The current-image existing-view regression selection passes **24 tests and 48
+paired Source-deleted native executions**: 24 Source Debug/Runtime Debug and
+24 Source Release/Runtime Release. No publication refusals, legacy Debug-only
+runs or full profile cross-product are counted. All 16 pinned selection logs
+and exact zero-failure terminal test counts pass independently. The helpers
+remove the written Source before native execution and require exact reference/
+native stdout, stderr, status and debug observations. All 1,060 compiler/Source,
+68 reused Runtime, 65 fixture and 182 original run-pass guards remain unchanged.
+
+- canonical-conversion-native-gate-v1/gate-acceptance.json, SHA-256
+  41ca89ea180268d5df296355dc45fded45c98bcd0676cfa1d86fc896cd94f637.
+- canonical-conversion-native-views-v1/execution-summary.json, SHA-256
+  fda6e2118a9a00409a45ea53429f490b1010242523877d9feb305f70e2097394.
+
+Both pin the compiled and executed gate image SHA-256
+b37a2366042a3e0326825156eb151e72c3026cc3d593516400b78f5cb1fc6695.
+The existing bytes/List temporary, stable, scoped-call, mutable-owner, reflected
+and actor persistent-view regressions grant current-compiler regression
+acceptance. They do not execute the new compound required-callable or Source17
+Verify/Property suite witnesses; those native obligations remain unproven.
+Historical byte/List matrices are not added to this distinct 48-execution total.
+
+Archive identity now compares all four current optional Arcs even without
+original data. The separate unapplied suite transition must preserve the
+transaction, add native_suites and required_cache to both exhaustive patterns
+and comparisons, and keep every peer on the unchanged before archive. Source17
+still requires actual suite Verify/Property order, distinct ordinal occurrences
+for equal sampled values, its configured trials, Source-deleted Debug/Release
+executions, measured zero provider acquisitions/live custody, cleanup and
+same-context reentry. None is inferred from a closed Source or absent Network
+parameters. Exact actor-handler/actor-state-view callable-sealing transitions
+and nested callback-return identity coverage also remain unproven. The draft
+actor witness first needs valid checked Source; a predicted mismatch is not an
+observed failure.
+
+This bounded receipt does not complete full Resource/Graph suite integration,
+physical temporary destruction/no-hidden-clone proof, the selected lifetime
+contract, the full native inventory/corpus, workspace/doc-tests, installed-host
+or whole-goal acceptance. The fixed 207-fixture/182-object denominators and rough
+planning estimate remain unchanged. GitHub CI remains disabled.

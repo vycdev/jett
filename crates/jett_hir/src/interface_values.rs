@@ -1,6 +1,10 @@
 //! Preserve checked interface boundaries before ownership and CFG lowering.
 use super::*;
 
+#[path = "value_conversion_receipt.rs"]
+mod conversion_receipt;
+pub(super) use conversion_receipt::CanonicalValueConversion;
+
 impl Lowerer<'_> {
     pub(super) fn collect_interface_dispatches(&mut self) -> Vec<Function> {
         let mut slots = Vec::new();
@@ -413,6 +417,16 @@ pub fn complete_value_conversions(
     program: &mut Program,
     types: &TypeInterner,
 ) -> Result<(), Vec<LowerError>> {
+    let mut candidate = program.clone();
+    complete_value_conversions_inner(&mut candidate, types)?;
+    *program = candidate;
+    Ok(())
+}
+
+fn complete_value_conversions_inner(
+    program: &mut Program,
+    types: &TypeInterner,
+) -> Result<(), Vec<LowerError>> {
     let before = program.clone();
     super::reflected_callable::baked::validate_conversion_input(&before)?;
     super::actor_graph::validate_conversion_input(&before)?;
@@ -431,10 +445,11 @@ pub fn complete_value_conversions(
                 }]
             })?;
     }
-    coerce_program(program, types);
-    super::actor_handlers::conversion(program, &before, types)?;
-    super::mutable_sum_backings::conversion(program, &before, types)?;
-    let temporary_execution = super::temporary_local_views::conversion(program, &before, types)?;
+    let conversion = conversion_receipt::coerce(program, &before, types)?;
+    super::actor_handlers::conversion(program, &before, types, &conversion)?;
+    super::mutable_sum_backings::conversion(program, &before, types, &conversion)?;
+    let temporary_execution =
+        super::temporary_local_views::conversion(program, &before, types, &conversion)?;
     // Each private transition authenticates the same unchanged archive and
     // exact post-conversion functions before their renewed views are joined.
     let mut graph_converted = program.clone();
@@ -465,6 +480,15 @@ pub fn complete_value_conversions(
                 })
                 .collect()
         })
+}
+
+#[cfg(test)]
+pub(super) fn recorded_coercion_for_test<'types>(
+    program: &mut Program,
+    before: &Program,
+    types: &'types TypeInterner,
+) -> Result<CanonicalValueConversion<'types>, Vec<LowerError>> {
+    conversion_receipt::coerce(program, before, types)
 }
 
 // The private Graph factory binds its exact checked recipe transition before

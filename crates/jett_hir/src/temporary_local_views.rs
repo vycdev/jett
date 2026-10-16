@@ -770,6 +770,7 @@ pub(super) fn conversion(
     program: &Program,
     before: &Program,
     types: &TypeInterner,
+    conversion: &interface_values::CanonicalValueConversion<'_>,
 ) -> Result<Option<resource_source::Materialized>, Vec<LowerError>> {
     if !expected(before) && !has_markers(before) {
         return Ok(None);
@@ -783,8 +784,7 @@ pub(super) fn conversion(
             })
             .collect::<Vec<_>>()
     })?;
-    let mut replay = before.clone();
-    interface_values::coerce_program(&mut replay, types);
+    let replay = conversion.replay(before, types)?;
     // The caller joins only this execution view after its peer Graph/baked
     // transitions authenticate the same unchanged archive independently.
     finish_replay(program, before, &replay).map(Some)

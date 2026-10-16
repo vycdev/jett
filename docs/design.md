@@ -9033,3 +9033,15 @@ belongs to the exact checked refinement declaration. Copied syntax, coincident
 source spans, a different enclosing declaration or another compiler session
 cannot substitute for that association. A successful or failed occurrence is
 still evaluated once for each selected original context.
+
+### Native conversion proof identity
+
+Completing generated HIR conversions retains each actual canonical constructor's
+private proof identity, including distinct occurrences with the same values.
+Independent proof refreshers may replay that exact construction after checking
+the complete input and original ownership proofs. A type spelling, copied token,
+or mutable current table grants no replacement authority. Failed completion
+publishes no partially converted Program or renewed archive. These compiler
+invariants change no Source admission, equality, purity, ownership or comptime
+rule. Verification remains recorded separately in the
+[canonical conversion note](active/native_canonical_value_conversions.md).

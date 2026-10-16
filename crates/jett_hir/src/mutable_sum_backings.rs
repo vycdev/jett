@@ -319,6 +319,7 @@ pub(super) fn conversion(
     program: &mut Program,
     before: &Program,
     types: &TypeInterner,
+    conversion: &interface_values::CanonicalValueConversion<'_>,
 ) -> Result<(), Vec<LowerError>> {
     validate_program(before).map_err(|errors| {
         errors
@@ -329,8 +330,7 @@ pub(super) fn conversion(
             })
             .collect::<Vec<_>>()
     })?;
-    let mut expected = before.clone();
-    interface_values::coerce_program(&mut expected, types);
+    let expected = conversion.replay(before, types)?;
     for original in &before.functions {
         if original.mutable_sum_backings.is_empty() {
             continue;

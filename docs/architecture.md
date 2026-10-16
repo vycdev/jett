@@ -4022,7 +4022,18 @@ inside existing lists, maps, optionals, and results. Container descriptors use
 linked addresses of checked generated adapters. Comptime callbacks materialize
 their checked source signatures before conversion to the requested type. A final
 HIR conversion pass reuses existing adapters and lowers newly materialized
-conversions before ownership analysis. Generic closures carry their lexical type
+conversions before ownership analysis. Canonical completion runs on an unpublished
+Program clone. A private boxed receipt records the one actual coercer execution
+and its complete before/after tables, retaining occurrence-specific reflected
+callable identities. Actor, mutable-sum and temporary-view proof refreshers replay
+that output only for the exact complete input and the same borrowed type arena.
+They still validate their own original receipts and exact current operations.
+All peer views and final HIR/backend-type checks must succeed before publication.
+Every optional private archive Arc participates in identity comparison, including
+hidden views on an archive without original Source data. The receipt is temporary
+and cannot be stored in its own output graph; see
+[canonical value conversions](active/native_canonical_value_conversions.md).
+Generic closures carry their lexical type
 bindings, ordered enclosing type arguments, and alias reflection metadata so
 materialization can select the checked body even when signatures coincide.
 Named calls resolve explicit type arguments in the caller before isolating the

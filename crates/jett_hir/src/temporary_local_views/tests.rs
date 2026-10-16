@@ -372,8 +372,13 @@ fn temporary_execution_joins_genuine_graph_and_baked_peer_transitions() {
         assert!(program.resource_source.reflected_values.is_some());
         let before = program.clone();
         let mut replay = before.clone();
-        interface_values::coerce_program(&mut replay, &checked.checked().interner);
-        let view = conversion(&replay, &before, &checked.checked().interner)
+        let receipt = interface_values::recorded_coercion_for_test(
+            &mut replay,
+            &before,
+            &checked.checked().interner,
+        )
+        .unwrap();
+        let view = conversion(&replay, &before, &checked.checked().interner, &receipt)
             .unwrap()
             .unwrap();
         assert_eq!(

@@ -411,6 +411,7 @@ pub(super) fn conversion(
     program: &mut Program,
     before: &Program,
     types: &TypeInterner,
+    conversion: &interface_values::CanonicalValueConversion<'_>,
 ) -> Result<(), Vec<LowerError>> {
     validate_program(before).map_err(|errors| {
         errors
@@ -421,8 +422,7 @@ pub(super) fn conversion(
             })
             .collect::<Vec<_>>()
     })?;
-    let mut expected = before.clone();
-    super::interface_values::coerce_program(&mut expected, types);
+    let expected = conversion.replay(before, types)?;
     for function in &mut program.functions {
         if !function.actor_state_views.is_empty() {
             let original = before

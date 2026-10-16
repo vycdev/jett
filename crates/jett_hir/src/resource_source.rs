@@ -130,30 +130,33 @@ impl std::fmt::Debug for ResourceSourceArchive {
             .finish()
     }
 }
+fn same_optional_arc<T>(left: &Option<Arc<T>>, right: &Option<Arc<T>>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+        _ => false,
+    }
+}
 impl PartialEq for ResourceSourceArchive {
     fn eq(&self, other: &Self) -> bool {
-        match (&self.data, &other.data) {
-            (None, None) => true,
-            (Some(a), Some(b)) => {
-                Arc::ptr_eq(a, b)
-                    && match (&self.reflected_values, &other.reflected_values) {
-                        (None, None) => true,
-                        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                        _ => false,
-                    }
-                    && match (&self.graph_values, &other.graph_values) {
-                        (None, None) => true,
-                        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                        _ => false,
-                    }
-                    && match (&self.execution, &other.execution) {
-                        (None, None) => true,
-                        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                        _ => false,
-                    }
-            }
-            _ => false,
-        }
+        // Exhaustive patterns make new archive fields require an identity audit.
+        // Hidden views on an empty archive still participate in the comparison.
+        let Self {
+            data,
+            execution,
+            reflected_values,
+            graph_values,
+        } = self;
+        let Self {
+            data: other_data,
+            execution: other_execution,
+            reflected_values: other_reflected_values,
+            graph_values: other_graph_values,
+        } = other;
+        same_optional_arc(data, other_data)
+            && same_optional_arc(execution, other_execution)
+            && same_optional_arc(reflected_values, other_reflected_values)
+            && same_optional_arc(graph_values, other_graph_values)
     }
 }
 impl Eq for ResourceSourceArchive {}
