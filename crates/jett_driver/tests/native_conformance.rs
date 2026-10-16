@@ -262,6 +262,20 @@ fn run_bounded_with_env(
     directory: &Path,
     scripted_provider: Option<(&str, &str)>,
 ) -> std::process::Output {
+    run_bounded_with_environment(
+        executable,
+        directory,
+        scripted_provider.as_slice(),
+        scripted_provider,
+    )
+}
+
+fn run_bounded_with_environment(
+    executable: &Path,
+    directory: &Path,
+    environment: &[(&str, &str)],
+    scripted_provider: Option<(&str, &str)>,
+) -> std::process::Output {
     // File-backed output also bounds the wait if a child process inherits a handle.
     let mut stdout = tempfile::NamedTempFile::new().unwrap();
     let mut stderr = tempfile::NamedTempFile::new().unwrap();
@@ -272,7 +286,7 @@ fn run_bounded_with_env(
         .stdin(Stdio::null())
         .stdout(stdout.reopen().unwrap())
         .stderr(stderr.reopen().unwrap());
-    if let Some((name, value)) = scripted_provider {
+    for (name, value) in environment {
         command.env(name, value);
     }
     let mut child = ExecutionChild(command.spawn().expect("execute native artifact"));
@@ -322,6 +336,7 @@ fn retain_resource_native_evidence(
         executable.to_path_buf(),
         directory.join("resource.obj"),
         directory.join("resource-native-report-v1.bin"),
+        directory.join("resource-native-host-abi-control-v2.bin"),
     ] {
         if path.is_file() {
             let metadata = path.metadata().unwrap();

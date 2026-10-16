@@ -33,6 +33,8 @@ use ordinary_reservation_faults::{ReservationFaults, ReservationSite};
 mod test_archive_api;
 #[cfg(all(test, jett_resource_native_test_archive))]
 mod test_archive_main;
+#[cfg(all(test, jett_resource_native_test_archive))]
+pub(super) mod test_observations;
 pub(super) use graph_descriptors::CheckedGraphHookProof;
 #[cfg(test)]
 pub(super) use provider::{DecodedScript, NativeTestEvent};
@@ -291,6 +293,13 @@ pub(super) struct ResourceOrdinaryOwner {
     ordinal: usize,
 }
 impl ResourceOrdinaryOwner {
+    #[cfg(all(test, jett_resource_native_test_archive))]
+    pub(super) fn observation_identity(self) -> Option<test_observations::AttemptIdentity> {
+        Some(test_observations::AttemptIdentity {
+            id: self.attempt.raw(),
+            ordinal: u32::try_from(self.ordinal).ok()?,
+        })
+    }
     pub(super) fn ordinal(self) -> usize {
         self.ordinal
     }

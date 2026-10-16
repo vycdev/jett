@@ -3904,3 +3904,107 @@ physical temporary destruction/no-hidden-clone proof, the selected lifetime
 contract, the full native inventory/corpus, workspace/doc-tests, installed-host
 or whole-goal acceptance. The fixed 207-fixture/182-object denominators and rough
 planning estimate remain unchanged. GitHub CI remains disabled.
+
+#### Private Resource observation v2: local checks and archive checkpoint — 2026-10-16
+
+The double-private recorder and strict v2 decoder are integrated across 16 Rust
+paths. Production ABI 1/layout 3, 58 production and 8 private C exports,
+Counts 72/ArchiveInfo 32 bytes and receipt/normal-launcher manifest version 1 are
+unchanged. Private test protocol 2/JTRRP002 and JTRHC002 add bounded observation,
+not Source/custody/provider authority. Five acquisition-pipeline stages stay
+separate; successful Property history and supported installed int64 bits remain
+actual runtime observations only when captured by a matched native run. See the
+[observation checkpoint](native_resource_private_observations.md).
+
+**407 focused local checks pass**: 389 Runtime library, 12 report decoder, one
+Source17 history oracle and five host decoder controls. Six actual MSVC archives
+are measured in matched Debug/Release profiles: normal Runtime+Launcher and
+private Runtime. Their exact target/native/ receipt pins are:
+
+- private-observation-v2-normal-msvc-v1/receipt.json:
+  4e41eca939e70f4c1ea162639b3f714510726a118a200d38bb89bddc6d575e8c.
+- private-observation-v2-private-msvc-v1/receipt.json:
+  d19cc38b1d38a6f84783ad0fd1dc219cea722d88ce5e1db8ddba2b025d64dbe0.
+- private-observation-v2-measurement-paired-v1-terminal.json:
+  411f53b3f27b98962ed900c336bd1a7c89f88c7836c7ccebdccd3b53ee6aa52f.
+
+Both measurement processes exit zero and are reaped. Source/config/helper/tool
+maps and 68 historical artifact guards remain unchanged. The actual terminal
+records 7.4653 GiB maximum cache usage, within its 8 GiB limit. This is a bounded
+measurement observation, not a claim that the cache ceiling was maintained
+through earlier historical runs. Archive measurement grants zero Source
+executions. The Source17 normal pin is updated only from its actual receipt;
+its Source is unchanged.
+
+The verifier retains the actual receipt bytes. Its successor checks physical
+linker identity/digest without rewriting recorded argv and authenticates the
+known terminal duplicate-liveness serialization defect through the exact genuine
+preflight receipt. Four real command baselines and 12 negative controls pass.
+The full compiler-before guard passes. The accepted fresh compiler gate now
+binds 1,089 compiler/Source, 69 fresh Runtime, 33 measurement and 68 historical
+artifact inputs plus 27 helper entries and 182 original run-pass inputs.
+
+At this checkpoint the fresh compiler gate is **accepted**, with zero Source
+execution credit. Native ingress and whole Source17 v2 now have separate bounded
+**accepted** execution receipts. Historical protocol 1 Suite/View/lifecycle receipts retain
+their original scope and are not promoted to current-v2 coverage. Actor 8827
+separately accepted two unchanged Sources/four Source-deleted Debug/Release
+processes before this Runtime change; its required-value summary
+f9f2e093ac3806fd48c24f426b5eace86ef745697fe46f494ed8e44dbe2aaa5d and
+direct-getter summary cb01bf437b69d6906e526035e955050d906c654cbe356ac7e7065c3aef591fdd
+remain historical and grant no fresh v2 regression credit. Per-kind ordinary
+storage, private artifact retainers, normal custody/reentry, physical lifetime,
+whole inventory/workspace/installed-host acceptance and the full native goal
+remain open. No coverage percentage is inferred. GitHub CI remains disabled.
+
+The accepted compile-only gate is
+private-observation-v2-gate-compile-v3/gate-acceptance.json, SHA-256
+3d05e4499c87c4d606ca515ca1ab2c7c9ece96331749bb564b62dfe017f78cc3;
+its inner terminal is 55d5c2889f7fa5fae6e19a668c3cee6f07e71c9a7bdfd35bfc75de219691b3e6
+and outer private-observation-v2-compile-supervisor-v4/terminal.json is
+2276b0b86a8469365642ce61179a323573a013e1b255cedcaab8c474a75866a5.
+The image is 40,563,712 bytes, SHA-256
+7a626568c675d99fe8464843efe69735232d9e0b8fb0d786853193801fde6205.
+Both terminals complete with exit zero, reaped quiet owned processes, disposed
+root handle, released leases and no errors. The outer watcher observes a maximum
+7.5453 GiB within its 8 GiB limit. Five pure PowerShell and eight pure Python
+identity controls pass separately from the 407 local tests; none grants Source
+execution credit.
+
+The first gate attempt remains unaccepted after a recycled-child-PID monitor
+refusal following successful Cargo compilation. The second keeps unchanged
+guards and releases leases but refuses the cached test image. Both failed
+outputs remain preserved. For the accepted third gate only the test target
+timestamp changes; Source bytes remain 1eb3316afe08153c48f4da8e9e33cc233ac30896d6b3695947f5e45d0c4b7e75
+and Source17 remains unchanged. No failed-attempt observations are promoted to
+accepted native execution.
+
+The fresh native ingress gate accepts 32 actual processes: eight Source
+processes/10 report-header entries, 22 host ABI controls and two pure writer
+controls. Four linked artifact rows supply no execution credit, and the Source
+processes cover two distinct original Source hashes. Acceptance is
+native-bounded-ingress-execution-v3/execution-acceptance.json, SHA-256
+56c746359c5fcd7ab73399ed98f64de5fe80d048d94f2d4a33b0706d09c773fb;
+its catalogue is 4347e7b4a69a43b43466954538f07dad69a99c83aee5a0d127eabb97d231ae39.
+
+Whole unchanged Source17 accepts eight processes/four objects/eight private
+entries across paired Debug/Release normal and private launchers. Both private
+Property profiles observe two 100-trial entries and 6,404 history records each;
+Verify observes four history records per private profile. Every private
+incomplete flag is zero, all five separate acquisition counters are measured
+zero, and same-context reentry passes. All eight statuses are zero; Source/
+objects are deleted, checked-program Weak/input-Arc roots released, and reaped
+executables/PDBs removed. Exact installed int64 bits are checked by the Rust
+oracle against original hashed bytes, without JavaScript-number rewriting.
+Acceptance is native-bounded-source17-execution-v3/execution-acceptance.json,
+SHA-256 a59a3d4cadf23a05d30b7ecceb034f501dd40d02f404570f33309d787192087b;
+the harness summary is 271caf5fbd93f9fd4733185188ad270b344f2dcebba0f126ed93df984ffdb5e6.
+
+The accepted v4 runner uses 15-second helper startup, 5-second CIM operations,
+a 30-second single cleanup deadline and 3,600-second active deadline. The two
+preserved prelaunch refusals—physical-tool PATH and helper startup—grant no
+Source execution credit. Normal telemetry remains null and unmeasured. The
+per-kind ordinary storage, private retainer, normal custody/reentry, physical
+lifetime and full native acceptance obligations remain open; full_acceptance
+stays false and GitHub CI stays disabled. Historical protocol 1 limitations above
+are not rewritten or promoted.

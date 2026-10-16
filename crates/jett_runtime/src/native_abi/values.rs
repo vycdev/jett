@@ -897,6 +897,8 @@ struct NativeActorIdentity {
 
 #[derive(Default)]
 pub(super) struct NativeValues {
+    #[cfg(all(test, jett_resource_native_test_archive))]
+    pub(in crate::native_abi) test_observations: resource::test_observations::Recorder,
     #[cfg(test)]
     allocation_budget: Option<usize>,
     strings: HashMap<NativeHandle, NativeString>,

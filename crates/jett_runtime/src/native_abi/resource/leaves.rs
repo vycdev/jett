@@ -80,7 +80,11 @@ pub unsafe extern "C" fn jett_rt_v1_resource_scope_validate(
     template: u32,
 ) -> JettRuntimeStatusV1 {
     status(context, |s, v, r| {
-        s.scope_validate(v, id(scope)?, function, signature, template)
+        let scope = id(scope)?;
+        s.scope_validate(v, scope, function, signature, template)?;
+        #[cfg(all(test, jett_resource_native_test_archive))]
+        s.observe_property_source_entry(v, scope);
+        Ok(())
     })
 }
 
@@ -128,6 +132,11 @@ pub unsafe extern "C" fn jett_rt_v1_resource_hook_prepare(
     descriptor: u64,
     out_value: *mut u64,
 ) -> JettRuntimeStatusV1 {
+    #[cfg(all(test, jett_resource_native_test_archive))]
+    test_observations::observe_ingress(
+        context,
+        test_observations::AcquisitionIngress::HookPrepare { operation },
+    );
     unsafe {
         output(context, out_value, |s, v, r| {
             s.prepare_hook(
@@ -154,6 +163,11 @@ pub unsafe extern "C" fn jett_rt_v1_resource_factory_prepare(
     network: u64,
     out_value: *mut u64,
 ) -> JettRuntimeStatusV1 {
+    #[cfg(all(test, jett_resource_native_test_archive))]
+    test_observations::observe_ingress(
+        context,
+        test_observations::AcquisitionIngress::FactoryPrepare,
+    );
     unsafe {
         output(context, out_value, |s, v, r| {
             s.prepare_factory(v, r, id(call)?, network)
@@ -172,6 +186,11 @@ pub unsafe extern "C" fn jett_rt_v1_resource_factory_commit(
     label: i64,
     out_value: *mut JettResourceCallResultV1,
 ) -> JettRuntimeStatusV1 {
+    #[cfg(all(test, jett_resource_native_test_archive))]
+    test_observations::observe_ingress(
+        context,
+        test_observations::AcquisitionIngress::FactoryCommit,
+    );
     unsafe {
         output(context, out_value, |s, v, r| {
             s.factory(v, r, id(prepared)?, network, label)

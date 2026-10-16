@@ -12,11 +12,9 @@ const SUPPORT: &str = include_str!("../resource/resource_probe.jett");
 const SOURCE17_SHA256: &str = "c8e74848356a5b3d09ab6659318b1e1292718d34443f7f37222bafd6f3eed0ff";
 const NORMAL_RECEIPT_ENV: &str = "JETT_SOURCE17_NORMAL_ARCHIVE_RECEIPT_V1";
 const NORMAL_RECEIPT_SHA256: &str =
-    "2b2b9cd529c451c216072dc2b563253149f409bd3ef9ea867a1a86da1c637069";
+    "4e41eca939e70f4c1ea162639b3f714510726a118a200d38bb89bddc6d575e8c";
 const EVIDENCE_ENV: &str = "JETT_SOURCE17_SUITE_EVIDENCE_V1";
 const UNMEASURED: &[&str] = &[
-    "total attempted provider acquisitions, including rejected attempts before event recording",
-    "successful runtime Property context set/call/clear history and complete trial order",
     "individual ordinary storage-kind live counts beyond aggregate ordinary_empty",
     "individual private artifact-retainer counts beyond checked-program and caller input-Arc release",
     "normal-launcher custody counts and same-context reentry",
@@ -145,6 +143,10 @@ fn expected_contexts(
             "name_span": format!("{:?}", trial.span()),
             "given_names": trial.given_names(),
             "checked_arguments": format!("{:?}", trial.case().arguments),
+            "checked_argument_int64_bits": trial.case().arguments.iter().map(|value| match value {
+                jett_comptime::Value::Int64(value) => *value as u64,
+                _ => panic!("Source17 marker must retain its checked int64 domain"),
+            }).collect::<Vec<_>>(),
             "context_set_bytes_utf8": format!("property '{}' trial {}: ", trial.name(), one_based),
             "context_clear_after_call": true,
         }));
@@ -416,54 +418,234 @@ fn empty_two_entry_script() -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn observe_private(observed: &report::Report) -> Json {
+fn acquisition_counters(counts: &report::Counters) -> Json {
+    json!({
+        "hook_prepare_ingress": counts.values[0],
+        "acquire_hook_prepare_ingress": counts.values[1],
+        "factory_prepare_ingress": counts.values[2],
+        "factory_commit_ingress": counts.values[3],
+        "provider_construct_dispatch": counts.values[4],
+    })
+}
+
+fn observe_context_history(observed: &report::Report, purpose: Purpose, expected: &Json) -> Json {
+    let telemetry = &observed.observations;
+    assert_eq!(
+        telemetry.flags, 0,
+        "incomplete private telemetry is never acceptance"
+    );
+    assert_eq!(
+        telemetry.counters.values, [0; 5],
+        "measured dispatches, not provider-event inference"
+    );
+    assert_eq!(telemetry.attempts.len(), observed.attempts.len());
+    assert!(
+        telemetry
+            .history
+            .iter()
+            .all(|event| matches!(event.channel, report::Channel::Attempt(_))),
+        "Source17 has no legacy/session context mutations"
+    );
+    let mut attempts = Vec::new();
+    for (ordinal, (boundary, attempt)) in telemetry
+        .attempts
+        .iter()
+        .zip(&observed.attempts)
+        .enumerate()
+    {
+        assert_eq!(boundary.identity.id, attempt.completion.attempt);
+        assert_eq!(boundary.identity.ordinal as usize, ordinal);
+        let end = boundary.end.as_ref().expect("known genuine sealed attempt");
+        assert_eq!(boundary.begin.counters.values, [0; 5]);
+        assert_eq!(end.counters.values, [0; 5]);
+        let events = telemetry
+            .history
+            .iter()
+            .filter(|event| event.channel == report::Channel::Attempt(boundary.identity))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            events.first().map(|event| event.sequence),
+            boundary.begin.sequence
+        );
+        assert_eq!(events.last().map(|event| event.sequence), end.sequence);
+        assert!(matches!(
+            events.first().unwrap().kind,
+            report::HistoryKind::Begin
+        ));
+        assert!(matches!(
+            events.last().unwrap().kind,
+            report::HistoryKind::End
+        ));
+        assert_eq!(events.first().unwrap().context, None);
+        assert_eq!(events.last().unwrap().context, None);
+        let mut trials = Vec::new();
+        match purpose {
+            Purpose::Verify => assert_eq!(
+                events.len(),
+                2,
+                "Verify must have no Property mutations/calls"
+            ),
+            Purpose::Property => {
+                let expected_trials = expected["trials_in_checked_order"].as_array().unwrap();
+                assert_eq!(
+                    expected_trials.len() as u64,
+                    expected["trial_count"].as_u64().unwrap()
+                );
+                let mut cursor = 1;
+                for trial in expected_trials {
+                    let bytes = trial["context_set_bytes_utf8"].as_str().unwrap().as_bytes();
+                    let target = u32::try_from(trial["function"].as_u64().unwrap()).unwrap();
+                    let arguments = trial["checked_argument_int64_bits"].as_array().unwrap();
+                    let set = events
+                        .get(cursor)
+                        .expect("every checked trial has a runtime Set");
+                    assert!(matches!(set.kind, report::HistoryKind::Set));
+                    assert_eq!(set.context.as_deref(), Some(bytes));
+                    cursor += 1;
+                    let entered = events.get(cursor).expect("real target prologue after Set");
+                    assert_eq!(entered.context.as_deref(), Some(bytes));
+                    let report::HistoryKind::CallEnter { call, parameters } = &entered.kind else {
+                        panic!("expected actual target entry")
+                    };
+                    assert_eq!(call.function, target);
+                    assert_eq!(parameters.len(), arguments.len());
+                    for (ordinal, (parameter, expected_bits)) in
+                        parameters.iter().zip(arguments).enumerate()
+                    {
+                        assert_eq!(parameter.parameter as usize, ordinal);
+                        assert_eq!(
+                            parameter.value,
+                            report::ParameterValue::Int64 {
+                                bits: expected_bits.as_u64().unwrap()
+                            },
+                            "actual installed marker bits must match the checked generated trial"
+                        );
+                    }
+                    let target_call = *call;
+                    let entered_sequence = entered.sequence;
+                    cursor += 1;
+                    let mut complete = None;
+                    let mut nested = 0;
+                    loop {
+                        let event = events
+                            .get(cursor)
+                            .expect("target completion and Clear must be present");
+                        if matches!(event.kind, report::HistoryKind::Clear) {
+                            break;
+                        }
+                        assert_eq!(event.context.as_deref(), Some(bytes));
+                        assert!(
+                            complete.is_none(),
+                            "no additional call occurs after target completion before Clear"
+                        );
+                        match &event.kind {
+                            report::HistoryKind::CallEnter { call, .. } => {
+                                assert_ne!(
+                                    call.function, target,
+                                    "extra Property target occurrence"
+                                );
+                                nested += 1;
+                            }
+                            report::HistoryKind::CallComplete {
+                                call,
+                                entered_sequence: actual_entry,
+                                body_status,
+                                failure_status,
+                            } => {
+                                assert_eq!(*body_status, 0);
+                                assert_eq!(*failure_status, None);
+                                if *call == target_call {
+                                    assert_eq!(*actual_entry, Some(entered_sequence));
+                                    complete = Some(event.sequence);
+                                }
+                            }
+                            _ => panic!("unexpected mutation/boundary within checked trial"),
+                        }
+                        cursor += 1;
+                    }
+                    let completed = complete.expect("genuine successful target completion");
+                    let cleared = events[cursor];
+                    assert_eq!(cleared.context, None);
+                    trials.push(json!({
+                        "set_sequence": set.sequence, "entered_sequence": entered_sequence,
+                        "completed_sequence": completed, "clear_sequence": cleared.sequence,
+                        "function": target_call.function, "signature": target_call.signature,
+                        "template": target_call.template, "operation": target_call.operation,
+                        "call": target_call.call, "scope": target_call.scope,
+                        "actual_installed_int64_bits": parameters.iter().map(|parameter|
+                            match parameter.value { report::ParameterValue::Int64 { bits } => bits,
+                                report::ParameterValue::Unobserved => panic!("Source17 marker is unobserved") }).collect::<Vec<_>>(),
+                        "actual_parameter_shapes": parameters.iter().map(|parameter| parameter.shape).collect::<Vec<_>>(),
+                        "exact_context_bytes": entered.context,
+                        "nested_resource_calls_retained": nested,
+                    }));
+                    cursor += 1;
+                }
+                assert_eq!(
+                    cursor + 1,
+                    events.len(),
+                    "no missing, duplicated or extra trials"
+                );
+            }
+        }
+        attempts.push(json!({
+            "attempt": boundary.identity.id, "ordinal": boundary.identity.ordinal,
+            "begin_sequence": boundary.begin.sequence, "end_sequence": end.sequence,
+            "begin_counters": acquisition_counters(&boundary.begin.counters),
+            "end_counters": acquisition_counters(&end.counters),
+            "trials": trials,
+        }));
+    }
+    json!({
+        "scope": "Resource ABI validated prologue and actual first completion publication",
+        "ordinary_abi_calls_measured": false,
+        "non_int64_parameter_values_measured": false,
+        "final_counters": acquisition_counters(&telemetry.counters),
+        "incomplete_flags": telemetry.flags,
+        "history_records": telemetry.history.len(),
+        "history_context_bytes": telemetry.context_bytes,
+        "history_final_sequence": telemetry.final_sequence,
+        "attempts": attempts,
+        "raw_history": telemetry.history.iter().map(|event| json!({
+            "sequence": event.sequence, "channel": format!("{:?}", event.channel),
+            "exact_context_bytes": event.context, "event": format!("{:?}", event.kind),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn observe_private(observed: &report::Report, purpose: Purpose, expected: &Json) -> Json {
     assert_eq!(
         observed.attempts.len(),
         2,
         "same context/grant/provider, two entry calls"
     );
+    let context_history = observe_context_history(observed, purpose, expected);
     let mut previous = 0;
-    let attempts = observed
-        .attempts
-        .iter()
-        .map(|attempt| {
-            assert!(attempt.completion.attempt > previous);
-            previous = attempt.completion.attempt;
-            assert_eq!(attempt.completion.body_status, 0);
-            assert_eq!(attempt.completion.cleanup_status, 0);
-            assert_eq!(
-                attempt.completion.selected_channel,
-                report::FailureChannel::Clean
-            );
-            assert!(attempt.ordinary_message.is_empty() && attempt.resource_message.is_empty());
-            assert!(attempt.counts.resources_retired());
-            assert!(attempt.counts.ordinary_empty);
-            assert_eq!(attempt.event_sequence_end, 0);
-            json!({
-                "attempt": attempt.completion.attempt,
-                "body_status": attempt.completion.body_status,
-                "cleanup_status": attempt.completion.cleanup_status,
-                "channel": format!("{:?}", attempt.completion.selected_channel),
-                "resource_owners": attempt.counts.owners,
-                "resource_loans": attempt.counts.loans,
-                "resource_frames": attempt.counts.frames,
-                "registry_entries": attempt.counts.registry_entries,
-                "owner_handles": attempt.counts.owner_handles,
-                "loan_handles": attempt.counts.loan_handles,
-                "frame_handles": attempt.counts.frame_handles,
-                "provisional_returns": attempt.counts.provisional_returns,
-                "ordinary_storage_empty": attempt.counts.ordinary_empty,
-                "observed_before_context_destruction": true,
-                "event_sequence_end": attempt.event_sequence_end,
-                "total_provider_acquisition_attempts": null,
-                "successful_property_context_history": null,
-            })
+    let attempts = observed.attempts.iter().map(|attempt| {
+        assert!(attempt.completion.attempt > previous);
+        previous = attempt.completion.attempt;
+        assert_eq!(attempt.completion.body_status, 0);
+        assert_eq!(attempt.completion.cleanup_status, 0);
+        assert_eq!(attempt.completion.selected_channel, report::FailureChannel::Clean);
+        assert!(attempt.ordinary_message.is_empty() && attempt.resource_message.is_empty());
+        assert!(attempt.counts.resources_retired() && attempt.counts.ordinary_empty);
+        assert_eq!(attempt.event_sequence_end, 0);
+        json!({
+            "attempt": attempt.completion.attempt,
+            "body_status": attempt.completion.body_status,
+            "cleanup_status": attempt.completion.cleanup_status,
+            "channel": format!("{:?}", attempt.completion.selected_channel),
+            "resource_owners": attempt.counts.owners, "resource_loans": attempt.counts.loans,
+            "resource_frames": attempt.counts.frames, "registry_entries": attempt.counts.registry_entries,
+            "owner_handles": attempt.counts.owner_handles, "loan_handles": attempt.counts.loan_handles,
+            "frame_handles": attempt.counts.frame_handles, "provisional_returns": attempt.counts.provisional_returns,
+            "ordinary_storage_empty": attempt.counts.ordinary_empty,
+            "observed_before_context_destruction": true, "event_sequence_end": attempt.event_sequence_end,
         })
-        .collect::<Vec<_>>();
+    }).collect::<Vec<_>>();
     assert!(observed.events.is_empty());
     assert_eq!(observed.script_remaining, 0);
-    assert!(observed.observations_ready_for_acceptance());
-    assert!(observed.all_attempts_succeeded());
+    assert!(observed.observations_ready_for_acceptance() && observed.all_attempts_succeeded());
     assert_eq!(
         (
             observed.created,
@@ -474,15 +656,12 @@ fn observe_private(observed: &report::Report) -> Json {
         (true, 1, 0, 0)
     );
     json!({
-        "attempts": attempts,
-        "provider_events": [],
-        "script_remaining": observed.script_remaining,
-        "created": observed.created,
-        "destroy_attempts": observed.destroy_attempts,
-        "destroy_status": observed.destroy_status,
-        "report_write_status": observed.write_status,
+        "attempts": attempts, "provider_events": [], "script_remaining": observed.script_remaining,
+        "created": observed.created, "destroy_attempts": observed.destroy_attempts,
+        "destroy_status": observed.destroy_status, "report_write_status": observed.write_status,
         "same_context_reentry_observed_by_matched_launcher": true,
-        "zero_total_provider_acquisition_attempts_measured": false,
+        "zero_all_acquisition_dispatch_counters_measured": true,
+        "property_context_and_installed_int64_arguments": context_history,
     })
 }
 
@@ -561,7 +740,7 @@ fn source17_whole_canonical_suites_record_available_native_observations() {
                 let bytes = fs::read(&report_path).unwrap();
                 fs::write(case.join("resource-native-report-v1.bin"), &bytes).unwrap();
                 let observed = report::decode(&bytes).unwrap();
-                let available = observe_private(&observed);
+                let available = observe_private(&observed, prepared.purpose, &prepared.expected);
                 private_attempts += observed.attempts.len();
                 available
             } else {
@@ -621,4 +800,171 @@ fn source17_whole_canonical_suites_record_available_native_observations() {
         "remaining_instrumentation_obligations": UNMEASURED,
         "note": "Successful local test means available measurements passed; it cannot close full acceptance.",
     })).unwrap()).unwrap();
+}
+
+#[test]
+fn source17_property_history_rejects_wrong_values_order_and_incomplete_calls() {
+    fn fixture() -> (report::Report, Json) {
+        let identity = report::AttemptIdentity { id: 41, ordinal: 0 };
+        let mut history = vec![report::HistoryEvent {
+            sequence: 1,
+            channel: report::Channel::Attempt(identity),
+            context: None,
+            kind: report::HistoryKind::Begin,
+        }];
+        let mut expected = Vec::new();
+        for (ordinal, bits) in [u64::MAX, 23].into_iter().enumerate() {
+            let context = format!(
+                "property 'absent_aggregate_property' trial {}: ",
+                ordinal + 1
+            )
+            .into_bytes();
+            let sequence = history.len() as u64 + 1;
+            let call = report::CallIdentity {
+                call: 51 + ordinal as u64 * 2,
+                scope: 52 + ordinal as u64 * 2,
+                function: 7,
+                signature: 8,
+                template: 9,
+                operation: 10,
+            };
+            history.push(report::HistoryEvent {
+                sequence,
+                channel: report::Channel::Attempt(identity),
+                context: Some(context.clone()),
+                kind: report::HistoryKind::Set,
+            });
+            history.push(report::HistoryEvent {
+                sequence: sequence + 1,
+                channel: report::Channel::Attempt(identity),
+                context: Some(context.clone()),
+                kind: report::HistoryKind::CallEnter {
+                    call,
+                    parameters: vec![report::Parameter {
+                        parameter: 0,
+                        shape: 3,
+                        value: report::ParameterValue::Int64 { bits },
+                    }],
+                },
+            });
+            history.push(report::HistoryEvent {
+                sequence: sequence + 2,
+                channel: report::Channel::Attempt(identity),
+                context: Some(context.clone()),
+                kind: report::HistoryKind::CallComplete {
+                    call,
+                    entered_sequence: Some(sequence + 1),
+                    body_status: 0,
+                    failure_status: None,
+                },
+            });
+            history.push(report::HistoryEvent {
+                sequence: sequence + 3,
+                channel: report::Channel::Attempt(identity),
+                context: None,
+                kind: report::HistoryKind::Clear,
+            });
+            expected.push(
+                json!({ "function": 7, "checked_argument_int64_bits": [bits],
+                "context_set_bytes_utf8": String::from_utf8(context).unwrap() }),
+            );
+        }
+        let end = history.len() as u64 + 1;
+        history.push(report::HistoryEvent {
+            sequence: end,
+            channel: report::Channel::Attempt(identity),
+            context: None,
+            kind: report::HistoryKind::End,
+        });
+        let context_bytes = history
+            .iter()
+            .map(|event| event.context.as_ref().map_or(0, Vec::len) as u64)
+            .sum();
+        let counters = report::Counters { values: [0; 5] };
+        let observed = report::Report {
+            attempts: vec![report::Attempt {
+                completion: report::Completion {
+                    attempt: 41,
+                    body_status: 0,
+                    cleanup_status: 0,
+                    selected_channel: report::FailureChannel::Clean,
+                },
+                counts: report::Counts {
+                    owners: 0,
+                    loans: 0,
+                    frames: 0,
+                    registry_entries: 0,
+                    owner_handles: 0,
+                    loan_handles: 0,
+                    frame_handles: 0,
+                    provisional_returns: 0,
+                    ordinary_empty: true,
+                },
+                ordinary_message: Vec::new(),
+                resource_message: Vec::new(),
+                event_sequence_end: 0,
+            }],
+            events: Vec::new(),
+            script_remaining: 0,
+            destroy_status: 0,
+            created: true,
+            destroy_attempts: 1,
+            write_status: 0,
+            observations: report::Snapshot {
+                counters,
+                flags: 0,
+                context_bytes,
+                final_sequence: end,
+                attempts: vec![report::AttemptObservation {
+                    identity,
+                    begin: report::Boundary {
+                        sequence: Some(1),
+                        counters,
+                    },
+                    end: Some(report::Boundary {
+                        sequence: Some(end),
+                        counters,
+                    }),
+                }],
+                history,
+            },
+        };
+        (
+            observed,
+            json!({"trial_count": 2, "trials_in_checked_order": expected}),
+        )
+    }
+    // Authenticate the complete baseline before testing any corruption.
+    let (baseline, expected) = fixture();
+    observe_context_history(&baseline, Purpose::Property, &expected);
+    for mutation in 0..5 {
+        let (mut observed, expected) = fixture();
+        match mutation {
+            0 => match &mut observed.observations.history[2].kind {
+                report::HistoryKind::CallEnter { parameters, .. } => {
+                    parameters[0].value = report::ParameterValue::Int64 { bits: 0 }
+                }
+                _ => unreachable!(),
+            },
+            1 => observed.observations.history.swap(1, 5),
+            2 => {
+                observed.observations.history.remove(3);
+            }
+            3 => observed.observations.flags = 1,
+            4 => match &mut observed.observations.history[2].kind {
+                report::HistoryKind::CallEnter { call, .. } => call.function = 8,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        }
+        assert!(
+            std::panic::catch_unwind(|| observe_context_history(
+                &observed,
+                Purpose::Property,
+                &expected
+            ))
+            .is_err(),
+            "corrupt telemetry mutation {mutation} must fail the checked-plan oracle"
+        );
+    }
 }

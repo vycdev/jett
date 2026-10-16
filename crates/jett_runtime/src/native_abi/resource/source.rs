@@ -1161,8 +1161,162 @@ impl NativeResourceState {
         }
         Ok(value)
     }
+    #[cfg(all(test, jett_resource_native_test_archive))]
+    fn property_observation_identity(
+        &self,
+        handle: ResourceHandleId,
+    ) -> ResourceResult<test_observations::CallIdentity> {
+        let call = self.source_call(handle)?;
+        let scope = call.scope.ok_or(NativeResourceError::WrongFrame)?;
+        match self.operation(call.operation)? {
+            NativeOperation::InvokeSourceFunction {
+                callee,
+                signature,
+                callee_scope,
+                source: Some(_),
+                ..
+            } => Ok(test_observations::CallIdentity {
+                call: handle.raw(),
+                scope: scope.raw(),
+                function: *callee,
+                signature: *signature,
+                template: *callee_scope,
+                operation: call.operation,
+            }),
+            _ => Err(NativeResourceError::WrongOperation),
+        }
+    }
+    #[cfg(all(test, jett_resource_native_test_archive))]
+    pub(super) fn observe_property_source_entry(
+        &self,
+        ordinary: &mut values::NativeValues,
+        scope: ResourceHandleId,
+    ) {
+        use test_observations::{
+            ALLOCATION, BOUNDARY, Channel, EVENT_LIMIT, Parameter, ParameterValue,
+        };
+        if ordinary.test_observation_property_context().is_none() {
+            return;
+        }
+        let length = ordinary
+            .test_observation_property_context()
+            .map_or(0, <[u8]>::len);
+        if let Err(flag) = ordinary.test_observations.context_budget(length) {
+            ordinary.test_observations.incomplete(flag);
+            return;
+        }
+        let context =
+            match test_observations::copy_context(ordinary.test_observation_property_context()) {
+                Ok(Some(context)) => context,
+                Ok(None) => return,
+                Err(flag) => {
+                    ordinary.test_observations.incomplete(flag);
+                    return;
+                }
+            };
+        let prepared = (|| {
+            let handle = self.call_for_scope(scope).map_err(|_| BOUNDARY)?;
+            let call = self.source_call(handle).map_err(|_| BOUNDARY)?;
+            let identity = self
+                .property_observation_identity(handle)
+                .map_err(|_| BOUNDARY)?;
+            let owner = self
+                .attempt
+                .as_ref()
+                .ok_or(BOUNDARY)?
+                .ordinary_owner
+                .observation_identity()
+                .ok_or(BOUNDARY)?;
+            let NativeOperation::InvokeSourceFunction {
+                source: Some(source),
+                ..
+            } = self.operation(call.operation).map_err(|_| BOUNDARY)?
+            else {
+                return Err(BOUNDARY);
+            };
+            if source.formals.len() > test_observations::MAX_PARAMETERS {
+                return Err(EVENT_LIMIT);
+            }
+            let mut parameters = Vec::new();
+            parameters
+                .try_reserve_exact(source.formals.len())
+                .map_err(|_| ALLOCATION)?;
+            for formal in &source.formals {
+                let bits = *call
+                    .parameters
+                    .get(formal.parameter as usize)
+                    .ok_or(BOUNDARY)?;
+                let value = if matches!(formal.value, NativeSourceValue::Ordinary)
+                    && matches!(
+                        self.layout.shapes().get(formal.callee_shape as usize),
+                        Some(NativeShape::Integer {
+                            bits: 64,
+                            signed: true
+                        })
+                    ) {
+                    ParameterValue::Int64 { bits }
+                } else {
+                    ParameterValue::Unobserved
+                };
+                parameters.push(Parameter {
+                    parameter: formal.parameter,
+                    shape: formal.callee_shape,
+                    value,
+                });
+            }
+            Ok((Channel::Attempt(owner), identity, parameters))
+        })();
+        match prepared {
+            Ok((channel, identity, parameters)) => ordinary
+                .test_observations
+                .call_enter(channel, &context, identity, parameters),
+            Err(flag) => ordinary.test_observations.incomplete(flag),
+        }
+    }
+    #[cfg(all(test, jett_resource_native_test_archive))]
+    fn observe_property_source_completion(
+        &self,
+        ordinary: &mut values::NativeValues,
+        handle: ResourceHandleId,
+        completion: SourceCompletion,
+    ) {
+        let identity = match self.property_observation_identity(handle) {
+            Ok(identity) => identity,
+            Err(_) => {
+                ordinary
+                    .test_observations
+                    .incomplete(test_observations::BOUNDARY);
+                return;
+            }
+        };
+        if !ordinary.test_observations.has_entered_call(handle.raw()) {
+            return;
+        }
+        let length = ordinary
+            .test_observation_property_context()
+            .map_or(0, <[u8]>::len);
+        if let Err(flag) = ordinary.test_observations.context_budget(length) {
+            ordinary.test_observations.incomplete(flag);
+            return;
+        }
+        let context =
+            match test_observations::copy_context(ordinary.test_observation_property_context()) {
+                Ok(context) => context,
+                Err(flag) => {
+                    ordinary.test_observations.incomplete(flag);
+                    return;
+                }
+            };
+        ordinary.test_observations.call_complete(
+            context.as_deref(),
+            identity,
+            completion.original_body_status,
+            completion.failure.map(|failure| failure.status().code()),
+        );
+    }
     fn record_source_completion(
         &mut self,
+        ordinary: &mut values::NativeValues,
         handle: ResourceHandleId,
         failure: Option<NativeResourceError>,
     ) -> ResourceResult<()> {
@@ -1178,6 +1332,8 @@ impl NativeResourceState {
             // Refused retirement and pending publication carry no completion authority.
             return Ok(());
         }
+        #[cfg(all(test, jett_resource_native_test_archive))]
+        let first_publication = call.completion.is_none();
         let completion = SourceCompletion {
             scope,
             return_frame: call.return_frame,
@@ -1188,6 +1344,12 @@ impl NativeResourceState {
             return Err(NativeResourceError::WrongFamily);
         };
         call.completion = Some(completion);
+        #[cfg(all(test, jett_resource_native_test_archive))]
+        if first_publication {
+            self.observe_property_source_completion(ordinary, handle, completion);
+        }
+        #[cfg(not(all(test, jett_resource_native_test_archive)))]
+        let _ = ordinary;
         Ok(())
     }
 
@@ -1341,7 +1503,7 @@ impl NativeResourceState {
                     .copied()
                     .or_else(|| body.as_ref().err().copied())
             };
-            self.record_source_completion(handle, failure)?;
+            self.record_source_completion(ordinary, handle, failure)?;
         }
         cleanup?;
         body
@@ -1416,7 +1578,7 @@ impl NativeResourceState {
             return Err(NativeResourceError::WrongFamily);
         };
         call.phase = SourcePhase::Completed;
-        self.record_source_completion(handle, None)?;
+        self.record_source_completion(ordinary, handle, None)?;
         Ok(output)
     }
     pub(super) fn carrier_publish(
@@ -1530,7 +1692,7 @@ impl NativeResourceState {
             return Err(NativeResourceError::WrongFamily);
         };
         call.phase = SourcePhase::Completed;
-        self.record_source_completion(handle, None)?;
+        self.record_source_completion(ordinary, handle, None)?;
         Ok(output)
     }
     pub(super) fn absent_sum(

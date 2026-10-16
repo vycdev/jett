@@ -133,7 +133,7 @@ pub unsafe extern "C" fn jett_rt_v1_resource_test_archive_info(
                 out_info,
                 ArchiveInfo {
                     runtime_abi: JETT_RUNTIME_ABI_VERSION_V1,
-                    test_protocol: 1,
+                    test_protocol: 2,
                     layout_wire: crate::resource_custody::NATIVE_RESOURCE_LAYOUT_WIRE_VERSION,
                     pointer_bits: usize::BITS,
                     archive_profile: u32::from(!cfg!(debug_assertions)),

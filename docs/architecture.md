@@ -5487,3 +5487,32 @@ Packet/list temporary-owner composition remains an unsupported HIR/native proof
 edge in the full native goal; refusing it earns no coverage credit. Unrepresented
 later actor/checkpoint/Graph/Resource compositions remain pending; see the
 [initial actor sealing note](active/native_actor_callable_sealing.md).
+
+### Private Resource observation protocol 2
+
+The recorder under `cfg(all(test, jett_resource_native_test_archive))` adds
+private observation only. Production Runtime ABI 1, Resource layout wire 3, the 58
+production and 8 private C exports, NativeResourceCounts/ArchiveInfo layouts of
+72/32 bytes and
+receipt/normal-launcher manifest version 1 remain unchanged. The private
+ArchiveInfo.test_protocol and JTRRP002 report use version 2; host controls use
+JTRHC002. These versions select separate contracts.
+
+Five cumulative counters retain hook ingress, its acquire subset, factory
+prepare, factory commit and actual provider dispatch independently. Successful
+Property Set/Clear and Resource-ABI calls entered with installed Property
+context retain actual history and supported installed int64 bits. Calls without
+that context, ordinary ABI calls and other installed value forms remain
+unmeasured. Strict decoding preserves optional values and known sticky
+incompleteness; Source17 acceptance requires complete history and no incomplete
+flags. Observation failure preserves Source error selection.
+
+The implementation across 16 Rust paths passes 407 focused local checks. Six
+fresh MSVC Debug/Release archives have been measured and the fresh compiler gate
+is accepted. Archive measurement and compile-only acceptance grant zero Source
+executions. The matched native ingress control gate passes 32 categorized
+processes; Source17 passes eight processes with measured complete private
+history, installed int64 bits and five independent zero acquisition counters.
+Normal-launcher telemetry remains unmeasured. Per-kind ordinary storage, private artifact retainers, normal
+custody/reentry and physical lifetime remain open; see the
+[private observation checkpoint](active/native_resource_private_observations.md).

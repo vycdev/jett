@@ -436,6 +436,8 @@ impl NativeResourceState {
             .holder(frame, &self.layout.slot(prepared.destination)?)?;
         self.custody
             .prepare_acquisition(&self.layout.kind(prepared.kind)?, &holder)?;
+        #[cfg(all(test, jett_resource_native_test_archive))]
+        ordinary.test_observations.provider_construct_dispatch();
         let result = catch_unwind(AssertUnwindSafe(|| self.provider.construct(label)));
         let result = match result {
             Ok(Ok(result)) => result,

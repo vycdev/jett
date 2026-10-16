@@ -405,13 +405,21 @@ fn link(archive: &Archive, object: &Path, binary: &Path, directory: &Path) {
     assert!(binary.is_file());
 }
 fn script(case: &cases::Case) -> String {
+    script_with_attempts(case, 1)
+}
+
+fn script_with_attempts(case: &cases::Case, attempts: u32) -> String {
+    script_operations(case.script, attempts)
+}
+
+fn script_operations(rows: &[cases::Script], attempts: u32) -> String {
     let mut output = b"JTRST001".to_vec();
     output.extend(1u32.to_le_bytes());
     output.extend(0u32.to_le_bytes());
     output.extend(0u64.to_le_bytes());
-    output.extend(1u32.to_le_bytes());
-    output.extend((case.script.len() as u32).to_le_bytes());
-    for row in case.script {
+    output.extend(attempts.to_le_bytes());
+    output.extend((rows.len() as u32).to_le_bytes());
+    for row in rows {
         let (tag, label) = match *row {
             cases::Script::Construct(label) => (1u32, label),
             cases::Script::ConstructFail(label, _) => (2, label),
@@ -808,3 +816,6 @@ mod occupied_struct_harness;
 
 #[path = "resource_execution/source17_suites.rs"]
 mod source17_suites;
+
+#[path = "resource_execution/observation_controls.rs"]
+mod observation_controls;

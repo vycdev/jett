@@ -14,6 +14,8 @@ use std::ptr;
 #[path = "test_archive_main/report.rs"]
 mod report;
 use report::{Attempt, Report};
+#[path = "test_archive_main/controls.rs"]
+mod controls;
 
 const EXIT_CREATE: c_int = 70;
 const EXIT_ENTRY: c_int = 71;
@@ -265,7 +267,7 @@ fn install(session: &mut Session, script: &[u8]) -> Result<(), ()> {
     ok(unsafe { jett_rt_v1_resource_test_archive_info(info.as_mut_ptr(), result.as_mut_ptr()) })?;
     let info = unsafe { info.assume_init() };
     if info.runtime_abi != JETT_RUNTIME_ABI_VERSION_V1
-        || info.protocol != 1
+        || info.protocol != 2
         || info.wire != crate::resource_custody::NATIVE_RESOURCE_LAYOUT_WIRE_VERSION
         || info.pointer_bits != 64
         || info.profile != u32::from(!cfg!(debug_assertions))
@@ -423,6 +425,13 @@ fn events(context: *const JettRuntimeContextV1) -> Result<Vec<Event>, ()> {
     Ok(output)
 }
 
+fn observations(
+    context: *const JettRuntimeContextV1,
+) -> Result<super::test_observations::Snapshot, ()> {
+    // Read-only authenticated snapshot: no with_resource, failure, reset or script mutation.
+    super::test_observations::snapshot(context).map_err(|_| ())
+}
+
 // Every query is independent. One refused copy must not suppress later
 // pre-destroy observations or erase a prefix already collected.
 fn counts(context: *const JettRuntimeContextV1) -> Result<Counts, ()> {
@@ -475,7 +484,7 @@ fn complete_active(session: &mut Session, report: &mut Report) {
         1
     };
     // An orchestration abort before an observed entry result still requires
-    // cleanup, but cannot produce an accepted v1 body-status observation.
+    // cleanup, but cannot produce an accepted body-status observation.
     if active.body_status.is_none() {
         report.refused = true;
     }
@@ -544,6 +553,10 @@ fn observe_attempt(session: &mut Session, report: &mut Report, index: usize) {
         }
         Err(()) => report.refused = true,
     }
+    match query(|| observations(context)) {
+        Ok(value) => report.observations = Some(value),
+        Err(()) => report.refused = true,
+    }
     match query(|| remaining(context)) {
         Ok(value) => report.remaining = Some(value),
         Err(()) => report.refused = true,
@@ -583,6 +596,10 @@ fn observe_final(session: &mut Session, report: &mut Report) {
     }
     match query(|| events(context)) {
         Ok(value) => report.events = Some(value),
+        Err(()) => report.refused = true,
+    }
+    match query(|| observations(context)) {
+        Ok(value) => report.observations = Some(value),
         Err(()) => report.refused = true,
     }
     match query(|| remaining(context)) {
@@ -689,6 +706,11 @@ fn run(session: &mut Session, report: &mut Report) -> c_int {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn main(_argc: c_int, _argv: *mut *mut c_char) -> c_int {
+    match controls::dispatch() {
+        Ok(Some(exit)) => return exit,
+        Ok(None) => {}
+        Err(()) => return EXIT_INFRASTRUCTURE,
+    }
     // The file itself and its parent require both private cfgs. Ordinary runtime
     // and normal unit-test binaries retain Rust's existing panic hook.
     let outer = contained(|| {
@@ -713,7 +735,12 @@ pub unsafe extern "C" fn main(_argc: c_int, _argv: *mut *mut c_char) -> c_int {
             report.refused = true;
             exit = EXIT_INFRASTRUCTURE;
         }
-        if report.refused {
+        if report.refused
+            || report
+                .observations
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.flags != 0)
+        {
             exit = EXIT_INFRASTRUCTURE;
         }
         if exit == 0
@@ -730,7 +757,7 @@ pub unsafe extern "C" fn main(_argc: c_int, _argv: *mut *mut c_char) -> c_int {
         if session.created && session.destroy_status != 0 {
             exit = EXIT_DESTROY;
         }
-        // v1 cannot encode unknown counts/messages/sequence/remaining. Preserve
+        // The report cannot encode unknown custody/messages/remaining or a missing snapshot. Preserve
         // the internal completed prefix, refuse the report, and exit nonzero.
         let bytes = match report.encode() {
             Ok(bytes) => bytes,

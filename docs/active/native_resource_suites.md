@@ -150,9 +150,13 @@ compiler gates below cover the Suite implementation and cross-phase
 regressions. The Source17 native checkpoint below supplies available measured
 outcomes; complete counter/history evidence remains required.
 
-## Local checkpoint and measurement limits
+## Historical suite checkpoint and measurement limits
 
-The current successor gates pass **1,867 compiler-library tests**: Codegen 135,
+This section retains the earlier protocol1 receipts and their exact compiler,
+Runtime and observation limits. They are historical acceptance; the protocol2
+successor below has its own fresh bounded native acceptance.
+
+Those successor gates pass **1,867 compiler-library tests**: Codegen 135,
 Comptime 683, HIR 286, MIR 384 and Typecheck 379. The full frontend/reference
 fixture suite passes **603 tests**, and the unchanged Windows CLI capture suite
 passes **nine tests**. Focused compiler controls are included in the library
@@ -167,7 +171,7 @@ into accepted gates. Logs under `target/native/`:
   `92e961e08879c451aa1b0c41e18187460a00b66d511090cc1704f6ad10290a3e`.
 
 The whole unchanged Source17 canonical Verify and Property entries pass the
-current native available-observation gate: **four objects and eight processes**
+then-compiled native available-observation gate: **four objects and eight processes**
 across paired Source/Runtime Debug and Release with both matched normal and
 private launchers. Written project/support Source and objects are removed
 before launch; the reaped executable and temporary PDB are retired afterward.
@@ -206,7 +210,7 @@ records the eight native processes separately. Receipts under target/native/:
 
 The compiled and executed gate image is SHA-256
 b7c1391ce3548701be12487541e40552a3c2c2735b4799e4c111a39122dcc3be.
-The current existing-view regression passes **24 tests and 48 paired
+The same historical existing-view regression passes **24 tests and 48 paired
 Source-deleted executions**, 24 Source Debug/Runtime Debug and 24 Source
 Release/Runtime Release, with zero publication refusals or legacy Debug-only
 runs. All 16 selection-log hashes and exact zero-failure counts pass. The same
@@ -246,14 +250,50 @@ maintained. The two completed retirement receipts under
 - `native-suite-native-headroom-retirement-v1/retirement-result.json`, SHA-256
   `85326e1653a1d2d0c92e608e92cd201d4321838dde0a92410e200b5fa6dad871`.
 
+## Private observation v2 successor
+
+The 16-path observation implementation passes **407 focused local checks**:
+389 Runtime library tests, 12 report decoder controls, one Source17 history-oracle
+control and five host decoder controls. Six fresh MSVC archives are measured:
+normal Runtime and Launcher plus private Runtime, each in Debug and Release.
+The normal receipt is 4e41eca939e70f4c1ea162639b3f714510726a118a200d38bb89bddc6d575e8c;
+the private receipt is d19cc38b1d38a6f84783ad0fd1dc219cea722d88ce5e1db8ddba2b025d64dbe0.
+Measurement grants zero Source executions. The Source17 harness now pins the
+actual normal receipt; its unchanged original Source remains
+c8e74848356a5b3d09ab6659318b1e1292718d34443f7f37222bafd6f3eed0ff.
+
+The fresh compiler gate is accepted at
+private-observation-v2-gate-compile-v3/gate-acceptance.json, SHA-256
+3d05e4499c87c4d606ca515ca1ab2c7c9ece96331749bb564b62dfe017f78cc3.
+Its compile-only acceptance grants zero Source executions. The fresh native
+ingress and whole-Source17 protocol 2 gates now pass separately. Ingress records
+32 processes: eight Source processes with 10 actual report-header entries, 22
+host ABI controls and two pure writer controls. Four linked artifact rows are
+not executions; the Source processes use two distinct original Source hashes.
+
+Source17 records eight processes/four objects across paired Debug/Release and
+normal/private launchers, with eight private entries. Each private Property
+profile records two 100-trial entries and 6,404 cumulative history records; each
+private Verify profile records four history records. All private incomplete
+flags are zero, all five separate acquisition counters are measured zero and
+same-context reentry passes. Normal telemetry remains null. These fresh results
+close the corresponding v2 available-observation gaps; the protocol 1 nulls above
+retain their historical meaning. Per-kind storage/retainers, normal custody/
+reentry, physical lifetime and full_acceptance remain open. The
+[private observation note](native_resource_private_observations.md) records the
+protocol boundary, exact evidence and outstanding physical measurements.
+
 ## Actor and wider transport obligations
 
-Actor handlers retain complete native snapshots. Fresh reflected callable sealing
-has no authenticated actor snapshot renewal yet; a genuine responding-handler
-witness remains unexecuted. Constructors carrying actor_state_views have the
-analogous conditional obligation. Preserve exact snapshots and add only exact
-constructor-owned old/new-token replay if the predicted mismatch is confirmed.
-This gap is separate from Source17, which has no actor.
+Actor checkpoint 8827c57321e6e0d74cee6fd30dd21a7f11940d8c authenticates
+bounded full-snapshot renewal from the sole actual callable sealer and a private
+original-Lowerer source epoch. Its unchanged required-value and direct-getter
+Sources pass four Source-deleted native processes across Debug and Release.
+Those receipts precede the Runtime observation change and remain historical;
+they supply no current-v2 regression or physical lifetime/reentry credit. See
+the [initial actor sealing note](native_actor_callable_sealing.md). The valid
+Packet/list temporary-owner composition and broader actor/checkpoint/Graph/
+Resource obligations remain open. This is separate from actorless Source17.
 
 Broader generated Resource/callback/refinement inputs, nonflat wrapper CFG shapes,
 physical private artifact lifetime, full ordinary suite inventory and wider

@@ -53,6 +53,14 @@ impl PreparedResourceOrdinaryAttempt<'_> {
                 error: AttemptFailureChannel::default(),
             });
         self.values.resource_ordinary_channels.selected = Some(index);
+        #[cfg(all(test, jett_resource_native_test_archive))]
+        match self.owner.observation_identity() {
+            Some(identity) => self.values.test_observations.begin(identity),
+            None => self
+                .values
+                .test_observations
+                .incomplete(resource::test_observations::BOUNDARY),
+        }
     }
 }
 
@@ -127,12 +135,45 @@ impl NativeValues {
         }
     }
 
+    #[cfg(all(test, jett_resource_native_test_archive))]
+    pub(in crate::native_abi) fn test_observation_property_context(&self) -> Option<&[u8]> {
+        self.current_property_case_context()
+    }
+    #[cfg(all(test, jett_resource_native_test_archive))]
+    pub(in crate::native_abi) fn test_observation_set_property_context(
+        &mut self,
+        context: Option<Vec<u8>>,
+    ) {
+        self.set_property_case_context(context);
+    }
+
     pub(super) fn set_property_case_context(&mut self, context: Option<Vec<u8>>) {
+        #[cfg(all(test, jett_resource_native_test_archive))]
+        let observation_owner = self
+            .resource_ordinary_channels
+            .selected()
+            .filter(|record| matches!(record.phase, OrdinaryAttemptPhase::Running))
+            .and_then(|record| record.owner.observation_identity());
         if let Some(channel) = self.resource_ordinary_channels.running_mut() {
             if channel.failure.is_none() {
+                #[cfg(all(test, jett_resource_native_test_archive))]
+                match observation_owner {
+                    Some(identity) => self.test_observations.property_change(
+                        resource::test_observations::Channel::Attempt(identity),
+                        context.as_deref(),
+                    ),
+                    None => self
+                        .test_observations
+                        .incomplete(resource::test_observations::BOUNDARY),
+                }
                 channel.property_case_context = context;
             }
         } else if self.failure.is_none() {
+            #[cfg(all(test, jett_resource_native_test_archive))]
+            self.test_observations.property_change(
+                resource::test_observations::Channel::Session,
+                context.as_deref(),
+            );
             self.property_case_context = context;
         }
     }
@@ -255,6 +296,15 @@ impl NativeValues {
             .and_then(|index| self.resource_ordinary_channels.records.get_mut(index))
             .ok_or(INVALID_HANDLE)?;
         record.phase = OrdinaryAttemptPhase::Sealed(completion);
+        #[cfg(all(test, jett_resource_native_test_archive))]
+        match record.owner.observation_identity() {
+            Some(identity) => self
+                .test_observations
+                .end(identity, record.error.property_case_context.as_deref()),
+            None => self
+                .test_observations
+                .incomplete(resource::test_observations::BOUNDARY),
+        }
         Ok(())
     }
 }
