@@ -860,9 +860,15 @@ temporaries before entering containers; borrowed argument lowering reads their
 existing handles. Plain string view expressions retain ordinary copy behavior.
 
 Ordinary handled optional/result projections authenticate the explicit outer
-View, inner View of an exact stable immutable sum local or View parameter,
+View, inner View of an exact stable sum binding,
 concrete endpoint type and terminal Return continuation. HIR retains the
-checked binding identity. MIR seals the original declaration, current local
+checked binding identity. The bounded mutable-owned extension records a
+private receipt for every canonical declaration, including final primitive/String
+copies. It joins the original mutable Owned binding fact, alias fact, initializer,
+concrete scope path and complete real function snapshot; View parameters and
+borrowed match/iteration binders gain no owning authority. MIR consumes that
+receipt before admitting a mutable backing and rejoins it against its immutable
+original HIR function. MIR seals the original declaration, current local
 headers, tag observation, selecting branch, success projection, absent path
 and final initializer before pruning or ownership planning. Generated sum and
 success-payload locals remain nonowning; a move-only final alias has the same
@@ -880,8 +886,17 @@ observation before either extraction or failure continuation.
 
 This bounded ordinary proof does not grant Resource custody or prove the
 payload identity hidden by erased interfaces, callables, actors or capability
-carriers. Alternate outer Default payload lifetimes, mutable backing origins,
-temporary-backed aliases and general loan expiry remain outside it. See the
+carriers. Alternate outer Default payload lifetimes, mutable View-parameter
+roots, missing or inconsistent selected owner facts, temporary-backed Handle
+aliases and general loan expiry remain outside it. Mutable-owner admission
+changes neither generated nonowning slots nor copied-payload loan retirement.
+The initial sum snapshot follows genuine callable sealing; later private sealing
+reports exact old/new callable tokens for replay against the protected body.
+Reflected source normalization omits only the independently validated sum proof
+inventory; the sum snapshot retains exact callable identity. Baked/materialized
+callable composition remains explicit unverified debt. See the
+[bounded mutable-owned sum acceptance](active/native_mutable_borrowed_sum_backings.md)
+and the
 [ordinary borrowed-sum implementation](active/native_ordinary_borrowed_sum_codegen.md).
 
 Native ownership planning conservatively refuses owner consumption or rebinding
@@ -899,8 +914,9 @@ the selected concrete fact map, resolving each exact DefId and declaration span
 with bounded cycle detection. Original types, modes and mutable flags remain
 unchanged. HIR still requires the exact root join; missing or inconsistent facts
 cannot fall back to flat global maps. Focused MSVC acceptance is recorded in the
-local-view note. Borrowed-sum Handle aliases keep their separate immutable-backing
-witness. Owner transitions after source alias creation follow the same
+local-view note. Borrowed-sum Handle aliases keep their separate checked backing
+receipt and [bounded mutable-owned acceptance](active/native_mutable_borrowed_sum_backings.md).
+Owner transitions after source alias creation follow the same
 conservative owner-change refusal; see
 [the bounded implementation](active/native_local_view_aliases.md) and
 [the stable projected-view contract](active/native_stable_projected_local_views.md).

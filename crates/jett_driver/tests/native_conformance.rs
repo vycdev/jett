@@ -138,6 +138,8 @@ mod uninhabited_callbacks;
 #[path = "native_conformance/latent_callbacks.rs"]
 mod latent_callbacks;
 
+#[path = "native_conformance/mutable_borrowed_sums.rs"]
+mod mutable_borrowed_sums;
 #[path = "native_conformance/ordinary_borrowed_sums.rs"]
 mod ordinary_borrowed_sums;
 

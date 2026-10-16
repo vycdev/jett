@@ -74,9 +74,10 @@ Source-deleted executions in paired Source/runtime Debug and Release. The
 [native audit](native_acceptance_audit.md#mutable-owned-local-view-backing-bounded-msvc-acceptance)
 records the full selected matrix: 31 tests, 64 executions and six separate
 publication-boundary checks, alongside 753 affected library tests.
-Mutable View-parameter roots, temporary-backed aliases and mutable borrowed-sum
-Handle backing remain unsupported native compositions; they are not new Source
-bans. Absent or mismatched selected reflected root facts remain refusal cases.
+Mutable View-parameter roots and temporary-backed aliases remain unsupported
+native compositions; they are not new Source bans. Mutable owned borrowed-sum
+Handle backing has separate [bounded receipt acceptance](native_mutable_borrowed_sum_backings.md),
+which do not infer ownership from absent alias metadata. Absent or mismatched selected reflected root facts remain refusal cases.
 No runtime ABI, implicit clone,
 lifetime extension or loan-expiry change is made. The current bounded acceptance
 is separate from the historical receipts above and does not complete native parity.

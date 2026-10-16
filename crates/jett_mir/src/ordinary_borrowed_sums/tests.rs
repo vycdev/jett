@@ -1276,3 +1276,6 @@ fn ordinary_borrowed_sums_malformed_maps_and_edits_leave_input_unchanged() {
     assert!(remap_locals(&mut changed, before, &local_map).is_err());
     assert_eq!(changed, malformed);
 }
+
+#[path = "mutable_tests.rs"]
+mod mutable_tests;

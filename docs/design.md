@@ -6046,7 +6046,7 @@ that concrete checked map. It preserves each original fact and adds no owning
 authority. Absent or inconsistent root facts still fail native admission; flat
 global facts cannot supply a missing proof. Focused MSVC acceptance is recorded
 in the local-view note. Borrowed-sum Handle aliases retain their separate
-immutable-backing proof below. These implementation limits do not establish
+checked backing receipt described below. These implementation limits do not establish
 general loan expiry, change the checker rules above, or claim every projected
 owner kind is supported; see the
 [local view implementation note](active/native_local_view_aliases.md) and
@@ -6091,8 +6091,12 @@ no zero-runtime-copy claim; see the
 [call-view implementation](active/native_scoped_call_view_staging.md).
 
 An explicitly viewed handled optional/result payload follows the same
-borrowing rule when it retains one stable immutable sum local or view
-parameter. The canonical initializer has an explicit outer `view` around a
+borrowing rule when it retains one stable sum binding. Immutable owners and
+view parameters retain their existing native proof. The bounded mutable-owned
+extension admits an original mutable local or owned parameter through a private
+receipt joining its exact selected Owned binding fact, declaration, initializer
+and concrete body context. A mutable view parameter or absent origin is not an
+owned root. The canonical initializer has an explicit outer `view` around a
 Handle whose target is an explicit `view` of that binding. A Some/Ok move-only
 payload is a read-only, nonowning alias with the exact checked payload type;
 it is not an implicit clone or transfer out of the sum. Forwarded aliases
@@ -6113,8 +6117,13 @@ String copy for that handler. Outer pending sums fail before extraction or
 continuation execution; ready sums retain their payload's pending metadata for
 later observers. Nested expression-level Handles can retain their own scalar
 Default, but an alternate outer Default payload needs its own backing-lifetime
-contract. Mutable backing origins, temporary-backed aliases, loan expiry and
-erased Resource-bearing payload identity are not established by this proof.
+contract. Mutable view-parameter roots, missing or inconsistent selected owned
+facts, temporary-backed Handle aliases, loan expiry and erased Resource-bearing
+payload identity remain outside this proof. Copy destinations keep their Owned
+mode and can outlive a later shell replacement; move-only aliases retain the
+existing persistent owner-change prohibition, including after their last read.
+The [mutable-owned sum note](active/native_mutable_borrowed_sum_backings.md) records
+its bounded MSVC acceptance and remaining proof and implementation limits.
 The [ordinary borrowed-sum implementation](active/native_ordinary_borrowed_sum_codegen.md)
 is separate from the
 [Resource borrowed-sum contract](active/native_resource_borrowed_sums.md) and

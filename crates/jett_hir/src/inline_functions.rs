@@ -54,6 +54,7 @@ pub(super) fn extract_inline_functions_with_sources(
             root,
             identity: &function.identity,
             locals: &function.locals,
+            mutable_sum_backings: &function.mutable_sum_backings,
         };
         extractor.detached_aliases.clear();
         extractor.generated_shape_rewrites.clear();
@@ -65,6 +66,9 @@ pub(super) fn extract_inline_functions_with_sources(
                 function.locals[alias.index() as usize].view_source = None;
             }
         }
+        function
+            .mutable_sum_backings
+            .retain(|proof| block_mentions_local(&function.body, proof.alias.index(), true));
         functions.append(&mut extractor.pending);
         index += 1;
     }
@@ -75,6 +79,7 @@ struct ParentInfo<'a> {
     root: FunctionId,
     identity: &'a FunctionIdentity,
     locals: &'a [Local],
+    mutable_sum_backings: &'a [crate::MutableSumBacking],
 }
 
 struct Extractor<'a> {
@@ -293,6 +298,12 @@ impl Extractor<'_> {
                 source_definition: None,
                 actor_handler: None,
                 actor_state_views: Vec::new(),
+                mutable_sum_backings: parent
+                    .mutable_sum_backings
+                    .iter()
+                    .filter(|proof| block_mentions_local(body, proof.alias.index(), true))
+                    .cloned()
+                    .collect(),
                 params: capture_parameters,
                 capture_count,
                 return_type: *return_type,

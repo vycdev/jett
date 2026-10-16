@@ -8,7 +8,10 @@ The [Source-only baseline](native_ordinary_borrowed_sums.md) retains its origina
 ## Contract and implementation
 
 The canonical initializer is an explicit outer `view` of a Handle targeting an
-explicit `view` of one stable immutable sum local or View parameter. The absent
+explicit `view` of one stable sum binding. Immutable owners and View parameters
+retain the measured predecessor proof. A bounded extension admits a mutable
+owned local or owned parameter only through its private original checked receipt.
+The absent
 continuation ends with Return. A Some/Ok move-only payload keeps its exact checked
 type and backing dependency without a clone, sum transfer, or owning cleanup
 slot. Forwarded, nested and loop aliases preserve that dependency. Explicit
@@ -17,8 +20,8 @@ slot. Forwarded, nested and loop aliases preserve that dependency. Explicit
 Implicitly copyable final destinations keep ordinary copy semantics. Primitive
 values are copied; String owns its retained copy. A copied destination may be
 mutable and rebound. After initialization, generated projection intermediates
-leave the borrow inventory, allowing a later ordinary transfer or owning unwrap
-of the original sum. This does not expire a persistent move-only alias or permit
+leave the borrow inventory, allowing a later ordinary transfer, owning unwrap
+or replacement of the original mutable sum. This does not expire a persistent move-only alias or permit
 changing its backing owner. A Result Fail String companion likewise owns one
 retained copy for its handler.
 
@@ -37,7 +40,8 @@ are preserved. Outer pending sums fail before extraction or continuation;
 ready sums retain later payload-observer readiness checks.
 
 This bounded proof grants no Resource custody. Alternate outer Default payload
-lifetimes, mutable backing origins, temporary-backed aliases, general loan expiry
+lifetimes, mutable View-parameter roots, unproven owned origins, temporary-backed
+Handle aliases, general loan expiry
 and payload identity hidden by erased interfaces, callables, actors or capability
 carriers remain separate work. Nested scalar Handle defaults retain their
 existing semantics.
@@ -108,3 +112,22 @@ accepted for this compiler/runtime revision. Later Source packets retain their
 own complete-corpus and platform requirements. The complete 100% objective and
 all other semantic, ordinary-carrier, Resource and reflection obligations remain
 open in the [acceptance audit](native_acceptance_audit.md).
+
+## Mutable owned backing: bounded successor acceptance
+
+The [mutable-owned sum extension](native_mutable_borrowed_sum_backings.md) adds
+an opaque original checked receipt before MIR admission for both borrowed and
+copied final destinations. Exact selected root/alias facts, original initializer,
+concrete context and full function identity remain mandatory. The original MIR
+row, current CFG, tag/arm association and canonical remaps retain independent
+checks. Persistent aliases still block consumption, rebinding, field writes and
+state changes after their last read; copied values keep their ordinary ownership.
+The coordinated callable transition retains exact tokens and no public reseal.
+
+The successor note records all 1,807 affected-library tests and a selected
+ten-test native matrix with 46 Source-deleted profile-matched executions. The
+five additive Sources contribute ten executions, including unchanged-oracle
+named-argument terminal failures. The normal-runtime controls establish exact
+output/status/order parity; they supply no new private cleanup-counter or full
+Resource-corpus acceptance. The measured tables above remain predecessor
+evidence; no coverage estimate or inventory changes.

@@ -42,7 +42,7 @@ been audited. Likewise, a fixture's reference in Rust is not proof of execution.
 | Versioned C ABI and exact resource retirement | Runtime ABI version/layout tests, mismatch rejection, cleanup probes and panic containment; native launcher tests for successful and failing entry cleanup. |
 | Deterministic objects, target selection, linking, and atomic publication | Codegen deterministic-object and unsupported-target tests; native driver linker/runtime validation and output-preservation tests. |
 | Required comptime evaluation stays at compile time | Explicit-comptime and namespace-constant evaluation/materialization tests, per-instantiation context regressions, primitive value-shape rejection, and rejection of unbaked markers by codegen. No runtime initializer or interpreter fallback is an acceptance substitute. |
-| Supported-host distribution | All four jobs in `.github/workflows/native.yml`: Linux GNU and Windows MSVC workspace/build/package jobs, followed by clean installed jobs with no checkout. Both runtime profiles must work after relocation and source removal. |
+| Supported-host distribution | Local Linux GNU and Windows MSVC workspace/build/package gates, followed by clean installed checks with no checkout. Both runtime profiles must work after relocation and source removal. Historical workflow results retain their own revision and scope; GitHub CI is disabled at the user's request. |
 | Complete current workspace | `cargo test --locked --workspace --no-fail-fast` or equivalent test and doc-test invocations against a coherent revision. Rebuilding dependency artifacts during a run can invalidate later rustdoc inputs; such failures require a fresh doc-test run. |
 | Stable documentation matches the implementation | Review `docs/design.md`, `docs/architecture.md`, the parity plan, and the notes below against the final implementation and verified gate results. |
 
@@ -50,6 +50,19 @@ The tested CI toolchain is Rust 1.97.1. Cross-compilation, future providers, and
 asynchronous scheduling must not be inferred from host packaging or the current
 sequential interpreter/native task model. Their implementation status remains
 separate from parity for existing accepted behavior.
+
+At the user's request to save GitHub Actions minutes, the sole native workflow
+(`native.yml`, workflow ID `369899180`) is `disabled_manually`. At the recorded
+check there were no queued or running jobs. GitHub CI is not an acceptance gate
+for the current work and must remain disabled. No current-revision workflow
+acceptance is claimed; equivalent local workspace,
+supported-host, installed-distribution and complete-corpus coverage still apply
+to the full goal. Earlier workflow links and CI requirements below describe
+historical receipts and their original scope, not a request to re-enable CI.
+The primary checkout's local failure audit,
+`native-codegen-recovery-2026-10-09/ci-disabled-failure-audit-v1/audit.json`, records
+existing PR-merge failures; their local repair and replacement acceptance remain
+pending.
 
 ## Selected semantics and remaining acceptance
 
@@ -3357,3 +3370,65 @@ expiry, Resource authority or flat-map fallback is introduced. Full coherent
 workspace/inventory, complete Resource transport and exact-revision
 supported-host/installed acceptance remain open. The fixed
 207-fixture/182-object denominators and full 100% native-codegen goal are unchanged.
+
+#### Mutable owned borrowed-sum backing: bounded MSVC acceptance
+
+The canonical explicitly viewed Handle admits a mutable root through its
+original checked Owned local/parameter receipt. Exact declaration, root and alias
+facts, initializer, concrete context and complete real function remain joined.
+MIR rejoins the immutable original HIR record before independent current CFG,
+tag/arm, field and remapping checks. Canonical conversion and private exact
+callable-token transitions cannot reseal an arbitrary current tree. Generated
+alias slots remain immutable and nonowning. Persistent move-only aliases keep
+blocking owner changes after their last read; primitive/String copies retain
+ordinary ownership and survive shell replacement. The detailed
+[mutable-sum note](native_mutable_borrowed_sum_backings.md) records the proof and
+Source controls.
+
+All five affected compiler libraries pass **1,807 tests**: Typecheck 379,
+Comptime 663, HIR 261, MIR 369 and Codegen 135. The log is
+`target/native/mutable-sum-core-libraries-v1.log`, SHA-256
+`6ab23ff17459a6000209349df28c39fcb77dcd903288974836eeb6a815f0a895`.
+Focused HIR and corrected MIR groups each pass five tests, counted within that
+total; full Rust formatting passes. This is not a full workspace/Driver gate.
+
+The selected native matrix passes **10 tests** and **46 Source-deleted
+executions**: five additive mutable-sum programs contribute ten, the unchanged
+ordinary packet 24, the supplemental packet six, and exact actor direct-view,
+actor projected-view and reflected mutable-owned-view controls two each.
+Every run pairs Source Debug/default with normal Runtime Debug or Source
+Release/optimized with normal Runtime Release: 23 Debug and 23 Release
+executions, not a full profile cross-product. Exact output, status, Source
+absence and terminal-failure oracles pass. There are **zero publication
+refusals** in this selection; expected runtime failures supply execution evidence.
+The normal-runtime controls establish output/status/order parity, not new
+private cleanup-counter observations, complete physical cleanup counts or
+full Resource-corpus acceptance.
+
+Fresh compiler gate:
+`target/native/mutable-sum-gate-compile-v1/gate-acceptance.json`, SHA-256
+`4e2cd94e7ccc2cb23ae22b14a65e66a547d4136e148cf7f2708294cfb147c819`.
+Native summary:
+`target/native/mutable-sum-native-execution-v2/execution-summary.json`, SHA-256
+`df43d3141cbef95c2c68402cb1fff94e78f5aa753c50d9ab523ad241d45ea7b4`.
+Before/after guards preserve 1,046 compiler/source inputs, 68 reused runtime
+artifacts and 50 fixture hashes; those fixtures are not the 23-program execution
+denominator. Runtime/helper/ABI and measured bundles are unchanged. The
+interrupted v1 attempt supplies no completed-matrix or additional acceptance
+credit. Earlier 753/31/64 and 1,797/32/66 local-view results retain their own scope.
+
+Temporary-backed Handle roots, mutable view-parameter roots, borrowed binders,
+absent/mismatched selected facts, alternate outer Default payload lifetimes,
+scoped copied-Handle contexts without genuine selected source facts,
+erased/capability/actor/Resource carriers and
+baked/materialized callable composition retain their separate proof or
+implementation limits. The lexical whole-owner temporary-backing contract at
+`f865e3f1` remains unchanged and pending implementation and cleanup gates,
+including unchanged Source09. No last-use expiry, implicit clone, invented
+Source identity or wider escape is added. Full coherent local workspace and
+inventory execution, complete Resource transport, wider actor/task compositions,
+asynchronous scheduling and local supported-host/installed acceptance remain
+open. GitHub CI remains disabled at the user's request; this bounded receipt
+neither requires re-enabling it nor completes the local full-coverage goal.
+The fixed 207-fixture/182-object denominators and full native-codegen goal are
+unchanged.

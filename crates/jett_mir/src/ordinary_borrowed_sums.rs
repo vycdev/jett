@@ -94,6 +94,7 @@ pub struct OrdinaryBorrowedSumProjection {
     original: Expression,
     original_alias: Local,
     original_backing: Local,
+    mutable_backing: Option<hir::MutableSumBacking>,
     alias: Local,
     backing: Local,
     source: Local,
@@ -161,6 +162,7 @@ impl OrdinaryBorrowedSumProjection {
             && breakpoint_regions::expressions_equal(&self.original, &other.original)
             && self.original_alias == other.original_alias
             && self.original_backing == other.original_backing
+            && self.mutable_backing == other.mutable_backing
             && self.alias == other.alias
             && self.backing == other.backing
             && self.source == other.source
@@ -204,7 +206,8 @@ impl OrdinaryBorrowedSumProjection {
             }
         }
         if (self.alias.mutable && self.original_alias.view_source.is_some())
-            || self.backing.mutable
+            || self.backing.mutable != self.original_backing.mutable
+            || self.mutable_backing.is_some() != self.original_backing.mutable
             || self.source.mutable
             || self.output.mutable
             || self.alias.view_source != self.original_alias.view_source.map(|_| self.backing.id)
@@ -366,6 +369,7 @@ struct Declaration {
     alias: Local,
     backing: Local,
     path_kind: OrdinarySumPayloadPath,
+    mutable_backing: Option<hir::MutableSumBacking>,
 }
 #[derive(Default)]
 struct Inventory {
@@ -418,7 +422,13 @@ impl Inventory {
                     {
                         let copyable =
                             jett_typecheck::ownership::is_implicitly_copyable(types, alias.ty);
-                        if backing.mutable || (alias.mutable && !copyable) {
+                        let mutable_backing = if backing.mutable {
+                            Some(function.mutable_sum_backing(*local, value, source)?
+                                .ok_or("mutable borrowed Handle lacks original checked owner receipt")?.clone())
+                        } else {
+                            None
+                        };
+                        if alias.mutable && !copyable {
                             return Err(
                                 "ordinary borrowed Handle requires an immutable backing and view alias".into()
                             );
@@ -459,6 +469,7 @@ impl Inventory {
                             alias: alias.clone(),
                             backing: backing.clone(),
                             path_kind,
+                            mutable_backing,
                         });
                     }
                 }
@@ -696,6 +707,19 @@ impl Witness {
             return Err("ordinary borrowed Handle lost its original function or complete declaration inventory".into());
         }
         for (index, row) in self.rows.iter().enumerate() {
+            if row.mutable_backing.as_ref()
+                != self
+                    .original
+                    .mutable_sum_backing(
+                        row.original_alias.id,
+                        &row.original,
+                        row.original_backing.id,
+                    )?
+                    .as_ref()
+                    .copied()
+            {
+                return Err("mutable sum backing changed its original source receipt".into());
+            }
             row.current(function)?;
             if self.rows[..index]
                 .iter()
@@ -710,6 +734,7 @@ impl Witness {
                     declaration.path == row.original_path
                         && declaration.alias == row.original_alias
                         && declaration.backing == row.original_backing
+                        && declaration.mutable_backing == row.mutable_backing
                         && declaration.path_kind == row.path
                         && breakpoint_regions::expressions_equal(&declaration.value, &row.original)
                 })
@@ -807,6 +832,7 @@ impl Capture {
             original: seed.original,
             original_alias: seed.declaration.alias.clone(),
             original_backing: seed.declaration.backing.clone(),
+            mutable_backing: seed.declaration.mutable_backing.clone(),
             alias: seed.declaration.alias,
             backing: seed.declaration.backing,
             source,

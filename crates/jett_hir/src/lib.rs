@@ -79,6 +79,8 @@ mod interface_values;
 #[cfg(test)]
 mod local_view_tests;
 mod local_views;
+mod mutable_sum_backings;
+pub use mutable_sum_backings::MutableSumBacking;
 mod reflected_callable;
 mod reflected_fields;
 pub use reflected_callable::{
@@ -248,6 +250,7 @@ pub struct Function {
     pub source_definition: Option<DefId>,
     pub actor_handler: Option<ActorHandlerEntry>,
     pub actor_state_views: Vec<ActorStateView>,
+    pub mutable_sum_backings: Vec<MutableSumBacking>,
     pub params: Vec<Param>,
     /// Leading parameters supplied by a closure environment or actor state snapshot.
     pub capture_count: usize,
@@ -720,6 +723,7 @@ pub struct ValidationError {
 pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
     reflected_callable::validate_program(program)?;
     actor_handlers::validate_program(program)?;
+    mutable_sum_backings::validate_program(program)?;
     let mut validator = Validator {
         program,
         errors: Vec::new(),
@@ -1622,6 +1626,7 @@ impl<'a> Lowerer<'a> {
             interface_values::coerce_program(&mut program, &self.check.interner);
             actor_handlers::seal_program(&mut program)?;
             reflected_callable::seal_program(&mut program)?;
+            mutable_sum_backings::seal_program(&mut program, &self.check.interner)?;
             validate(&program).map_err(|errors| {
                 errors
                     .into_iter()
@@ -1942,6 +1947,7 @@ impl<'a> Lowerer<'a> {
         let body = body_lowerer.lower_block(source_body);
         body_lowerer.reject_unconsumed_static_selections();
         body_lowerer.reject_unconsumed_comptime_type_bindings();
+        let mutable_sum_backings = body_lowerer.mutable_sum_backings;
         let locals = body_lowerer.locals;
         Some(Function {
             id,
@@ -1960,6 +1966,7 @@ impl<'a> Lowerer<'a> {
             source_definition: None,
             actor_handler: None,
             actor_state_views: Vec::new(),
+            mutable_sum_backings,
             params,
             capture_count: 0,
             return_type: TypeInterner::NOTHING,
@@ -2230,6 +2237,7 @@ impl<'a> Lowerer<'a> {
         let body = body_lowerer.lower_block(&source.function.body);
         body_lowerer.reject_unconsumed_static_selections();
         body_lowerer.reject_unconsumed_comptime_type_bindings();
+        let mutable_sum_backings = body_lowerer.mutable_sum_backings;
         let locals = body_lowerer.locals;
         let (namespace, name, kind) = if let Some(method) = &source.method {
             if let Some(interface) = &method.interface_name {
@@ -2289,6 +2297,7 @@ impl<'a> Lowerer<'a> {
             source_definition: source.definition,
             actor_handler: None,
             actor_state_views: Vec::new(),
+            mutable_sum_backings,
             params,
             capture_count: 0,
             return_type,
@@ -2562,6 +2571,7 @@ impl<'a> Lowerer<'a> {
             source_definition: None,
             actor_handler: None,
             actor_state_views,
+            mutable_sum_backings: body_lowerer.mutable_sum_backings,
             params,
             capture_count: 0,
             return_type: source.ty,
@@ -2915,6 +2925,7 @@ impl<'a> Lowerer<'a> {
         let body = body_lowerer.lower_block(&source.handler.body);
         body_lowerer.reject_unconsumed_static_selections();
         body_lowerer.reject_unconsumed_comptime_type_bindings();
+        let mutable_sum_backings = body_lowerer.mutable_sum_backings;
         let locals = body_lowerer.locals;
         let actor_def = self.resolve.scope_table.def(source.actor_definition);
 
@@ -2935,6 +2946,7 @@ impl<'a> Lowerer<'a> {
             source_definition: None,
             actor_handler: Some(ActorHandlerEntry::new(target, receipt, roles)),
             actor_state_views: Vec::new(),
+            mutable_sum_backings,
             params,
             capture_count,
             return_type: message.responds,
@@ -3002,6 +3014,7 @@ impl<'a> Lowerer<'a> {
         );
         let result = lowerer.lower_expression(constraint)?;
         lowerer.reject_unconsumed_comptime_type_bindings();
+        let mutable_sum_backings = lowerer.mutable_sum_backings;
         let locals = lowerer.locals;
         let declared = self.resolve.scope_table.def(source.definition);
         Some(Function {
@@ -3024,6 +3037,7 @@ impl<'a> Lowerer<'a> {
             source_definition: Some(source.definition),
             actor_handler: None,
             actor_state_views: Vec::new(),
+            mutable_sum_backings,
             params: vec![Param {
                 local,
                 name: "value".to_string(),
@@ -3084,6 +3098,7 @@ struct BodyLowerer<'lowerer, 'program> {
     binding_facts: HashMap<Span, CheckedBindingFact>,
     assignment_places: HashMap<Span, CheckedAssignmentPlace>,
     next_field_update_occurrence: u64,
+    mutable_sum_backings: Vec<MutableSumBacking>,
     generic_calls: HashMap<Span, CheckedGenericCall>,
     intrinsic_ids: HashMap<Span, IntrinsicId>,
     intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -3154,6 +3169,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             binding_facts,
             assignment_places,
             next_field_update_occurrence: 0,
+            mutable_sum_backings: Vec::new(),
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -3557,6 +3573,10 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             let local =
                 self.allocate_local(definition, &decl.name.name, ty, decl.mutable, decl.span);
             self.locals[local.index() as usize].view_source = view_source;
+            if let Err(message) = self.record_mutable_sum_backing(decl, definition, local, &value) {
+                self.parent.error(decl.span, message);
+                return None;
+            }
             call_observation::record(self, decl, definition, local, &value);
             (StatementKind::Let { local, value }, decl.span)
         })

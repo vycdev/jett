@@ -483,6 +483,7 @@ pub(crate) fn adapter(
         source_definition: None,
         actor_handler: None,
         actor_state_views: Vec::new(),
+        mutable_sum_backings: Vec::new(),
         params,
         capture_count: 1,
         return_type: *target_return,
@@ -499,6 +500,8 @@ pub(crate) fn adapter(
 }
 
 pub(crate) fn seal_program(program: &mut Program) -> Result<(), Vec<LowerError>> {
+    let sum_before = program.clone();
+    let mut sum_edits = Vec::new();
     let originals = program.functions.clone();
     let sources = Arc::new(originals.iter().map(erase_function).collect::<Vec<_>>());
     let mut attached = Vec::new();
@@ -535,6 +538,7 @@ pub(crate) fn seal_program(program: &mut Program) -> Result<(), Vec<LowerError>>
                                     .ok_or("reflected callable predicate is missing")
                             })
                             .collect::<Result<Vec<_>, _>>()?;
+                        let previous = callable.clone();
                         let data = Arc::make_mut(&mut callable.data);
                         if data.context.as_ref() != Some(&identity) {
                             return Err("reflected callable constructor context changed".into());
@@ -546,6 +550,7 @@ pub(crate) fn seal_program(program: &mut Program) -> Result<(), Vec<LowerError>>
                             predicates,
                             sources: sources.clone(),
                         }));
+                        sum_edits.push((previous, callable.clone()));
                         attached.push((callable.function(), callable.clone()));
                     }
                 }
@@ -622,9 +627,13 @@ pub(crate) fn seal_program(program: &mut Program) -> Result<(), Vec<LowerError>>
             ..
         })) = &mut function.body.statements[0].kind
         {
+            if let Some(previous) = stored.as_ref() {
+                sum_edits.push((previous.clone(), callable.clone()));
+            }
             *stored = Some(callable);
         }
     }
+    super::mutable_sum_backings::callable_sealing(program, &sum_before, &sum_edits)?;
     Ok(())
 }
 
@@ -645,6 +654,10 @@ fn erase_adapter(function: &Function) -> Function {
 
 fn erase_function(function: &Function) -> Function {
     let mut function = erase_adapter(function);
+    // Independent sum receipts validate their own complete owner/body snapshot.
+    // Exclude only that inventory to avoid cyclic seals; preserve every actual
+    // operation, binding header and checked callable identity in its own gate.
+    function.mutable_sum_backings.clear();
     let _ = super::resource_materialization::walk_block(&mut function.body, &mut |expression| {
         *expression = erase_callable(expression);
         Ok(())

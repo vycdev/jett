@@ -3721,6 +3721,7 @@ fn append_native_verify_suite(
         source_definition: None,
         actor_handler: None,
         actor_state_views: Vec::new(),
+        mutable_sum_backings: Vec::new(),
         params: Vec::new(),
         capture_count: 0,
         return_type: jett_types::TypeInterner::NOTHING,

@@ -228,6 +228,7 @@ impl<'p> ProgramValidation<'p> {
                 source_definition: None,
                 actor_handler: function.actor_handler_entry().ok().flatten().cloned(),
                 actor_state_views: Vec::new(),
+                mutable_sum_backings: Vec::new(),
                 params: function.params.clone(),
                 capture_count: function.capture_count,
                 return_type: function.return_type,

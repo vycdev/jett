@@ -245,6 +245,7 @@ impl Lowerer<'_> {
                 source_definition: None,
                 actor_handler: None,
                 actor_state_views: Vec::new(),
+                mutable_sum_backings: Vec::new(),
                 params,
                 capture_count: 0,
                 return_type: method.return_type,
@@ -432,6 +433,7 @@ pub fn complete_value_conversions(
     }
     coerce_program(program, types);
     super::actor_handlers::conversion(program, &before, types)?;
+    super::mutable_sum_backings::conversion(program, &before, types)?;
     // Each private transition authenticates the same unchanged archive and
     // exact post-conversion functions before their renewed views are joined.
     let mut graph_converted = program.clone();
@@ -598,6 +600,7 @@ impl Adapters {
             source_definition: None,
             actor_handler: None,
             actor_state_views: Vec::new(),
+            mutable_sum_backings: Vec::new(),
             params,
             capture_count: 1,
             return_type: *return_type,

@@ -3,7 +3,7 @@ use super::*;
 use super::suite_options::launcher_for_options;
 
 #[derive(Clone, Copy)]
-enum ProjectedOutcome {
+pub(super) enum ProjectedOutcome {
     Success(&'static str),
     RuntimeFailure {
         stdout: &'static str,
@@ -11,7 +11,7 @@ enum ProjectedOutcome {
     },
 }
 
-fn run_case(name: &str, source_text: &str, expected: ProjectedOutcome) {
+pub(super) fn run_case(name: &str, source_text: &str, expected: ProjectedOutcome) {
     run_case_with_traces(name, source_text, expected, &[]);
 }
 

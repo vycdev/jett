@@ -346,7 +346,9 @@ Temporary roots, mutable alias slots, mutable view-parameter backing and capture
 escape retain their implementation limits. Absent or mismatched selected
 reflected root facts remain refusal cases. No flat checker-fact fallback,
 lifetime extension or loan expiry is added.
-Borrowed-sum Handle aliases still require their separate immutable backing proof.
+Borrowed-sum Handle aliases retain their separate checked backing receipt; the
+[mutable-owned sum extension](native_mutable_borrowed_sum_backings.md) has its own
+bounded library/native acceptance, separate from these local-view receipts.
 
 Original Source08 is preserved as an executable empty-output control; new
 Source11 observes nested bytes/list projections, forwarding, borrowed calls,
@@ -386,4 +388,5 @@ separate publication-boundary checks; exact evidence is recorded in the
 [native audit](native_acceptance_audit.md#reflected-local-view-backing-facts-bounded-msvc-acceptance).
 The accepted first-slice counts above remain specific to that revision. No
 Runtime/ABI/helper or lifetime-policy change is made. Mutable borrowed-sum Handle
-backing remains a separate private-proof extension.
+backing has separate [bounded private-proof acceptance](native_mutable_borrowed_sum_backings.md);
+these existing local-view receipts retain their own revision and scope.

@@ -131,3 +131,13 @@ worktree runs used the same dedicated target with expanded filesystem access;
 that environment failure is not language or native parity evidence. Existing
 compiler warnings are retained in the logs. No existing primary-worktree paths,
 commits, pushes, PRs, or native coverage denominators were changed.
+
+## Mutable-owned successor acceptance
+
+This frozen Source-only baseline, its original fixture bytes and its refusal
+counts remain historical evidence. The separate
+[mutable-owned sum extension](native_mutable_borrowed_sum_backings.md) retains
+the original binding/Handle proof while adding exact checked mutable Owned-root
+receipts. Its new variants and acceptance gates do not rewrite this baseline.
+The successor note records bounded library and paired-profile Source-deleted
+MSVC acceptance, with the original packet retained as an unchanged control.

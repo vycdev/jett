@@ -43,6 +43,7 @@ Program {
             ),
             actor_handler: None,
             actor_state_views: [],
+            mutable_sum_backings: [],
             params: [
                 Param {
                     local: LocalId(
@@ -211,6 +212,7 @@ Program {
             ),
             actor_handler: None,
             actor_state_views: [],
+            mutable_sum_backings: [],
             params: [],
             capture_count: 0,
             return_type: TypeId(
