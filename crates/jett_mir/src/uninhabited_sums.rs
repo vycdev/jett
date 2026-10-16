@@ -109,6 +109,11 @@ pub fn prepare_native_uninhabited_sums(program: &mut Program, types: &TypeIntern
         return;
     };
     for (function, (absent_plans, present_plans)) in program.functions.iter_mut().zip(plans) {
+        if crate::temporary_local_views::has_records(function) {
+            // Pending composition: selecting new sum edges needs exact temporary
+            // edit replay. The ordinary backend may still emit the original CFG.
+            continue;
+        }
         let before = (crate::resource_ownership::has_records(function)
             || function.reflected_callable.is_some()
             || crate::ordinary_borrowed_sums::has_records(function)

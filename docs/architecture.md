@@ -830,11 +830,11 @@ annotation's outer-secret promotion. The original secret receiver stays in the
 initializer, preserving existing pending guards. No arbitrary wrapper peeling,
 declassification, carrier retagging, hidden owner or runtime change is added.
 
-Endpoint types retain their checked qualification and existing representation
-checks. No field-index path is duplicated in alias metadata, and no runtime ABI,
-hidden owner, or implicit allocation is introduced. Every borrowed initializer
-must pass the typed proof before optimization can remove unused locals or
-unreachable blocks. Generated snapshots and captured copies remain owned;
+Declaration-backed endpoint types retain their checked qualification and
+existing representation checks. No field-index path is duplicated in alias
+metadata, and no runtime ABI, hidden owner or implicit allocation is introduced
+for these paths. Each such borrowed initializer must pass the typed proof before
+optimization can remove unused locals or unreachable blocks. Generated snapshots and captured copies remain owned;
 origins from another body cannot survive as borrowed captures. MIR retains and
 remaps the backing chain, expands alias reads into whole-owner liveness, and
 excludes aliases from cleanup slots. Pending checks remain at each field access.
@@ -903,9 +903,10 @@ Native ownership planning conservatively refuses owner consumption or rebinding
 after a persistent move-only source alias may have been created on a reachable
 path. Final copied primitive/String bindings retain the ordinary ownership
 behavior described above. This does not select general source loan expiry.
-Mutable source alias chains, temporary-backed source aliases, allocating
-conversions, flow-narrowed bare-machine origins, and field paths without the
-checked declared-owner proof remain explicit native limitations. Read-only
+Mutable source alias chains, temporary-backed source aliases beyond the bounded
+ordinary function-body slice below, allocating conversions, flow-narrowed
+bare-machine origins, and field paths without the checked declared-owner proof
+remain explicit native limitations. Read-only
 aliases grant no write authority, and retained dependent loans block changes to
 their owners, including after the last alias read. Selected owned-local field
 updates follow their checked ownership and loan requirements. The producer
@@ -935,8 +936,55 @@ has its own owner; exits retire only crossed scopes, after acquiring any
 owned Return/Respond/Default result. Aliases receive no destructor slots.
 Copyable endpoints, readiness/error order and existing escape/loan rules stay
 unchanged. No actor/Resource authority or call-view End extension follows.
-This is a selected contract, not implemented acceptance: unchanged Source09
-and the reference/native ownership and cleanup gates remain pending in
+The bounded implementation recognizes original ordinary nongeneric function-body
+declarations whose checked direct named producer returns a finite ordinary
+struct, projected through exact typed struct fields to bytes or a list. Its
+native owner proof admits finite primitive/string/bytes/list/struct data; other
+owner shapes remain outside this slice. Checked reference transport currently
+supports bytes; list transport remains pending.
+The original Other fact stays intact. Admission additionally requires an exact
+immutable original `VarDecl` with a written `view` initializer and its canonical
+variable fact. Viewed pattern and iteration binders retain their existing
+borrowed paths without temporary owner authority. Complete nested declaration
+lookup preserves refusals for genuine written temporaries at raw entries and in
+unsupported regions. A private SourceCall receipt joins the original checked
+declaration, producer, whole-owner header, projection and
+scope; single-use canonical capture and the immutable archive's expected
+inventory precede current-marker validation. Exact conversion and peer replay
+cannot infer this authority from matching names, spans or layout. Reusing the
+archive grants no Resource custody or execution family.
+
+MIR validates its immutable HIR association and complete current graph before
+pruning or planning. It authenticates either the direct whole-result acquisition
+or its exact staged call/End/move chain, then pins the initialized owning slot
+through the original function-body cleanup edges independently of alias reads.
+Aliases remain nonowning. Existing result emission acquires the owned return
+before dropping occupied slots. Checked reference activations retain whole
+Values in vacant/live/retired storage with private nonowning tickets and named
+argument frames, and bind acquired output to the exact completed activation.
+Original root definitions declared through `mutual:` use the immutable
+resolver's definition-name-span edge to the existing declaration DefId. The
+lookup remains unique and registration retains complete typed AST, canonical
+name, namespace and signature checks; temporary receipts additionally retain
+the physical root, original call and activation. A later body is not required
+to reuse its earlier declaration span. Interface method dispatch stays outside
+this ordinary-root activation family. No Runtime helper, ABI, implicit clone or
+fabricated Source DefId is added.
+
+Focused compiler/reference controls and core libraries pass. A genuine checked
+Source control covers a factory's staged temporary argument before a later
+Handle; genuine nonidentity local compaction is separately covered. Synthetic
+disconnected-block controls are refused by the public graph guard/pruner and
+exercise only isolated exact temporary replay back to the original graph; they
+are not Source-generated pruning evidence. The two bytes temporary controls
+pass four paired Source-deleted native executions (Source Debug/Runtime Debug
+and Source Release/Runtime Release). The complete refreshed regression matrix
+passes 23 tests/46 executions with all Source/Runtime/fixture guards intact.
+These receipts do not measure native allocation/destruction timing, which
+remains pending. Nested declarations, loops, actor/Resource/generic/reflected
+contexts and types, and other producer families
+still owe implementation and cleanup evidence without new checker bans. The
+full selected contract, unchanged Source09 and remaining gates are recorded in
 [the temporary local-view note](active/native_temporary_local_views.md).
 
 **Implementation strategy:** Abstract interpretation over the control flow graph. At each program point, maintain a mapping from variable → ownership state. At control flow joins (if/else merge points, loop entries), states must be compatible:

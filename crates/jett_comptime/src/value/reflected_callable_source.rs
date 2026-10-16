@@ -1,5 +1,7 @@
 //! Exact original Source body lookup; names choose a resolved declaration only.
-use jett_parser::ast::{Block, ComptimeTypeBindStmt, Expr, FunctionDef, Item, Stmt, StringPart};
+use jett_parser::ast::{
+    Block, ComptimeTypeBindStmt, Expr, FunctionDef, Item, Stmt, StringPart, VarDecl,
+};
 use jett_resolve::{DefId, DefKind};
 use jett_typecheck::CheckedResourceProgram;
 
@@ -22,7 +24,16 @@ pub(crate) fn named_function(
     let mut matches = Vec::new();
     for item in &program.module().items {
         match item {
-            Item::Function(function) if function.name.span == info.span => matches.push(function),
+            // A mutual declaration owns the DefId and declaration span. The
+            // resolver joins its later, immutable root definition to that same
+            // DefId; the body span must not be confused with the declaration.
+            Item::Function(function)
+                if function.name.span == info.span
+                    || program.resolved().resolutions.get(&function.name.span)
+                        == Some(&definition) =>
+            {
+                matches.push(function);
+            }
             Item::Implement(block) => {
                 for method in &block.methods {
                     if method.name.span == info.span {
@@ -35,6 +46,76 @@ pub(crate) fn named_function(
     }
     match matches.as_slice() {
         [function] => Some(*function),
+        _ => None,
+    }
+}
+
+/// Locate actual declaration storage, excluding pattern and iteration binders.
+/// The immutable module remains the authority; this lookup grants no execution.
+pub(crate) fn variable_declaration<'a>(
+    program: &'a CheckedResourceProgram,
+    span: jett_common::Span,
+) -> Option<&'a VarDecl> {
+    let contains = |outer: jett_common::Span| {
+        outer.file == span.file && outer.start <= span.start && outer.end >= span.end
+    };
+    let mut matches = Vec::new();
+    let mut blocks = Vec::new();
+    let mut expressions = Vec::new();
+    for item in &program.module().items {
+        match item {
+            Item::Function(function) => blocks.push(&function.body),
+            Item::Implement(block) => {
+                blocks.extend(block.methods.iter().map(|method| &method.body));
+            }
+            Item::Struct(structure) => {
+                blocks.extend(structure.methods.iter().map(|method| &method.body));
+            }
+            Item::Verify(block) => blocks.push(&block.body),
+            Item::Property(block) => blocks.push(&block.body),
+            Item::VarDecl(declaration) => {
+                if declaration.name.span == span {
+                    matches.push(declaration);
+                }
+                expressions.push(&declaration.value);
+            }
+            Item::Actor(actor) => {
+                for declaration in &actor.state_fields {
+                    if declaration.name.span == span {
+                        matches.push(declaration);
+                    }
+                    expressions.push(&declaration.value);
+                }
+                blocks.extend(actor.handlers.iter().map(|handler| &handler.body));
+            }
+            Item::TypeAlias(alias) => expressions.extend(alias.constraint.iter()),
+            Item::Namespace(_)
+            | Item::Mutual(_)
+            | Item::Interface(_)
+            | Item::Bitfield(_)
+            | Item::Enum(_)
+            | Item::Machine(_)
+            | Item::Resource(_) => {}
+        }
+    }
+    let mut declaration = |statement: &'a Stmt| {
+        if let Stmt::VarDecl(value) = statement {
+            if value.name.span == span {
+                matches.push(value);
+            }
+        }
+    };
+    for block in blocks.into_iter().filter(|block| contains(block.span)) {
+        walk_block_nodes(block, &mut |_| {}, &mut |_| {}, &mut declaration);
+    }
+    for expression in expressions
+        .into_iter()
+        .filter(|expression| contains(expression.span()))
+    {
+        walk_expr_nodes(expression, &mut |_| {}, &mut |_| {}, &mut declaration);
+    }
+    match matches.as_slice() {
+        [declaration] => Some(*declaration),
         _ => None,
     }
 }

@@ -266,6 +266,9 @@ fn validate_function_with_signatures<'a>(
     signatures: &[hir::Function],
     manifest: &hir::ResourceManifest,
 ) -> Result<CallerAcquisitions<'a>, String> {
+    // Includes disconnected blocks and unused original declarations. This gate
+    // is shared by public preparation and standalone MoveValuePlan acquisition.
+    crate::temporary_local_views::validate(function, types)?;
     // Fresh exact site proof precedes lexical context selection.
     let breakpoint_sites = crate::breakpoint_regions::validate(function, types)?;
     let mut validator = Validator::new(function, types, signatures, manifest)?;

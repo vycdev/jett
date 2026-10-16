@@ -6035,8 +6035,9 @@ aliases are non-owning and carry no cleanup obligation. Explicit clones acquire
 independent ownership, and ordinary owned field initializers retain their copy
 behavior. Carrier-preserving `coarsen` and `declassify` aliases retain the same
 backing owner and existing representation checks. Temporary-backed source local
-aliases, mutable alias chains, allocating conversions, and owner consumption or
-rebinding after source alias creation remain native implementation limits. A
+aliases beyond the bounded ordinary function-body slice below, mutable alias
+chains, allocating conversions, and owner consumption or rebinding after source
+alias creation remain native implementation limits. A
 read-only alias grants no write authority, and a retained dependent loan blocks
 changes to its owner, including after its last alias read. Selected field
 updates to a live mutable owned local without a conflicting loan follow the
@@ -6062,8 +6063,17 @@ reply or Default result has been acquired. Copyable endpoints keep their
 existing copy behavior. Escape and dependent-loan rules, checked field types,
 pending checks and failure order are unchanged. This contract does not grant
 actor-state or Resource custody and does not extend operation-bounded call
-loans. Implementation and reference/native cleanup gates, including unchanged
-Source09, remain pending; see the
+loans. A bounded implementation retains such backing for original ordinary
+nongeneric function-body declarations with a checked direct named producer
+returning a finite ordinary struct and an exact typed bytes/list field path.
+Checked reference transport currently supports bytes; list transport and
+broader scopes and producer families remain pending. Private original-program
+proofs, generated owning storage and read-independent MIR lifetime planning
+implement that slice without granting Source ownership to an alias. Local
+compiler/reference controls and paired Source-deleted native Debug/Release
+execution pass for unchanged Source09 and the new Source13. Physical cleanup
+measurements and broader-context gates remain pending. These bounds add no
+checker bans and do not narrow the selected lifetime rule; see the
 [temporary local-view contract](active/native_temporary_local_views.md).
 
 An original explicit call-site view may be evaluated eagerly before a later

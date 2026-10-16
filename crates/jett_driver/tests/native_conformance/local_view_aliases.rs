@@ -176,51 +176,27 @@ fn native_stable_projected_local_view_struct_generic_and_qualified_endpoints_kee
 }
 
 #[test]
-fn native_temporary_projected_local_view_aliases_reject_before_publication() {
-    use jett_driver::native::{NativeBuildError, build_host_executable_with_options};
-    use jett_driver::{BackendLoweringError, BuildOptions, build_file_with_options};
-
-    let cases = [(
-        "temporary_root",
+fn native_temporary_projected_local_view_retains_the_whole_function_scope_owner() {
+    run_case(
+        "09_temporary_root",
         include_str!("local_view_aliases/09_temporary_root_boundary.jett"),
-        "native borrowed alias requires a stable local origin; temporary views remain unsupported",
-    )];
-    for (name, source_text, expected_message) in cases {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join(format!("{name}.jett"));
-        fs::write(&source, source_text).unwrap();
-        let output = directory.path().join("preserved.exe");
-        let sentinel = b"existing native publication";
-        fs::write(&output, sentinel).unwrap();
-        let launcher = if cfg!(windows) {
-            NativeLauncherBundle::windows_msvc_static_v1(directory.path().join("unused.lib"))
-        } else {
-            NativeLauncherBundle::linux_gnu_v1(directory.path().join("unused.a"))
-        };
-        assert!(!launcher.archive_path.exists());
+        ProjectedOutcome::Success(""),
+    );
+}
 
-        for release in [false, true] {
-            let options = BuildOptions { release };
-            let checked = build_file_with_options(&source, options);
-            assert!(
-                !checked.has_errors,
-                "{name}: excluded views remain frontend-valid: {:?}",
-                checked.diagnostics
-            );
-            let error = build_host_executable_with_options(&source, &launcher, &output, options)
-                .expect_err("unstable origin must fail before emission or archive lookup");
-            let NativeBuildError::Lowering { source, .. } = error else {
-                panic!("{name}: expected HIR admission failure: {error}");
-            };
-            let errors = match *source {
-                BackendLoweringError::Hir(errors) => errors,
-                error => panic!("{name}: expected HIR admission failure: {error}"),
-            };
-            assert_eq!(errors.len(), 1, "{name}: {errors:?}");
-            assert_eq!(errors[0].message, expected_message, "{name}: {errors:?}");
-            assert_eq!(fs::read(&output).unwrap(), sentinel);
-        }
-    }
+#[test]
+fn native_temporary_projected_local_view_produces_once_and_preserves_forwarded_reads() {
+    run_case(
+        "13_temporary_function_body",
+        include_str!("local_view_aliases/13_temporary_function_body.jett"),
+        ProjectedOutcome::Success(concat!(
+            "producer\n",
+            "between\n",
+            "borrowed:4142:4142\n",
+            "clone:414243:4142\n",
+            "after-last-read\n",
+        )),
+    );
 }
 
 #[test]

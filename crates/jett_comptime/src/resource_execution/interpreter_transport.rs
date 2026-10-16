@@ -1218,6 +1218,13 @@ impl Interpreter {
                     .map_err(|error| error.to_string())?,
             );
         }
+        self.temporary_local_views =
+            crate::interpreter::temporary_local_views::Context::needed(&program).then(|| {
+                crate::interpreter::temporary_local_views::Context::new(
+                    program.clone(),
+                    self.scopes.len(),
+                )
+            });
         self.retained_resource_program = Some((program, purpose));
         self.field_update_context = field_context;
         Ok(())

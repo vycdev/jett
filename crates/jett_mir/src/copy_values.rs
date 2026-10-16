@@ -103,6 +103,13 @@ impl CopyValuePlan {
         types: &TypeInterner,
         program: PlanningContext<'_>,
     ) -> Result<Self, String> {
+        crate::temporary_local_views::validate(function, types)?;
+        if crate::temporary_local_views::has_records(function) && program.is_none() {
+            return Err(
+                "temporary local view storage requires complete Source call ownership validation"
+                    .into(),
+            );
+        }
         crate::field_updates::validate_function(function, types)?;
         crate::ordinary_borrowed_sums::validate(function, types)?;
         if program.companion.is_none()
@@ -526,6 +533,14 @@ impl CopyValuePlan {
                 break;
             }
         }
+        crate::temporary_local_views::pin_scope(
+            function,
+            types,
+            &cfg,
+            &mut live_in,
+            &mut live_out,
+            &mut after,
+        )?;
         Ok(Self {
             owned_locals: function
                 .locals

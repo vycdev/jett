@@ -837,6 +837,17 @@ fn derive(
         current: temporary.functions.clone(),
         proofs: vec![proof.clone()],
     }));
+    // The private factory has authenticated the complete input table and built
+    // this exact recipe Scope from its checked proof. Its staged execution view
+    // must include that Scope before peer conversion validates the whole table.
+    // Original Source functions, required rows and required-only IDs stay intact.
+    temporary
+        .resource_source
+        .install_materialized(Materialized {
+            functions: temporary.functions.clone(),
+            values: archive.required_materializations().to_vec(),
+            required_only: archive.required_only_function_ids().to_vec(),
+        });
     crate::interface_values::complete_graph_value_conversions(&mut temporary, types).map_err(
         |errors| {
             errors

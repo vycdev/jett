@@ -4,10 +4,14 @@
 use super::*;
 
 pub(crate) fn unreachable(function: &mut Function) -> bool {
+    if crate::temporary_local_views::validate_current(function).is_err() {
+        return false;
+    }
     if crate::resource_ownership::constructors::validate_nodes(function).is_err() {
         return false;
     }
-    let before = (!function.breakpoint_regions.is_empty()
+    let before = (crate::temporary_local_views::has_records(function)
+        || !function.breakpoint_regions.is_empty()
         || crate::call_owner_generations::has_records(function)
         || crate::resource_ownership::has_records(function)
         || crate::ordinary_borrowed_sums::has_records(function)
@@ -58,7 +62,8 @@ pub(crate) fn unreachable(function: &mut Function) -> bool {
 
     if crate::match_bindings::remap_blocks(function, &blocks).is_err()
         || before.as_ref().is_some_and(|before| {
-            crate::actor_handlers::remap_blocks(function, before, &blocks).is_err()
+            crate::temporary_local_views::remap_blocks(function, before, &blocks).is_err()
+                || crate::actor_handlers::remap_blocks(function, before, &blocks).is_err()
                 || crate::field_updates::remap_blocks(function, before, &blocks).is_err()
                 || crate::call_owner_generations::remap_blocks(function, before, &blocks).is_err()
                 || crate::resource_ownership::remap_blocks(function, before, &blocks).is_err()
@@ -78,6 +83,9 @@ pub(crate) fn unreachable(function: &mut Function) -> bool {
 /// Remove absent frame slots without changing any original control-flow block.
 /// Every parameter, binding, read, capture and debug or loan reference survives.
 pub(crate) fn unused_locals(function: &mut Function) -> bool {
+    if crate::temporary_local_views::validate_current(function).is_err() {
+        return false;
+    }
     if crate::resource_ownership::constructors::validate_nodes(function).is_err() {
         return false;
     }
@@ -88,7 +96,8 @@ pub(crate) fn unused_locals(function: &mut Function) -> bool {
     {
         return true;
     }
-    let before = (!function.breakpoint_regions.is_empty()
+    let before = (crate::temporary_local_views::has_records(function)
+        || !function.breakpoint_regions.is_empty()
         || crate::call_owner_generations::has_records(function)
         || crate::resource_ownership::has_records(function)
         || crate::ordinary_borrowed_sums::has_records(function)
@@ -168,7 +177,8 @@ pub(crate) fn unused_locals(function: &mut Function) -> bool {
         .retain_mut(|record| record.remap_locals(&locals));
     if crate::match_bindings::remap_locals(function, &locals).is_err()
         || before.as_ref().is_some_and(|before| {
-            crate::resource_ownership::remap_locals(function, before, &locals).is_err()
+            crate::temporary_local_views::remap_locals(function, before, &locals).is_err()
+                || crate::resource_ownership::remap_locals(function, before, &locals).is_err()
                 || crate::ordinary_borrowed_sums::remap_locals(function, before, &locals).is_err()
         })
         || crate::call_owner_generations::remap_locals(function, &locals).is_err()

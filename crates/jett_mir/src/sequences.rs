@@ -74,6 +74,12 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
         return;
     }
     for function in &mut program.functions {
+        if crate::temporary_local_views::has_records(function) {
+            // Pending composition: this pass has no authenticated sequence edit
+            // replay for the temporary inventory. Keep the complete valid graph.
+            // An unprepared ForEach still receives the backend's existing refusal.
+            continue;
+        }
         let before_pass = (crate::resource_ownership::has_records(function)
             || function.reflected_callable.is_some()
             || crate::ordinary_borrowed_sums::has_records(function)

@@ -81,6 +81,10 @@ mod local_view_tests;
 mod local_views;
 mod mutable_sum_backings;
 pub use mutable_sum_backings::MutableSumBacking;
+mod temporary_local_views;
+pub use temporary_local_views::{
+    TemporaryLocalBacking, TemporaryLocalScope, temporary_local_backings,
+};
 mod reflected_callable;
 mod reflected_fields;
 pub use reflected_callable::{
@@ -1627,6 +1631,7 @@ impl<'a> Lowerer<'a> {
             actor_handlers::seal_program(&mut program)?;
             reflected_callable::seal_program(&mut program)?;
             mutable_sum_backings::seal_program(&mut program, &self.check.interner)?;
+            temporary_local_views::seal_original_program(&program, &self.check.interner)?;
             validate(&program).map_err(|errors| {
                 errors
                     .into_iter()
@@ -1636,18 +1641,20 @@ impl<'a> Lowerer<'a> {
                     })
                     .collect::<Vec<_>>()
             })?;
-            validate_backend_types(&program, &self.check.interner).map_err(|errors| {
-                errors
-                    .into_iter()
-                    .map(|error| LowerError {
-                        span: error.span,
-                        message: error.message,
-                    })
-                    .collect::<Vec<_>>()
-            })?;
+            type_validation::validate_original_backend_types(&program, &self.check.interner)
+                .map_err(|errors| {
+                    errors
+                        .into_iter()
+                        .map(|error| LowerError {
+                            span: error.span,
+                            message: error.message,
+                        })
+                        .collect::<Vec<_>>()
+                })?;
             if let Some(original) = &self.reflected_checked_program
                 && (self.authenticated_resource_lowering
                     || has_reflected_callable_plans(&program)
+                    || temporary_local_views::has_markers(&program)
                     || field_updates::requires_original_reflected_archive(&program)
                     || self
                         .check
@@ -1662,6 +1669,17 @@ impl<'a> Lowerer<'a> {
                     inline_sources,
                 );
             }
+            temporary_local_views::validate_program(&program, &self.check.interner).map_err(
+                |errors| {
+                    errors
+                        .into_iter()
+                        .map(|error| LowerError {
+                            span: error.span,
+                            message: error.message,
+                        })
+                        .collect::<Vec<_>>()
+                },
+            )?;
             Ok(program)
         } else {
             Err(self.errors)
@@ -2195,6 +2213,21 @@ impl<'a> Lowerer<'a> {
             })
         {
             body_lowerer.reflected_field_root = Some(&source.function.body);
+        }
+        if body_lowerer.parent.reflected_checked_program.is_some()
+            && source.instantiation.is_none()
+            && source.method.is_none()
+            && source.function.type_params.is_empty()
+            && source.definition.is_some_and(|definition| {
+                reflected_field_sources::original_root_function(
+                    body_lowerer.parent.module,
+                    body_lowerer.parent.resolve,
+                    source.function,
+                    definition,
+                )
+            })
+        {
+            body_lowerer.temporary_root = Some(&source.function.body);
         }
         body_lowerer.return_type = Some(return_type);
         let mut params = Vec::with_capacity(source.function.params.len());
@@ -3099,6 +3132,10 @@ struct BodyLowerer<'lowerer, 'program> {
     assignment_places: HashMap<Span, CheckedAssignmentPlace>,
     next_field_update_occurrence: u64,
     mutable_sum_backings: Vec<MutableSumBacking>,
+    temporary_root: Option<&'program ast::Block>,
+    temporary_scope: Option<(Span, usize)>,
+    temporary_prefix: Vec<Statement>,
+    temporary_origins: HashMap<LocalId, TemporaryLocalBacking>,
     generic_calls: HashMap<Span, CheckedGenericCall>,
     intrinsic_ids: HashMap<Span, IntrinsicId>,
     intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -3170,6 +3207,10 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             assignment_places,
             next_field_update_occurrence: 0,
             mutable_sum_backings: Vec::new(),
+            temporary_root: None,
+            temporary_scope: None,
+            temporary_prefix: Vec::new(),
+            temporary_origins: HashMap::new(),
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -3390,11 +3431,19 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
     fn lower_block(&mut self, block: &ast::Block) -> Block {
         self.visible_bindings.push(HashMap::new());
         let mut statements = Vec::new();
-        for statement in &block.stmts {
-            if let Some(statement) = self.lower_statement(statement) {
+        let previous_temporary_scope = self.temporary_scope;
+        for (index, statement) in block.stmts.iter().enumerate() {
+            self.temporary_scope = self
+                .temporary_root
+                .filter(|root| std::ptr::eq(*root, block))
+                .map(|_| (block.span, index));
+            let lowered = self.lower_statement(statement);
+            statements.append(&mut self.temporary_prefix);
+            if let Some(statement) = lowered {
                 statements.push(statement);
             }
         }
+        self.temporary_scope = previous_temporary_scope;
         self.visible_bindings.pop();
         Block {
             statements,
@@ -3569,6 +3618,22 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             // The new binding becomes visible only after its initializer,
             // including any handled failure and nested breakpoint.
             let value = self.lower_expression(&decl.value)?;
+            if self.binding_modes.get(&decl.name.span)
+                == Some(&CheckedBindingMode::View {
+                    source: CheckedViewSource::Other,
+                })
+                && let Some((local, rewritten)) =
+                    self.lower_temporary_local_declaration(decl, definition, &value, ty)
+            {
+                call_observation::record(self, decl, definition, local, &rewritten);
+                return Some((
+                    StatementKind::Let {
+                        local,
+                        value: rewritten,
+                    },
+                    decl.span,
+                ));
+            }
             let view_source = self.local_view_source(decl, &value, ty)?;
             let local =
                 self.allocate_local(definition, &decl.name.name, ty, decl.mutable, decl.span);

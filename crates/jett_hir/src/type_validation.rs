@@ -21,6 +21,19 @@ pub fn validate_backend_types(
     program: &Program,
     interner: &TypeInterner,
 ) -> Result<(), Vec<ValidationError>> {
+    validate_backend_types_inner(program, interner, true)
+}
+pub(super) fn validate_original_backend_types(
+    program: &Program,
+    interner: &TypeInterner,
+) -> Result<(), Vec<ValidationError>> {
+    validate_backend_types_inner(program, interner, false)
+}
+fn validate_backend_types_inner(
+    program: &Program,
+    interner: &TypeInterner,
+    archived: bool,
+) -> Result<(), Vec<ValidationError>> {
     let mut validator = BackendTypeValidator {
         resource_manifest: &program.resource_manifest,
         interner,
@@ -48,6 +61,11 @@ pub fn validate_backend_types(
     {
         if let Err(message) = program.resource_source.validate_types(interner) {
             validator.error(Span::new(jett_common::FileId::new(0), 0, 0), message);
+        }
+    }
+    if archived {
+        if let Err(errors) = crate::temporary_local_views::validate_program(program, interner) {
+            validator.errors.extend(errors);
         }
     }
     for function in &program.functions {

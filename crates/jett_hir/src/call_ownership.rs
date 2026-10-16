@@ -73,6 +73,7 @@ pub struct SourceArgumentWitness {
     handled_result: Option<SourceHandledResult>,
     projection_root: Option<SourceProjectionRoot>,
     match_origin: Option<(LocalId, crate::MatchBinding)>,
+    temporary_origin: Option<Box<crate::temporary_local_views::TemporaryLocalArgument>>,
 }
 
 /// Original checked flow occurrence, separate from the owner's stored type.
@@ -242,6 +243,19 @@ pub struct SourceCallOwnership {
     /// HIR-added metadata tail. It is never counted as a source actual.
     pub generated_operands: Vec<GeneratedArgumentOwnership>,
     certificate: Box<SourceCallCertificate>,
+    temporary_local_backing: Option<crate::TemporaryLocalBacking>,
+}
+
+impl SourceCallOwnership {
+    pub(crate) fn temporary_local_backing(&self) -> Option<&crate::TemporaryLocalBacking> {
+        self.temporary_local_backing.as_ref()
+    }
+    pub(crate) fn set_temporary_local_backing(&mut self, proof: crate::TemporaryLocalBacking) {
+        self.temporary_local_backing = Some(proof);
+    }
+    pub(crate) fn clear_temporary_local_backing(&mut self) {
+        self.temporary_local_backing = None;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1528,6 +1542,19 @@ pub enum CallOwnership {
 }
 
 impl CallOwnership {
+    /// Read-only refusal guard; presence supplies no minting or storage authority.
+    pub fn has_temporary_local_receipts(&self) -> bool {
+        match self {
+            Self::Source(source) => {
+                source.temporary_local_backing.is_some()
+                    || source
+                        .arguments
+                        .iter()
+                        .any(|argument| argument.witness.temporary_origin.is_some())
+            }
+            Self::Generated(_) => false,
+        }
+    }
     pub fn metadata_types(&self, mut visit: impl FnMut(TypeId)) {
         match self {
             Self::Source(source) => {
@@ -1846,6 +1873,9 @@ impl CallOwnership {
         match self {
             Self::Source(source) => {
                 for argument in &source.arguments {
+                    if let Some(proof) = &argument.witness.temporary_origin {
+                        proof.metadata_locals(&mut visit);
+                    }
                     if let Some(root) = argument.witness.projection_root {
                         visit(root.local);
                     }
@@ -1916,6 +1946,9 @@ impl CallOwnership {
         match self {
             Self::Source(source) => {
                 for argument in &mut source.arguments {
+                    if let Some(proof) = &mut argument.witness.temporary_origin {
+                        proof.remap(&mut map)?;
+                    }
                     if let Some(root) = &mut argument.witness.projection_root {
                         root.local = map(root.local)?;
                     }
@@ -2469,7 +2502,12 @@ pub fn validate_operand_ownership(
                 {
                     return Err("call ownership sealed occurrence has no exact expected secret qualification".into());
                 }
-                validate_origin(&argument.origin, &local, types)?;
+                validate_origin(
+                    &argument.origin,
+                    witness.temporary_origin.as_deref(),
+                    &local,
+                    types,
+                )?;
                 if source_match_origin(&argument.origin, &local)? != witness.match_origin {
                     return Err(
                         "call ownership match payload differs from its original scoped origin"
@@ -2776,6 +2814,7 @@ fn source_match_origin(
 
 fn validate_origin(
     origin: &CallerOrigin,
+    temporary: Option<&crate::temporary_local_views::TemporaryLocalArgument>,
     local: &impl Fn(LocalId) -> Option<OwnershipLocalInfo>,
     types: &TypeInterner,
 ) -> Result<(), String> {
@@ -2814,11 +2853,13 @@ fn validate_origin(
                     let matched = value
                         .match_binding
                         .is_some_and(|proof| proof.matches_binding(fact.ty, fact.declaration_span));
-                    if value.view_source != expected
+                    let temporary = temporary.is_some_and(|proof| proof.matches(fact, value));
+                    if (!temporary && value.view_source != expected)
                         || (expected.is_none()
                             && !value.is_view_parameter
                             && !iteration
-                            && !matched)
+                            && !matched
+                            && !temporary)
                     {
                         return Err(
                             "call ownership borrowed binding lost its immediate source".into()
@@ -2871,7 +2912,12 @@ pub(super) fn validate_actor_arguments(
             return Err("actor argument changed its original checked occurrence".into());
         }
         seen[argument.source_index] = true;
-        validate_origin(&argument.origin, &lookup, types)?;
+        validate_origin(
+            &argument.origin,
+            witness.temporary_origin.as_deref(),
+            &lookup,
+            types,
+        )?;
         if source_match_origin(&argument.origin, &lookup)? != witness.match_origin {
             return Err("actor argument changed scoped matched payload origin".into());
         }
@@ -3424,6 +3470,7 @@ impl crate::BodyLowerer<'_, '_> {
             arguments,
             bridge: CallBridge::Direct,
             generated_operands: Vec::new(),
+            temporary_local_backing: None,
             certificate: Box::new(SourceCallCertificate {
                 target,
                 shape,
@@ -3538,6 +3585,7 @@ impl crate::BodyLowerer<'_, '_> {
                 handled_result: None,
                 projection_root: self.checked_flow_projection_root(fact.source_span, &origin)?,
                 match_origin: source_match_origin(&origin, &|id| self.ownership_local_info(id))?,
+                temporary_origin: self.temporary_argument_origin(&origin),
             };
             let mut argument = ArgumentOwnership {
                 source_span: fact.source_span,

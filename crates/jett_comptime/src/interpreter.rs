@@ -59,6 +59,7 @@ mod graphics;
 mod interface_arguments;
 mod nominal_types;
 mod reflected_callables;
+mod temporary_local_views;
 
 use graphics::GraphicsProvider;
 pub use graphics::{GraphicsTestEvent, GraphicsTestObservation};
@@ -635,6 +636,7 @@ struct RegisteredFunction {
 }
 
 pub struct Interpreter {
+    temporary_local_views: Option<temporary_local_views::Context>,
     field_update_context: Option<field_updates::FieldUpdateContext>,
     /// One existing checked entry may start ordinary executable identity.
     /// Source callees then require their authenticated caller context.
@@ -753,6 +755,7 @@ impl Interpreter {
     /// Create a new interpreter with an empty global scope.
     pub fn new() -> Self {
         Self {
+            temporary_local_views: None,
             field_update_context: None,
             field_update_entry_allowed: false,
             resource_transport: None,
@@ -921,6 +924,9 @@ impl Interpreter {
     // -- Scope management ---------------------------------------------------
 
     fn push_scope(&mut self) {
+        if let Some(context) = &mut self.temporary_local_views {
+            context.push_scope();
+        }
         if let Some(context) = &mut self.field_update_context {
             context.push_scope();
         }
@@ -933,6 +939,9 @@ impl Interpreter {
     }
 
     fn pop_scope(&mut self) {
+        if let Some(context) = &mut self.temporary_local_views {
+            context.pop_scope();
+        }
         if let Some(context) = &mut self.field_update_context {
             context.pop_scope();
         }
@@ -968,6 +977,13 @@ impl Interpreter {
                 continue;
             }
             if let Some(v) = scope.get(name) {
+                if self
+                    .temporary_local_views
+                    .as_ref()
+                    .is_some_and(|context| context.placeholder(index, name))
+                {
+                    return None;
+                }
                 return Some(v);
             }
         }
@@ -2750,6 +2766,9 @@ impl Interpreter {
     }
 
     fn eval_expr_flow_inner(&mut self, expr: &Expr) -> Result<ExprFlow, String> {
+        if let Some(flow) = self.eval_temporary_read(expr)? {
+            return Ok(flow);
+        }
         match expr {
             // Literals
             Expr::IntLiteral(n, _) => {
@@ -3741,6 +3760,9 @@ impl Interpreter {
                 }
             }
         }
+        if let Some(flow) = self.eval_temporary_call(callee, type_args, args, call_span)? {
+            return Ok(flow);
+        }
         // Only a fact at this actual result can be reused after the call; an
         // unrelated installed map must not alter metadata-free API validation.
         let checked_producer = self.checked_refinement_source_type(call_span).is_some();
@@ -4372,6 +4394,9 @@ impl Interpreter {
         }
         match stmt {
             Stmt::VarDecl(decl) => {
+                if let Some(result) = self.exec_temporary_binding(decl)? {
+                    return Ok(result);
+                }
                 let declared_ty = self.substitute_type_expr(&decl.ty);
                 let type_name = type_expr_name(&declared_ty);
                 let val = if self.type_aliases.contains_key(&type_name) {
@@ -5076,7 +5101,23 @@ impl Interpreter {
 
     /// Execute a block (list of statements), propagating control-flow signals.
     fn exec_block_inner(&mut self, block: &Block) -> Result<Option<Signal>, String> {
+        self.exec_block_with_temporary_output(block)
+            .map(temporary_local_views::BlockOutput::into_signal)
+    }
+
+    fn exec_block_with_temporary_output(
+        &mut self,
+        block: &Block,
+    ) -> Result<temporary_local_views::BlockOutput, String> {
         self.push_scope();
+        let activation = match self.begin_temporary_block(block) {
+            Ok(activation) => activation,
+            Err(error) => {
+                self.pop_scope();
+                self.check_resource_cleanup()?;
+                return Err(error);
+            }
+        };
         let result = (|| {
             for stmt in &block.stmts {
                 if let Some(signal) = self.exec_stmt_inner(stmt)? {
@@ -5085,9 +5126,16 @@ impl Interpreter {
             }
             Ok(None)
         })();
+        let result = self.acquire_temporary_output(activation, result);
+        let local_cleanup = self.complete_temporary_block(activation);
         self.pop_scope();
+        // Preserve the pre-existing Resource-cleanup precedence over a primary
+        // block error. Ordinary retirement cannot replace an existing error.
         self.check_resource_cleanup()?;
-        result
+        match (result, local_cleanup) {
+            (Err(error), _) | (_, Err(error)) => Err(error),
+            (Ok(result), Ok(())) => Ok(result),
+        }
     }
 
     /// Execute a block, returning the value produced by a `return` statement
@@ -12760,7 +12808,9 @@ impl Interpreter {
             .unwrap_or_else(|| name.to_string());
         let source_types = vec![None; args.len()];
         let previous_field_entry = std::mem::replace(&mut self.field_update_entry_allowed, true);
+        let previous_temporary_entry = self.set_temporary_entry_allowed(true);
         let result = self.call_function_from_source(&runtime_name, &[], args, Some(&source_types));
+        self.set_temporary_entry_allowed(previous_temporary_entry);
         self.field_update_entry_allowed = previous_field_entry;
         self.current_namespace = saved_namespace;
         result
@@ -12920,6 +12970,23 @@ impl Interpreter {
         args: Vec<Value>,
         source_types: Option<&[Option<String>]>,
     ) -> Result<Value, String> {
+        self.call_registered_function_with_temporary_frame(
+            name,
+            type_args,
+            args,
+            source_types,
+            None,
+        )
+    }
+
+    fn call_registered_function_with_temporary_frame(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: Vec<Value>,
+        source_types: Option<&[Option<String>]>,
+        temporary_frame: Option<temporary_local_views::PreparedNamedFrame>,
+    ) -> Result<Value, String> {
         let resolved_name = match (
             self.resolve_interface_dispatch(name, &args),
             self.interface_dispatch_name(name),
@@ -13002,11 +13069,26 @@ impl Interpreter {
             &captured_arguments,
             source_types.is_some(),
         )?;
-        let func = match &field_body {
-            Some(reference) => reference.function().map_err(|error| error.to_string())?,
-            None => func,
+        let temporary_function = self.prepare_temporary_function(
+            &resolved_name,
+            &registered.namespace,
+            func,
+            source_types.is_some(),
+            temporary_frame.as_ref(),
+        )?;
+        let func = match (&temporary_function, &field_body) {
+            (Some(receipt), _) => receipt.original()?,
+            (None, Some(reference)) => reference.function().map_err(|error| error.to_string())?,
+            (None, None) => func,
         };
         let saved_field_cursor = self.enter_checked_field_body(field_body.as_ref())?;
+        let temporary_activation = match self.enter_temporary_function(temporary_function.clone()) {
+            Ok(activation) => activation,
+            Err(error) => {
+                let _field_restore = self.restore_checked_field_body(saved_field_cursor);
+                return Err(error);
+            }
+        };
         let saved_expression_types =
             std::mem::replace(&mut self.active_checked_function, expression_types);
         let saved_type_arguments = std::mem::replace(&mut self.current_type_arguments, arguments);
@@ -13037,18 +13119,38 @@ impl Interpreter {
         self.allow_checked_refinement_proofs &= source_types.is_some();
         let source_types = source_types.filter(|_| self.allow_checked_refinement_proofs);
         let call_result = (|| {
-            for (index, (param, arg)) in func.params.iter().zip(args).enumerate() {
-                let param_ty = self.substitute_type_expr(&param.ty);
-                let source_type = source_types
-                    .and_then(|types| types.get(index))
-                    .and_then(Option::as_deref);
-                let arg =
-                    self.normalize_and_validate_value_from_source(&param_ty, arg, source_type)?;
-                self.set_variable_with_type(&param.name.name, arg, param_ty);
-                self.install_checked_field_binding(&param.name)?;
+            if let Some(frame) = temporary_frame.as_ref() {
+                let staged =
+                    self.stage_temporary_parameters(func, args, source_types, Some(frame))?;
+                for (index, (param, (arg, param_ty))) in func.params.iter().zip(staged).enumerate()
+                {
+                    self.set_variable_with_type(&param.name.name, arg, param_ty);
+                    self.install_temporary_parameter(index, param, Some(frame))?;
+                    self.install_checked_field_binding(&param.name)?;
+                }
+            } else {
+                for (index, (param, arg)) in func.params.iter().zip(args).enumerate() {
+                    let param_ty = self.substitute_type_expr(&param.ty);
+                    let source_type = source_types
+                        .and_then(|types| types.get(index))
+                        .and_then(Option::as_deref);
+                    let arg =
+                        self.normalize_and_validate_value_from_source(&param_ty, arg, source_type)?;
+                    self.set_variable_with_type(&param.name.name, arg, param_ty);
+                    self.install_checked_field_binding(&param.name)?;
+                }
             }
 
-            let result = self.exec_block_inner(&func.body)?;
+            let result = match self.exec_block_with_temporary_output(&func.body)? {
+                temporary_local_views::BlockOutput::Acquired(output) => {
+                    return output.into_registered_value(
+                        self,
+                        temporary_activation,
+                        temporary_function.as_ref(),
+                    );
+                }
+                temporary_local_views::BlockOutput::Ordinary(result) => result,
+            };
             let (mut value, return_source_type) = match result {
                 Some(Signal::Return(value, source_type)) => (value, source_type),
                 Some(Signal::ResourceReturn(..) | Signal::ResourceDefault(..)) => {
@@ -13092,10 +13194,11 @@ impl Interpreter {
         self.current_namespace = saved_namespace;
         self.current_function_trusted_stdlib = saved_trusted_stdlib;
         self.active_reflected_capture_origin = saved_capture_origin;
+        let temporary_restore = self.leave_temporary_function(temporary_activation);
         let field_restore = self.restore_checked_field_body(saved_field_cursor);
-        match (call_result, field_restore) {
-            (Err(error), _) | (_, Err(error)) => Err(error),
-            (Ok(value), Ok(())) => Ok(value),
+        match (call_result, temporary_restore, field_restore) {
+            (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => Err(error),
+            (Ok(value), Ok(()), Ok(())) => Ok(value),
         }
     }
 

@@ -434,12 +434,16 @@ pub fn complete_value_conversions(
     coerce_program(program, types);
     super::actor_handlers::conversion(program, &before, types)?;
     super::mutable_sum_backings::conversion(program, &before, types)?;
+    let temporary_execution = super::temporary_local_views::conversion(program, &before, types)?;
     // Each private transition authenticates the same unchanged archive and
     // exact post-conversion functions before their renewed views are joined.
     let mut graph_converted = program.clone();
     super::actor_graph::complete_conversion(&mut graph_converted, &before)?;
     super::reflected_callable::baked::complete_conversion(program, &before)?;
     program.resource_source.graph_values = graph_converted.resource_source.graph_values;
+    if let Some(view) = temporary_execution {
+        program.resource_source.install_materialized(view);
+    }
     super::reflected_callable::seal_program(program)?;
     if graphs {
         program

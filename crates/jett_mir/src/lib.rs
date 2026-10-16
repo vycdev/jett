@@ -13,6 +13,7 @@ mod breakpoint_regions;
 mod call_owner_generations;
 mod call_ownership;
 mod ordinary_borrowed_sums;
+mod temporary_local_views;
 pub use ordinary_borrowed_sums::{
     OrdinaryBorrowedSumProjection, OrdinarySumPayloadPath, OrdinarySumProjectionSite,
 };
@@ -108,6 +109,7 @@ pub struct Function {
     call_owner_generations: Vec<call_owner_generations::CallOwnerGeneration>,
     resource_lowering: Option<resource_ownership::ResourceLoweringWitness>,
     ordinary_borrowed_sums: Option<ordinary_borrowed_sums::Witness>,
+    temporary_local_views: Option<temporary_local_views::Witness>,
     reflected_callable: Option<reflected_callable::Witness>,
     actor_graph: Option<actor_graph::Witness>,
     field_updates: Option<field_updates::Witness>,
@@ -1464,6 +1466,17 @@ pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Ve
             message,
         }]
     })?;
+    temporary_local_views::capture(&mut lowered, program, types).map_err(|message| {
+        vec![LowerError {
+            span: program
+                .functions
+                .first()
+                .map_or(Span::new(jett_common::FileId::new(0), 0, 0), |function| {
+                    function.span
+                }),
+            message,
+        }]
+    })?;
     validate_call_ownership(&lowered, types).map_err(|errors| {
         errors
             .into_iter()
@@ -1565,6 +1578,7 @@ fn lower_function_body(
         call_owner_generations: Vec::new(),
         resource_lowering: None,
         ordinary_borrowed_sums: None,
+        temporary_local_views: None,
         reflected_callable: None,
         actor_graph: None,
         field_updates: None,

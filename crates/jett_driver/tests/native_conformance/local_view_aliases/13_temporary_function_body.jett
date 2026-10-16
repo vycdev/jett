@@ -1,0 +1,15 @@
+namespace app
+struct Packet:
+    data: bytes
+    sibling: bytes
+function make_packet(view stdout: Stdout) returns Packet:
+    Stdout.write(view stdout, "producer\n")
+    return Packet(data: bytes.from_string("AB"), sibling: bytes.from_string("YZ"))
+function main(stdout: Stdout) returns nothing:
+    bytes borrowed = view make_packet(view stdout).data
+    Stdout.write(view stdout, "between\n")
+    bytes forwarded = borrowed
+    Stdout.write(view stdout, "borrowed:{bytes.to_hex(view borrowed)}:{bytes.to_hex(view forwarded)}\n")
+    bytes grown = bytes.concat(clone forwarded, bytes.from_string("C"))
+    Stdout.write(view stdout, "clone:{bytes.to_hex(view grown)}:{bytes.to_hex(view borrowed)}\n")
+    Stdout.write(view stdout, "after-last-read\n")

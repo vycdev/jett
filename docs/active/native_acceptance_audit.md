@@ -3604,3 +3604,139 @@ full workspace/doc-test, GNU/installed-distribution or complete Resource
 acceptance. The fixed 207-fixture/182-object denominators and remaining native
 coverage obligations are unchanged. GitHub CI remains disabled at the user's
 request.
+
+
+#### Temporary local backing: bounded MSVC acceptance
+
+The selected full lexical-backing contract now has an initial ordinary
+function-body implementation. The alias declaration and direct named factory
+are original nongeneric ordinary functions; the whole returned finite struct
+backs an exact typed bytes/list field path. The native whole-owner proof
+admits finite primitive/string/bytes/list/struct data; other wrapper, sum,
+collection, recursive and runtime-authority shapes remain outside this slice.
+HIR/MIR cover those endpoints, while
+the checked reference adapter currently supports bytes only. List reference
+transport, nested declaration scopes/loops, actor/Resource/generic/reflected
+contexts and broader producer families remain owed. None becomes a checker ban
+or a narrower completion denominator.
+
+Private original-declaration/producer/scope receipts and a single-use canonical
+capture join the retained checked archive. Its immutable expected inventory
+prevents current marker/function erasure from hiding a temporary obligation
+while the archive is retained. MIR checks the complete graph and exact owning
+acquisition before pruning, then pins the whole owner through lexical cleanup
+independently of reads. Alias and forwarded slots remain nonowning. The checked
+reference path uses whole-owner activations, payload-free tickets and exact
+acquired-output packets. Existing native result acquisition precedes cleanup;
+no Runtime helper or ABI changes are introduced.
+
+The actual checked Source staged-argument test establishes factory acquisition
+after its temporary call loan and later handled argument, followed by the loan
+End and whole-result move into the persistent owner. Genuine nonidentity local
+compaction also passes. Synthetic disconnected-block preimages are refused by
+the public Resource graph guard and pruner. Isolated private temporary replay
+can restore their original graph and unchanged independent receipts, supplying
+no Source-generated unreachable-block or public-pruning acceptance.
+
+The initial focused gate passes **27 tests**: reference 7, HIR 10 and MIR 10.
+One added ordinary-entry regression also passes. The reference adapter gives
+activations only to original ordinary root declarations, preserves interface
+method dispatch outside that receipt family, and refuses edited claimed roots
+or methods attempting to import a temporary frame. The mutual lookup also
+joins a later original definition through its immutable
+resolver name-span edge to the same declaration DefId, preserving exact unique
+root identity, full typed AST, canonical name, namespace, signature and
+activation. Two additional controls pass for mutual producer/caller/borrowed
+callee execution in Debug and Release checking and adversarial edited facts
+refused before acquisition. The full current core gate passes **1,842 library
+tests**: typechecker 379, Comptime 678, HIR 271, MIR 379 and codegen 135,
+including the written-declaration classification controls below. All compiler
+focused controls are included in that library total.
+Logs under `target/native/`:
+
+- `temporary-local-view-focused-v4.log`, SHA-256
+  `cd3f32de06fed2008516fe2e3297f1e9a8310b5cfe01accba68caee4390b7251`.
+- `temporary-ordinary-entry-focused-v1.log`, SHA-256
+  `92da6acdfeaa20c57522508a9d12194d30fff5707da15b416338d70cd58cada3`.
+- `temporary-mutual-entry-focused-v1.log`, SHA-256
+  `02ba9c2b11b282641211dcc89aed18d2a34db2d882ca3c8d26492e245ea8200f`.
+- `temporary-local-view-core-libraries-v4.log`, SHA-256
+  `e1fa74d244fc54b25e3044a349fe321d25c94198694c17e05cae4de872ab13b9`.
+
+The earlier full fixture attempt failed with **546 passes and 57 failures**.
+The diagnostic joined `json.json_tree_parse` to its original definition in
+stdlib file 10016 while DefId 299 retained the `mutual:` declaration span in
+file 10015. Requiring those spans to match incorrectly refused genuine checked
+Source. The shared immutable resolver join repairs this without weakening
+registration or inventing a new source identity. The failed log is
+`temporary-local-view-fixtures-v1.log`, SHA-256
+`8fe22530ee635e56f2ef5b82ade5766dc2444d9b7307d4fe03e9ddf4b4b9e5bd`.
+The successor fixture attempt fails with **549 passes and 54 failures** and
+`temporary local view body needs its original checked entry or caller`. Its
+log is `temporary-local-view-fixtures-v2.log`, SHA-256
+`34eb9d0f7e4d6a4bc4d0ec0f15f66494b99f792aaf3ab1abffbebc9bf037b0bb`.
+The written-declaration classification repair requires an authentic immutable
+original `VarDecl` with a written `view` initializer and its canonical variable
+definition/name/span and checked `Other` fact. Existing viewed pattern and
+iteration binders keep their ordinary borrowed paths and mint no temporary
+owner authority. Complete nested AST lookup retains true temporary raw-entry
+and unsupported-region refusals. All **12 reference call controls** pass,
+including two new classification controls and the mutual controls, in
+`temporary-written-view-focused-v1.log`, SHA-256
+`47be7144f0e2a90ea9879053d4cadf00613d300e7ec9957ee8ca7f21cbd9a33b`.
+The real JSON namespace smoke passes one test in
+`temporary-written-view-namespace-smoke-v1.log`, SHA-256
+`105f1d0a3bd723d623e3c57f568b18bdac2b79e1a29140fd76af403fbfde1ef5`.
+The full successor fixture gate passes **603 tests** in
+`temporary-local-view-fixtures-v3.log`, SHA-256
+`da41cfcf837bc381f0cfecd23f11e210f9c6f48c5f9f9f9926c20b9ee59c5d65`.
+That fixture selection includes the namespace smoke. All **nine CLI capture
+tests** pass in `temporary-local-view-cli-capture-v1.log`, SHA-256
+`317b28bbd05dbfff3f68519d86c2cb52bd7cc80066a67a342cf2f48efca00745`.
+The successful successors do not turn either earlier failed invocation into a
+passing gate.
+
+Original Source09 remains byte-exact SHA-256
+`c0f288b659bdf84bf87fb7f46576eb7cadd3b440c000f726b5b1c099ccfd83af`.
+Its driver control now expects success. The new formatted Source13 covers
+producer-once output, later direct/forwarded reads, an unviewed owned sibling
+and explicit-clone independence. Source13 is unchanged SHA-256
+`48391e6a0fa7390f6d36cb190c8e4100d835218ca317232a64ec8ec228cd59aa`.
+
+The fresh MSVC gate passes compile-only acceptance, with zero Source execution
+credit. The subsequent complete selection passes **23 tests and 46 paired
+Source-deleted native executions**: Source Debug/Runtime Debug and Source
+Release/Runtime Release, 23 per Runtime profile. No full profile cross-product,
+legacy Debug-only executions or publication refusals are counted. The two
+new bytes temporary controls account for four executions; the rest are eight
+stable projected-view, eight scoped-call, two mutable-owner, one reflected
+mutable-view and two actor persistent-view regression tests. Their passing
+regressions grant no temporary-owner acceptance in actor or reflected contexts.
+The helpers remove the written Source before executing the binaries and assert
+exact reference/native stdout, stderr, status and debug observations. All
+1,056 compiler/Source, 68 reused Runtime, 64 fixture and 182 original run-pass
+input guards remain unchanged.
+
+- `temporary-local-view-gate-compile-v2/gate-acceptance.json`, SHA-256
+  `fb39b49856ad89bbdfb5777008a1b9365b6ca4d95a04940a89e5285be4eb6891`.
+- `temporary-local-view-native-execution-v2/execution-summary.json`, SHA-256
+  `314b6e92a7cd0235bbf92292e49df9e92ebb86490de290982ae23c6865876c0a`.
+
+Both pin the actual gate image SHA-256
+`a1f9a700a5219d91bbbf784a5768dc9ec87558a78a72ecd3ae7a9be7a8e28a14`.
+The earlier matrix attempt failed, with zero accepted execution credit in
+`temporary-local-view-native-execution-v1/execution-summary.json`, SHA-256
+`dcc869793d07c776035c7a95e88c122e8e310b04298f569606b8a7a7c97d38c8`.
+Its partial observations are not added to the successful successor.
+
+Source09 empty output and Source13 producer/read/clone markers establish the
+selected output behavior, not physical owner lifetime or absence of hidden
+cloning. Native mid-scope allocation/destruction timing,
+full connected lifecycle/failure traces, earlier-owner cleanup ordering and the
+remaining full-contract gates are still open in
+[the temporary local-view note](native_temporary_local_views.md).
+
+This bounded receipt does not establish full workspace/doc-test, complete native
+corpus, GNU/installed-distribution, complete Resource or whole-language native
+acceptance. The fixed 207-fixture/182-object denominators and remaining coverage
+obligations are unchanged. GitHub CI remains disabled at the user's request.

@@ -8,6 +8,8 @@ use jett_typecheck::CheckedResourceProgram;
 use jett_types::{Type, TypeId};
 
 use super::{Value, reflected_callable::original_source};
+pub(crate) use original_source::named_function as original_named_function;
+pub(crate) use original_source::variable_declaration as original_variable_declaration;
 
 #[path = "closure_capture/ast_equal.rs"]
 mod ast_equal;
@@ -53,7 +55,6 @@ impl OriginalClosureOwner {
             .filter(|info| {
                 info.kind == DefKind::Function
                     && info.name == name
-                    && info.span == current.name.span
                     && &info.namespace == namespace
                     && original_source::named_function(checked, info.id)
                         .is_some_and(|original| ast_equal::function(original, current))
