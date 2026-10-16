@@ -987,6 +987,15 @@ still owe implementation and cleanup evidence without new checker bans. The
 full selected contract, unchanged Source09 and remaining gates are recorded in
 [the temporary local-view note](active/native_temporary_local_views.md).
 
+The bounded [List reference transport](active/native_temporary_list_views.md)
+extends the same private owner/ticket adapter through exact retained generic
+instance facts. Canonical mutual body/DefId joins and actual written-VarDecl
+classification remain mandatory; pattern and iteration borrows keep their
+existing paths. The complete matrix passes 24 tests and 48 paired native
+Debug/Release executions under its fresh matching gate. It includes the focused
+List pair, with no additional distinct count. Physical cleanup and broader
+lifetime gates remain open. Runtime helpers and ABI are unchanged.
+
 **Implementation strategy:** Abstract interpretation over the control flow graph. At each program point, maintain a mapping from variable → ownership state. At control flow joins (if/else merge points, loop entries), states must be compatible:
 
 ```

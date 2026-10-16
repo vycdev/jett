@@ -675,3 +675,15 @@ fn native_reflected_mutable_owned_backing_preserves_selected_outer_alias_depende
         ProjectedOutcome::Success("direct:4142\nint64:4344:4344\nbool:4344:4344\n"),
     );
 }
+
+#[test]
+fn native_temporary_local_list_views_match_checked_reference_without_source() {
+    run_case(
+        "14_temporary_list_function_body",
+        include_str!("local_view_aliases/14_temporary_list_function_body.jett"),
+        ProjectedOutcome::Success(concat!(
+            "make:numbers\nnumbers:3:3:10:false\nfirst:2\nnegative:none\noutside:none\n",
+            "clone:17:10\nresult:10\nmake:names\nnames:2\nname:Ada\n",
+        )),
+    );
+}

@@ -94,14 +94,23 @@ impl Interpreter {
         name: &str,
         namespace: &Option<String>,
         current: &FunctionDef,
+        projection: Option<&crate::checked_types::CheckedFunctionTypes>,
+        arguments: &[crate::value::ClosureTypeArgument],
         source: bool,
         frame: Option<&PreparedNamedFrame>,
     ) -> Result<Option<FunctionReceipt>, String> {
         let Some(context) = &self.temporary_local_views else {
             return Ok(None);
         };
-        let Some(receipt) = receipts::function_receipt(&context.program, name, namespace, current)?
-        else {
+        let receipt = if let Some(frame) = frame {
+            frame
+                .callee
+                .validate_registered(name, namespace, current, projection, arguments)?;
+            Some(frame.callee.clone())
+        } else {
+            receipts::function_receipt(&context.program, name, namespace, current)?
+        };
+        let Some(receipt) = receipt else {
             if frame.is_some() || Context::body_needed(&context.program, Some(current.body.span)) {
                 return Err(
                     "temporary local view generic call transport remains unsupported".into(),
@@ -109,7 +118,11 @@ impl Interpreter {
             }
             return Ok(None);
         };
-        if Context::scoped_body_needed(&context.program, current.body.span) {
+        if storage::scoped_temporary(
+            &context.program,
+            receipt.facts()?.scopes,
+            Some(current.body.span),
+        ) {
             return Err(
                 "temporary local view reflected/comptime body transport remains unsupported".into(),
             );
@@ -230,8 +243,7 @@ impl Interpreter {
         let function = current.function.clone();
         self.temporary_program()?;
         let Some(fact) = function
-            .program
-            .checked()
+            .facts()?
             .binding_facts
             .get(&declaration.name.span)
             .copied()
@@ -280,10 +292,11 @@ impl Interpreter {
         };
         if !matches!(
             function.program.checked().interner.resolve(fact.ty),
-            Type::Bytes
+            Type::Bytes | Type::List(_)
         ) {
             return Err(
-                "temporary local view endpoint transport remains unsupported beyond bytes".into(),
+                "temporary local view endpoint transport remains unsupported beyond bytes/list"
+                    .into(),
             );
         }
         // Reserve only metadata. This slot cannot be published or observed yet.
@@ -481,3 +494,6 @@ fn projection_root(mut expression: &Expr) -> &Expr {
         }
     }
 }
+
+#[cfg(test)]
+mod list_tests;

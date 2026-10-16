@@ -3740,3 +3740,75 @@ This bounded receipt does not establish full workspace/doc-test, complete native
 corpus, GNU/installed-distribution, complete Resource or whole-language native
 acceptance. The fixed 207-fixture/182-object denominators and remaining coverage
 obligations are unchanged. GitHub CI remains disabled at the user's request.
+
+#### Bounded temporary List transport — 2026-10-16
+
+The [List transport note](native_temporary_list_views.md) records accepted local
+MSVC behavior for exact retained generic observer instances and List endpoints.
+It preserves canonical mutual DefId/body joins, registered Source authentication,
+the immutable written-VarDecl classifier, all prior 23 selected tests and original
+Source09/13. Existing enum/iteration borrows gain no temporary-owner authority.
+
+Five new List and twelve existing reference controls pass together: **17 passed /
+0 failed** in temporary-list-transport-focused-v1.log, SHA-256
+cac01d28dac98fada049d521bd80b9139d842d10e9495ebb4861998d7dabd90c.
+After a warning-only Rust or-pattern parentheses cleanup, selected successor
+checks pass **1847 compiler library tests** (135 + 683 + 271 + 379 + 379),
+**603 fixtures** and **nine CLI capture tests**, all with zero failures:
+
+- temporary-list-transport-core-v1.log, SHA-256
+  d86f8177789a9aed444317787a49a81854a0e5cd1ca3eb7101ea2d9dde8ebd7b.
+- temporary-list-transport-fixtures-v1.log, SHA-256
+  d7d77d9c9b9641516890253923c3d822b8b2af2727a532e92f11cf40c1e6594a.
+- temporary-list-transport-cli-v1.log, SHA-256
+  56c1b715305b34e36cbb7bf0f537b8ae1e94a510668201b59935adce20db6033.
+
+The first All matrix fails exit 101: authored Source14 incorrectly uses
+match/some/none optional patterns, so its checked-reference parse fails before
+List native build/execution. That aggregate accepts **zero** executions, despite
+two earlier retained selectors passing; partial results are not added to the
+successor. All guards pass in the failed attempt. Its summary is
+temporary-list-view-native-execution-v1/execution-summary.json, SHA-256
+55751b44050f635c90b0972c39f0f26938ee91171a5fc74448da7d82387be711.
+Its List diagnostic log is SHA-256
+907fdd85438cc9b59e77c39d1957e175c00bfc323720e4885b22556fb8ae5550.
+
+The fixture-only canonical bare-handle repair preserves numeric/String producer,
+alias, mutual generic, list/bounds/clone observations and fixed expected stdout.
+Formatted Source14 is ae81376d38a94f9890146138609ee5df641cf49bca9e15530464a50fea6d1c99.
+The frontend receipt in temporary-list-fixture-handle-repair-v1/frontend-receipt.json
+is SHA-256 c8eb735fb7d852c9a3388ba556548f96b1a865df8d07aa9165a98cb4519a45f0:
+format and Debug/Release checks exit zero; both frontend checks have zero errors
+and warnings. The initial format-only and compile-v1 observations did not prove
+fixture validity and remain bound to their earlier Source inventory.
+
+The matching fresh compile-v2 gate passes compile-only acceptance; its own
+Source-execution credit is zero. The focused repaired List selector then passes
+**one test/two paired Source-deleted executions**. The complete successor passes
+**24 tests/48 paired Source-deleted executions**, split **24 Source Debug/Runtime
+Debug** and **24 Source Release/Runtime Release**. The new List control accounts
+for one test/two executions within those totals. There are no publication
+refusals, legacy Debug-only runs or full profile cross-product claims. All 16
+selection log hashes and exact zero-failure terminal counts were independently
+verified. The full 48 include the earlier focused 2; the distinct accepted packet
+total is 48, not 50. The historical byte 23/46 receipt is not added either.
+
+- temporary-list-view-gate-compile-v2/gate-acceptance.json, SHA-256
+  40ad0d06d7a5585659b3e39311d60363cbd39848b2384bd5fe9d4760dd4c2968.
+- temporary-list-view-native-focused-v2/execution-summary.json, SHA-256
+  ae05fa796b52584804f5004fbd3315a0839a5963fc5a92760dec15b49a4e0411.
+- temporary-list-view-native-execution-v2/execution-summary.json, SHA-256
+  a2b39a53402f88709493b2b022d97d6d8ce342c8b46b62252ce7007d7cd1ee84.
+
+The compiled and executed gate image is SHA-256
+76f8a7020fb82fd53d573324f5a38730df68261581add438025243798f3a0c82.
+All 1058 compiler/Source, 68 reused Runtime, 65 fixture and 182 original run-pass
+guards remain unchanged. The fixture inventory adds only Source14 to the prior
+64. All six count/launcher sources, original Source09/13, selectors and fixed
+expected stdout remain; the ready-v2 runner changes only the fixture pin.
+
+This bounded receipt supplies no physical destruction/no-hidden-clone proof,
+actor/Resource temporary authority, full connected lifetime contract,
+Resource/Graph integration, suite-factory, full native inventory/corpus,
+workspace/doc-test, installed-host or whole-goal acceptance. The fixed 207/182
+denominators and rough planning estimate remain unchanged. CI remains disabled.

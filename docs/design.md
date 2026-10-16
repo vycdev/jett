@@ -6076,6 +6076,15 @@ measurements and broader-context gates remain pending. These bounds add no
 checker bans and do not narrow the selected lifetime rule; see the
 [temporary local-view contract](active/native_temporary_local_views.md).
 
+The bounded [temporary List transport](active/native_temporary_list_views.md)
+uses that same lexical whole-owner rule and existing list operations. Its
+checked reference adapter retains exact generic observer instances, nonowning
+List tickets, copyable element observations and explicit whole-List cloning.
+Focused reference and selected compiler checks pass. The repaired List fixture
+and all retained selections pass the 24-test/48-execution paired native matrix.
+Physical cleanup and broader lifetime acceptance remain open. This adds no
+language spelling or checker restriction.
+
 An original explicit call-site view may be evaluated eagerly before a later
 handled argument, then released when the complete consuming operation returns.
 Native lowering retains its exact checked local or finite field path through

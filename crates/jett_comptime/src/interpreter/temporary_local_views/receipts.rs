@@ -12,6 +12,8 @@ pub(in crate::interpreter) struct FunctionReceipt {
     pub(super) program: Arc<jett_typecheck::CheckedResourceProgram>,
     pub(super) item: usize,
     pub(super) definition: DefId,
+    /// Exact retained concrete body, never selected by span or runtime payload.
+    pub(super) instance: Option<usize>,
 }
 
 impl FunctionReceipt {
@@ -19,11 +21,12 @@ impl FunctionReceipt {
         Arc::ptr_eq(&self.program, &other.program)
             && self.item == other.item
             && self.definition == other.definition
+            && self.instance == other.instance
     }
 
     pub(super) fn fact(&self, name: &Ident) -> Result<CheckedBindingFact, String> {
-        let checked = self.program.checked();
-        let fact = checked
+        let fact = self
+            .facts()?
             .binding_facts
             .get(&name.span)
             .copied()
@@ -45,7 +48,7 @@ impl FunctionReceipt {
     pub(super) fn has_temporary_views(&self) -> Result<bool, String> {
         Ok(storage::temporary_facts(
             &self.program,
-            &self.program.checked().binding_facts,
+            self.facts()?.binding_facts,
             Some(self.original()?.body.span),
         ))
     }
@@ -71,31 +74,48 @@ impl FunctionReceipt {
         {
             return Err("temporary local view changed its retained declaration identity".into());
         }
-        if !function.type_params.is_empty() {
-            return Err("temporary local views need an ordinary non-generic body".into());
-        }
         let checked = self.program.checked();
-        let signature = checked
-            .definition_types
-            .get(&self.definition)
-            .ok_or("temporary local view lost its checked function signature")?;
-        let Type::Function {
-            params,
-            view_params,
-            ..
-        } = checked.interner.resolve(*signature)
-        else {
-            return Err("temporary local view has an invalid function signature".into());
-        };
-        if params.len() != function.params.len()
-            || view_params.len() != params.len()
-            || function
-                .params
-                .iter()
-                .zip(view_params)
-                .any(|(source, view)| source.view != *view)
-        {
-            return Err("temporary local view changed its original parameter contract".into());
+        match self.instance {
+            Some(index) => {
+                let instance = checked
+                    .generic_function_instantiations
+                    .get(index)
+                    .ok_or("temporary local view lost its concrete generic body")?;
+                if instance.definition != self.definition
+                    || instance.concrete_args.len() != function.type_params.len()
+                    || instance.parameter_types.len() != function.params.len()
+                    || function.type_params.is_empty()
+                {
+                    return Err("temporary local view changed its exact concrete body".into());
+                }
+            }
+            None => {
+                let signature = checked
+                    .definition_types
+                    .get(&self.definition)
+                    .ok_or("temporary local view lost its checked function signature")?;
+                let Type::Function {
+                    params,
+                    view_params,
+                    ..
+                } = checked.interner.resolve(*signature)
+                else {
+                    return Err("temporary local view has an invalid function signature".into());
+                };
+                if !function.type_params.is_empty()
+                    || params.len() != function.params.len()
+                    || view_params.len() != function.params.len()
+                    || function
+                        .params
+                        .iter()
+                        .zip(view_params)
+                        .any(|(source, view)| source.view != *view)
+                {
+                    return Err(
+                        "temporary local view changed its original parameter contract".into(),
+                    );
+                }
+            }
         }
         Ok(function)
     }
@@ -123,6 +143,7 @@ impl FunctionReceipt {
             .into_iter()
             .filter(|source| {
                 matches!(source, Expr::Call(original, actuals, original_span)
+                | Expr::GenericCall(original, _, actuals, original_span)
                 if *original_span == span && std::ptr::eq(original.as_ref(), callee)
                 && actuals.len() == arguments.len()
                 && (actuals.is_empty() || std::ptr::eq(actuals.as_ptr(), arguments.as_ptr())))
@@ -131,8 +152,7 @@ impl FunctionReceipt {
         if found.len() != 1 {
             return Err("temporary local view call has no original checked occurrence".into());
         }
-        self.program
-            .checked()
+        self.facts()?
             .call_ownership
             .get(&span)
             .ok_or_else(|| "temporary local view call has no checked caller packet".into())
@@ -247,6 +267,7 @@ pub(super) fn function_receipt(
         program: program.clone(),
         item: *item,
         definition: *definition,
+        instance: None,
     };
     receipt.original()?;
     Ok(Some(receipt))
@@ -271,7 +292,12 @@ pub(super) fn producer_receipt(
     declaration: &VarDecl,
 ) -> Result<Option<ProducerReceipt>, String> {
     let checked = function.program.checked();
-    let Some(fact) = checked.binding_facts.get(&declaration.name.span).copied() else {
+    let Some(fact) = function
+        .facts()?
+        .binding_facts
+        .get(&declaration.name.span)
+        .copied()
+    else {
         return Ok(None);
     };
     if !matches!(
@@ -335,7 +361,7 @@ pub(super) fn producer_receipt(
             .resolutions
             .get(&unparen(callee).span())
             != Some(&target)
-        || checked.type_map.get(span) != Some(return_type)
+        || function.facts()?.type_map.get(span) != Some(return_type)
         || !ordinary_type(&checked.interner, *return_type, &mut Vec::new())
         || !matches!(checked.interner.resolve(*return_type), Type::Struct(_))
     {
@@ -379,7 +405,7 @@ pub(super) fn checked_path(
             .position(|(name, _)| name == &field.name)
             .ok_or("temporary local view field is absent from its checked owner")?;
         let endpoint = structure.fields[index].1;
-        if checked.type_map.get(span) != Some(&endpoint) {
+        if function.facts()?.type_map.get(span) != Some(&endpoint) {
             return Err("temporary local view changed its field type".into());
         }
         path.push(Projection {
@@ -396,7 +422,8 @@ pub(super) fn checked_path(
         });
         Ok(endpoint)
     } else {
-        checked
+        function
+            .facts()?
             .type_map
             .get(&expression.span())
             .copied()
@@ -449,6 +476,36 @@ pub(super) fn checked_call(
                     return Err("temporary local view call changed its resolved target".into());
                 }
             }
+            if let CheckedInvocationTarget::Generic(target) = &packet.target {
+                if function.facts()?.generic_calls.get(&span) != Some(target)
+                    || function
+                        .program
+                        .resolved()
+                        .resolutions
+                        .get(&unparen(callee).span())
+                        != Some(&target.definition)
+                {
+                    return Err(
+                        "temporary local view generic call changed its checked target".into(),
+                    );
+                }
+                let instance = exact_instance(&function.program, target)?;
+                let original = &checked.generic_function_instantiations[instance];
+                let source = retained_function(&function.program, target.definition)?.1;
+                if params != &original.parameter_types
+                    || *return_type != original.return_type
+                    || source.params.len() != view_params.len()
+                    || source
+                        .params
+                        .iter()
+                        .zip(view_params)
+                        .any(|(parameter, view)| parameter.view != *view)
+                {
+                    return Err(
+                        "temporary local view generic call changed its concrete signature".into(),
+                    );
+                }
+            }
             (params.clone(), view_params.clone(), *return_type)
         }
         CheckedInvocationShape::Intrinsic {
@@ -457,7 +514,7 @@ pub(super) fn checked_call(
             operands,
         } => {
             if packet.target != CheckedInvocationTarget::Intrinsic(*intrinsic)
-                || checked.intrinsic_ids.get(&span) != Some(intrinsic)
+                || function.facts()?.intrinsic_ids.get(&span) != Some(intrinsic)
             {
                 return Err("temporary local view observer changed its closed intrinsic".into());
             }
@@ -486,11 +543,12 @@ pub(super) fn checked_call(
     };
     if parameters.len() != arguments.len()
         || views.len() != arguments.len()
-        || checked.type_map.get(&span) != Some(&result)
+        || function.facts()?.type_map.get(&span) != Some(&result)
     {
         return Err("temporary local view call changed its checked arity or result".into());
     }
-    let order = checked
+    let order = function
+        .facts()?
         .call_argument_orders
         .get(&span)
         .map(|order| order.source_indices.clone())
@@ -506,7 +564,11 @@ pub(super) fn checked_call(
             || parameter >= parameters.len()
             || seen[parameter]
             || order.get(parameter) != Some(&source)
-            || checked.source_type_map.get(&argument.value.span()) != Some(&fact.actual_type)
+            || function
+                .facts()?
+                .source_type_map
+                .get(&argument.value.span())
+                != Some(&fact.actual_type)
             || fact.parameter_type != parameters[parameter]
             || (fact.callee_access == CheckedCalleeAccess::View) != views[parameter]
             || (fact.syntax == CheckedCallerSyntax::WrittenView)
@@ -525,39 +587,181 @@ pub(super) fn checked_call(
 }
 
 pub(super) fn named_target(call: &CallReceipt) -> Result<Option<FunctionReceipt>, String> {
-    let CheckedInvocationTarget::Resolved(definition) = &call.packet.target else {
-        return Ok(None);
+    let (definition, instance) = match &call.packet.target {
+        CheckedInvocationTarget::Resolved(definition) => (*definition, None),
+        CheckedInvocationTarget::Generic(target) => (
+            target.definition,
+            Some(exact_instance(&call.caller.program, target)?),
+        ),
+        _ => return Ok(None),
     };
-    let info = call.caller.program.resolved().scope_table.def(*definition);
+    let info = call.caller.program.resolved().scope_table.def(definition);
     if info.kind != jett_resolve::DefKind::Function {
         return Ok(None);
     }
-    let candidates: Vec<_> = call
-        .caller
-        .program
+    let (item, source) = retained_function(&call.caller.program, definition)?;
+    if source.type_params.is_empty() != instance.is_none() {
+        return Err("temporary local view target changed its generic declaration contract".into());
+    }
+    let result = FunctionReceipt {
+        program: call.caller.program.clone(),
+        item,
+        definition,
+        instance,
+    };
+    result.original()?;
+    Ok(Some(result))
+}
+
+fn retained_function(
+    program: &jett_typecheck::CheckedResourceProgram,
+    definition: DefId,
+) -> Result<(usize, &FunctionDef), String> {
+    let candidates: Vec<_> = program
         .module()
         .items
         .iter()
         .enumerate()
-        .filter_map(|(item, _)| {
-            is_root_definition(&call.caller.program, item, *definition).then_some(item)
+        .filter_map(|(item, source)| match source {
+            Item::Function(function) if is_root_definition(program, item, definition) => {
+                Some((item, function))
+            }
+            _ => None,
         })
         .collect();
-    let [item] = candidates.as_slice() else {
-        return Err("temporary local view call lost its retained named function".into());
-    };
-    let result = FunctionReceipt {
-        program: call.caller.program.clone(),
-        item: *item,
-        definition: *definition,
-    };
-    if let Item::Function(function) = &result.program.module().items[*item] {
-        if !function.type_params.is_empty() {
-            return Ok(None);
+    match candidates.as_slice() {
+        [selected] => Ok(*selected),
+        _ => Err("temporary local view call lost its retained named function".into()),
+    }
+}
+
+fn exact_instance(
+    program: &jett_typecheck::CheckedResourceProgram,
+    target: &jett_typecheck::CheckedGenericCall,
+) -> Result<usize, String> {
+    let matching: Vec<_> = program
+        .checked()
+        .generic_function_instantiations
+        .iter()
+        .enumerate()
+        .filter(|(_, instance)| {
+            instance.definition == target.definition
+                && instance.concrete_args == target.concrete_args
+                && instance.specialization == target.specialization
+        })
+        .map(|(index, _)| index)
+        .collect();
+    match matching.as_slice() {
+        [index] => Ok(*index),
+        _ => Err("temporary local view generic target has no unique exact checked body".into()),
+    }
+}
+
+pub(super) struct Facts<'a> {
+    pub(super) type_map: &'a HashMap<Span, TypeId>,
+    pub(super) source_type_map: &'a HashMap<Span, TypeId>,
+    pub(super) binding_facts: &'a HashMap<Span, CheckedBindingFact>,
+    pub(super) call_ownership: &'a HashMap<Span, jett_typecheck::CheckedCallOwnership>,
+    pub(super) generic_calls: &'a HashMap<Span, jett_typecheck::CheckedGenericCall>,
+    pub(super) intrinsic_ids: &'a HashMap<Span, IntrinsicId>,
+    pub(super) intrinsic_type_arguments: &'a HashMap<Span, Vec<TypeId>>,
+    pub(super) call_argument_orders: &'a HashMap<Span, jett_typecheck::CheckedCallArgumentOrder>,
+    pub(super) scopes: &'a HashMap<Span, Vec<jett_typecheck::CheckedComptimeTypeBinding>>,
+}
+
+impl FunctionReceipt {
+    pub(super) fn facts(&self) -> Result<Facts<'_>, String> {
+        let checked = self.program.checked();
+        if let Some(index) = self.instance {
+            let body = checked
+                .generic_function_instantiations
+                .get(index)
+                .filter(|body| body.definition == self.definition)
+                .ok_or("temporary local view lost its exact generic body facts")?;
+            Ok(Facts {
+                type_map: &body.type_map,
+                source_type_map: &body.source_type_map,
+                binding_facts: &body.binding_facts,
+                call_ownership: &body.call_ownership,
+                generic_calls: &body.generic_calls,
+                intrinsic_ids: &body.intrinsic_ids,
+                intrinsic_type_arguments: &body.intrinsic_type_arguments,
+                call_argument_orders: &body.call_argument_orders,
+                scopes: &body.comptime_type_bindings,
+            })
+        } else {
+            Ok(Facts {
+                type_map: &checked.type_map,
+                source_type_map: &checked.source_type_map,
+                binding_facts: &checked.binding_facts,
+                call_ownership: &checked.call_ownership,
+                generic_calls: &checked.generic_calls,
+                intrinsic_ids: &checked.intrinsic_ids,
+                intrinsic_type_arguments: &checked.intrinsic_type_arguments,
+                call_argument_orders: &checked.call_argument_orders,
+                scopes: &checked.comptime_type_bindings,
+            })
         }
     }
-    result.original()?;
-    Ok(Some(result))
+
+    pub(super) fn validate_declaration(
+        &self,
+        name: &str,
+        namespace: &Option<String>,
+        current: &FunctionDef,
+    ) -> Result<(), String> {
+        let info = self.program.resolved().scope_table.def(self.definition);
+        if name != info.name
+            || namespace != &info.namespace
+            || crate::value::closure_capture::OriginalClosureOwner::registered(
+                &self.program,
+                name,
+                current,
+                namespace,
+            )
+            .is_none()
+            || current.name.span != self.original()?.name.span
+        {
+            return Err(
+                "temporary local view function differs from its retained checked Source".into(),
+            );
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_registered(
+        &self,
+        name: &str,
+        namespace: &Option<String>,
+        current: &FunctionDef,
+        projection: Option<&crate::checked_types::CheckedFunctionTypes>,
+        arguments: &[crate::value::ClosureTypeArgument],
+    ) -> Result<(), String> {
+        self.validate_declaration(name, namespace, current)?;
+        match self.instance {
+            Some(index) => {
+                let body = &self.program.checked().generic_function_instantiations[index];
+                if projection.is_none_or(|projection| {
+                    !crate::value::closure_capture::matches_field_function_projection(
+                        projection,
+                        arguments,
+                        body,
+                        &self.program.checked().interner,
+                    )
+                }) {
+                    return Err(
+                        "temporary local view generic frame changed its exact concrete projection"
+                            .into(),
+                    );
+                }
+            }
+            None if projection.is_none() && arguments.is_empty() => {}
+            None => {
+                return Err("temporary local view ordinary frame acquired generic metadata".into());
+            }
+        }
+        Ok(())
+    }
 }
 
 pub(super) fn copyable(types: &jett_types::TypeInterner, ty: TypeId) -> bool {

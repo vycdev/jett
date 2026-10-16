@@ -593,6 +593,8 @@ function dispatched() returns string:
                     method_name,
                     &method.namespace,
                     &method.definition,
+                    None,
+                    &[],
                     true,
                     None,
                 )
@@ -623,6 +625,8 @@ function dispatched() returns string:
                     method_name,
                     &method.namespace,
                     &method.definition,
+                    None,
+                    &[],
                     true,
                     Some(&frame),
                 )
@@ -637,7 +641,15 @@ function dispatched() returns string:
             .clone();
         assert!(
             interpreter
-                .prepare_temporary_function(method_name, &method.namespace, &required, true, None)
+                .prepare_temporary_function(
+                    method_name,
+                    &method.namespace,
+                    &required,
+                    None,
+                    &[],
+                    true,
+                    None,
+                )
                 .is_err()
         );
         let context = interpreter.temporary_local_views.as_ref().unwrap();
@@ -1021,6 +1033,41 @@ impl PreparedNamedFrame {
         self.aliases.get(parameter).and_then(Option::as_ref)
     }
 
+    /// Resolve the checker table by this exact retained target's declaration,
+    /// which can differ from the later Source body span after mutual.
+    pub(in crate::interpreter) fn select_registered_projection(
+        &self,
+        types: &CheckedExpressionTypes,
+        name: &str,
+        namespace: &Option<String>,
+        current: &FunctionDef,
+        arguments: &[crate::value::ClosureTypeArgument],
+        values: &[Value],
+    ) -> Result<Option<Arc<crate::checked_types::CheckedFunctionTypes>>, String> {
+        self.callee.validate_declaration(name, namespace, current)?;
+        if !types.matches_original_program(&self.callee.program) {
+            return Err(
+                "temporary local view projection belongs to a foreign checked program".into(),
+            );
+        }
+        let declaration = self
+            .callee
+            .program
+            .resolved()
+            .scope_table
+            .def(self.callee.definition)
+            .span;
+        let selected = types.select(declaration, arguments, values)?;
+        self.callee.validate_registered(
+            name,
+            namespace,
+            current,
+            selected.as_deref(),
+            arguments,
+        )?;
+        Ok(selected)
+    }
+
     pub(super) fn validate_target(
         &self,
         interpreter: &Interpreter,
@@ -1043,9 +1090,11 @@ impl PreparedNamedFrame {
         }
         let original = self.call.caller.original()?;
         let calls: Vec<_> = receipts::direct_expressions(&original.body).into_iter().filter(|expression| {
-            matches!(expression, Expr::Call(_, _, span) if *span == self.call.span)
+            matches!(expression, Expr::Call(_, _, span) | Expr::GenericCall(_, _, _, span) if *span == self.call.span)
         }).collect();
-        let [Expr::Call(callee, arguments, span)] = calls.as_slice() else {
+        let [Expr::Call(callee, arguments, span) | Expr::GenericCall(callee, _, arguments, span)] =
+            calls.as_slice()
+        else {
             return Err("temporary local view frame lost its unique original call".into());
         };
         let current = receipts::checked_call(&self.call.caller, callee, arguments, *span)?;
@@ -1140,7 +1189,7 @@ fn validate_parameter(
         || fact.ty != ticket.endpoint
         || !matches!(
             function.program.checked().interner.resolve(fact.ty),
-            Type::Bytes
+            Type::Bytes | Type::List(_)
         )
         || !matches!(
             fact.mode,
@@ -1180,10 +1229,8 @@ fn validate_alias(
         .get(&root.span)
         .ok_or("temporary local view argument lost its resolved binding use")?;
     let info = call.caller.program.resolved().scope_table.def(*definition);
-    let source_fact = call
-        .caller
-        .program
-        .checked()
+    let facts = call.caller.facts()?;
+    let source_fact = facts
         .binding_facts
         .get(&info.span)
         .copied()
@@ -1257,7 +1304,7 @@ impl Interpreter {
         let any_alias = lexical_aliases.iter().any(Option::is_some);
         if let CheckedInvocationTarget::Intrinsic(intrinsic) = &call.packet.target {
             return if any_alias {
-                self.eval_temporary_bytes_observer(&call, *intrinsic, arguments, lexical_aliases)
+                self.eval_temporary_observer(&call, *intrinsic, arguments, lexical_aliases)
                     .map(Some)
             } else {
                 Ok(None)
@@ -1270,28 +1317,27 @@ impl Interpreter {
                 Ok(None)
             };
         };
-        if !type_args.is_empty() {
-            return if any_alias {
-                Err("temporary local view generic call transport remains unsupported".into())
-            } else {
-                Ok(None)
-            };
-        }
+        // Resolve in the caller before independent operand effects. The exact
+        // checked target remains the authority; spelling only supplies its
+        // Source-aware runtime type projection and reflection metadata.
+        let resolved_type_args = self
+            .inferred_user_function_type_args(callee, type_args, arguments, Some(&call.order))
+            .unwrap_or_else(|| {
+                type_args
+                    .iter()
+                    .map(|ty| self.substitute_type_expr(ty))
+                    .collect()
+            });
+        let captured = self.captured_type_arguments(&resolved_type_args);
         let info = target.program.resolved().scope_table.def(target.definition);
         let name = info.name.clone();
         let registered = self
             .functions
             .get(&name)
-            .ok_or("temporary local view named callee is not registered")?;
-        let registered_receipt = receipts::function_receipt(
-            &target.program,
-            &name,
-            &registered.namespace,
-            &registered.definition,
-        )?
-        .ok_or("temporary local view named callee is not ordinary")?;
-        if !target.same(&registered_receipt) || self.is_value_call_target(receipts::unparen(callee))
-        {
+            .ok_or("temporary local view named callee is not registered")?
+            .clone();
+        target.validate_declaration(&name, &registered.namespace, &registered.definition)?;
+        if self.is_value_call_target(receipts::unparen(callee)) {
             return Err("temporary local view call changed its registered named target".into());
         }
         let mut lexical = Vec::with_capacity(arguments.len());
@@ -1331,11 +1377,21 @@ impl Interpreter {
             callee: target,
             aliases,
         };
+        frame.select_registered_projection(
+            self.checked_expression_types
+                .as_ref()
+                .ok_or("temporary local view lost its checked type projection")?,
+            &name,
+            &registered.namespace,
+            &registered.definition,
+            &captured,
+            &values,
+        )?;
         frame.validate_target(self, &frame.callee)?;
         Ok(Some(ExprFlow::Value(
             self.call_registered_function_with_temporary_frame(
                 &name,
-                &[],
+                &resolved_type_args,
                 values,
                 Some(&source_types),
                 Some(frame),
@@ -1343,7 +1399,7 @@ impl Interpreter {
         )))
     }
 
-    fn eval_temporary_bytes_observer(
+    fn eval_temporary_observer(
         &mut self,
         call: &receipts::CallReceipt,
         intrinsic: IntrinsicId,
@@ -1353,7 +1409,12 @@ impl Interpreter {
         if !self.current_function_trusted_stdlib
             || !matches!(
                 intrinsic,
-                IntrinsicId::BytesLength | IntrinsicId::BytesToHex | IntrinsicId::BytesGet
+                IntrinsicId::BytesLength
+                    | IntrinsicId::BytesToHex
+                    | IntrinsicId::BytesGet
+                    | IntrinsicId::ListLength
+                    | IntrinsicId::ListGetClone
+                    | IntrinsicId::ListSum
             )
         {
             return Err(
@@ -1364,11 +1425,8 @@ impl Interpreter {
         let CheckedInvocationShape::Intrinsic { .. } = &call.packet.shape else {
             return Err("temporary local view observer has no intrinsic packet".into());
         };
-        let expected_arity = if intrinsic == IntrinsicId::BytesGet {
-            2
-        } else {
-            1
-        };
+        let indexed = matches!(intrinsic, IntrinsicId::BytesGet | IntrinsicId::ListGetClone);
+        let expected_arity = if indexed { 2 } else { 1 };
         if arguments.len() != expected_arity
             || call.order != (0..expected_arity).collect::<Vec<_>>()
             || aliases.first().and_then(Option::as_ref).is_none()
@@ -1383,11 +1441,15 @@ impl Interpreter {
             .ok_or("temporary local view byte observer lost its alias")?;
         // Evaluate independent operands in original lexical order. Borrow the
         // bytes only afterward; the evaluator never receives an owned snapshot.
-        let index = if intrinsic == IntrinsicId::BytesGet {
+        let index = if indexed {
             match self.eval_expr_flow(&arguments[1].value)? {
                 ExprFlow::Value(Value::Int64(index)) => Some(index),
                 ExprFlow::Signal(signal) => return Ok(ExprFlow::Signal(signal)),
-                _ => return Err("bytes.get expects an int64 index".into()),
+                _ => {
+                    return Err(
+                        "temporary local view indexed observer expects an int64 index".into(),
+                    );
+                }
             }
         } else {
             None
@@ -1396,25 +1458,104 @@ impl Interpreter {
             .temporary_local_views
             .as_ref()
             .ok_or("temporary local view observer lost its context")?;
-        let Value::Bytes(bytes) = context.observe(ticket)? else {
-            return Err("temporary local view observer lost its exact bytes payload".into());
-        };
-        let result = match intrinsic {
-            IntrinsicId::BytesLength => {
-                Value::Int64(i64::try_from(bytes.len()).map_err(|_| "bytes.length exceeds int64")?)
+        let observed = context.observe(ticket)?;
+        let result = if matches!(
+            intrinsic,
+            IntrinsicId::ListLength | IntrinsicId::ListGetClone | IntrinsicId::ListSum
+        ) {
+            self.observe_temporary_list(call, intrinsic, ticket, observed, index)?
+        } else {
+            let Value::Bytes(bytes) = observed else {
+                return Err("temporary local view observer lost its exact bytes payload".into());
+            };
+            match intrinsic {
+                IntrinsicId::BytesLength => Value::Int64(
+                    i64::try_from(bytes.len()).map_err(|_| "bytes.length exceeds int64")?,
+                ),
+                IntrinsicId::BytesToHex => {
+                    Value::String(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+                }
+                IntrinsicId::BytesGet => match index
+                    .and_then(|index| usize::try_from(index).ok())
+                    .and_then(|index| bytes.get(index))
+                {
+                    Some(byte) => Value::OptionalSome(Box::new(Value::Int64(i64::from(*byte)))),
+                    None => Value::OptionalNone,
+                },
+                _ => return Err("temporary local view observer escaped its closed dispatch".into()),
             }
-            IntrinsicId::BytesToHex => {
-                Value::String(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
-            }
-            IntrinsicId::BytesGet => match index
-                .and_then(|index| usize::try_from(index).ok())
-                .and_then(|index| bytes.get(index))
-            {
-                Some(byte) => Value::OptionalSome(Box::new(Value::Int64(i64::from(*byte)))),
-                None => Value::OptionalNone,
-            },
-            _ => return Err("temporary local view observer escaped its closed dispatch".into()),
         };
         Ok(ExprFlow::Value(result))
+    }
+
+    fn observe_temporary_list(
+        &self,
+        call: &receipts::CallReceipt,
+        intrinsic: IntrinsicId,
+        ticket: &storage::AliasTicket,
+        observed: &Value,
+        index: Option<i64>,
+    ) -> Result<Value, String> {
+        let types = &call.caller.program.checked().interner;
+        let Type::List(inner) = types.resolve(ticket.endpoint) else {
+            return Err("temporary local view list observer lost its exact list endpoint".into());
+        };
+        let facts = call.caller.facts()?;
+        if facts
+            .intrinsic_type_arguments
+            .get(&call.span)
+            .map(Vec::as_slice)
+            != Some(std::slice::from_ref(inner))
+        {
+            return Err(
+                "temporary local view list observer changed its checked element operand".into(),
+            );
+        }
+        let Value::List(items) = observed else {
+            return Err("temporary local view observer lost its exact list payload".into());
+        };
+        match intrinsic {
+            IntrinsicId::ListLength => Ok(Value::Int64(
+                i64::try_from(items.len()).map_err(|_| "list.length exceeds int64")?,
+            )),
+            IntrinsicId::ListGetClone if receipts::copyable(types, *inner) => {
+                // This bounded observation copies only checked copyable items;
+                // it never produces an owned snapshot of the backing list.
+                Ok(
+                    match index
+                        .and_then(|index| usize::try_from(index).ok())
+                        .and_then(|index| items.get(index))
+                    {
+                        Some(item) => Value::OptionalSome(Box::new(item.clone())),
+                        None => Value::OptionalNone,
+                    },
+                )
+            }
+            IntrinsicId::ListGetClone => Err(
+                "temporary local view move-only list.get result transport remains unsupported"
+                    .into(),
+            ),
+            IntrinsicId::ListSum => {
+                let primitive = match types.resolve(*inner) {
+                    Type::Int8
+                    | Type::Int16
+                    | Type::Int32
+                    | Type::Int64
+                    | Type::Uint8
+                    | Type::Uint16
+                    | Type::Uint32
+                    | Type::Uint64
+                    | Type::Float32
+                    | Type::Float64 => types.type_name(*inner),
+                    _ => {
+                        return Err(
+                            "temporary local view list.sum lost its checked numeric domain".into(),
+                        );
+                    }
+                };
+                self.sum_primitive_list("list.__sum", &primitive, items)
+            }
+            _ => Err("temporary local view list observer escaped its closed dispatch".into()),
+        }
     }
 }

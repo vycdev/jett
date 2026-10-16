@@ -113,17 +113,6 @@ impl Context {
                 })
     }
 
-    pub(super) fn scoped_body_needed(
-        program: &Arc<jett_typecheck::CheckedResourceProgram>,
-        body: Span,
-    ) -> bool {
-        scoped_temporary(
-            program,
-            &program.checked().comptime_type_bindings,
-            Some(body),
-        )
-    }
-
     pub(in crate::interpreter) fn new(
         program: Arc<jett_typecheck::CheckedResourceProgram>,
         depth: usize,
@@ -309,9 +298,8 @@ impl Context {
             return Ok(None);
         };
         function.expression(expression)?;
-        let fact = self
-            .program
-            .checked()
+        let facts = function.facts()?;
+        let fact = facts
             .binding_facts
             .get(&alias.fact.declaration_span)
             .ok_or("temporary local view lost its checked alias fact")?;
@@ -431,7 +419,7 @@ impl Context {
             .ok_or("temporary local view alias has no activation")?;
         let alias_activation = current.id;
         let source = current.function.original()?;
-        let checked = self.program.checked();
+        let facts = current.function.facts()?;
         let info = self
             .program
             .resolved()
@@ -450,7 +438,7 @@ impl Context {
             matches!(statement, Stmt::VarDecl(declaration) if declaration.name.span == fact.declaration_span
                 && declaration.name.name == name && !declaration.mutable)
         });
-        if checked.binding_facts.get(&fact.declaration_span) != Some(&fact)
+        if facts.binding_facts.get(&fact.declaration_span) != Some(&fact)
             || info.span != fact.declaration_span
             || info.name != name
             || fact.mutable
@@ -551,7 +539,12 @@ impl Context {
                 || fields.len() != structure.fields.len()
                 || structure.fields.get(projection.index).map(|(_, ty)| *ty)
                     != Some(projection.endpoint)
-                || self.program.checked().type_map.get(&projection.span)
+                || slot
+                    .receipt
+                    .function
+                    .facts()?
+                    .type_map
+                    .get(&projection.span)
                     != Some(&projection.endpoint)
             {
                 return Err(
@@ -613,7 +606,7 @@ pub(super) fn temporary_facts(
     })
 }
 
-fn scoped_temporary(
+pub(super) fn scoped_temporary(
     program: &jett_typecheck::CheckedResourceProgram,
     scopes: &HashMap<Span, Vec<jett_typecheck::CheckedComptimeTypeBinding>>,
     body: Option<Span>,
@@ -629,7 +622,7 @@ pub(super) fn same_function(
     right: &FunctionReceipt,
 ) -> Result<bool, String> {
     Ok(Arc::ptr_eq(&left.program, &right.program)
-        && left.definition == right.definition
+        && left.same(right)
         && std::ptr::eq(left.original()?, right.original()?))
 }
 

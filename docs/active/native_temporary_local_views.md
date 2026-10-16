@@ -275,3 +275,18 @@ The [local-view note](native_local_view_aliases.md) and
 bounded implementation status and historical receipts. The bounded
 implementation, passing compiler controls and bounded MSVC execution do not
 complete the selected temporary-backed contract or whole-language native parity.
+
+## Accepted bounded List transport
+
+The [List transport acceptance note](native_temporary_list_views.md) extends the
+same lexical whole-owner rule with exact generic observer receipts and List
+endpoints. Mutual-body and written-VarDecl authentication, original Source09/13
+and existing byte controls are preserved. Seventeen reference controls and
+selected compiler-library/fixture/CLI checks pass (1847/603/9 tests).
+
+The repaired Source14 passes the focused one-test/two-execution native check and
+the complete 24-test/48-execution paired Source-deleted matrix under its fresh
+matching gate. The 48 include the focused pair; no additional distinct count is
+added. The first authored fixture parse failure retains zero aggregate credit.
+All Source/Runtime/fixture/original-input guards pass in the accepted successor.
+Physical cleanup and the broader lifetime contract remain open.

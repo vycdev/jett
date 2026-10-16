@@ -13056,9 +13056,21 @@ impl Interpreter {
             .collect();
         let captured_arguments = self.captured_type_arguments(&arguments);
         let expression_types = match &self.checked_expression_types {
-            Some(types) => types
-                .select(func.name.span, &captured_arguments, &args)
-                .map_err(|error| format!("{resolved_name}: {error}"))?,
+            Some(types) => match temporary_frame.as_ref() {
+                Some(frame) => frame
+                    .select_registered_projection(
+                        types,
+                        &resolved_name,
+                        &registered.namespace,
+                        func,
+                        &captured_arguments,
+                        &args,
+                    )
+                    .map_err(|error| format!("{resolved_name}: {error}"))?,
+                None => types
+                    .select(func.name.span, &captured_arguments, &args)
+                    .map_err(|error| format!("{resolved_name}: {error}"))?,
+            },
             None => None,
         };
         let field_body = self.prepare_checked_field_function(
@@ -13073,6 +13085,8 @@ impl Interpreter {
             &resolved_name,
             &registered.namespace,
             func,
+            expression_types.as_deref(),
+            &captured_arguments,
             source_types.is_some(),
             temporary_frame.as_ref(),
         )?;
