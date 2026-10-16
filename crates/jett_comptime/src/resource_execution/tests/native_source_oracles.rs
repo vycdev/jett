@@ -346,3 +346,41 @@ fn native_resource_direct_sum_replacement_shared_reentry_inputs_match_real_refer
         }
     }
 }
+
+// Append inside resource_execution/tests/native_source_oracles.rs.
+#[test]
+fn native_resource_direct_sum_self_reseat_sources_match_real_reference() {
+    const CASES: &[cases::Case] = &[
+        cases::Case {
+            name: "direct_optional_self_reseat_absent",
+            source: include_str!(
+                "../../../../jett_mir/src/resource_ownership/fixtures/direct_optional_self_reseat.jett"
+            ),
+            script: &[],
+            events: &[],
+            reference: cases::ReferenceOutcome::Clean,
+            body: 0,
+            cleanup: 0,
+            channel: 0,
+            ordinary_message: b"",
+            resource_message: b"",
+            exit: 0,
+        },
+        cases::Case {
+            name: "direct_result_self_reseat_failure",
+            source: include_str!(
+                "../../../../jett_mir/src/resource_ownership/fixtures/direct_result_self_reseat.jett"
+            ),
+            script: &[],
+            events: &[],
+            reference: cases::ReferenceOutcome::Clean,
+            body: 0,
+            cleanup: 0,
+            channel: 0,
+            ordinary_message: b"",
+            resource_message: b"",
+            exit: 0,
+        },
+    ];
+    run_reference_cases(CASES);
+}

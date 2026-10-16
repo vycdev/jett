@@ -767,3 +767,58 @@ fn resource_ownership_replacement_and_reseat_reject_changed_public_source_or_hea
         }
     }
 }
+
+// Shared source probe; each shape is an independently registered test.
+fn check_direct_sum_self_reseat_shell(source: &str, selected: &str, result_shape: bool) {
+    for release in [false, true] {
+        let checked = checked(source, release);
+        let program = lowered(&checked);
+        let plan = validate_resource_ownership(&program, &checked.checked().interner).unwrap();
+        let function = named(&plan, selected);
+        let reseats = function
+            .operations()
+            .iter()
+            .filter(|operation| {
+                matches!(operation.role(), ResourceOperationRole::SelfRebind { .. })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reseats.len(), 1);
+        let operation = reseats[0];
+        let ResourceOperationRole::SelfRebind { slot } = operation.role() else {
+            unreachable!()
+        };
+        let shape = function.owner_slots()[slot.index()].shape();
+        assert!(if result_shape {
+            matches!(shape, ResourceShape::Result { .. })
+        } else {
+            matches!(shape, ResourceShape::Optional { .. })
+        });
+        assert!(!function.operations().iter().any(|other| {
+            other.site() == operation.site()
+                && matches!(
+                    other.role(),
+                    ResourceOperationRole::Replace { .. }
+                        | ResourceOperationRole::Transfer { .. }
+                        | ResourceOperationRole::Drop { .. }
+                )
+        }));
+    }
+}
+
+#[test]
+fn resource_ownership_direct_sum_self_reseat_preserves_the_exact_shell_optional() {
+    check_direct_sum_self_reseat_shell(
+        include_str!("fixtures/direct_optional_self_reseat.jett"),
+        "reseat_optional",
+        false,
+    );
+}
+
+#[test]
+fn resource_ownership_direct_sum_self_reseat_preserves_the_exact_shell_result() {
+    check_direct_sum_self_reseat_shell(
+        include_str!("fixtures/direct_result_self_reseat.jett"),
+        "reseat_result",
+        true,
+    );
+}

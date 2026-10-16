@@ -497,12 +497,23 @@ impl<'p> Analysis<'p> {
                     },
                 );
             } else if replace {
+                // An absent sum owns its shell and any ordinary failure payload.
                 if !self_rebind
-                    || !matches!(value.shape, ResourceShape::Plain { .. })
-                    || value.occupancy != ResourceOccupancy::Occupied
+                    || !matches!(
+                        (&value.shape, value.occupancy),
+                        (ResourceShape::Plain { .. }, ResourceOccupancy::Occupied)
+                            | (
+                                ResourceShape::Optional { .. } | ResourceShape::Result { .. },
+                                ResourceOccupancy::Empty
+                                    | ResourceOccupancy::Occupied
+                                    | ResourceOccupancy::Conditional,
+                            )
+                    )
                     || state.values[index].is_some()
                 {
-                    return Err("pending ResourceOwnershipPlan: self-rebind needs the exact occupied plain Local reseat".into());
+                    return Err(
+                        "Resource self-rebind needs its exact mutable owned Local reseat".into(),
+                    );
                 }
                 self.operation(
                     ResourceFrameId(0),

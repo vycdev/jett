@@ -642,3 +642,25 @@ fn resource_staged_scope_sum_keeps_active_operation_rows_and_forgery_refusal() {
         }
     }
 }
+
+// Shared source probe; each shape is an independently registered test.
+fn check_direct_sum_self_reseat_object(source: &str) {
+    for release in [false, true] {
+        let object = emitted(source, release);
+        assert!(!object.bytes.is_empty());
+    }
+}
+
+#[test]
+fn resource_native_direct_sum_self_reseat_emits_from_the_same_checked_sources_optional() {
+    check_direct_sum_self_reseat_object(include_str!(
+        "../../../../jett_mir/src/resource_ownership/fixtures/direct_optional_self_reseat.jett"
+    ));
+}
+
+#[test]
+fn resource_native_direct_sum_self_reseat_emits_from_the_same_checked_sources_result() {
+    check_direct_sum_self_reseat_object(include_str!(
+        "../../../../jett_mir/src/resource_ownership/fixtures/direct_result_self_reseat.jett"
+    ));
+}
