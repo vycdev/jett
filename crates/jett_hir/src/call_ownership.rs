@@ -241,7 +241,7 @@ pub struct SourceCallOwnership {
     pub bridge: CallBridge,
     /// HIR-added metadata tail. It is never counted as a source actual.
     pub generated_operands: Vec<GeneratedArgumentOwnership>,
-    certificate: SourceCallCertificate,
+    certificate: Box<SourceCallCertificate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3424,14 +3424,14 @@ impl crate::BodyLowerer<'_, '_> {
             arguments,
             bridge: CallBridge::Direct,
             generated_operands: Vec::new(),
-            certificate: SourceCallCertificate {
+            certificate: Box::new(SourceCallCertificate {
                 target,
                 shape,
                 context,
                 bridge: CallBridge::Direct,
                 result_type,
                 generated_operands: Vec::new(),
-            },
+            }),
         });
         validate_operand_ownership(
             &ownership,

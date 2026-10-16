@@ -3432,3 +3432,46 @@ open. GitHub CI remains disabled at the user's request; this bounded receipt
 neither requires re-enabling it nor completes the local full-coverage goal.
 The fixed 207-fixture/182-object denominators and full native-codegen goal are
 unchanged.
+
+#### Private HIR storage: Windows CLI stack regression
+
+Two private retained values now use owned heap storage: the complete field-update
+Source target and the complete Source-call certificate. The constructor values,
+immutable target accessor, full target/certificate comparisons and controlled
+remaps remain the same. Derived cloning and equality still operate on complete
+pointees, retaining existing checked identity and nonce behavior. This changes
+compiler storage/allocation cost; it adds no Source rule, proof authority,
+Runtime helper or ABI change.
+
+The unchanged Windows CLI control
+`native_setup_failure_keeps_the_object_builds_captured_frontend_events`
+first reproduces the child stack overflow (exit 3221225725), then passes with
+both storage changes. All **nine CLI capture tests** pass without changing their
+fixtures, stack settings or object-build/manifest-lookup order. Full affected
+libraries pass **765 tests**: HIR 261, MIR 369 and Codegen 135. Logs under
+`target/native/`:
+
+- `local-regression-cli-stack-before-v1.log`, SHA-256
+  `7abe5336663c42d415bb9d9c10657c26c4da24a3d08f4ee9e95aed816319f5f7`.
+- `local-regression-cli-stack-both-box-v1.log`, SHA-256
+  `fa7912c02f2e1274ae6ce558ebbfd3bab20bc051ce2eb3a2dc0ce44c0208b7e0`.
+- `local-regression-cli-capture-all-v1.log`, SHA-256
+  `e34111882036d853626fafd6d1cd667c565c8ad0d65ba49ab3282f7d36cdf016`.
+- `local-regression-box-hir-mir-codegen-v1.log`, SHA-256
+  `32552a35ddb6b487efc23d765200e2b763e3422908bcea8ab628afdf0a266535`.
+
+The same Rust layout probe records Expression **944 to 592 bytes**, Statement
+**3,104 to 1,456**, FieldUpdatePlace **1,200 to 256**, SourceCallOwnership
+**760 to 400** and CallOwnership **760 to 416**. Before/after HIR archives are
+pinned respectively to SHA-256
+`cf0ff42e7a679478c82775246c4ae3510c489206419abf356685a590fb072f2c` and
+`1c8e96896d5cddf34c12e10de1a13301c223a5544c9473535f16a2fc84f2f41b`.
+Probe outputs and the after-archive receipt are in
+`native-codegen-recovery-2026-10-09/ci-disabled-failure-audit-v1/`.
+These layout measurements are not post-change frame measurements or a proof of
+a universal stack bound.
+
+This local regression receipt supplies no new Source-deleted executions or
+full workspace, inventory, GNU/installed-distribution or Resource acceptance.
+The remaining coverage obligations and fixed 207-fixture/182-object denominators
+are unchanged. GitHub CI remains disabled at the user's request.

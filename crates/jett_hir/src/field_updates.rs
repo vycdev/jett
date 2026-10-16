@@ -20,7 +20,7 @@ pub struct FieldUpdatePlace {
     scoped_type_bindings: Vec<crate::ScopedTypeBinding>,
     checked: CheckedAssignmentPlace,
     original_span: jett_common::Span,
-    target: Expression,
+    target: Box<Expression>,
     root: LocalId,
 }
 
@@ -38,7 +38,7 @@ impl FieldUpdatePlace {
         self.root
     }
     pub fn target(&self) -> &Expression {
-        &self.target
+        self.target.as_ref()
     }
     pub fn span(&self) -> jett_common::Span {
         self.checked.assignment_span
@@ -62,7 +62,7 @@ impl FieldUpdatePlace {
         if self.checked.resource != CheckedFieldUpdateResourceRequirement::Ordinary {
             return Err("pending Resource projected assignment transport".into());
         }
-        if self.original_span != self.span() || target != &self.target {
+        if self.original_span != self.span() || target != self.target.as_ref() {
             return Err("field update changed its exact Source target".into());
         }
         let root = locals
@@ -155,7 +155,7 @@ pub(super) fn authenticate(
             scoped_type_bindings: body.scoped_type_bindings.clone(),
             checked,
             original_span: original.span,
-            target: target.clone(),
+            target: Box::new(target.clone()),
             root: local,
         };
         place
