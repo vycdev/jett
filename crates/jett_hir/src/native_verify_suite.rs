@@ -38,9 +38,6 @@ fn append(
     if !Arc::ptr_eq(&retained, checked) || !program.resource_source.belongs_to(checked) {
         return Err("native verify transition belongs to another checked Source".into());
     }
-    if !program.resource_manifest.kinds().is_empty() {
-        return Err("ordinary verify transition cannot authorize Resource execution".into());
-    }
     let types = &checked.checked().interner;
     program.resource_source.validate_current(program, types)?;
     crate::reflected_callable::baked::validate_conversion_input(program).map_err(messages)?;
@@ -93,7 +90,7 @@ fn append(
         span,
     };
     let mut candidate = program.clone();
-    candidate.functions.push(suite);
+    candidate.functions.push(suite.clone());
     // The candidate differs by exactly the private factory's canonical suite.
     // Each existing transition checks the unchanged archive and exact old table
     // before retaining the new complete table, including this appended body.
@@ -102,18 +99,14 @@ fn append(
     crate::reflected_callable::baked::complete_conversion(&mut candidate, program)
         .map_err(messages)?;
     candidate.resource_source.graph_values = graph_candidate.resource_source.graph_values;
-    if program.resource_source.graph_values.is_some() {
-        candidate
-            .resource_source
-            .install_materialized(crate::resource_source::Materialized {
-                functions: candidate.functions.clone(),
-                values: program.resource_source.required_materializations().to_vec(),
-                required_only: program
-                    .resource_source
-                    .required_only_function_ids()
-                    .to_vec(),
-            });
-    }
+    crate::native_suite_transition::append_verify(
+        &mut candidate,
+        program,
+        checked,
+        entry_file,
+        &suite,
+        targets.iter().map(|target| target.id).collect(),
+    )?;
     crate::reflected_callable::baked::validate_conversion_input(&candidate).map_err(messages)?;
     crate::actor_graph::validate_conversion_input(&candidate).map_err(messages)?;
     candidate

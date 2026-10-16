@@ -37,6 +37,8 @@ pub use jett_typecheck::{
 };
 mod ordinary_required_values;
 pub use ordinary_required_values::bake_required_values;
+mod native_suite_transition;
+pub use native_suite_transition::CheckedNativeSuiteCall;
 mod native_verify_suite;
 pub use native_verify_suite::append_checked_native_verify_suite;
 mod native_property_suite;

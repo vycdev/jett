@@ -634,7 +634,12 @@ pub(crate) fn seal_program(program: &mut Program) -> Result<(), Vec<LowerError>>
         }
     }
     super::mutable_sum_backings::callable_sealing(program, &sum_before, &sum_edits)?;
+    let native_suites =
+        super::native_suite_transition::callable_sealing(program, &sum_before, &sum_edits)?;
     super::temporary_local_views::callable_sealing(program, &sum_before, &sum_edits)?;
+    if native_suites.is_some() {
+        program.resource_source.native_suites = native_suites;
+    }
     Ok(())
 }
 

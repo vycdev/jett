@@ -735,6 +735,11 @@ fn finish_replay(
         required_only: archive.required_only_function_ids().to_vec(),
     };
     let mut candidate = program.clone();
+    let native_suites = native_suite_transition::converted(program, before)
+        .map_err(|message| vec![LowerError { span, message }])?;
+    if native_suites.is_some() {
+        candidate.resource_source.native_suites = native_suites;
+    }
     candidate
         .resource_source
         .install_materialized(resource_source::Materialized {

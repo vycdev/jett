@@ -64,6 +64,7 @@ mod entry_scope;
 mod execution_closure;
 pub use entry_scope::{ResourceEntryScopePlan, validate_resource_ownership_for_entry};
 mod named_callables;
+mod native_suites;
 mod returned_descriptors;
 pub use named_callables::ResourceNamedCallableProof;
 #[cfg(test)]
@@ -404,6 +405,38 @@ impl ResourceCallFormal {
     }
 }
 
+/// Readonly metadata from one exact, privately constructed compiler suite call.
+/// The boxed operation payload keeps the shared operation enum bounded.
+#[derive(Debug, Clone)]
+pub struct ResourceNativeSuiteInvocation {
+    function: FunctionId,
+    proof: hir::CheckedNativeSuiteCall,
+    formals: Vec<ResourceCallFormal>,
+    evaluation_order: Vec<usize>,
+    operands: Vec<ResourceCallOperand>,
+    result: ResourceCallResult,
+}
+impl ResourceNativeSuiteInvocation {
+    pub fn function(&self) -> FunctionId {
+        self.function
+    }
+    pub fn proof(&self) -> &hir::CheckedNativeSuiteCall {
+        &self.proof
+    }
+    pub fn formals(&self) -> &[ResourceCallFormal] {
+        &self.formals
+    }
+    pub fn evaluation_order(&self) -> &[usize] {
+        &self.evaluation_order
+    }
+    pub fn operands(&self) -> &[ResourceCallOperand] {
+        &self.operands
+    }
+    pub fn result(&self) -> ResourceCallResult {
+        self.result
+    }
+}
+
 /// Closed metadata roles. None is a public constructor for a validated plan.
 #[derive(Debug, Clone)]
 pub enum ResourceOperationRole {
@@ -489,6 +522,10 @@ pub enum ResourceOperationRole {
         evaluation_order: Vec<usize>,
         operands: Vec<ResourceCallOperand>,
         result: ResourceCallResult,
+    },
+    /// Exact canonical compiler suite edge; it never supplies Source authority.
+    InvokeNativeSuite {
+        invocation: Box<ResourceNativeSuiteInvocation>,
     },
     /// Move a sole plain payload into a fresh conditional shell.
     SumAdopt {
@@ -769,6 +806,18 @@ impl<'p> ResourceOwnershipPlan<'p> {
                     .filter(|function| function.id == id)
             })
     }
+    /// The exact original Source header or privately constructed suite header.
+    /// A canonical suite stays distinct from an original Source declaration.
+    pub fn authenticated_entry(&self, id: FunctionId) -> Option<&'p hir::Function> {
+        self.original_source(id).or_else(|| {
+            self.program
+                .functions
+                .get(id.index() as usize)
+                .filter(|function| function.id == id)
+                .and_then(|function| function.resource_lowering.as_ref())
+                .and_then(|witness| witness.source.native_suite_function(id))
+        })
+    }
     pub fn function(&self, id: FunctionId) -> Option<&ResourceFunctionPlan> {
         self.functions
             .iter()
@@ -898,6 +947,9 @@ impl Capture {
         let Some(witness) = &self.witness else {
             return Ok(false);
         };
+        if native_suites::preserve(witness, expression)? {
+            return Ok(true);
+        }
         let (args, ownership) = match &expression.kind {
             hir::ExpressionKind::Call {
                 args, ownership, ..
@@ -1567,7 +1619,9 @@ pub fn validate_resource_ownership<'p>(
         {
             continue;
         }
-        let analyzed = if carriers::required(function, types) {
+        let analyzed = if native_suites::is_suite(function) {
+            native_suites::analyze(program, function, types)
+        } else if carriers::required(function, types) {
             carriers::analyze(program, function, types)
         } else {
             flow::analyze(program, function, types)

@@ -6470,6 +6470,22 @@ property clamp:
 
 The `verify` block checks 5 specific cases at compile time. The `property` block checks its assertions against 10,000 generated `(value, low, high)` triples. Generation can exercise integer boundaries, negative numbers, extreme ranges, and invalid combinations like `low > high`; a passing run establishes no guarantee about untested triples.
 
+Pure Verify and Property bodies may use Resource-typed aggregate values whose
+selected contents contain no live Resource. Potential Resource paths remain in
+the original checked type graph; their absence does not grant a provider or make
+an impure function eligible. The native implementation must retain the same
+checked program, required cache and generated case identities through its
+canonical suite entry. The [native Resource suite protocol](active/native_resource_suites.md)
+records the compiler transport and outstanding acceptance for this case.
+
+Inside these original checked bodies, an ordinary-typed direct call can still
+belong to the exact Resource execution family. Native extraction must preserve
+its original checked call and argument/field order through ordinary expression
+containers. Boolean `&&` and `||` keep their right operand on the selected
+short-circuit branch. This does not give ordinary staging Resource custody or
+implement wider indirect, refinement-handler or Resource-bearing aggregate
+native transport.
+
 The current native property-suite implementation reuses the interpreter's 100
 deterministic trials per property. A terminal failure in an emitted suite
 identifies the property name and one-based trial number before the original

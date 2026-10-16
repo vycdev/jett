@@ -302,13 +302,24 @@ impl ResourceCallRegion {
 impl Capture {
     pub(crate) fn normalized_call_needed(&self, value: &Expression, types: &TypeInterner) -> bool {
         self.witness.as_ref().is_some_and(|witness| {
-            source_custody_call(value, types, &witness.execution) && {
-                let mut handled = false;
-                walk::expression(value, &mut |node| {
-                    handled |= matches!(node.kind, hir::ExpressionKind::Handle { .. })
-                });
-                handled
-            }
+            let ordinary_direct = match &value.kind {
+                hir::ExpressionKind::Call { args, .. } => {
+                    witness.execution.direct_call(value)
+                        && !resource_type_pending(types, value.ty)
+                        && args.iter().all(|arg| !resource_type_pending(types, arg.ty))
+                }
+                _ => false,
+            };
+            // Aggregate custody retains its separate carrier transport. Only an
+            // ordinary endpoint may enter this path without a handled actual.
+            source_custody_call(value, types, &witness.execution)
+                && (ordinary_direct || {
+                    let mut handled = false;
+                    walk::expression(value, &mut |node| {
+                        handled |= matches!(node.kind, hir::ExpressionKind::Handle { .. })
+                    });
+                    handled
+                })
         })
     }
     pub(crate) fn begin_normalized_call(

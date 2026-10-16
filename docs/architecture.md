@@ -1925,6 +1925,35 @@ edited existing bodies or edited appended suites fail the next conversion
 gate. Ordinary lowering without a protected archive retains its existing
 suite path and cannot gain Resource or Graph authority.
 
+The successor Resource suite transition retains the complete protected current
+table and immutable original Source separately. Its private factory appends only
+the exact checked Verify or Property wrapper, retains the successful required
+cache and opaque generated-case plan, and issues an Arc-backed receipt for each
+whole-wrapper preorder call occurrence. Identical sampled values do not merge
+trial identity. MIR carries a distinct boxed native-suite invocation role; it
+never manufactures a Source call certificate or admits Generated Resource calls
+by type alone. Canonical conversion preserves the private recorded-output receipt
+and validates the unchanged-before archive before joining its Graph, reflected and
+temporary peer transitions. Its transaction publishes only after sealing and all
+final HIR/backend-type checks. The first connected
+activation slice has ordinary generated arguments and a Nothing result; all
+transitive Resource aggregate helpers retain their existing Source/carrier plans.
+Zero provider acquisition and custody still require observed native evidence.
+See the [candidate protocol and acceptance boundary](active/native_resource_suites.md).
+
+The Builder's contextual extraction predicate also recognizes exact retained
+direct Source calls in the Resource execution family whose arguments and result
+have ordinary endpoints. It propagates through existing eager/ordered operand
+containers with their original eligibility checks, stages preceding values in
+checked source order, and puts a lazy boolean RHS region only in its selected
+branch. Each normalized region authenticates the complete original tuple before
+extraction and retains ordered actual/site/header associations through its
+Begin/Stage/Invoke/End sequence; failed construction restores its checkpoint.
+This changes neither the suite wrapper's flat private protocol nor the separate
+carrier custody proof. Resource-bearing endpoint staging, indirect/hook timing,
+refinement-handler exits and broader aggregate contexts remain independent
+obligations. No Runtime helper, ABI, provider grant or Source rule is added.
+
 ### What Runs at Comptime
 
 1. **`verify` blocks** — All assertions are evaluated. Any failure stops compilation.

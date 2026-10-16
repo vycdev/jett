@@ -17,15 +17,24 @@ enum LoweringRequirement {
 
 #[cfg(test)]
 fn has_extractable_handle(expression: &Expression) -> bool {
-    expression_needs_lowering(expression, LoweringRequirement::Handlers)
+    expression_needs_lowering(expression, LoweringRequirement::Handlers, &|_| false)
 }
 
+#[cfg(test)]
 fn needs_eager_lowering(expression: &Expression) -> bool {
-    expression_needs_lowering(expression, LoweringRequirement::HandlersAndCallOwnership)
+    expression_needs_lowering(
+        expression,
+        LoweringRequirement::HandlersAndCallOwnership,
+        &|_| false,
+    )
 }
 
-fn expression_needs_lowering(expression: &Expression, requirement: LoweringRequirement) -> bool {
-    let needs = |value: &Expression| expression_needs_lowering(value, requirement);
+fn expression_needs_lowering(
+    expression: &Expression,
+    requirement: LoweringRequirement,
+    source_call: &impl Fn(&Expression) -> bool,
+) -> bool {
+    let needs = |value: &Expression| expression_needs_lowering(value, requirement, source_call);
     let includes_call_ownership = requirement == LoweringRequirement::HandlersAndCallOwnership;
     match &expression.kind {
         ExpressionKind::ActorGraphImport(_) => true,
@@ -56,7 +65,8 @@ fn expression_needs_lowering(expression: &Expression, requirement: LoweringRequi
         ExpressionKind::Call {
             args, ownership, ..
         } => {
-            (includes_call_ownership && needs_call_owner_staging(ownership))
+            (includes_call_ownership
+                && (needs_call_owner_staging(ownership) || source_call(expression)))
                 || args.iter().any(needs)
         }
         ExpressionKind::ActorSpawn { args, .. } => args.iter().any(needs),
@@ -1174,6 +1184,19 @@ impl Builder<'_> {
         Some(lowered)
     }
 
+    /// Include authenticated ordinary endpoints of the checked Resource family
+    /// in the same source-order extraction used for handlers.
+    fn needs_eager_lowering(&self, expression: &Expression) -> bool {
+        expression_needs_lowering(
+            expression,
+            LoweringRequirement::HandlersAndCallOwnership,
+            &|value| {
+                self.resource_capture
+                    .normalized_call_needed(value, self.types)
+            },
+        )
+    }
+
     pub(super) fn lower_value(&mut self, expression: &Expression) -> Expression {
         if let ExpressionKind::ActorGraphImport(plan) = &expression.kind {
             self.lower_block(plan.body());
@@ -1229,7 +1252,7 @@ impl Builder<'_> {
         }
         if let ExpressionKind::ResourceInvoke { args, .. } = &expression.kind {
             // Typed preservation only. Extracting actuals would require the dedicated owner plan.
-            if args.iter().any(needs_eager_lowering) {
+            if args.iter().any(|value| self.needs_eager_lowering(value)) {
                 self.resource_error = Some(LowerError { span: expression.span, message: "pending ResourceOwnershipPlan: Resource actual extraction requires dedicated custody staging".into() });
             }
             return expression.clone();
@@ -1311,7 +1334,7 @@ impl Builder<'_> {
             return Some(lowered);
         }
         if let ExpressionKind::Clone(value) = &expression.kind
-            && needs_eager_lowering(value)
+            && self.needs_eager_lowering(value)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::Clone(Box::new(self.lower_value(value)));
@@ -1319,7 +1342,7 @@ impl Builder<'_> {
         }
         if let ExpressionKind::Run(value) = &expression.kind {
             let needs_snapshot = snapshotable_local(self.types, value);
-            if needs_eager_lowering(value) || needs_snapshot {
+            if self.needs_eager_lowering(value) || needs_snapshot {
                 let mut lowered = expression.clone();
                 let source = self.lower_value(value);
                 // `run` does not consume a cloneable local in the interpreter.
@@ -1333,14 +1356,14 @@ impl Builder<'_> {
             }
         }
         if let ExpressionKind::Join(value) = &expression.kind
-            && needs_eager_lowering(value)
+            && self.needs_eager_lowering(value)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::Join(Box::new(self.lower_value(value)));
             return Some(lowered);
         }
         if let ExpressionKind::Coarsen(value) = &expression.kind
-            && (needs_eager_lowering(value) || snapshotable_local(self.types, value))
+            && (self.needs_eager_lowering(value) || snapshotable_local(self.types, value))
         {
             let mut lowered = expression.clone();
             let source = self.lower_value(value);
@@ -1353,7 +1376,7 @@ impl Builder<'_> {
             return Some(lowered);
         }
         if let ExpressionKind::Declassify(value) = &expression.kind
-            && (needs_eager_lowering(value) || snapshotable_local(self.types, value))
+            && (self.needs_eager_lowering(value) || snapshotable_local(self.types, value))
         {
             let mut lowered = expression.clone();
             let source = self.lower_value(value);
@@ -1370,7 +1393,7 @@ impl Builder<'_> {
             owner_type,
             field,
         } = &expression.kind
-            && needs_eager_lowering(base)
+            && self.needs_eager_lowering(base)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::Field {
@@ -1381,7 +1404,7 @@ impl Builder<'_> {
             return Some(lowered);
         }
         if let ExpressionKind::StateIs { value, state } = &expression.kind
-            && needs_eager_lowering(value)
+            && self.needs_eager_lowering(value)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::StateIs {
@@ -1391,7 +1414,7 @@ impl Builder<'_> {
             return Some(lowered);
         }
         if let ExpressionKind::Unary { op, value } = &expression.kind
-            && needs_eager_lowering(value)
+            && self.needs_eager_lowering(value)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::Unary {
@@ -1407,10 +1430,10 @@ impl Builder<'_> {
     fn try_lower_value_binary(&mut self, expression: &Expression) -> Option<Expression> {
         if let ExpressionKind::Binary { left, op, right } = &expression.kind
             && matches!(op, hir::BinaryOp::And | hir::BinaryOp::Or)
-            && (needs_eager_lowering(left) || needs_eager_lowering(right))
+            && (self.needs_eager_lowering(left) || self.needs_eager_lowering(right))
         {
             let left_value = self.lower_value(left);
-            if !needs_eager_lowering(right) {
+            if !self.needs_eager_lowering(right) {
                 let mut lowered = expression.clone();
                 lowered.kind = ExpressionKind::Binary {
                     left: Box::new(left_value),
@@ -1482,7 +1505,7 @@ impl Builder<'_> {
         if let ExpressionKind::Binary { left, op, right } = &expression.kind
             && !matches!(op, hir::BinaryOp::And | hir::BinaryOp::Or)
             && can_snapshot_view(self.types, left.ty)
-            && (needs_eager_lowering(left) || needs_eager_lowering(right))
+            && (self.needs_eager_lowering(left) || self.needs_eager_lowering(right))
         {
             // Save the left value before extracting a handler from the right.
             // Its failure block may mutate locals that the left side reads.
@@ -1646,7 +1669,9 @@ impl Builder<'_> {
     #[inline(never)]
     fn try_lower_value_collection(&mut self, expression: &Expression) -> Option<Expression> {
         if let ExpressionKind::ListConstruct { elements } = &expression.kind
-            && elements.iter().any(needs_eager_lowering)
+            && elements
+                .iter()
+                .any(|value| self.needs_eager_lowering(value))
             && let Some(elements) =
                 self.lower_ordered_owned_values(elements, &(0..elements.len()).collect::<Vec<_>>())
         {
@@ -1656,7 +1681,7 @@ impl Builder<'_> {
         }
         if let ExpressionKind::StringInterpolation(segments) = &expression.kind
             && segments.iter().any(|segment| {
-                matches!(segment, hir::StringSegment::Value(value) if needs_eager_lowering(value))
+                matches!(segment, hir::StringSegment::Value(value) if self.needs_eager_lowering(value))
             })
         {
             let values = segments
@@ -1685,9 +1710,9 @@ impl Builder<'_> {
             }
         }
         if let ExpressionKind::MapConstruct { entries } = &expression.kind
-            && entries
-                .iter()
-                .any(|entry| needs_eager_lowering(&entry.key) || needs_eager_lowering(&entry.value))
+            && entries.iter().any(|entry| {
+                self.needs_eager_lowering(&entry.key) || self.needs_eager_lowering(&entry.value)
+            })
         {
             let values: Vec<_> = entries
                 .iter()
@@ -1715,7 +1740,7 @@ impl Builder<'_> {
             validates_refinements,
             refinement_predicates,
         } = &expression.kind
-            && fields.iter().any(needs_eager_lowering)
+            && fields.iter().any(|value| self.needs_eager_lowering(value))
             && let Some(fields) = self.lower_ordered_owned_values(fields, evaluation_order)
         {
             let mut lowered = expression.clone();
@@ -1734,7 +1759,7 @@ impl Builder<'_> {
             evaluation_order,
             validates_widths,
         } = &expression.kind
-            && fields.iter().any(needs_eager_lowering)
+            && fields.iter().any(|value| self.needs_eager_lowering(value))
             && let Some(fields) = self.lower_ordered_owned_values(fields, evaluation_order)
         {
             let mut lowered = expression.clone();
@@ -1752,7 +1777,9 @@ impl Builder<'_> {
             payloads,
             evaluation_order,
         } = &expression.kind
-            && payloads.iter().any(needs_eager_lowering)
+            && payloads
+                .iter()
+                .any(|value| self.needs_eager_lowering(value))
             && let Some(payloads) = self.lower_ordered_owned_values(payloads, evaluation_order)
         {
             let mut lowered = expression.clone();
@@ -1769,7 +1796,9 @@ impl Builder<'_> {
             state,
             payloads,
         } = &expression.kind
-            && payloads.iter().any(needs_eager_lowering)
+            && payloads
+                .iter()
+                .any(|value| self.needs_eager_lowering(value))
             && let Some(payloads) =
                 self.lower_ordered_owned_values(payloads, &(0..payloads.len()).collect::<Vec<_>>())
         {
@@ -1787,7 +1816,10 @@ impl Builder<'_> {
             target,
             payloads,
         } = &expression.kind
-            && (needs_eager_lowering(source) || payloads.iter().any(needs_eager_lowering))
+            && (self.needs_eager_lowering(source)
+                || payloads
+                    .iter()
+                    .any(|value| self.needs_eager_lowering(value)))
         {
             let values = std::iter::once(source.as_ref().clone())
                 .chain(payloads.iter().cloned())
@@ -1810,21 +1842,21 @@ impl Builder<'_> {
     #[inline(never)]
     fn try_lower_value_sum(&mut self, expression: &Expression) -> Option<Expression> {
         if let ExpressionKind::ResultOk(value) = &expression.kind
-            && needs_eager_lowering(value)
+            && self.needs_eager_lowering(value)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::ResultOk(Box::new(self.lower_value(value)));
             return Some(lowered);
         }
         if let ExpressionKind::ResultFail(value) = &expression.kind
-            && needs_eager_lowering(value)
+            && self.needs_eager_lowering(value)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::ResultFail(Box::new(self.lower_value(value)));
             return Some(lowered);
         }
         if let ExpressionKind::OptionalSome(value) = &expression.kind
-            && needs_eager_lowering(value)
+            && self.needs_eager_lowering(value)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::OptionalSome(Box::new(self.lower_value(value)));
@@ -1845,7 +1877,8 @@ impl Builder<'_> {
             evaluation_order,
             ownership,
         } = &expression.kind
-            && (args.iter().any(needs_eager_lowering) || needs_call_owner_staging(ownership))
+            && (args.iter().any(|value| self.needs_eager_lowering(value))
+                || needs_call_owner_staging(ownership))
         {
             // Normalize closed physical View roles before the common preflight
             // distinguishes a source owner transfer from a retained/raw borrow.
@@ -1899,7 +1932,7 @@ impl Builder<'_> {
             evaluation_order,
             constructor,
         } = &expression.kind
-            && args.iter().any(needs_eager_lowering)
+            && args.iter().any(|value| self.needs_eager_lowering(value))
             && let Some(args) = self.lower_ordered_owned_values(args, evaluation_order)
         {
             let mut lowered = expression.clone();
@@ -1920,7 +1953,8 @@ impl Builder<'_> {
             kind,
             proof,
         } = &expression.kind
-            && (needs_eager_lowering(actor) || args.iter().any(needs_eager_lowering))
+            && (self.needs_eager_lowering(actor)
+                || args.iter().any(|value| self.needs_eager_lowering(value)))
             && valid_ordered_owned_values(self.types, &self.locals, args, evaluation_order)
         {
             let actor_value = self.lower_value(actor);
@@ -1962,8 +1996,8 @@ impl Builder<'_> {
             evaluation_order,
             ownership,
         } = &expression.kind
-            && (needs_eager_lowering(callee)
-                || args.iter().any(needs_eager_lowering)
+            && (self.needs_eager_lowering(callee)
+                || args.iter().any(|value| self.needs_eager_lowering(value))
                 || needs_call_owner_staging(ownership))
             && !matches!(callee.kind, ExpressionKind::View(_))
             && let Type::Function { view_params, .. } = self.types.resolve(
@@ -2027,7 +2061,8 @@ impl Builder<'_> {
             evaluation_order,
             ownership,
         } = &expression.kind
-            && (args.iter().any(needs_eager_lowering) || needs_call_owner_staging(ownership))
+            && (args.iter().any(|value| self.needs_eager_lowering(value))
+                || needs_call_owner_staging(ownership))
             && let Some(modes) = self.function_param_modes.get(function)
             && let Some(inputs) = call_staging_inputs(args, modes)
         {

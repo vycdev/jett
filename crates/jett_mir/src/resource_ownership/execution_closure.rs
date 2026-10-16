@@ -52,7 +52,7 @@ impl ResourceExecutionClosure {
         analysis: std::sync::Arc<graph_metadata::OriginalGraphAnalysis>,
     ) -> Result<Self, String> {
         analysis.validate_archive(archive, types)?;
-        let mut family = Self::from_original(archive.execution_functions(), types)?;
+        let mut family = Self::from_original(archive.execution_functions(), types, archive)?;
         let mut candidates = BTreeSet::new();
         // A completed empty Graph table cannot retire any custody function.
         // Keep independent closure reconstruction and archive/type checks above.
@@ -162,6 +162,7 @@ impl ResourceExecutionClosure {
     pub(super) fn from_original(
         functions: &[hir::Function],
         types: &TypeInterner,
+        archive: &hir::ResourceSourceArchive,
     ) -> Result<Self, String> {
         let mut family = Self::default();
         for (index, function) in functions.iter().enumerate() {
@@ -195,7 +196,9 @@ impl ResourceExecutionClosure {
                 }
                 let mut calls = false;
                 let mut malformed = false;
+                let mut ordinal = 0;
                 walk::hir_block(&function.body, &mut |value| {
+                    ordinal += 1;
                     if let hir::ExpressionKind::Call {
                         function: target,
                         ownership,
@@ -204,12 +207,18 @@ impl ResourceExecutionClosure {
                         && family.contains(*target)
                     {
                         calls = true;
-                        malformed |= !matches!(ownership, hir::CallOwnership::Source(_));
+                        let suite = archive.native_suite_call(function.id, value, ordinal);
+                        malformed |= !matches!(ownership, hir::CallOwnership::Source(_))
+                            && !suite.is_some_and(|proof| {
+                                proof.target() == *target
+                                    && proof.belongs_to_archive(archive)
+                                    && proof.matches(function.id, value, ordinal)
+                            });
                     }
                 });
                 if malformed {
                     return Err(
-                        "Resource execution predecessor has no original Source call certificate"
+                        "Resource execution predecessor has neither an original Source call certificate nor its exact private suite receipt"
                             .into(),
                     );
                 }

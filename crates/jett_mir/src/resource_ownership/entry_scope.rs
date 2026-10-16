@@ -84,7 +84,7 @@ pub fn validate_resource_ownership_for_entry<'p>(
         refusal("native Resource entry lacks its initially authenticated Source witness")
     })?;
     let original = plan
-        .original_source(entry)
+        .authenticated_entry(entry)
         .ok_or_else(|| refusal("native Resource entry has no exact original Source function"))?;
     if !capture_needed(original, &witness.source)
         || !capture_needed(&witness.original, &witness.source)

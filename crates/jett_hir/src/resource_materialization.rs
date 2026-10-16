@@ -92,6 +92,9 @@ pub fn materialize_checked_required_values(
             candidate.functions = view.functions.clone();
             crate::actor_graph::complete_conversion(&mut candidate, &before)?;
             candidate.resource_source.install_materialized(view);
+            // Preserve the opaque successful cache association for canonical
+            // Property sampling; public value mirrors grant no new authority.
+            candidate.resource_source.required_cache = Some(Arc::new(values.clone()));
             *program = candidate;
             Ok(())
         }

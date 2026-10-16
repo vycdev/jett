@@ -387,6 +387,15 @@ fn resource_staged_layout_keeps_complete_source_tuple_and_exact_activation_alias
             let program = lower_source(&checked);
             let types = &checked.checked().interner;
             let selected = entry(&program);
+            let staged_target = program
+                .functions
+                .iter()
+                .find(|function| {
+                    function.identity.declaration.namespace == "app"
+                        && function.identity.declaration.name == "accept_staged"
+                })
+                .unwrap()
+                .id;
             let layout = EmittedResourceLayout::from_program(&program, types, selected).unwrap();
             let repeated = EmittedResourceLayout::from_program(&program, types, selected).unwrap();
             assert_eq!(layout.bytes(), repeated.bytes());
@@ -409,10 +418,15 @@ fn resource_staged_layout_keeps_complete_source_tuple_and_exact_activation_alias
                         ..
                     } = operation.role()
                     {
-                        regions += 1;
-                        assert_eq!(evaluation_order, &[1, 0, 2]);
-                        assert_eq!(formals.len(), 3);
-                        assert_eq!(operands.len(), 3);
+                        // Ordinary Resource-family calls now have their own exact
+                        // regions too. Preserve every original mixed-call assertion
+                        // for this fixture's checked accept_staged target.
+                        if *target == staged_target {
+                            regions += 1;
+                            assert_eq!(evaluation_order, &[1, 0, 2]);
+                            assert_eq!(formals.len(), 3);
+                            assert_eq!(operands.len(), 3);
+                        }
                         let id = layout
                             .operation(function.function(), operation.id())
                             .unwrap();

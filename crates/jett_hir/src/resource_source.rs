@@ -122,6 +122,8 @@ pub struct ResourceSourceArchive {
     execution: Option<Arc<Materialized>>,
     pub(crate) reflected_values: Option<Arc<super::reflected_callable::baked::Transition>>,
     pub(crate) graph_values: Option<Arc<super::actor_graph::Transition>>,
+    pub(crate) native_suites: Option<Arc<super::native_suite_transition::Transition>>,
+    pub(crate) required_cache: Option<Arc<jett_comptime::ExplicitComptimeValues>>,
 }
 impl std::fmt::Debug for ResourceSourceArchive {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -146,17 +148,23 @@ impl PartialEq for ResourceSourceArchive {
             execution,
             reflected_values,
             graph_values,
+            native_suites,
+            required_cache,
         } = self;
         let Self {
             data: other_data,
             execution: other_execution,
             reflected_values: other_reflected_values,
             graph_values: other_graph_values,
+            native_suites: other_native_suites,
+            required_cache: other_required_cache,
         } = other;
         same_optional_arc(data, other_data)
             && same_optional_arc(execution, other_execution)
             && same_optional_arc(reflected_values, other_reflected_values)
             && same_optional_arc(graph_values, other_graph_values)
+            && same_optional_arc(native_suites, other_native_suites)
+            && same_optional_arc(required_cache, other_required_cache)
     }
 }
 impl Eq for ResourceSourceArchive {}
@@ -194,10 +202,15 @@ impl ResourceSourceArchive {
             execution: None,
             reflected_values: None,
             graph_values: None,
+            native_suites: None,
+            required_cache: None,
         }
     }
     /// Original checked functions stay immutable; this view contains only checked replacements.
     pub fn execution_functions(&self) -> &[Function] {
+        if let Some(suites) = &self.native_suites {
+            return suites.functions();
+        }
         if let Some(view) = &self.execution {
             return view.functions.as_slice();
         }
@@ -354,6 +367,21 @@ impl ResourceSourceArchive {
     }
     pub(crate) fn install_materialized(&mut self, view: Materialized) {
         self.execution = Some(Arc::new(view));
+    }
+    /// A constructor-authenticated generated suite, distinct from original Source.
+    pub fn native_suite_function(&self, id: FunctionId) -> Option<&Function> {
+        self.native_suites.as_ref()?.function(id)
+    }
+    /// Exact whole-wrapper preorder occurrence; duplicate trial values stay distinct.
+    pub fn native_suite_call(
+        &self,
+        owner: FunctionId,
+        expression: &Expression,
+        ordinal: usize,
+    ) -> Option<&crate::CheckedNativeSuiteCall> {
+        self.native_suites
+            .as_ref()?
+            .call(owner, expression, ordinal)
     }
     pub fn functions(&self) -> &[Function] {
         self.data

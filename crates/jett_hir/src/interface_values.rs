@@ -430,6 +430,12 @@ fn complete_value_conversions_inner(
     let before = program.clone();
     super::reflected_callable::baked::validate_conversion_input(&before)?;
     super::actor_graph::validate_conversion_input(&before)?;
+    super::native_suite_transition::validate_conversion_input(&before).map_err(|message| {
+        vec![LowerError {
+            span: before.functions[0].span,
+            message,
+        }]
+    })?;
     let archive = before.resource_source.clone();
     let graphs = archive
         .required_materializations()
@@ -450,6 +456,13 @@ fn complete_value_conversions_inner(
     super::mutable_sum_backings::conversion(program, &before, types, &conversion)?;
     let temporary_execution =
         super::temporary_local_views::conversion(program, &before, types, &conversion)?;
+    let native_suites =
+        super::native_suite_transition::converted(program, &before).map_err(|message| {
+            vec![LowerError {
+                span: before.functions[0].span,
+                message,
+            }]
+        })?;
     // Each private transition authenticates the same unchanged archive and
     // exact post-conversion functions before their renewed views are joined.
     let mut graph_converted = program.clone();
@@ -458,6 +471,9 @@ fn complete_value_conversions_inner(
     program.resource_source.graph_values = graph_converted.resource_source.graph_values;
     if let Some(view) = temporary_execution {
         program.resource_source.install_materialized(view);
+    }
+    if native_suites.is_some() {
+        program.resource_source.native_suites = native_suites;
     }
     super::reflected_callable::seal_program(program)?;
     if graphs {

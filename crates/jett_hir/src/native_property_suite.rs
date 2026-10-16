@@ -75,8 +75,8 @@ pub fn append_checked_native_property_suite(
 ) -> Result<Option<CheckedNativePropertyPlan>, Vec<LowerError>> {
     input(program, checked)?;
     if !cases.belongs_to(checked)
-        || !crate::reflected_callable::baked::same_required_cache(program, cases.required_values())
-        || crate::reflected_callable::baked::has_property_suite(program)
+        || !crate::native_suite_transition::same_required_cache(program, cases.required_values())
+        || crate::native_suite_transition::has_property_suite(program)
     {
         return Err(error(
             fallback_span(program),
@@ -179,9 +179,9 @@ pub fn rebuild_checked_native_property_replay(
         .resource_source
         .validate_types(types)
         .map_err(|message| error(fallback_span(program), message))?;
-    if !crate::reflected_callable::baked::owns_property_suite(program, plan)
+    if !crate::native_suite_transition::owns_property_suite(program, plan)
         || !plan.data.cases.belongs_to(checked)
-        || !crate::reflected_callable::baked::same_required_cache(
+        || !crate::native_suite_transition::same_required_cache(
             program,
             plan.data.cases.required_values(),
         )
@@ -249,7 +249,6 @@ fn input(program: &Program, checked: &Arc<CheckedResourceProgram>) -> Result<(),
             .resource_source
             .checked_program()
             .is_some_and(|retained| Arc::ptr_eq(retained, checked))
-        || !program.resource_manifest.kinds().is_empty()
     {
         return Err(error(
             span,
@@ -698,21 +697,23 @@ fn install(
         ));
     }
     let mut candidate = before.clone();
-    candidate.functions.push(canonical);
+    candidate.functions.push(canonical.clone());
     let mut graph_candidate = candidate.clone();
     crate::actor_graph::complete_conversion(&mut graph_candidate, &before)?;
     crate::reflected_callable::baked::complete_conversion(&mut candidate, &before)?;
     candidate.resource_source.graph_values = graph_candidate.resource_source.graph_values;
-    crate::reflected_callable::baked::install_property_suite(&mut candidate, plan.clone())?;
-    if before.resource_source.graph_values.is_some() {
-        candidate
-            .resource_source
-            .install_materialized(crate::resource_source::Materialized {
-                functions: candidate.functions.clone(),
-                values: before.resource_source.required_materializations().to_vec(),
-                required_only: before.resource_source.required_only_function_ids().to_vec(),
-            });
+    if candidate.resource_source.reflected_values.is_some() {
+        crate::reflected_callable::baked::install_property_suite(&mut candidate, plan.clone())?;
     }
+    crate::native_suite_transition::append_property(
+        &mut candidate,
+        &before,
+        &plan.data.checked,
+        plan.data.entry_file,
+        &canonical,
+        plan,
+    )
+    .map_err(|message| error(canonical.span, message))?;
     input(&candidate, &plan.data.checked)?;
     *program = candidate;
     Ok(())

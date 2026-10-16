@@ -2178,12 +2178,48 @@ impl Verifier<'_> {
                     "pending Resource family descriptor hidden Scope ABI",
                 ));
             }
+            if let Some(plan) = ownership.function(function.id) {
+                for operation in plan.operations_for_expression(expression) {
+                    if let jett_mir::ResourceOperationRole::InvokeNativeSuite { invocation } =
+                        operation.role()
+                    {
+                        let proof = invocation.proof();
+                        if proof.target() != invocation.function()
+                            || !proof.matches(function.id, expression, proof.expression_ordinal())
+                        {
+                            return Err(self.contract_error(
+                                function,
+                                expression.span,
+                                "Resource native suite edge changed its exact factory receipt",
+                            ));
+                        }
+                    }
+                }
+            }
             if let ExpressionKind::Call {
                 function: target, ..
             } = &expression.kind
             {
-                if ownership.function(*target).is_some() && !ownership.function(function.id).is_some_and(|plan| plan.operations_for_expression(expression).any(|operation| matches!(operation.role(), jett_mir::ResourceOperationRole::InvokeSourceFunction { function: callee, .. } if callee == target))) {
-                    return Err(self.unsupported(function, expression.span, "Resource family direct edge has no exact Source scope activation"));
+                let activation = ownership.function(function.id).is_some_and(|plan| {
+                    plan.operations_for_expression(expression).any(|operation| {
+                        match operation.role() {
+                            jett_mir::ResourceOperationRole::InvokeSourceFunction {
+                                function: callee,
+                                ..
+                            } => callee == target,
+                            jett_mir::ResourceOperationRole::InvokeNativeSuite { invocation } => {
+                                invocation.function() == *target
+                            }
+                            _ => false,
+                        }
+                    })
+                });
+                if ownership.function(*target).is_some() && !activation {
+                    return Err(self.unsupported(
+                        function,
+                        expression.span,
+                        "Resource family direct edge has no exact scope activation",
+                    ));
                 }
             }
         }
@@ -2193,6 +2229,7 @@ impl Verifier<'_> {
                     operation.role(),
                     jett_mir::ResourceOperationRole::InvokeHook { .. }
                         | jett_mir::ResourceOperationRole::InvokeSourceFunction { .. }
+                        | jett_mir::ResourceOperationRole::InvokeNativeSuite { .. }
                 )
             });
             if invocation

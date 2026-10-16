@@ -12,6 +12,8 @@ pub(super) mod carrier_operations;
 mod carriers;
 #[path = "resource_layout/graph_shapes.rs"]
 mod graph_shapes;
+#[path = "resource_layout/native_suite.rs"]
+mod native_suite;
 
 const LIMIT: usize = 4096;
 const BYTE_LIMIT: usize = 1024 * 1024;
@@ -51,7 +53,7 @@ impl<'p> EmittedResourceLayout<'p> {
             .filter(|function| function.id == entry)
             .ok_or_else(|| pending("driver entry has no exact current function"))?;
         let original = plan
-            .original_source(entry)
+            .authenticated_entry(entry)
             .ok_or_else(|| pending("driver entry has no original Source execution closure"))?;
         let headers_match = selected.params.len() == original.params.len()
             && selected
@@ -1191,6 +1193,9 @@ impl<'a, 'p> Rows<'a, 'p> {
                 operands,
                 *result,
             )?,
+            Role::InvokeNativeSuite { invocation } => {
+                self.native_suite_row(function, frame, invocation)?
+            }
             Role::TakeFailureCompanion {
                 source, failure, ..
             } => vec![17, frame, self.slot(f, *source)?, self.shape(*failure)?],

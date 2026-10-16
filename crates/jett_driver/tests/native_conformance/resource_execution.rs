@@ -805,3 +805,6 @@ mod absent_aggregate_baseline;
 
 #[path = "resource_occupied_struct_harness.rs"]
 mod occupied_struct_harness;
+
+#[path = "resource_execution/source17_suites.rs"]
+mod source17_suites;

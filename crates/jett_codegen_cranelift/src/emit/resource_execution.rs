@@ -9,6 +9,7 @@ mod carriers;
 mod leaves;
 mod lexical_borrows;
 mod named_indirect;
+mod native_suite;
 mod returned_hooks;
 mod sum_views;
 #[cfg(test)]
@@ -1348,10 +1349,17 @@ impl Translator<'_, '_> {
         let invocation = operations.iter().copied().find(|operation| {
             matches!(
                 operation.role(),
-                Role::InvokeHook { .. } | Role::InvokeSourceFunction { .. }
+                Role::InvokeHook { .. }
+                    | Role::InvokeSourceFunction { .. }
+                    | Role::InvokeNativeSuite { .. }
             )
         });
         if let Some(invocation) = invocation {
+            if matches!(invocation.role(), Role::InvokeNativeSuite { .. }) {
+                return self
+                    .resource_native_suite(expression, invocation, &operations)
+                    .map(Some);
+            }
             let (args, descriptor) = match &expression.kind {
                 ExpressionKind::Call { args, .. } | ExpressionKind::ResourceInvoke { args, .. } => {
                     (args.as_slice(), None)
