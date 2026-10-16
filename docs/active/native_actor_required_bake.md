@@ -39,25 +39,31 @@ The existing baked view authenticates its complete current input and exact
 checked/cache/property/original identities before replaying that retained real
 output. It preserves the existing mutable-sum replay and validates full actor
 snapshots before and after. It then retains the actual sealed table required by
-MIR; MIR's complete archive equality remains unchanged. This renewal does not
-admit an actor-body-changing delta. A callable plan moved into a generated
-adapter can change the full execution table while leaving the handler snapshot
-unchanged.
+MIR; MIR's complete archive equality remains unchanged. This already-materialized
+baked renewal does not admit an actor-body-changing delta. The separate
+[original-Lowerer initial actor transition](native_actor_callable_sealing.md)
+now authenticates that bounded initial delta from the same actual sealer receipt
+and a private exact epoch; later actor-changing compositions remain separate.
+A callable plan moved into a generated adapter can also change the full execution
+table while leaving the handler snapshot unchanged.
 
 The four focused receipt controls cover materialized Some-to-Some renewal,
 idempotence, foreign checked/cache/arena/archive identities, previous/current
 token or occurrence splices, complete unrelated output edits and transactional
-refusal. Broader initial-getter, actor-changing and Graph/source-lineage contexts
+refusal. The separate bounded original-Lowerer initial-getter path is recorded
+in [the initial actor sealing note](native_actor_callable_sealing.md). Later
+actor-changing, valid temporary-owner and broader Graph/source-lineage contexts
 retain their separate obligations.
 
-The successor focused gates pass **11 HIR tests**, each exercising Debug and
+At checkpoint `44ebf1348b66c244164dd6034ed9bdb495ce03c5`, the focused gates
+passed **11 HIR tests**, each exercising Debug and
 Release checking modes: seven actor required-bake controls and four actual
 sealing-receipt controls. The whole unchanged witness control now completes
 actual value conversions/sealing, validates HIR/backend output and enforces the
 strict full execution-table equality required by MIR. The actor controls also
 cover equal-valued occurrences, constructor persistent views, exact
 receipt/cache/arena replay, complete input/output edits, transactional late
-refusal and NaN/signed-zero bits. Current logs under `target/native/` are:
+refusal and NaN/signed-zero bits. Historical checkpoint logs under `target/native/` are:
 
 - `actor-required-sealed-focused-v1.log`, SHA-256
   `c7a954b62fb632a263d81bd31f2a2e440017e12c56cdf3ea825f0455527cf7e5`.
@@ -76,10 +82,10 @@ test repair, with no production change for that failure. The failed log is
 `5c9505545c7704cb3cf14118ff7bd9dd8f76b0e8a27e17c0dc8bc74c2ca1b553`,
 and receives no accepted-gate credit.
 
-The fresh successor gates pass **2,539 distinct Rust tests**: 1,886 compiler-library
+That accepted checkpoint passed **2,539 distinct Rust tests**: 1,886 compiler-library
 tests (Codegen 135, Comptime 691, HIR 297, MIR 384 and Typecheck 379), 603
 frontend/reference fixtures and all 50 CLI tests. The 11 focused controls are
-included in HIR 297. Current logs under `target/native/` are:
+included in HIR 297. Historical checkpoint logs under `target/native/` are:
 
 - `actor-required-sealed-core-v1.log`, SHA-256
   `7c335abafed1644f9207db8c01bf577316afbb198c87dda58c78e137aebaedfc`.
@@ -89,8 +95,8 @@ included in HIR 297. Current logs under `target/native/` are:
   `45bde9c8f4c0132b4689115af273529664cd77111a00a8a143f8d4f5a431d957`.
 
 The first fixture invocation named a nonexistent test target and ran no tests;
-it supplies no acceptance or compiler-failure evidence. All 1,081 current
-compiler/Source input hashes match
+it supplies no acceptance or compiler-failure evidence. At that checkpoint,
+all 1,081 compiler/Source input hashes matched
 `native-codegen-recovery-2026-10-09/actor-required-sealed-current-source-inputs-v1.json`,
 SHA-256 `bd9dd1206287a75f93ff746bc833cf003a111bd579d8842f1bbab53edeed197c`.
 
@@ -140,7 +146,7 @@ refused with E9001 in both checking modes. Its frontend-only evidence is
 `native-codegen-recovery-2026-10-09/actor-required-frontend-cli-v3/check-result.json`
 (SHA-256 `e6c1c28dbb746559d8f39c265a09a3a1995c3e9d5fbc9069214c6efe022170c1`).
 
-## Paired ordinary native output checkpoint
+## Accepted required-witness native output checkpoint
 
 The original whole witness remains byte-identical with Source SHA-256
 `ce01b25e20a4955067e87fbc7389f1957b21fd10de6e76575e337f2f98111665`.
@@ -176,12 +182,20 @@ finalizers or same-context reentry. Both rows retain
 `physical_lifetime_measured=false`, `reentry_measured=false` and
 `full_native_acceptance=false`; the full native-codegen goal remains open.
 
-Remaining independent obligations include actual bound-to-sealed callable token
-replay when sealing changes an actor body, authenticated source lineage for
-Seal.sources, actor-owned Graph producer transitions and Resource-hook-bearing
-actor required execution. A callback plan that moves into a generated adapter
+The bounded original-Lowerer initial sealing/snapshot epoch now has its separate
+[checkpoint](native_actor_callable_sealing.md). Remaining independent obligations
+include later actor-body-changing sealing, valid temporary-owner composition,
+unrepresented Seal.sources checkpoints, actor-owned Graph producer transitions
+and Resource-hook-bearing actor required execution. A callback plan that moves into a generated adapter
 need not change its handler snapshot; no unconditional sealing failure follows.
 Physical lifetime, actor queues, callback ownership/finalizers and same-context
 reentry remain separate from ordinary native output. Do not erase actor snapshots,
 change Source, disable Resource transport or infer broader native coverage from
 this bounded HIR transition.
+
+A later [initial actor sealing checkpoint](native_actor_callable_sealing.md)
+records fresh Required and Direct native selectors separately. The historical
+2,539-test/two-process facts above remain bound to `44ebf134`; they are not added
+to the later native count. The bounded original-Lowerer delta does not resolve
+valid temporary-owner, later actor/Graph/Resource or native physical lifetime
+obligations.

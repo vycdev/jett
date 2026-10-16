@@ -2,6 +2,24 @@
 use crate::*;
 use jett_typecheck::{CheckedActorBindingRole, CheckedActorHandler, CheckedActorHandlerTarget};
 
+#[path = "actor_callable_sealing.rs"]
+mod callable_sealing;
+pub(crate) use callable_sealing::{
+    InitialCallableRenewal, finish_original as finish_original_callable_sealing,
+    renew as renew_callable_snapshots, source_matches as callable_source_matches,
+};
+
+fn same_callable_epoch(
+    left: &Option<Arc<callable_sealing::Epoch>>,
+    right: &Option<Arc<callable_sealing::Epoch>>,
+) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActorHandlerRole {
     role: CheckedActorBindingRole,
@@ -47,6 +65,7 @@ pub struct ActorStateView {
     root: LocalId,
     initializer: Box<Expression>,
     constructor: Option<Box<Snapshot>>,
+    callable_epoch: Option<Arc<callable_sealing::Epoch>>,
 }
 impl PartialEq for ActorStateView {
     fn eq(&self, other: &Self) -> bool {
@@ -56,6 +75,7 @@ impl PartialEq for ActorStateView {
             && self.root == other.root
             && self.initializer == other.initializer
             && self.constructor == other.constructor
+            && same_callable_epoch(&self.callable_epoch, &other.callable_epoch)
     }
 }
 impl ActorStateView {
@@ -73,6 +93,7 @@ impl ActorStateView {
             root,
             initializer: Box::new(initializer),
             constructor: None,
+            callable_epoch: None,
         }
     }
     pub fn local(&self) -> LocalId {
@@ -225,6 +246,7 @@ pub struct ActorHandlerEntry {
     receipt: Arc<CheckedActorHandler>,
     roles: Vec<ActorHandlerRole>,
     snapshot: Option<Box<Snapshot>>,
+    callable_epoch: Option<Arc<callable_sealing::Epoch>>,
 }
 impl PartialEq for ActorHandlerEntry {
     fn eq(&self, other: &Self) -> bool {
@@ -232,6 +254,7 @@ impl PartialEq for ActorHandlerEntry {
             && Arc::ptr_eq(&self.receipt, &other.receipt)
             && self.roles == other.roles
             && self.snapshot == other.snapshot
+            && same_callable_epoch(&self.callable_epoch, &other.callable_epoch)
     }
 }
 impl ActorHandlerEntry {
@@ -245,6 +268,7 @@ impl ActorHandlerEntry {
             receipt: Arc::new(receipt),
             roles,
             snapshot: None,
+            callable_epoch: None,
         }
     }
     pub fn target(&self) -> CheckedActorHandlerTarget {

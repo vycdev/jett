@@ -5437,9 +5437,10 @@ remains forbidden by its existing purpose gate. Frontend cache proofs do not
 authorize native body edits or renew actor snapshots. The separate checked HIR
 required-bake receipt described below joins exact actor owners and renews full
 snapshots. A separate actual-sealer receipt authenticates exact token edits and
-renewed execution tables; actor-body-changing sealing still requires its own
-snapshot delta and source lineage. A plan moved into a generated adapter need not
-change the handler snapshot. The frontend evidence remains recorded in
+renewed execution tables. The original-Lowerer initial actor path below may
+authenticate its bounded snapshot delta and source epoch; later unrepresented
+actor-changing compositions still require their own path. A plan moved into a
+generated adapter need not change the handler snapshot. The frontend evidence remains recorded in
 [the actor required-value note](active/native_actor_required_values.md).
 
 Retained ExplicitComptime and NamespaceConstant workers also validate lazy
@@ -5465,7 +5466,24 @@ type arena, source epoch and exact token-slot edits. The already-materialized
 baked view authenticates its current table and private cache identity before
 renewing from that retained output, preserving mutable-sum replay and validating
 full actor snapshots unchanged. MIR retains complete archive equality. This
-receipt does not admit actor-body-changing deltas or replace broader initial
-getter/source-lineage, actor-owned Graph or Resource-hook-bearing obligations.
+already-materialized baked renewal does not admit actor-body-changing deltas.
+The separate original-Lowerer initial actor path below authenticates only its
+represented delta; later source-lineage, actor-owned Graph and Resource-hook-
+bearing obligations remain.
 Ordinary native output does not establish physical lifetime or same-context
 reentry; see the [checked actor bake note](active/native_actor_required_bake.md).
+
+### Initial actor callable-sealing source epochs
+
+The original Lowerer may renew complete actor snapshots from the sole actual
+CheckedCallableSealing output, retaining original receipt/role/view metadata.
+A private finite epoch stores raw predecessor sources and the validated final
+table before attaching its own edge. Source comparison restores only existing
+protected stages to that exact checkpoint and retains full actor metadata.
+The same actual token receipt remains authoritative; no duplicate token producer
+is introduced. Actual Weak expiry controls cover the finite compiler graph, not
+native physical actor/callback lifetime or same-context reentry. The checker-valid
+Packet/list temporary-owner composition remains an unsupported HIR/native proof
+edge in the full native goal; refusing it earns no coverage credit. Unrepresented
+later actor/checkpoint/Graph/Resource compositions remain pending; see the
+[initial actor sealing note](active/native_actor_callable_sealing.md).

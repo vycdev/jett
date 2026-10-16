@@ -291,7 +291,6 @@ impl ReflectedCallablePlan {
                         )
                     })
             })
-            || !sources_match(&seal.sources, program, &self.data.checked)
         {
             return Err("reflected callable getter, adapter, predicate or context changed");
         }
@@ -326,6 +325,7 @@ impl ReflectedCallablePlan {
         ) {
             return Err("reflected callable canonical body, tuple or return conversion changed");
         }
+        sources_match(&seal.sources, program, &self.data.checked)?;
         Ok(())
     }
 }
@@ -513,14 +513,57 @@ pub(crate) fn seal_program(
     Ok(())
 }
 
+/// Actual original lowering supplies the checked context; the token producer
+/// remains the same sole sealer used by ordinary completion.
+pub(super) fn seal_original_program(
+    program: &mut Program,
+    original: Option<&Arc<jett_typecheck::CheckedResourceProgram>>,
+    types: &TypeInterner,
+) -> Result<(), Vec<LowerError>> {
+    let mut candidate = program.clone();
+    let (_, actor) = seal_program_with_actor_context(&mut candidate, types, original)?;
+    if let Some(actor) = actor {
+        super::actor_handlers::finish_original_callable_sealing(&mut candidate, types, &actor)
+            .map_err(|message| {
+                vec![LowerError {
+                    span: program
+                        .functions
+                        .first()
+                        .map_or(Span::new(FileId::new(0), 0, 0), |f| f.span),
+                    message,
+                }]
+            })?;
+    } else {
+        super::mutable_sum_backings::seal_program(&mut candidate, types)?;
+    }
+    *program = candidate;
+    Ok(())
+}
+
 fn seal_program_with_receipt<'types>(
     program: &mut Program,
     types: &'types TypeInterner,
 ) -> Result<CheckedCallableSealing<'types>, Vec<LowerError>> {
+    let (receipt, _) = seal_program_with_actor_context(program, types, None)?;
+    Ok(receipt)
+}
+
+fn seal_program_with_actor_context<'types>(
+    program: &mut Program,
+    types: &'types TypeInterner,
+    original: Option<&Arc<jett_typecheck::CheckedResourceProgram>>,
+) -> Result<
+    (
+        CheckedCallableSealing<'types>,
+        Option<super::actor_handlers::InitialCallableRenewal>,
+    ),
+    Vec<LowerError>,
+> {
     let sum_before = program.clone();
     let mut sealing_edits = Vec::new();
     let originals = Arc::new(program.functions.clone());
-    let sources = Arc::new(originals.iter().map(erase_function).collect::<Vec<_>>());
+    // Keep the actual raw epoch; comparison canonicalizes outer callable metadata.
+    let sources = originals.clone();
     let mut attached = Vec::new();
     for owner in &mut program.functions {
         let identity = owner.identity.clone();
@@ -674,6 +717,22 @@ fn seal_program_with_receipt<'types>(
             }]
         },
     )?;
+    let actor = super::actor_handlers::renew_callable_snapshots(
+        program,
+        &sum_before,
+        types,
+        &receipt,
+        original,
+    )
+    .map_err(|message| {
+        vec![LowerError {
+            span: sum_before
+                .functions
+                .first()
+                .map_or(Span::new(FileId::new(0), 0, 0), |f| f.span),
+            message,
+        }]
+    })?;
     let sum_edits = receipt.token_pairs();
     super::mutable_sum_backings::callable_sealing(program, &sum_before, &sum_edits)?;
     let baked = baked::callable_sealing(program, &sum_before, types, &receipt)?;
@@ -686,7 +745,7 @@ fn seal_program_with_receipt<'types>(
     if native_suites.is_some() {
         program.resource_source.native_suites = native_suites;
     }
-    Ok(receipt)
+    Ok((receipt, actor))
 }
 
 fn erase_adapter(function: &Function) -> Function {
@@ -869,29 +928,34 @@ pub fn lower_reflected_callable_value(
 }
 
 fn sources_match(
-    expected: &[Function],
+    expected: &Arc<Vec<Function>>,
     program: &Program,
     checked: &Arc<jett_typecheck::CheckedResourceProgram>,
-) -> bool {
-    expected.iter().all(|expected| {
-        program
-            .functions
+) -> Result<(), &'static str> {
+    let restore = |functions: &[Function]| {
+        functions
+            .iter()
+            .map(|function| original_function(function, &program.resource_source, checked))
+            .collect::<Result<Vec<_>, _>>()
+    };
+    let current =
+        restore(&program.functions).map_err(|_| "reflected current Source restoration failed")?;
+    let original = restore(expected).map_err(|_| "reflected expected Source restoration failed")?;
+    // Existing ordinary matching retains full actor metadata. A changed actor
+    // Snapshot therefore requires the exact epoch view below rather than erasure.
+    if original.iter().all(|expected| {
+        current
             .get(expected.id.index() as usize)
             .is_some_and(|current| {
-                let Ok(current) = original_function(current, &program.resource_source, checked)
-                else {
-                    return false;
-                };
-                let Ok(expected) = original_function(expected, &program.resource_source, checked)
-                else {
-                    return false;
-                };
-                super::resource_materialization::functions_equal(
-                    std::slice::from_ref(&erase_function(&current)),
-                    std::slice::from_ref(&erase_function(&expected)),
+                source_functions_equal(
+                    std::slice::from_ref(current),
+                    std::slice::from_ref(expected),
                 )
             })
-    })
+    }) {
+        return Ok(());
+    }
+    super::actor_handlers::callable_source_matches(expected, program, &current, &original, checked)
 }
 
 /// Undo only protected checked replacements. Public edited HIR cannot create a

@@ -67,8 +67,8 @@ That checkpoint's rebuilt CLI passed **12 expected checks** across Debug and Rel
 checking modes: the unchanged original witness and the pure-capture control
 each exit zero; all four unavailable-capture controls each exit one with E9001.
 The original witness has no errors and retains one unused-variable warning.
-These are frontend checks; runtime main is not executed. The exact 1,075
-compiler/Source input hashes remain unchanged.
+These were frontend checks; runtime main was not executed. At that checkpoint,
+the exact 1,075 compiler/Source input hashes were guarded unchanged.
 
 Frontend checkpoint logs under `target/native/` are:
 
@@ -104,25 +104,34 @@ checked materialization receipt. The HIR owner matcher no longer declines an
 actor owner merely because its metadata kind is ActorInitializer or ActorHandler.
 The later actual-sealer receipt also renews the complete baked execution table
 from its exact token edits while validating unchanged full actor snapshots. It
-does not admit actor-body-changing sealing deltas. The original frontend evidence
-above remains a historical checkpoint.
+does not itself admit actor-body-changing sealing deltas. A separate
+[original-Lowerer initial transition](native_actor_callable_sealing.md) now renews
+that bounded initial snapshot using the same actual receipt and an exact private
+epoch. The original frontend evidence above remains a historical checkpoint.
 
 The remaining boundaries are independent:
 
-1. Canonical callable sealing that changes an actor body must renew that same
-   full snapshot using the actual bound-to-sealed receipt and authenticated
-   source lineage. It must preserve every canonical conversion, temporary-view
-   and peer transition proof. A plan moved into a generated adapter need not
-   change the handler snapshot; no unconditional sealing failure is inferred.
+1. The bounded original-Lowerer initial snapshot transition is separate from
+   later actor-body-changing sealing. Later and unrepresented checkpoints still
+   require their exact receipt/source-lineage path and every canonical, temporary
+   and peer proof. The checker-valid Packet/list temporary-owner composition
+   remains an unsupported HIR/native gap in the full goal, with no coverage
+   credit for refusal. A plan moved into a generated adapter need not change
+   its handler snapshot.
 2. Actor-owned Graph producer transitions remain separate from ordinary checked
    required baking.
 3. In a retained program with Resource hooks, actor-owned required evaluation
    still reaches the unchanged runtime cursor gate. That requires a separate
    exact occurrence-bound execution route. Temporarily disabling transport would
    bypass transitive absence/custody handling and is not an acceptable fallback.
-4. The [paired ordinary native checkpoint](native_actor_required_bake.md) now
-   records two Source-deleted executions of the whole unchanged witness with
+4. The [historical paired ordinary native checkpoint](native_actor_required_bake.md)
+   records two Source-deleted executions of the whole unchanged required witness with
    `observed:5\n`, empty program stderr and exit zero in matched Debug/Release.
    Physical lifetime, queue/callback ownership and same-context reentry still
    need their own observations; ordinary output alone cannot establish them or
    complete the native-codegen goal.
+
+The later [initial actor sealing checkpoint](native_actor_callable_sealing.md)
+records fresh Required and Direct native selectors and their exact provenance.
+Those bounded outputs do not close the temporary-owner, later proof-composition
+or physical lifetime/reentry obligations above.

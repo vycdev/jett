@@ -8958,3 +8958,6 @@ mod actor_field_updates;
 
 #[path = "native_conformance/actor_required_values.rs"]
 mod actor_required_values;
+
+#[path = "native_conformance/actor_direct_getter.rs"]
+mod actor_direct_getter;
