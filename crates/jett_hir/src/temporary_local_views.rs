@@ -6,6 +6,14 @@ use std::sync::{Arc, OnceLock};
 #[cfg(test)]
 mod tests;
 
+#[path = "temporary_initial_finalization.rs"]
+mod initial_finalization;
+pub(crate) use initial_finalization::{
+    Completed as CompletedOriginalFinalization, Construction,
+    Prepared as PreparedOriginalFinalization, finish_fresh as finish_fresh_original,
+    prepare as prepare_original_finalization,
+};
+
 struct Original {
     checked: Arc<jett_typecheck::CheckedResourceProgram>,
     declaration: CheckedBindingFact,
@@ -341,6 +349,48 @@ fn validate_source_record<'a>(
     Ok(owner)
 }
 
+/// Normalize only the exact own outer marker; preserve full canonical operands.
+fn canonical_production(
+    function: &Function,
+    proof: &TemporaryLocalBacking,
+    types: &TypeInterner,
+) -> Result<Expression, String> {
+    let mut canonical = validate_source_record(function, proof, types)?.clone();
+    let ExpressionKind::Call {
+        function: current_target,
+        args: current_args,
+        evaluation_order: current_order,
+        ownership: CallOwnership::Source(current_ownership),
+    } = &mut canonical.kind
+    else {
+        return Err("temporary original owner lost its checked direct invocation".into());
+    };
+    let ExpressionKind::Call {
+        function: original_target,
+        args: original_args,
+        evaluation_order: original_order,
+        ownership: CallOwnership::Source(original_ownership),
+    } = &proof.0.producer.kind
+    else {
+        return Err("temporary original producer is not its checked direct invocation".into());
+    };
+    if current_ownership.temporary_local_backing() != Some(proof) {
+        return Err("temporary original owner changed its occurrence marker".into());
+    }
+    current_ownership.clear_temporary_local_backing();
+    // Preserve canonical operands and every checked call-certificate field.
+    if *current_target != *original_target
+        || current_args.len() != original_args.len()
+        || current_order.as_slice() != original_order.as_slice()
+        || &*current_ownership != original_ownership
+        || canonical.ty != proof.0.producer.ty
+        || canonical.span != proof.0.producer.span
+    {
+        return Err("temporary canonical production changed its checked invocation headers".into());
+    }
+    Ok(canonical)
+}
+
 /// This is called only from the original Lowerer, after its canonical passes
 /// and before its immutable archive is captured. It is deliberately single use;
 /// public conversion entry points can never fill or replace this record.
@@ -366,49 +416,7 @@ pub(super) fn seal_original_program(
                     "temporary original production was already captured".into(),
                 ));
             }
-            let owner = validate_source_record(function, &proof, types).map_err(fail)?;
-            let mut canonical = owner.clone();
-            let ExpressionKind::Call {
-                function: current_target,
-                args: current_args,
-                evaluation_order: current_order,
-                ownership: CallOwnership::Source(current_ownership),
-            } = &mut canonical.kind
-            else {
-                return Err(fail(
-                    "temporary original owner lost its checked direct invocation".into(),
-                ));
-            };
-            let ExpressionKind::Call {
-                function: original_target,
-                args: original_args,
-                evaluation_order: original_order,
-                ownership: CallOwnership::Source(original_ownership),
-            } = &proof.0.producer.kind
-            else {
-                return Err(fail(
-                    "temporary original producer is not its checked direct invocation".into(),
-                ));
-            };
-            if current_ownership.temporary_local_backing() != Some(&proof) {
-                return Err(fail(
-                    "temporary original owner changed its occurrence marker".into(),
-                ));
-            }
-            current_ownership.clear_temporary_local_backing();
-            // Canonical coercion changes operands, never the retained Source
-            // call certificate, target, source order, result or source span.
-            if *current_target != *original_target
-                || current_args.len() != original_args.len()
-                || current_order.as_slice() != original_order.as_slice()
-                || &*current_ownership != original_ownership
-                || canonical.ty != proof.0.producer.ty
-                || canonical.span != proof.0.producer.span
-            {
-                return Err(fail(
-                    "temporary canonical production changed its checked invocation headers".into(),
-                ));
-            }
+            let canonical = canonical_production(function, &proof, types).map_err(fail)?;
             pending.push((proof, canonical));
         }
     }
@@ -644,6 +652,12 @@ impl BodyLowerer<'_, '_> {
             required_scopes: self.required_scopes.clone(),
             scoped_types: self.scoped_type_bindings.clone(),
         }));
+        // Register at mint, before the marker or earlier-argument clones escape
+        // into this still-unpublished Lowerer construction.
+        self.parent
+            .temporary_construction
+            .as_mut()?
+            .register(proof.clone());
         let mut production = production;
         let ExpressionKind::Call {
             ownership: CallOwnership::Source(source),

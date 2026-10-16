@@ -5482,11 +5482,50 @@ table before attaching its own edge. Source comparison restores only existing
 protected stages to that exact checkpoint and retains full actor metadata.
 The same actual token receipt remains authoritative; no duplicate token producer
 is introduced. Actual Weak expiry controls cover the finite compiler graph, not
-native physical actor/callback lifetime or same-context reentry. The checker-valid
-Packet/list temporary-owner composition remains an unsupported HIR/native proof
-edge in the full native goal; refusing it earns no coverage credit. Unrepresented
-later actor/checkpoint/Graph/Resource compositions remain pending; see the
+native physical actor/callback lifetime or same-context reentry. A fresh original
+construction may also freeze unchanged temporary canonical producers through the
+separate exact transition below. Unrepresented later actor/checkpoint/Graph/Resource
+compositions remain pending; see the
 [initial actor sealing note](active/native_actor_callable_sealing.md).
+
+### Initial actor and retained temporary-owner finalization
+
+The consuming Lowerer owns a non-Clone mint-time inventory of exact temporary
+proof Arcs, bound to its original module/check/type arena. It closes registration
+before canonical passes and never publishes a pending registry or Program. The
+ordinary no-actor/no-delta path retains its existing one-time late finalizer.
+
+For an actual initial actor callable delta, the sole actual sealer receipt may
+authenticate a separate open-to-closed temporary-cell transition. Every minted
+marker must match the complete retained input/output inventory and original
+owner/alias facts. Candidates come only from the actual receipt's BEFORE owner
+expressions, after clearing only their own outer marker; complete canonical
+operands must equal the token output. A hidden temporary argument proof visitor
+joins each predecessor to an exact earlier declaration in the same body. Repeated
+uses remain valid; absent, foreign, self or forward dependencies refuse. Bound
+callable payloads cannot import a sealed or Graph epoch.
+
+Preparation writes no cells. An opaque checkpoint derived from the retained
+actor stage and the actual initial sum producer authenticates the complete final
+peer table. All dependency, open-cell and attachment checks precede the first
+write. The producer consumes the fresh registry, fills OnceLocks once with its
+retained BEFORE values, then captures the existing pre-attachment actor epoch.
+Only its opaque completion may skip the late setter. Arc-based Program equality
+alone is not rollback or proof of a cell-state transition.
+
+The unchanged checker-valid Packet/list composition passes the new transition
+controls and the broader 2,553-test local regression checkpoint. Its fresh
+compile-only gate is accepted. One unchanged Source emits two objects and passes
+two Source-deleted Debug/Release native processes, each with observed:5 plus LF,
+empty stderr and exit zero. These bounded output and cleanup observations do not
+measure native physical actor ownership or same-context reentry. A canonical producer
+changed by sealing still needs a separate immutable current-canonical proof and
+HIR/MIR consumer design. No marker removal, current-table recapture, checker
+restriction, arbitrary historical ancestry or runtime authority is introduced.
+The 35 focused HIR controls are included in that broader total; no native
+execution credit is inferred from compiler tests. Earlier Resource observations
+retain their committed checkpoint scope. See the
+[temporary finalization note](active/native_actor_temporary_owner_finalization.md).
 
 ### Private Resource observation protocol 2
 

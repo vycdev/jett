@@ -521,30 +521,55 @@ pub(super) fn seal_original_program(
     types: &TypeInterner,
 ) -> Result<(), Vec<LowerError>> {
     let mut candidate = program.clone();
-    let (_, actor) = seal_program_with_actor_context(&mut candidate, types, original)?;
-    if let Some(actor) = actor {
-        super::actor_handlers::finish_original_callable_sealing(&mut candidate, types, &actor)
-            .map_err(|message| {
-                vec![LowerError {
-                    span: program
-                        .functions
-                        .first()
-                        .map_or(Span::new(FileId::new(0), 0, 0), |f| f.span),
-                    message,
-                }]
-            })?;
-    } else {
-        super::mutable_sum_backings::seal_program(&mut candidate, types)?;
-    }
+    let (_, actor, _) = seal_program_with_actor_context(&mut candidate, types, original, None)?;
+    finish_initial_sealing(&mut candidate, types, actor)?;
     *program = candidate;
     Ok(())
+}
+
+/// Own the only unpublished construction. Neither the registry nor pending
+/// cells can be returned through a public API on success or failure.
+pub(super) fn seal_fresh_original_program(
+    mut program: Program,
+    original: Option<&Arc<jett_typecheck::CheckedResourceProgram>>,
+    types: &TypeInterner,
+    construction: super::temporary_local_views::Construction,
+) -> Result<Program, Vec<LowerError>> {
+    let (_, actor, construction) =
+        seal_program_with_actor_context(&mut program, types, original, Some(construction))?;
+    let completed = finish_initial_sealing(&mut program, types, actor)?;
+    super::temporary_local_views::finish_fresh_original(&program, types, construction, completed)
+        .map_err(|message| initial_error(&program, message))?;
+    Ok(program)
+}
+fn initial_error(program: &Program, message: String) -> Vec<LowerError> {
+    vec![LowerError {
+        span: program
+            .functions
+            .first()
+            .map_or(Span::new(FileId::new(0), 0, 0), |f| f.span),
+        message,
+    }]
+}
+fn finish_initial_sealing(
+    program: &mut Program,
+    types: &TypeInterner,
+    actor: Option<super::actor_handlers::InitialCallableRenewal>,
+) -> Result<Option<super::temporary_local_views::CompletedOriginalFinalization>, Vec<LowerError>> {
+    if let Some(actor) = actor {
+        super::actor_handlers::finish_original_callable_sealing(program, types, actor)
+            .map_err(|message| initial_error(program, message))
+    } else {
+        super::mutable_sum_backings::seal_program(program, types)?;
+        Ok(None)
+    }
 }
 
 fn seal_program_with_receipt<'types>(
     program: &mut Program,
     types: &'types TypeInterner,
 ) -> Result<CheckedCallableSealing<'types>, Vec<LowerError>> {
-    let (receipt, _) = seal_program_with_actor_context(program, types, None)?;
+    let (receipt, _, _) = seal_program_with_actor_context(program, types, None, None)?;
     Ok(receipt)
 }
 
@@ -552,10 +577,12 @@ fn seal_program_with_actor_context<'types>(
     program: &mut Program,
     types: &'types TypeInterner,
     original: Option<&Arc<jett_typecheck::CheckedResourceProgram>>,
+    mut construction: Option<super::temporary_local_views::Construction>,
 ) -> Result<
     (
         CheckedCallableSealing<'types>,
         Option<super::actor_handlers::InitialCallableRenewal>,
+        Option<super::temporary_local_views::Construction>,
     ),
     Vec<LowerError>,
 > {
@@ -723,6 +750,7 @@ fn seal_program_with_actor_context<'types>(
         types,
         &receipt,
         original,
+        &mut construction,
     )
     .map_err(|message| {
         vec![LowerError {
@@ -745,7 +773,7 @@ fn seal_program_with_actor_context<'types>(
     if native_suites.is_some() {
         program.resource_source.native_suites = native_suites;
     }
-    Ok((receipt, actor))
+    Ok((receipt, actor, construction))
 }
 
 fn erase_adapter(function: &Function) -> Function {

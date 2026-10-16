@@ -161,6 +161,13 @@ impl ArgumentOwnership {
 }
 
 impl SourceArgumentWitness {
+    /// Read-only proof closure; never execution liveness, a new loan, or a setter.
+    pub(crate) fn temporary_local_origin(
+        &self,
+    ) -> Option<&crate::temporary_local_views::TemporaryLocalArgument> {
+        self.temporary_origin.as_deref()
+    }
+
     pub fn match_origin(&self) -> Option<(LocalId, crate::MatchBinding)> {
         self.match_origin
     }

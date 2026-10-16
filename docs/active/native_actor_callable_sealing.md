@@ -20,17 +20,16 @@ archive before changing snapshot fields. An empty archive alone supplies no
 admission. A normal later actor-changing seal refuses until its producer path is
 represented. With no actor delta, the shared existing peer flow stays unchanged.
 
-An actual actor delta with temporary-owner markers remains refused. Original
-temporary finalization later fills a shared OnceLock with canonical operands;
-this first immutable epoch has no exact receipt for that extra proof edge. This
-is an unrepresented compiler composition, not a checker/source-validity rule or
-a claim that a combined Source cycle has been demonstrated. Ordinary no-actor
-behavior stays unchanged. The separate Packet projection control uses the real
-temporary-owner marker and must pass checking before the lowering refusal. This
-valid temporary-owner plus actor-getter composition remains a native/HIR gap
-included in the 100% goal, with no coverage credit for its refusal. Supporting it
-requires its exact transition proof; dropping its marker or changing Source does
-not complete that work.
+An actual actor delta with temporary-owner markers may proceed only through the
+separate original-construction, BEFORE-value-only finalization path. It retains
+every marker and complete Source certificate, proves an exact finite earlier-
+declaration dependency closure, and fills each original cell once before the
+actor epoch's retained after table exists. Changed canonical producers and later
+unrepresented compositions still refuse as compiler gaps, never checker/source-
+validity rules. No combined Source cycle is claimed from structural reasoning.
+The separate unchanged Packet projection control now requires genuine lowering
+and full archive/backend/epoch validation; its new native proof is a separate
+measurement. See [the temporary finalization note](native_actor_temporary_owner_finalization.md).
 
 The protected actor stage must remain exact after existing initial peers. The
 original finalizer runs the existing initial sum sealer once on that retained
@@ -66,7 +65,7 @@ first requires genuine checked initial lowering, actual handler/getter/adapter
 identities, full HIR/backend/archive validation and idempotent completion in both
 checking modes. Six actor controls add epoch identity, whole-table and foreign
 attachment refusal, actual Weak expiry, and transactional context/arena/later-entry
-refusal, plus a separate checked Source for temporary-owner composition refusal.
+refusal, plus the separate unchanged Packet Source for temporary-owner composition.
 They reuse the shared receipt's existing four producer controls.
 
 Root measured the unchanged-compiler RED: Source checking/preparation succeeds,
@@ -76,7 +75,13 @@ first Debug checking iteration stops the loop; Release RED was not separately
 measured. Evidence is target/native/actor-initial-sealing-red-v1.log (SHA-256
 3b9392ea75b384dfa2ce38e65c31d0fb5b434ac6c1175e3e2709ad6e35d5ce2b).
 
-## Current focused checkpoint
+## Accepted initial-epoch checkpoint
+
+The evidence below belongs to committed checkpoint
+`8827c57321e6e0d74cee6fd30dd21a7f11940d8c`, before the bounded temporary-
+finalization extension. It is preserved as measured evidence for that initial
+repair. Its then-refused Packet control and native counts do not establish the
+new temporary path; fresh extension gates are recorded separately.
 
 The focused gates pass **18 HIR tests**, each exercising Debug and Release
 checking modes: one genuine direct-handler regression, six actor epoch controls,
@@ -126,7 +131,7 @@ The corrected runner published the fresh accepted results below. Neither that
 incomplete attempt nor the historical required-comptime checkpoint is added to
 the current execution count.
 
-## Current paired ordinary native output checkpoint
+## Historical paired ordinary native output checkpoint
 
 Two independent selectors pass one Rust test each, separately from the 2,546
 regression tests above. The unchanged required witness
@@ -172,5 +177,34 @@ queue ownership or same-context reentry. Every row retains
 
 The accepted required-bake checkpoint `44ebf1348b66c244164dd6034ed9bdb495ce03c5`
 retains its [2,539-test and paired required-witness native evidence](native_actor_required_bake.md).
-Its older observations are not relabeled as the new direct getter's evidence. The full native-codegen goal, valid temporary-owner composition,
-later actor edges and broader Graph/Resource/checkpoint transport remain open.
+Its older observations are not relabeled as the direct getter's evidence. The
+full native-codegen goal remains open. The new bounded temporary-owner
+composition passes the current HIR/regression and paired native checkpoint
+below. Changed temporary canonical producers, later actor
+edges and broader Graph/Resource/checkpoint transport remain separate obligations.
+
+## Temporary-owner extension: current compiler checkpoint
+
+The original Packet/list witness remains 970 bytes with SHA-256
+a1f3fa32e14828daebb472f316608683b303187eba63b987edbab56d381a2f0f.
+Its separate exact initial-finalization path passes 35 focused HIR controls and
+the broader 2,553 distinct tests: Codegen 135, Comptime 691, HIR 311, MIR 384,
+Typecheck 379, 603 frontend/reference fixtures and 50 CLI tests. The 35 focused
+controls are included in HIR 311 and are not added again. Exact logs and the
+transition boundary are recorded in the
+[temporary finalization note](native_actor_temporary_owner_finalization.md).
+
+The fresh compile-only gate is accepted with zero native execution credit.
+The separate native selector passes one Rust test and records one unchanged
+Source, two objects and two native processes, paired Source/Runtime Debug and
+Release. Both outputs are exactly observed:5 plus LF, with empty stderr and exit
+zero. Source is deleted and the host object dropped before executable-only
+launch; children are reaped, executables and temporary directories removed.
+The authoritative execution receipt is
+076ac84a3717a56fafa9a5450edc96003a2ec3035e50c4fd10ef3eada9fe78b4;
+its schema-v1 observation file is
+2b19eea41a33e6a94d89050443cad25062e1802e3a76159b7243c982525bbe34.
+The earlier initial actor and committed Resource observation receipts retain
+their historical scope. These tests do not rerun Source17 or measure physical
+actor/callback ownership or same-context reentry; full native acceptance stays
+false.

@@ -4008,3 +4008,51 @@ per-kind ordinary storage, private retainer, normal custody/reentry, physical
 lifetime and full native acceptance obligations remain open; full_acceptance
 stays false and GitHub CI stays disabled. Historical protocol 1 limitations above
 are not rewritten or promoted.
+
+#### Original actor and retained temporary-owner finalization: compiler checkpoint
+
+The consuming Lowerer now retains its exact mint-time temporary-proof inventory
+through a separate initial actor transition. The actual sealer's BEFORE values,
+finite earlier-declaration dependencies, open cells and complete actor/sum
+checkpoint are validated before the first OnceLock write. The unchanged 970-byte
+Packet/list witness is
+a1f3fa32e14828daebb472f316608683b303187eba63b987edbab56d381a2f0f.
+No Source restriction, marker erasure or current-table recapture grants coverage.
+See the [finalization note](native_actor_temporary_owner_finalization.md).
+
+All 35 focused HIR controls pass. Broad local regression passes **2,553 distinct
+tests**: Codegen 135, Comptime 691, HIR 311, MIR 384, Typecheck 379, 603 frontend/
+reference fixtures and 50 CLI tests. Focused controls are included in HIR 311.
+The three logs under target/native/ are:
+
+- actor-temporary-owner-core-regression-v1.log, SHA-256
+  0745179c292cc76b55510000b8530bd17073909042a09f57d51d8af913f5c11b.
+- actor-temporary-owner-fixture-regression-v1.log, SHA-256
+  66e11f2cff69c9394ca1aa9e36167af3662d654a2148267ba6038ddf9f4d4e49.
+- actor-temporary-owner-cli-regression-v1.log, SHA-256
+  a077a1eb56e2638311665196eb3e980f9ce548fe61a6927fa2ec5924dd030b14.
+
+The fresh compile-only gate is accepted, with 1,093 compiler/Source inputs and
+image SHA-256 c308ff075c6dc904684867a3854e6f9d82961c1e417a01a05dd899dbe138237d.
+Gate acceptance is private-observation-v2-gate-compile-v4/gate-acceptance.json,
+SHA-256 290a8b403a76aec6b10d7e1e0b5e27cce268a78cc6600a717761c82914498160.
+Compilation grants zero native execution credit. The separate native selector
+passes one Rust test and accepts one unchanged Source/two objects/two native
+processes across paired Debug and Release. Both produce exact observed:5 plus LF,
+empty stderr and exit zero. The written Source is deleted and host object
+dropped before executable-only launch; children are reaped, executables and
+temporary directories removed. The outer process is quiet/reaped, its root
+handle closed and lease released, with no failures.
+
+Acceptance is
+native-bounded-actor-temporary-owner-execution-v1/execution-acceptance.json,
+SHA-256 076ac84a3717a56fafa9a5450edc96003a2ec3035e50c4fd10ef3eada9fe78b4.
+Its 5,863-byte schema-v1 native-evidence/actor-temporary-owner.json is
+2b19eea41a33e6a94d89050443cad25062e1802e3a76159b7243c982525bbe34;
+the actual process receipt is
+9782953688918c25d1d42adc161145ba03d9a7fd21934e0b79227d2f44446fb6.
+The intentionally incomplete prerelease terminal is not the acceptance leaf. Historical actor 8827 and Resource e916 observations retain their own
+revision, runtime and execution scope; neither is relabeled as current Source17
+regression or added to the new actor execution count. Physical actor/callback/queue
+ownership, same-context reentry, changed canonical producers, broader proof
+transport and the full native goal remain open. CI remains disabled.

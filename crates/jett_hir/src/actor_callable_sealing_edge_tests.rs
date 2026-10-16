@@ -10,8 +10,8 @@ const SOURCE: &str = include_str!(
     "../../jett_comptime/src/resource_execution/fixtures/actor_handler_direct_getter.jett"
 );
 
-// Separate closed Source control for an intentionally unrepresented initial peer
-// composition. The genuine direct-getter fixture remains byte-identical.
+// Separate complete Source control for the exact original temporary/actor
+// composition. Both original Source witnesses remain byte-identical.
 const TEMPORARY_SOURCE: &str = r#"namespace app
 type Positive = int64 where value > 0
 struct Holder:
@@ -361,10 +361,41 @@ fn initial_actor_sealing_refuses_foreign_context_arena_and_later_entry_transacti
             )
             .unwrap_or_else(|error| panic!("separate temporary composition must check: {error:?}")),
         );
-        let errors = crate::lower_checked_ordinary_program(&temporary_checked).unwrap_err();
-        assert!(errors.iter().any(|error| error.message.contains(
-            "initial actor callable sealing with temporary-owner finalization remains unsupported"
-        )));
+        let mut temporary_program = crate::lower_checked_ordinary_program(&temporary_checked)
+            .unwrap_or_else(|errors| panic!("unchanged complete Packet composition: {errors:?}"));
+        let temporary_types = &temporary_checked.checked().interner;
+        crate::validate(&temporary_program).unwrap();
+        crate::validate_backend_types(&temporary_program, temporary_types).unwrap();
+        temporary_program
+            .resource_source
+            .validate_current(&temporary_program, temporary_types)
+            .unwrap();
+        let temporary_handler = temporary_program
+            .functions
+            .iter()
+            .find(|f| f.actor_handler.is_some())
+            .unwrap();
+        let temporary_edge = epoch(temporary_handler)
+            .expect("real combined actor epoch")
+            .clone();
+        source_view(
+            &temporary_edge.sources,
+            &temporary_program,
+            &temporary_program.functions,
+            &temporary_checked,
+        )
+        .unwrap();
+        let weak_edge = Arc::downgrade(&temporary_edge);
+        let weak_source = Arc::downgrade(&temporary_edge.sources);
+        crate::complete_value_conversions(&mut temporary_program, temporary_types).unwrap();
+        crate::validate_backend_types(&temporary_program, temporary_types).unwrap();
+        let retained_archive = temporary_program.resource_source.clone();
+        drop(temporary_edge);
+        drop(temporary_program);
+        assert!(weak_edge.upgrade().is_some());
+        drop(retained_archive);
+        assert!(weak_edge.upgrade().is_none());
+        assert!(weak_source.upgrade().is_none());
         // Refusals cannot alter the actual original program or its private edge.
         source_view(&edge.sources, &program, &program.functions, &checked).unwrap();
     }

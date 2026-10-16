@@ -18,6 +18,36 @@ pub(crate) struct InitialCallableRenewal {
     sources: Arc<Vec<Function>>,
     output: Program,
     affected: Vec<FunctionId>,
+    temporary: Option<crate::temporary_local_views::PreparedOriginalFinalization>,
+}
+
+/// Complete peer checkpoint derived only inside the actual original finish:
+/// exact retained actor stage plus the real initial sum producer.
+pub(crate) struct InitialPeerCheckpoint {
+    checked: Arc<jett_typecheck::CheckedResourceProgram>,
+    sources: Arc<Vec<Function>>,
+    output: Program,
+}
+impl InitialPeerCheckpoint {
+    pub(crate) fn authenticate(
+        &self,
+        program: &Program,
+        types: &TypeInterner,
+        sources: &Arc<Vec<Function>>,
+        checked: &Arc<jett_typecheck::CheckedResourceProgram>,
+    ) -> Result<(), String> {
+        if !Arc::ptr_eq(checked, &self.checked)
+            || !std::ptr::eq(types, &self.checked.checked().interner)
+            || !Arc::ptr_eq(sources, &self.sources)
+            || !same_program(program, &self.output)
+        {
+            return Err(
+                "temporary original finalization changed its complete actual actor/sum checkpoint"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
 }
 
 fn metadata_equal(left: &Program, right: &Program) -> bool {
@@ -88,6 +118,7 @@ pub(crate) fn renew(
     types: &TypeInterner,
     receipt: &CheckedCallableSealing<'_>,
     original: Option<&Arc<jett_typecheck::CheckedResourceProgram>>,
+    construction: &mut Option<crate::temporary_local_views::Construction>,
 ) -> Result<Option<InitialCallableRenewal>, String> {
     receipt.authenticate_output(before, program, types)?;
     super::validate_program(before)
@@ -96,14 +127,6 @@ pub(crate) fn renew(
     let changed = affected(before, &protected)?;
     if changed.is_empty() {
         return Ok(None);
-    }
-    // Original temporary-owner finalization later fills a shared OnceLock.
-    // This first immutable actor epoch has no receipt for that additional edge.
-    if crate::temporary_local_views::has_markers(before) {
-        return Err(
-            "initial actor callable sealing with temporary-owner finalization remains unsupported"
-                .into(),
-        );
     }
     let checked = original.ok_or(
         "actor-changing callable sealing has no represented original-Lowerer epoch; later actor sealing remains unsupported"
@@ -123,6 +146,16 @@ pub(crate) fn renew(
                 .into(),
         );
     }
+    let temporary = if crate::temporary_local_views::has_markers(before) {
+        let fresh = construction.take().ok_or(
+            "initial actor callable sealing with temporary-owner finalization remains unsupported without its fresh original construction"
+        )?;
+        Some(crate::temporary_local_views::prepare_original_finalization(
+            before, program, types, receipt, checked, fresh,
+        )?)
+    } else {
+        None
+    };
     renew_snapshots(&mut protected, &changed)?;
     *program = protected.clone();
     Ok(Some(InitialCallableRenewal {
@@ -130,10 +163,38 @@ pub(crate) fn renew(
         sources: receipt.source_epoch().clone(),
         output: protected,
         affected: changed,
+        temporary,
     }))
 }
 
+fn preflight_attachment(program: &Program, affected: &[FunctionId]) -> Result<(), String> {
+    for (index, id) in affected.iter().enumerate() {
+        let function = program
+            .functions
+            .get(id.index() as usize)
+            .filter(|f| f.id == *id)
+            .ok_or("actor callable epoch lost an affected function")?;
+        if affected[..index].contains(id)
+            || (function.actor_handler.is_none() && function.actor_state_views.is_empty())
+            || function
+                .actor_handler
+                .as_ref()
+                .is_some_and(|entry| entry.callable_epoch.is_some())
+            || function
+                .actor_state_views
+                .iter()
+                .any(|view| view.callable_epoch.is_some())
+        {
+            return Err(
+                "actor callable attachment has repeated or foreign original epoch inventory".into(),
+            );
+        }
+    }
+    Ok(())
+}
+
 fn attach(program: &mut Program, edge: &Arc<Epoch>) -> Result<(), String> {
+    preflight_attachment(program, &edge.affected)?;
     for id in &edge.affected {
         let function = program
             .functions
@@ -164,8 +225,8 @@ fn attach(program: &mut Program, edge: &Arc<Epoch>) -> Result<(), String> {
 pub(crate) fn finish_original(
     program: &mut Program,
     types: &TypeInterner,
-    renewal: &InitialCallableRenewal,
-) -> Result<(), String> {
+    renewal: InitialCallableRenewal,
+) -> Result<Option<crate::temporary_local_views::CompletedOriginalFinalization>, String> {
     if !std::ptr::eq(types, &renewal.checked.checked().interner)
         || renewal.output.resource_source != ResourceSourceArchive::empty()
         || !same_program(program, &renewal.output)
@@ -181,6 +242,20 @@ pub(crate) fn finish_original(
         .map_err(|errors| format!("initial actor callable snapshots: {errors:?}"))?;
     crate::mutable_sum_backings::validate_program(&completed)
         .map_err(|errors| format!("initial actor callable sum receipts: {errors:?}"))?;
+    preflight_attachment(&completed, &renewal.affected)?;
+    // Finalize only immutable BEFORE payloads, after complete peer preflight
+    // and before the retained after table exists. Ordinary APIs have no capability.
+    let checkpoint = InitialPeerCheckpoint {
+        checked: renewal.checked.clone(),
+        sources: renewal.sources.clone(),
+        output: completed.clone(),
+    };
+    let temporary = match renewal.temporary {
+        Some(prepared) => {
+            Some(prepared.commit(&completed, types, &renewal.sources, &checkpoint)?)
+        }
+        None => None,
+    };
     let edge = Arc::new(Epoch {
         checked: renewal.checked.clone(),
         sources: renewal.sources.clone(),
@@ -191,7 +266,7 @@ pub(crate) fn finish_original(
     super::validate_program(&completed)
         .map_err(|errors| format!("initial actor callable attached snapshots: {errors:?}"))?;
     *program = completed;
-    Ok(())
+    Ok(temporary)
 }
 
 /// Non-executable actor metadata at one exact private Source checkpoint.

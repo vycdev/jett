@@ -1444,6 +1444,7 @@ enum FunctionKey {
 }
 
 struct Lowerer<'a> {
+    temporary_construction: Option<temporary_local_views::Construction>,
     resource_manifest: ResourceManifest,
     authenticated_resource_lowering: bool,
     reflected_checked_program: Option<Arc<jett_typecheck::CheckedResourceProgram>>,
@@ -1494,6 +1495,7 @@ impl<'a> Lowerer<'a> {
             })
             .collect();
         Self {
+            temporary_construction: Some(temporary_local_views::Construction::new(module, check)),
             resource_manifest: ResourceManifest::empty(),
             authenticated_resource_lowering: false,
             reflected_checked_program: None,
@@ -1629,14 +1631,20 @@ impl<'a> Lowerer<'a> {
                 functions,
                 equality_methods,
             };
+            let construction = self.temporary_construction.take().ok_or_else(|| {
+                vec![LowerError {
+                    span: Span::new(FileId::new(0), 0, 0),
+                    message: "original lowering lost its unpublished temporary construction".into(),
+                }]
+            })?;
             interface_values::coerce_program(&mut program, &self.check.interner);
             actor_handlers::seal_program(&mut program)?;
-            reflected_callable::seal_original_program(
-                &mut program,
+            program = reflected_callable::seal_fresh_original_program(
+                program,
                 self.reflected_checked_program.as_ref(),
                 &self.check.interner,
+                construction,
             )?;
-            temporary_local_views::seal_original_program(&program, &self.check.interner)?;
             validate(&program).map_err(|errors| {
                 errors
                     .into_iter()

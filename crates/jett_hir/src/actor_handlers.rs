@@ -5,8 +5,9 @@ use jett_typecheck::{CheckedActorBindingRole, CheckedActorHandler, CheckedActorH
 #[path = "actor_callable_sealing.rs"]
 mod callable_sealing;
 pub(crate) use callable_sealing::{
-    InitialCallableRenewal, finish_original as finish_original_callable_sealing,
-    renew as renew_callable_snapshots, source_matches as callable_source_matches,
+    InitialCallableRenewal, InitialPeerCheckpoint,
+    finish_original as finish_original_callable_sealing, renew as renew_callable_snapshots,
+    source_matches as callable_source_matches,
 };
 
 fn same_callable_epoch(

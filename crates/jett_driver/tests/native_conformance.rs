@@ -8976,3 +8976,6 @@ mod actor_required_values;
 
 #[path = "native_conformance/actor_direct_getter.rs"]
 mod actor_direct_getter;
+
+#[path = "native_conformance/actor_temporary_owner_getter.rs"]
+mod actor_temporary_owner_getter;
