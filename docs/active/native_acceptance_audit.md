@@ -3508,3 +3508,27 @@ execution acceptance. Logs under `target/native/`:
 This is regression maintenance, with no new native execution or full
 workspace/inventory acceptance. Coverage denominators and remaining obligations
 are unchanged. GitHub CI remains disabled at the user's request.
+
+#### Pending actor send error parity
+
+The checked reference actor-message path again includes the rejected value in
+its error, matching the existing unchecked interpreter and native Runtime.
+The native conformance control requires the exact reference message before
+comparing the complete native output and diagnostic stream. Runtime code and
+the pending actor fixture are unchanged.
+
+`native_pending_actor_send_matches_interpreter_error` passes locally with the
+supplied normal Debug Runtime bundle: one reference failure oracle and one
+Source-present native failure execution, with exact output/status/error parity.
+This is not a Source-deleted run or paired Debug/Release acceptance. The log is
+`target/native/local-regression-pending-actor-native-v1.log`, SHA-256
+`2d1afb32c7f1a7e3da61b1ed0fc450af3f8c48280b5d5a147d48ea99563df694`.
+All 68 reused Runtime artifact hashes remain unchanged.
+
+All 663 Comptime library tests also passed with this diagnostic repair in
+`target/native/local-regression-driver-comptime-libraries-v1.log`, SHA-256
+`3aaebe06f8079f0e68e24ba40fa20c3aaa4d62d5fcb717b954c2b9b22d74853f`.
+That combined invocation had a separate Driver test failure caused by its
+missing required bundle environment; the successful focused rerun does not
+turn that invocation into a fully passing Driver gate. Full workspace/native
+acceptance remains open, and GitHub CI stays disabled.

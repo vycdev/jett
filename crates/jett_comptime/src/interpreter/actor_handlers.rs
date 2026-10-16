@@ -305,7 +305,7 @@ impl Interpreter {
             }
         };
         let Value::Actor(identity) = value.payload() else {
-            return Err("send/ask: expected actor value".into());
+            return Err(format!("send/ask: expected actor value, got {value}"));
         };
         let identity = *identity;
         let mut values = Vec::new();

@@ -5275,6 +5275,10 @@ fn native_pending_actor_send_matches_interpreter_error() {
         .join("../../tests/native/pending_actor_send_failure.jett");
     let expected = jett_driver::run_file_capture_outcome(&fixture)
         .expect_err("interpreter must reject a pending actor send");
+    assert_eq!(
+        expected.message,
+        "runtime error: send/ask: expected actor value, got pending(actor#0)"
+    );
     let directory = tempfile::tempdir().expect("isolated pending actor send directory");
     let binary = directory.path().join("pending_actor_send_failure.exe");
     build_host_executable(&fixture, launcher(), &binary).expect("compile pending actor send");
