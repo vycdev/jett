@@ -4124,3 +4124,42 @@ archives bind both runs. These counts remain separate from the earlier
 replacement checkpoint and historical Source17 receipts. Physical/per-kind
 retainers, normal custody/reentry and full acceptance stay open; rough tracking
 and disabled CI are unchanged.
+
+#### Ordinary corpus attempt: unaccepted supervision terminal
+
+The accepted current inventory remains 602 registered tests: 576 ordinary and
+26 opt-in, with 1,191 fixture-input hashes. Its two listing processes execute
+zero test bodies. The subsequent ordinary attempt ends without a complete
+libtest result or accepted corpus credit. Its partial stdout has 43 ok status
+lines and 3 ignored lines, no failed status line and no terminal summary; stderr
+is empty. These partial observations are not a completed pass count or a
+measured native Source/child/object count.
+
+Supervision refuses a CIM observation of an owned link.exe whose ExecutablePath
+is null (RuntimeError: expected JSON string). The final cleanup probe also
+collides with the existing probe-00045.json artifact. At the frozen terminal,
+the root process is reaped and its handle closed, but owned-tree quiet is
+unconfirmed and the shared lease is unreleased; complete=false. Before/after
+input guards have no failures, and final cache 8,395,662,274 bytes remains below
+the 8,589,934,592-byte cap. This is an unaccepted monitoring/cleanup result.
+
+Under target/native/native-bounded-ordinary-execution-v1/, execution-terminal.json
+is e367039f70c81efef89603fc37e3084323b907fa930ca4f4fce491de36f220d0;
+test-process.json is
+f93bf7c70e11376ccfce3478dc649b0be3a3b2543667b5145689fe19a3016749.
+The later recovery is accepted under
+ordinary-native-unaccepted-cleanup-v1/recovery-acceptance.json, SHA-256
+0fdfdc10cbecd5e30f79669301e2d14222cf2518592a5e45600453669efa28fc.
+Two independent CIM snapshots are empty, their helpers are reaped with handles
+closed, and the exact held lease is released. Recovery terminates no processes
+and executes no Sources. It does not convert the earlier run into acceptance.
+
+The v13 supervisor controls pass six positive and 25 negative in-process cases,
+with zero child processes, native API calls or filesystem mutations. Their
+actual result is native-adapter-v13-root-control-run-v1/result.json, SHA-256
+f6ac4118b88bc888868dbc9742e76ceffc21d67fb55459885fbd7272fca4b900.
+These controls grant no ordinary corpus or Source execution credit. Successor
+ordinary execution remains pending. The prior accepted
+replacement/pure/Source17 scopes and the fixed 182 manifest, remaining opt-ins,
+full workspace and installed-host obligations are unchanged. Full/physical
+acceptance remains false; rough tracking is unchanged and CI stays disabled.
