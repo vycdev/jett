@@ -5434,9 +5434,13 @@ Closed pure explicit `comptime` remains valid in actor initializers and receive
 bodies. The required worker retains original actor owner/handler ordinals and
 checked handler scope facts as metadata; runtime ActorHandler Resource entry
 remains forbidden by its existing purpose gate. Frontend cache proofs do not
-authorize native body edits or renew actor snapshots. Exact HIR required baking,
-full snapshot renewal and later callable-sealing replay are separate transitions
-tracked in [the actor required-value note](active/native_actor_required_values.md).
+authorize native body edits or renew actor snapshots. The separate checked HIR
+required-bake receipt described below joins exact actor owners and renews full
+snapshots. A separate actual-sealer receipt authenticates exact token edits and
+renewed execution tables; actor-body-changing sealing still requires its own
+snapshot delta and source lineage. A plan moved into a generated adapter need not
+change the handler snapshot. The frontend evidence remains recorded in
+[the actor required-value note](active/native_actor_required_values.md).
 
 Retained ExplicitComptime and NamespaceConstant workers also validate lazy
 closure environments before creating a function value. The complete original
@@ -5448,3 +5452,20 @@ same-name constant cannot satisfy an actor field or handler parameter. Nested
 lazy bodies keep the same closedness requirement. This enforces the existing
 closed-expression rule without granting runtime actor entry, Resource custody,
 HIR baking or native snapshot renewal.
+
+### Checked actor required-value bake transitions
+
+Ordinary required-value baking retains an ephemeral receipt of its actual fully
+validated input/output, successful cache identity and type arena. Actor handler
+and constructor view snapshots advance only from that receipt while preserving
+original checker receipts, roles and projections. Peer execution tables capture
+the renewed table at the same private transaction boundary. The sole actual
+callable sealer retains complete before/output Programs, checked session, borrowed
+type arena, source epoch and exact token-slot edits. The already-materialized
+baked view authenticates its current table and private cache identity before
+renewing from that retained output, preserving mutable-sum replay and validating
+full actor snapshots unchanged. MIR retains complete archive equality. This
+receipt does not admit actor-body-changing deltas or replace broader initial
+getter/source-lineage, actor-owned Graph or Resource-hook-bearing obligations.
+Ordinary native output does not establish physical lifetime or same-context
+reentry; see the [checked actor bake note](active/native_actor_required_bake.md).

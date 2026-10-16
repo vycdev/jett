@@ -2,6 +2,10 @@
 use super::*;
 use jett_comptime::{ExplicitComptimeValues, Value};
 
+#[path = "required_bake_receipt.rs"]
+mod required_bake_receipt;
+pub(crate) use required_bake_receipt::CheckedRequiredBake;
+
 #[derive(Debug)]
 pub(crate) struct Transition {
     checked: Arc<jett_typecheck::CheckedResourceProgram>,
@@ -49,111 +53,11 @@ pub fn materialize_checked_reflected_values(
         .first()
         .map_or(Span::new(FileId::new(0), 0, 0), |function| function.span);
     let result = (|| -> Result<Program, String> {
-        if program.resource_source.checked_program().is_none()
-            || !program.resource_manifest.kinds().is_empty()
-        {
-            return Err(
-                "ordinary required transition has no retained checked ordinary archive".into(),
-            );
-        }
-        super::super::actor_graph::validate_conversion_input(program)
-            .map_err(|errors| format!("invalid protected Graph input: {errors:?}"))?;
-        super::validate_program(program)
-            .map_err(|errors| format!("invalid original reflected owner: {errors:?}"))?;
-        program.resource_source.validate_types(types)?;
-        let checked = program
-            .resource_source
-            .checked_program()
-            .ok_or("reflected required transition lacks original checked Source")?
-            .clone();
-        // The private Graph witness authenticates the entire derived table,
-        // including appended adapters. Original Source still compares exactly.
-        let source_count = if program.resource_source.graph_values.is_some() {
-            program.resource_source.functions().len()
-        } else {
-            program.functions.len()
-        };
-        let original = program
-            .functions
-            .iter()
-            .take(source_count)
-            .map(|function| super::original_function(function, &program.resource_source, &checked))
-            .collect::<Result<Vec<_>, _>>()?;
-        if !equal(&original, program.resource_source.functions()) {
-            return Err(
-                "reflected required transition changed original Source before construction".into(),
-            );
-        }
-        let proofs = values.checked_required_values(&checked)?;
-        let mut candidate = program.clone();
-        let functions = program.functions.clone();
-        for function in &mut candidate.functions {
-            let owner = function.clone();
-            let mut bindings = Vec::new();
-            let original_local_count = function.locals.len();
-            let mut replacements = Vec::new();
-            super::super::resource_materialization::walk_block(
-                &mut function.body,
-                &mut |expression| {
-                    if !matches!(
-                        expression.kind,
-                        ExpressionKind::Constant { .. } | ExpressionKind::Comptime { .. }
-                    ) {
-                        return Ok(());
-                    }
-                    let selected = proofs
-                        .iter()
-                        .filter(|proof| {
-                            super::super::resource_materialization::proof_matches(
-                                proof,
-                                &owner,
-                                expression,
-                                &checked,
-                                &program.resource_source,
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    let [proof] = selected.as_slice() else {
-                        return Err(
-                            "required value lacks a unique original checked owner/context".into(),
-                        );
-                    };
-                    let replacement = materialize(
-                        proof.value(),
-                        expression.ty,
-                        expression.span,
-                        &mut function.locals,
-                        &mut bindings,
-                    )?;
-                    if replacement.ty != expression.ty || replacement.span != expression.span {
-                        return Err("required replacement changed its original typed site".into());
-                    }
-                    replacements.push(((*proof).clone(), replacement.clone()));
-                    *expression = replacement;
-                    Ok(())
-                },
-            )?;
-            if function.locals.get(..original_local_count) != Some(owner.locals.as_slice()) {
-                return Err("required materializer changed an original local".into());
-            }
-            function.body.statements.splice(0..0, bindings.clone());
-            let used = super::materialized_source::validate_required_values(
-                &checked,
-                &candidate.resource_source,
-                function,
-                &functions,
-                &replacements,
-            )?;
-            let added = &function.locals[original_local_count..];
-            if added.len() != bindings.len() || used.len() != added.len()
-                || added.iter().enumerate().any(|(offset,local)| {
-                    local.id.index() as usize != original_local_count + offset
-                        || local.mutable || local.view_source.is_some() || local.debug_ty != local.ty
-                        || local.debug_type_name.is_some() || !used.contains(&local.id)
-                })
-                || bindings.iter().any(|statement| !matches!(statement.kind, StatementKind::Let { local, .. } if used.contains(&local)))
-            { return Err("required materializer added an unauthenticated local or statement".into()); }
-        }
+        let bake = required_bake_receipt::produce(program, values, types, &mut materialize)?;
+        let mut candidate = bake.candidate();
+        crate::actor_handlers::required_bake(&mut candidate, program, values, types, &bake)?;
+        let checked = bake.checked().clone();
+        let original = bake.original_functions().to_vec();
         // Every ordinary replacement and added local has passed the existing
         // private value matcher above. Renew Graph custody at this fixed boundary
         // before installing the corresponding reflected transition.
@@ -166,11 +70,12 @@ pub fn materialize_checked_reflected_values(
             property: None,
             current: candidate.functions.clone(),
         }));
-        if program
-            .resource_source
-            .required_materializations()
-            .iter()
-            .any(|row| row.proof.actor_graph().is_some())
+        if crate::temporary_local_views::has_markers(program)
+            || program
+                .resource_source
+                .required_materializations()
+                .iter()
+                .any(|row| row.proof.actor_graph().is_some())
         {
             candidate
                 .resource_source
@@ -263,6 +168,66 @@ pub(crate) fn complete_conversion(
     Ok(())
 }
 
+/// Renew this exact checked cache view from the retained actual sealer output.
+/// Full function equality includes actor metadata; no erased view can grant it.
+pub(super) fn callable_sealing(
+    program: &Program,
+    before: &Program,
+    types: &TypeInterner,
+    receipt: &super::CheckedCallableSealing<'_>,
+) -> Result<Option<Arc<Transition>>, Vec<LowerError>> {
+    let result = (|| -> Result<Option<Arc<Transition>>, String> {
+        let Some(transition) = &before.resource_source.reflected_values else {
+            return Ok(None);
+        };
+        let mut replay = receipt.replay(before, types)?;
+        if program.resource_source != before.resource_source
+            || program.resource_manifest != before.resource_manifest
+            || program.equality_methods != before.equality_methods
+            || !before.resource_source.belongs_to(&transition.checked)
+            || !receipt
+                .checked()
+                .is_some_and(|checked| Arc::ptr_eq(checked, &transition.checked))
+            || !crate::resource_materialization::functions_equal(
+                &before.functions,
+                &transition.current,
+            )
+        {
+            return Err(
+                "baked callable sealing changed its exact checked cache or full input table".into(),
+            );
+        }
+        // This peer's real renewal changes private snapshots. Replay that same
+        // producer on retained actual sealer output, preserving every actor field.
+        crate::mutable_sum_backings::callable_sealing(&mut replay, before, &receipt.token_pairs())
+            .map_err(|errors| format!("baked callable sealing sum replay: {errors:?}"))?;
+        for checked_program in [before, program] {
+            crate::actor_handlers::validate_program(checked_program)
+                .map_err(|errors| format!("baked callable sealing actor snapshot: {errors:?}"))?;
+        }
+        if !crate::resource_materialization::functions_equal(&replay.functions, &program.functions)
+        {
+            return Err("baked callable sealing differs from its retained complete output".into());
+        }
+        Ok(Some(Arc::new(Transition {
+            checked: transition.checked.clone(),
+            original: transition.original.clone(),
+            cache: transition.cache.clone(),
+            property: transition.property.clone(),
+            current: replay.functions,
+        })))
+    })();
+    result.map_err(|message| {
+        vec![LowerError {
+            span: before
+                .functions
+                .first()
+                .map_or(Span::new(FileId::new(0), 0, 0), |function| function.span),
+            message,
+        }]
+    })
+}
+
 pub(super) fn owns_materialized_owner(archive: &ResourceSourceArchive, owner: &Function) -> bool {
     archive.reflected_values.as_ref().is_some_and(|transition| {
         archive.belongs_to(&transition.checked)
@@ -337,3 +302,7 @@ pub(crate) fn install_property_suite(
     }));
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "actor_required_bake_tests.rs"]
+mod actor_required_bake_tests;

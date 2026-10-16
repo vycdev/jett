@@ -9,6 +9,10 @@ pub(crate) mod baked;
 mod materialized_source;
 pub use baked::{has_reflected_callable_plans, materialize_checked_reflected_values};
 
+#[path = "reflected_callable_sealing_receipt.rs"]
+mod sealing;
+pub(crate) use sealing::CheckedCallableSealing;
+
 #[derive(Debug, Clone)]
 pub struct ReflectedCallablePlan {
     data: Arc<Plan>,
@@ -499,16 +503,32 @@ pub(crate) fn adapter(
     })
 }
 
-pub(crate) fn seal_program(program: &mut Program) -> Result<(), Vec<LowerError>> {
+pub(crate) fn seal_program(
+    program: &mut Program,
+    types: &TypeInterner,
+) -> Result<(), Vec<LowerError>> {
+    let mut candidate = program.clone();
+    seal_program_with_receipt(&mut candidate, types)?;
+    *program = candidate;
+    Ok(())
+}
+
+fn seal_program_with_receipt<'types>(
+    program: &mut Program,
+    types: &'types TypeInterner,
+) -> Result<CheckedCallableSealing<'types>, Vec<LowerError>> {
     let sum_before = program.clone();
-    let mut sum_edits = Vec::new();
-    let originals = program.functions.clone();
+    let mut sealing_edits = Vec::new();
+    let originals = Arc::new(program.functions.clone());
     let sources = Arc::new(originals.iter().map(erase_function).collect::<Vec<_>>());
     let mut attached = Vec::new();
     for owner in &mut program.functions {
         let identity = owner.identity.clone();
         let owner_id = owner.id;
+        let mut expression_ordinal = 0usize;
         super::resource_materialization::walk_block(&mut owner.body, &mut |expression| {
+            let occurrence = expression_ordinal;
+            expression_ordinal += 1;
             let getter = erase_callable(expression);
             if let ExpressionKind::Intrinsic {
                 field_validation: Some(ReflectedFieldValidation::Validate(plans)),
@@ -550,7 +570,13 @@ pub(crate) fn seal_program(program: &mut Program) -> Result<(), Vec<LowerError>>
                             predicates,
                             sources: sources.clone(),
                         }));
-                        sum_edits.push((previous, callable.clone()));
+                        sealing_edits.push(sealing::Edit {
+                            owner: owner_id,
+                            expression: occurrence,
+                            slot: sealing::Slot::Getter { field: ordinal },
+                            previous: Some(previous),
+                            current: callable.clone(),
+                        });
                         attached.push((callable.function(), callable.clone()));
                     }
                 }
@@ -564,7 +590,7 @@ pub(crate) fn seal_program(program: &mut Program) -> Result<(), Vec<LowerError>>
             }]
         })?;
     }
-    for function in &originals {
+    for function in originals.iter() {
         let mut body = function.body.clone();
         super::resource_materialization::walk_block(&mut body, &mut |expression| {
             if let ExpressionKind::Handle { kind: HandleKind::ReflectedReturn { callable: Some(callable), .. }, .. } = &expression.kind {
@@ -572,7 +598,7 @@ pub(crate) fn seal_program(program: &mut Program) -> Result<(), Vec<LowerError>>
                 let mut callable = callable.clone();
                 let context = callable.data.context.clone().ok_or("materialized reflected callable lacks context")?;
                 let mut sites = Vec::new();
-                for owner in &originals {
+                for owner in originals.iter() {
                     let mut owner_body = owner.body.clone();
                     super::resource_materialization::walk_block(&mut owner_body, &mut |value| {
                         if matches!(value.kind, ExpressionKind::FunctionAdapter { function: id, .. } if id == callable.function()) {
@@ -627,20 +653,40 @@ pub(crate) fn seal_program(program: &mut Program) -> Result<(), Vec<LowerError>>
             ..
         })) = &mut function.body.statements[0].kind
         {
-            if let Some(previous) = stored.as_ref() {
-                sum_edits.push((previous.clone(), callable.clone()));
-            }
+            sealing_edits.push(sealing::Edit {
+                owner: id,
+                expression: 0,
+                slot: sealing::Slot::Adapter,
+                previous: stored.clone(),
+                current: callable.clone(),
+            });
             *stored = Some(callable);
         }
     }
+    let receipt = sealing::produce(&sum_before, program, types, originals, sealing_edits).map_err(
+        |message| {
+            vec![LowerError {
+                span: sum_before
+                    .functions
+                    .first()
+                    .map_or(Span::new(FileId::new(0), 0, 0), |function| function.span),
+                message,
+            }]
+        },
+    )?;
+    let sum_edits = receipt.token_pairs();
     super::mutable_sum_backings::callable_sealing(program, &sum_before, &sum_edits)?;
+    let baked = baked::callable_sealing(program, &sum_before, types, &receipt)?;
     let native_suites =
         super::native_suite_transition::callable_sealing(program, &sum_before, &sum_edits)?;
     super::temporary_local_views::callable_sealing(program, &sum_before, &sum_edits)?;
+    if baked.is_some() {
+        program.resource_source.reflected_values = baked;
+    }
     if native_suites.is_some() {
         program.resource_source.native_suites = native_suites;
     }
-    Ok(())
+    Ok(receipt)
 }
 
 fn erase_adapter(function: &Function) -> Function {

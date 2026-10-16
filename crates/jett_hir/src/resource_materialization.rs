@@ -9,6 +9,9 @@ use jett_comptime::{CheckedRequiredOwner, CheckedRequiredValue, ExplicitComptime
 use jett_parser::ast::{Expr, Item};
 use jett_typecheck::CheckedResourceProgram;
 use jett_types::{Type, TypeId, TypeInterner};
+
+#[path = "required_actor_owners.rs"]
+mod required_actor_owners;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -208,6 +211,8 @@ pub(crate) fn proof_matches(
         if matches!(
             proof.owner(),
             CheckedRequiredOwner::RefinementPredicate { .. }
+                | CheckedRequiredOwner::ActorInitializer { .. }
+                | CheckedRequiredOwner::ActorHandler { .. }
         ) && archive
             .original_required_function(function, expression, checked)
             .is_none()
@@ -303,11 +308,10 @@ fn required_owner_matches(
                         && value.name.name == function.identity.declaration.name
                         && value.constraint.is_some()))
         }
-        // Actor required values now retain exact frontend ownership. Their
-        // native required-value/snapshot transition remains a separate producer.
-        CheckedRequiredOwner::ActorInitializer { .. }
-        | CheckedRequiredOwner::ActorHandler { .. }
-        | CheckedRequiredOwner::NamespaceConstant { .. } => false,
+        actor @ (CheckedRequiredOwner::ActorInitializer { .. }
+            | CheckedRequiredOwner::ActorHandler { .. }) =>
+                required_actor_owners::matches(actor, function, checked),
+        CheckedRequiredOwner::NamespaceConstant { .. } => false,
     }
 }
 
@@ -698,7 +702,7 @@ fn walk_expression(
 #[path = "resource_materialization_tests.rs"]
 mod tests;
 
-fn hir_blocks_equal(left: &Block, right: &Block) -> bool {
+pub(crate) fn hir_blocks_equal(left: &Block, right: &Block) -> bool {
     let mut left = left.clone();
     let mut right = right.clone();
     let l = clear_floats(&mut left);

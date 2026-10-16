@@ -49,7 +49,7 @@ runtime ActorHandler cursor, mint Resource custody or renew a native snapshot.
 It enforces the existing closed-expression rule without selecting new Source
 behavior.
 
-## Frontend checkpoint
+## Accepted frontend checkpoint
 
 The successor focused gate passes **eight Rust tests**, each exercising Debug
 and Release checking modes. It includes the complete unchanged responding
@@ -58,19 +58,19 @@ capability rejection, checked lexical type scopes, unavailable returned/nested
 captures and retained pure captures. The focused log is
 `target/native/actor-required-frontend-focused-v2.log`, SHA-256
 `1ccd5c4983869f82ee69ab396a7036280459278926f781fe9cc095920ba1da81`.
-Fresh broader successor gates pass **1,615 distinct Rust tests**: 691 Comptime,
+At that frontend checkpoint, broader gates passed **1,615 distinct Rust tests**: 691 Comptime,
 286 HIR, 603 frontend/reference fixtures, 26 CLI unit tests and nine CLI capture
 tests. The eight focused controls are included in the Comptime total. The CLI
 build succeeds and its Cargo JSON identifies the exact executable checked below.
 
-The final rebuilt CLI passes **12 expected checks** across Debug and Release
+That checkpoint's rebuilt CLI passed **12 expected checks** across Debug and Release
 checking modes: the unchanged original witness and the pure-capture control
 each exit zero; all four unavailable-capture controls each exit one with E9001.
 The original witness has no errors and retains one unused-variable warning.
 These are frontend checks; runtime main is not executed. The exact 1,075
 compiler/Source input hashes remain unchanged.
 
-Current logs under `target/native/` are:
+Frontend checkpoint logs under `target/native/` are:
 
 - `actor-required-frontend-core-v2.log`, SHA-256
   `f6c053d6f676397918d50e6bb86b9b100a05850b5ca9da6b85699210f58cbc59`.
@@ -81,7 +81,7 @@ Current logs under `target/native/` are:
 - `actor-required-frontend-cli-build-v2.log`, SHA-256
   `6547c594cf5de096cf1ce9e3707bd4c08b65feebd3f1ad9b27de918ff27c6d66`.
 
-The final CLI receipt is
+The frontend CLI receipt is
 `native-codegen-recovery-2026-10-09/actor-required-frontend-cli-v3/check-result.json`,
 SHA-256 `e6c1c28dbb746559d8f39c265a09a3a1995c3e9d5fbc9069214c6efe022170c1`.
 It pins executable SHA-256
@@ -97,26 +97,32 @@ Exact-current-image v2 checks also confirmed that defect. Earlier direct CLI v1
 checks used a stale image and supply no current acceptance or refusal evidence.
 These discovery runs receive no successor acceptance credit.
 
-No HIR actor required-bake or native actor acceptance follows from frontend
-cache construction or checking. The remaining transitions are separate
-obligations:
+Frontend cache construction and checking alone supplied no HIR or native actor
+acceptance. The separate [checked actor required-bake transition](native_actor_required_bake.md)
+now joins exact actor owners and renews complete snapshots from the actual
+checked materialization receipt. The HIR owner matcher no longer declines an
+actor owner merely because its metadata kind is ActorInitializer or ActorHandler.
+The later actual-sealer receipt also renews the complete baked execution table
+from its exact token edits while validating unchanged full actor snapshots. It
+does not admit actor-body-changing sealing deltas. The original frontend evidence
+above remains a historical checkpoint.
 
-1. HIR required-value owner matching must join the exact actor initializer or
-   handler to its original native constructor/handler and complete checked table.
-   The current native owner matcher conservatively declines these new metadata
-   variants rather than inferring native authority from the frontend proof.
-2. Required baking must renew the full actor snapshot only from a checked
-   required-value transition. It must retain roles, parameters, locals, body,
-   response type, source origin and actor receipt.
-3. Canonical callable sealing that changes an actor body must renew that same
-   full snapshot using the actual bound-to-sealed receipt. It must preserve every
-   canonical conversion,
-   temporary-view and peer transition proof.
-4. In a retained program with Resource hooks, actor-owned required evaluation
+The remaining boundaries are independent:
+
+1. Canonical callable sealing that changes an actor body must renew that same
+   full snapshot using the actual bound-to-sealed receipt and authenticated
+   source lineage. It must preserve every canonical conversion, temporary-view
+   and peer transition proof. A plan moved into a generated adapter need not
+   change the handler snapshot; no unconditional sealing failure is inferred.
+2. Actor-owned Graph producer transitions remain separate from ordinary checked
+   required baking.
+3. In a retained program with Resource hooks, actor-owned required evaluation
    still reaches the unchanged runtime cursor gate. That requires a separate
    exact occurrence-bound execution route. Temporarily disabling transport would
    bypass transitive absence/custody handling and is not an acceptable fallback.
-5. Native Debug/Release execution must eventually produce exactly
-   `observed:5\n`, empty stderr and exit zero from the unchanged whole witness.
-   Source-deleted execution and the relevant lifetime/reentry proofs remain
-   required before native acceptance is claimed.
+4. The [paired ordinary native checkpoint](native_actor_required_bake.md) now
+   records two Source-deleted executions of the whole unchanged witness with
+   `observed:5\n`, empty program stderr and exit zero in matched Debug/Release.
+   Physical lifetime, queue/callback ownership and same-context reentry still
+   need their own observations; ordinary output alone cannot establish them or
+   complete the native-codegen goal.

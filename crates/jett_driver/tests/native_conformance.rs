@@ -8955,3 +8955,6 @@ mod reflected_iteration_controls;
 
 #[path = "native_conformance/actor_field_updates.rs"]
 mod actor_field_updates;
+
+#[path = "native_conformance/actor_required_values.rs"]
+mod actor_required_values;

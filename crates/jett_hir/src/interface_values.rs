@@ -475,7 +475,7 @@ fn complete_value_conversions_inner(
     if native_suites.is_some() {
         program.resource_source.native_suites = native_suites;
     }
-    super::reflected_callable::seal_program(program)?;
+    super::reflected_callable::seal_program(program, types)?;
     if graphs {
         program
             .resource_source

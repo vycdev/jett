@@ -1087,6 +1087,22 @@ pub(crate) struct CallbackSource {
 }
 
 impl CallbackSource {
+    pub(crate) fn same_source(&self, other: &Self) -> bool {
+        let Self {
+            origin,
+            leaf,
+            source,
+        } = self;
+        let Self {
+            origin: other_origin,
+            leaf: other_leaf,
+            source: other_source,
+        } = other;
+        Weak::ptr_eq(origin, other_origin)
+            && leaf == other_leaf
+            && crate::resource_materialization::expression_equal(source, other_source)
+    }
+
     pub(crate) fn validate_site(
         &self,
         reference: &jett_comptime::value::ReflectedCallableValue,

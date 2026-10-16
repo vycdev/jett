@@ -1631,7 +1631,7 @@ impl<'a> Lowerer<'a> {
             };
             interface_values::coerce_program(&mut program, &self.check.interner);
             actor_handlers::seal_program(&mut program)?;
-            reflected_callable::seal_program(&mut program)?;
+            reflected_callable::seal_program(&mut program, &self.check.interner)?;
             mutable_sum_backings::seal_program(&mut program, &self.check.interner)?;
             temporary_local_views::seal_original_program(&program, &self.check.interner)?;
             validate(&program).map_err(|errors| {

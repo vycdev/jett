@@ -179,7 +179,7 @@ impl ActorStateView {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 struct Snapshot {
     id: FunctionId,
     identity: FunctionIdentity,
@@ -189,6 +189,18 @@ struct Snapshot {
     locals: Vec<Local>,
     body: Block,
     span: Span,
+}
+impl PartialEq for Snapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.identity == other.identity
+            && self.params == other.params
+            && self.captures == other.captures
+            && self.result == other.result
+            && self.locals == other.locals
+            && self.span == other.span
+            && crate::resource_materialization::hir_blocks_equal(&self.body, &other.body)
+    }
 }
 impl Snapshot {
     fn of(function: &Function) -> Self {
@@ -405,6 +417,54 @@ pub(super) fn validate_program(program: &Program) -> Result<(), Vec<ValidationEr
         }
     }
     Ok(())
+}
+
+/// Advance complete actor snapshots only after the actual ordinary required
+/// producer has authenticated every replacement and generated binding.
+pub(super) fn required_bake(
+    program: &mut Program,
+    before: &Program,
+    values: &jett_comptime::ExplicitComptimeValues,
+    types: &TypeInterner,
+    bake: &crate::reflected_callable::baked::CheckedRequiredBake<'_>,
+) -> Result<(), String> {
+    bake.authenticate_output(before, program, types)?;
+    validate_program(before)
+        .map_err(|errors| format!("invalid actor required-bake preimage: {errors:?}"))?;
+    let mut changed = false;
+    for (original, current) in before.functions.iter().zip(&program.functions) {
+        if current.actor_handler != original.actor_handler
+            || current.actor_state_views != original.actor_state_views
+        {
+            return Err("actor required bake replaced original receipt or view inventory".into());
+        }
+        if (original.actor_handler.is_some() || !original.actor_state_views.is_empty())
+            && Snapshot::of(original) != Snapshot::of(current)
+        {
+            changed = true;
+        }
+    }
+    if !changed {
+        // An empty bake grants no new snapshot authority and retains the
+        // preexisting no-value behavior for an otherwise unchanged actor.
+        return validate_program(program)
+            .map_err(|errors| format!("invalid unchanged actor bake: {errors:?}"));
+    }
+    let replay = bake.replay(before, values, types)?;
+    for (function, expected) in program.functions.iter_mut().zip(&replay.functions) {
+        let snapshot = Snapshot::of(expected);
+        for view in &mut function.actor_state_views {
+            view.constructor = Some(Box::new(snapshot.clone()));
+        }
+        if let Some(entry) = function.actor_handler.as_mut() {
+            entry.snapshot = Some(Box::new(snapshot));
+        }
+        for view in &function.actor_state_views {
+            view.validate(&function.locals, types)?;
+        }
+    }
+    validate_program(program)
+        .map_err(|errors| format!("invalid renewed actor required bake: {errors:?}"))
 }
 
 pub(super) fn conversion(
