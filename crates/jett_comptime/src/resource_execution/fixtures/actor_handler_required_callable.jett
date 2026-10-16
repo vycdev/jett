@@ -1,0 +1,25 @@
+namespace app
+type Positive = int64 where value > 0
+struct Holder:
+    callback: function() returns int64
+function five() returns int64:
+    return 5
+function positive() returns Positive:
+    return 5
+function stored() returns function() returns Positive:
+    Holder holder = Holder(callback: five)
+    mutable function() returns Positive selected = positive
+    for field in type.fields[Holder]():
+        selected = type.field_value[Holder, function() returns Positive](view holder, view field)
+    return selected
+actor Worker:
+    mutable int64 count = 0
+    receive read responds int64:
+        function() returns Positive selected = comptime stored()
+        int64 value = coarsen selected()
+        respond value
+function main(stdout: Stdout) returns nothing:
+    Worker worker = spawn Worker()
+    int64 observed = ask worker.read
+    Stdout.write(view stdout, "observed:{observed}\n")
+    return nothing

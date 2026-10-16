@@ -303,7 +303,11 @@ fn required_owner_matches(
                         && value.name.name == function.identity.declaration.name
                         && value.constraint.is_some()))
         }
-        CheckedRequiredOwner::NamespaceConstant { .. } => false,
+        // Actor required values now retain exact frontend ownership. Their
+        // native required-value/snapshot transition remains a separate producer.
+        CheckedRequiredOwner::ActorInitializer { .. }
+        | CheckedRequiredOwner::ActorHandler { .. }
+        | CheckedRequiredOwner::NamespaceConstant { .. } => false,
     }
 }
 

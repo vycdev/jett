@@ -1,0 +1,36 @@
+namespace app
+function five() returns int64:
+    return 5
+int64 bias = comptime five()
+function make_own() returns function(int64) returns int64:
+    return function(delta: int64) returns int64:
+        int64 local = delta + 1
+        return local + bias + five()
+function make_capture(seed: int64) returns function() returns int64:
+    int64 local = seed + 1
+    return function() returns int64:
+        return seed + local
+function make_nested(seed: int64) returns function() returns int64:
+    int64 local = seed + 1
+    function() returns function() returns int64 outer = function() returns function() returns int64:
+        return function() returns int64:
+            return seed + local
+    return outer()
+function evaluate() returns int64:
+    function(int64) returns int64 own = make_own()
+    function() returns int64 captured = make_capture(3)
+    function() returns int64 nested = make_nested(4)
+    return own(2) + captured() + nested()
+actor Worker:
+    receive own responds int64:
+        function(int64) returns int64 selected = comptime make_own()
+        respond selected(2)
+    receive captured responds int64:
+        function() returns int64 selected = comptime make_capture(3)
+        respond selected()
+    receive nested responds int64:
+        function() returns int64 selected = comptime make_nested(4)
+        respond selected()
+    receive evaluate responds int64:
+        int64 answer = comptime evaluate()
+        respond answer

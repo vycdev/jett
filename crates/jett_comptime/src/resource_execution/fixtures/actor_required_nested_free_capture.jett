@@ -1,0 +1,9 @@
+namespace app
+actor Worker:
+    mutable int64 count = 0
+    receive read responds int64:
+        function() returns function() returns int64 selected = comptime function() returns function() returns int64:
+            return function() returns int64:
+                return count
+        function() returns int64 inner = selected()
+        respond inner()

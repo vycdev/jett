@@ -3312,6 +3312,21 @@ impl Interpreter {
                 captures.insert(name.clone(), value.clone());
             }
         }
+        if let Some((checked, purpose)) = &self.retained_resource_program
+            && matches!(
+                purpose,
+                crate::ExecutionPurpose::ExplicitComptime
+                    | crate::ExecutionPurpose::NamespaceConstant
+            )
+        {
+            crate::value::closure_capture::validate_required_capture_environment(
+                checked,
+                params,
+                return_type,
+                body,
+                &captures,
+            )?;
+        }
         let capture_types = captures
             .keys()
             .filter_map(|name| {

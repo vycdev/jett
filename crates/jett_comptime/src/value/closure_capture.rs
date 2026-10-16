@@ -370,3 +370,62 @@ pub(crate) fn matches_field_function_projection(
     };
     checked_context::function_matches(current, &context, original, types)
 }
+
+/// Required values must be closed even when constructing a lazy closure does not
+/// execute its body. Only actual lexical captures satisfy Variable/Param reads;
+/// named functions, constants and type declarations remain registry references.
+pub(crate) fn validate_required_capture_environment(
+    checked: &Arc<CheckedResourceProgram>,
+    params: &[jett_parser::ast::Param],
+    return_type: Option<&jett_parser::ast::TypeExpr>,
+    body: &Block,
+    captures: &std::collections::HashMap<String, Value>,
+) -> Result<(), String> {
+    let original = original_source::closure_node(checked, body.span)
+        .ok_or("required closure has no exact original checked Source")?;
+    let Expr::InlineFn(original_params, original_return, original_body, _) = original else {
+        return Err("required closure changed its original Source kind".into());
+    };
+    if !ast_equal::params(params, original_params)
+        || !ast_equal::optional(&return_type.cloned(), original_return, ast_equal::type_expr)
+        || !ast_equal::block(body, original_body)
+    {
+        return Err("required closure differs from its original checked Source".into());
+    }
+    let inside = |span: Span| {
+        span.file == original_body.span.file
+            && span.start >= original_body.span.start
+            && span.end <= original_body.span.end
+    };
+    let resolved = checked.resolved();
+    let mut references = resolved
+        .resolutions
+        .iter()
+        .filter(|(span, _)| inside(**span))
+        .collect::<Vec<_>>();
+    references.sort_by_key(|(span, _)| (span.start, span.end));
+    for (_, definition) in references {
+        let binding = resolved
+            .scope_table
+            .definitions
+            .get(definition.index() as usize)
+            .filter(|binding| binding.id == *definition)
+            .ok_or("required closure reference lost its exact checked definition")?;
+        if !matches!(binding.kind, DefKind::Variable | DefKind::Param)
+            || inside(binding.span)
+            || original_params.iter().any(|param| param.name.span == binding.span)
+            || checked.module().items.iter().any(|item| {
+                matches!(item, Item::VarDecl(declaration) if declaration.name.span == binding.span)
+            })
+        {
+            continue;
+        }
+        if !captures.contains_key(&binding.name) {
+            return Err(format!(
+                "required closure must be closed: lexical capture '{}' is unavailable during compilation",
+                binding.name
+            ));
+        }
+    }
+    Ok(())
+}

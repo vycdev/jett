@@ -16,6 +16,15 @@ pub enum CheckedRequiredOwner {
         definition: DefId,
         declaration: Span,
     },
+    ActorInitializer {
+        definition: DefId,
+        declaration: Span,
+        field: usize,
+    },
+    ActorHandler {
+        target: jett_typecheck::CheckedActorHandlerTarget,
+        declaration: Span,
+    },
     Verify {
         declaration: Span,
     },
@@ -178,7 +187,7 @@ impl CheckedRequiredValue {
             CheckedExecution::new(self.key.program.clone(), ExecutionPurpose::ExplicitComptime)
                 .map_err(|error| error.to_string())?;
         checked
-            .validate_executable_cursor(&self.key.cursor())
+            .validate_required_source_cursor(&self.key.cursor())
             .map_err(|error| error.to_string())?;
         let Some((position, index)) =
             self.key
@@ -322,8 +331,29 @@ impl CheckedAttemptKey {
 
     fn region(&self, path: &[RegionStep]) -> Result<OriginalRegion<'_>, ResourceExecutionError> {
         let mut region = match self.node.origin {
-            ExecutableOrigin::ActorInitializer { .. } | ExecutableOrigin::ActorHandler { .. } => {
-                return Err(ResourceExecutionError::MissingCheckedBody);
+            ExecutableOrigin::ActorInitializer { item, field } => {
+                let Some(Item::Actor(actor)) = self.program.module().items.get(item) else {
+                    return Err(ResourceExecutionError::MissingCheckedBody);
+                };
+                OriginalRegion::Expression(
+                    &actor
+                        .state_fields
+                        .get(field)
+                        .ok_or(ResourceExecutionError::MissingCheckedBody)?
+                        .value,
+                )
+            }
+            ExecutableOrigin::ActorHandler { item, handler, .. } => {
+                let Some(Item::Actor(actor)) = self.program.module().items.get(item) else {
+                    return Err(ResourceExecutionError::MissingCheckedBody);
+                };
+                OriginalRegion::Block(
+                    &actor
+                        .handlers
+                        .get(handler)
+                        .ok_or(ResourceExecutionError::MissingCheckedBody)?
+                        .body,
+                )
             }
             ExecutableOrigin::Function { item, .. } => {
                 match self.program.module().items.get(item) {
@@ -408,10 +438,38 @@ impl CheckedAttemptKey {
     fn value_site(&self) -> Result<RequiredValueSite, ResourceExecutionError> {
         let checked =
             CheckedExecution::new(self.program.clone(), ExecutionPurpose::ExplicitComptime)?;
-        checked.validate_executable_cursor(&self.cursor())?;
+        checked.validate_required_source_cursor(&self.cursor())?;
         let owner = match self.node.origin {
-            ExecutableOrigin::ActorInitializer { .. } | ExecutableOrigin::ActorHandler { .. } => {
-                return Err(ResourceExecutionError::MissingCheckedBody);
+            ExecutableOrigin::ActorInitializer { item, field } => {
+                let Some(Item::Actor(actor)) = self.program.module().items.get(item) else {
+                    return Err(ResourceExecutionError::MissingCheckedBody);
+                };
+                let initializer = actor
+                    .state_fields
+                    .get(field)
+                    .ok_or(ResourceExecutionError::MissingCheckedBody)?;
+                CheckedRequiredOwner::ActorInitializer {
+                    definition: checked.required_actor_declaration(item)?.0,
+                    declaration: initializer.name.span,
+                    field,
+                }
+            }
+            ExecutableOrigin::ActorHandler { item, handler, .. } => {
+                let Some(Item::Actor(actor)) = self.program.module().items.get(item) else {
+                    return Err(ResourceExecutionError::MissingCheckedBody);
+                };
+                let BodyRoot::ActorHandler(target) = self.cursor().root else {
+                    return Err(ResourceExecutionError::MissingCheckedBody);
+                };
+                CheckedRequiredOwner::ActorHandler {
+                    target,
+                    declaration: actor
+                        .handlers
+                        .get(handler)
+                        .ok_or(ResourceExecutionError::MissingCheckedBody)?
+                        .name
+                        .span,
+                }
             }
             ExecutableOrigin::Function { definition, item } => {
                 match self.program.module().items.get(item) {

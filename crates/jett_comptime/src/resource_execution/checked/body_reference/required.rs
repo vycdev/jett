@@ -13,6 +13,9 @@ pub use value_proof::{
 #[path = "required/value_proof.rs"]
 mod value_proof;
 
+#[path = "required/actor_owners.rs"]
+mod actor_owners;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct AttemptNode {
     origin: ExecutableOrigin,
@@ -174,7 +177,8 @@ impl CheckedExecution {
         expression: &Expr,
         bindings: Vec<ClosureScopedTypeBinding>,
     ) -> Result<PreparedRequiredExpression, ResourceExecutionError> {
-        self.validate_executable_cursor(&cursor)?;
+        self.validate_required_source_cursor(&cursor)?;
+        self.validate_actor_required_expression(&cursor, expression)?;
         let reference = CheckedBodyReference {
             cursor: cursor.clone(),
         };
@@ -185,7 +189,8 @@ impl CheckedExecution {
             .ok_or(ResourceExecutionError::MissingCheckedBody)?
             .path
             .push(RegionStep::Expression(index));
-        let key = self.attempt_key(&cursor)?;
+        self.validate_required_source_cursor(&cursor)?;
+        let key = self.attempt_key_after_identity(&cursor)?;
         let result_type = *self
             .facts(&cursor)?
             .types
@@ -194,16 +199,30 @@ impl CheckedExecution {
         let function = match cursor.root {
             BodyRoot::Ordinary => None,
             BodyRoot::Generic(index) => Some(function_projection(self, index)?),
-            BodyRoot::ActorHandler(_) => return Err(ResourceExecutionError::WrongPurpose),
+            BodyRoot::ActorHandler(_) => None,
         };
         let scope = if cursor.scopes.is_empty() {
-            None
-        } else {
-            let mut scopes = &self.program.checked().comptime_type_bindings;
-            if let BodyRoot::Generic(index) = cursor.root {
-                scopes = &self.program.checked().generic_function_instantiations[index]
-                    .comptime_type_bindings;
+            match cursor.root {
+                BodyRoot::ActorHandler(target) => Some(self.required_actor_projection(target)?),
+                BodyRoot::Ordinary | BodyRoot::Generic(_) => None,
             }
+        } else {
+            let mut scopes = match cursor.root {
+                BodyRoot::Ordinary => &self.program.checked().comptime_type_bindings,
+                BodyRoot::Generic(index) => {
+                    &self.program.checked().generic_function_instantiations[index]
+                        .comptime_type_bindings
+                }
+                BodyRoot::ActorHandler(target) => {
+                    &self
+                        .program
+                        .checked()
+                        .actor_handler(target)
+                        .ok_or(ResourceExecutionError::MissingCheckedBody)?
+                        .body()
+                        .comptime_type_bindings
+                }
+            };
             let mut selected = None;
             for selection in &cursor.scopes {
                 let candidate = scopes
@@ -352,7 +371,11 @@ impl CheckedExecution {
             return Err(ResourceExecutionError::WrongPurpose);
         }
         let mut bases = Vec::new();
-        let mut source_is_original = false;
+        let mut source_is_original = if owner.is_none() {
+            self.actor_explicit_bases(expression, occurrence, bindings, &mut bases)?
+        } else {
+            false
+        };
         for (item, original) in self.program.module().items.iter().enumerate() {
             let origin = match original {
                 Item::Function(function) if owner == Some(function.name.span) => {
@@ -442,7 +465,7 @@ impl CheckedExecution {
                                 .ok_or(ResourceExecutionError::MissingCheckedBody)?
                                 .path
                                 .push(RegionStep::InlineBody(index));
-                            self.validate_executable_cursor(&next)?;
+                            self.validate_required_source_cursor(&next)?;
                             expanded.push((next, prior_bindings));
                         }
                         RegionStep::Scope(owner) => {
@@ -464,7 +487,7 @@ impl CheckedExecution {
                                     .ok_or(ResourceExecutionError::MissingCheckedBody)?
                                     .path
                                     .push(RegionStep::Scope(owner));
-                                self.validate_executable_cursor(&next)?;
+                                self.validate_required_source_cursor(&next)?;
                                 let mut projected = prior_bindings.clone();
                                 projected.push(ClosureScopedTypeBinding {
                                     name: binding.name.name.clone(),
@@ -648,3 +671,7 @@ mod tests;
 #[cfg(test)]
 #[path = "required/owner_tests.rs"]
 mod owner_tests;
+
+#[cfg(test)]
+#[path = "required/actor_owner_tests.rs"]
+mod actor_owner_tests;

@@ -5427,3 +5427,24 @@ materialization likewise joins the original checked predicate declaration and
 HIR function. Both routes retain original/current archive authentication and the
 existing value matcher. Prepared payloads and format checks provide no native
 execution credit; focused forgery controls and exact-head CI must pass first.
+
+### Actor-owned required-value provenance
+
+Closed pure explicit `comptime` remains valid in actor initializers and receive
+bodies. The required worker retains original actor owner/handler ordinals and
+checked handler scope facts as metadata; runtime ActorHandler Resource entry
+remains forbidden by its existing purpose gate. Frontend cache proofs do not
+authorize native body edits or renew actor snapshots. Exact HIR required baking,
+full snapshot renewal and later callable-sealing replay are separate transitions
+tracked in [the actor required-value note](active/native_actor_required_values.md).
+
+Retained ExplicitComptime and NamespaceConstant workers also validate lazy
+closure environments before creating a function value. The complete original
+parameters, return annotation and body must match the same checked program.
+External Variable/Param references must exist in the actual permitted lexical
+captures; own formals and body locals remain deferred. Exact namespace value
+declarations, named functions and types retain their registry roles, but a
+same-name constant cannot satisfy an actor field or handler parameter. Nested
+lazy bodies keep the same closedness requirement. This enforces the existing
+closed-expression rule without granting runtime actor entry, Resource custody,
+HIR baking or native snapshot renewal.
