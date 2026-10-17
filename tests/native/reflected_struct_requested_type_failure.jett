@@ -1,0 +1,11 @@
+namespace app
+struct User:
+    id: string
+    age: int64
+function main() returns nothing:
+    User user = User(id: "u1", age: 7)
+    TypeField id = list.get[TypeField](type.fields[User](), 0) handle:
+        return nothing
+    int64 wrong = type.field_value[User, int64](view user, view id)
+    println(wrong)
+    return nothing

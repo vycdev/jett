@@ -1,0 +1,29 @@
+namespace app
+type SmallSigned = int8
+type LargeUnsigned = uint64
+type Rounded = float32
+struct AliasEnvelope:
+    token: resource_probe.TestHandle
+    small: SmallSigned
+    large: LargeUnsigned
+    rounded: Rounded
+function expect(condition: bool) returns nothing:
+    use resource_companion_probe
+    if not condition:
+        resource_companion_probe.terminal_failure()
+    return nothing
+function retire_aliases(token: resource_probe.TestHandle) returns nothing:
+    AliasEnvelope held = AliasEnvelope(rounded: 0.1, small: 127, token: token, large: 18446744073709551615)
+    SmallSigned expected_small = 127
+    expect(held.small == expected_small)
+    LargeUnsigned expected_large = 18446744073709551615
+    expect(held.large == expected_large)
+    Rounded expected_rounded = 0.1
+    expect(held.rounded == expected_rounded)
+    return nothing
+export function main(net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle token = resource_probe.create(view net, 1102) handle error:
+        return nothing
+    retire_aliases(token)
+    return nothing

@@ -1,0 +1,28 @@
+namespace app
+machine Session:
+    states:
+        ready(count: int64)
+        cached(entries: map[int64, int64])
+    transitions:
+        ready to cached
+function observed_count(raw: string) returns string:
+    Session at ready value = json.parse[Session at ready](raw) handle error:
+        return "error:{error}"
+    return "{value.count}"
+function write_invalid_payloads(view stdout: Stdout) returns nothing:
+    string nonempty = observed_count("{{\"state\":\"cached\",\"payload\":{{\"entries\":{{\"x\":1}}}}}}")
+    Stdout.write(view stdout, "nonempty:{nonempty}\n")
+    string missing = observed_count("{{\"state\":\"cached\",\"payload\":{{}}}}")
+    Stdout.write(view stdout, "missing:{missing}\n")
+    string numeric = observed_count("{{\"state\":\"cached\",\"payload\":{{\"entries\":7}}}}")
+    Stdout.write(view stdout, "numeric:{numeric}\n")
+function main(stdout: Stdout) returns nothing:
+    list[string] retained = list("kept")
+    string wrong = observed_count("{{\"state\":\"cached\",\"payload\":{{\"entries\":{{}}}}}}")
+    Stdout.write(view stdout, "wrong:{wrong}\n")
+    write_invalid_payloads(view stdout)
+    string lenient = observed_count("{{\"state\":\"ready\",\"payload\":{{\"count\":19,\"extra\":true}},\"version\":1}}")
+    Stdout.write(view stdout, "lenient:{lenient}\n")
+    string after = observed_count("{{\"state\":\"ready\",\"payload\":{{\"count\":23}}}}")
+    Stdout.write(view stdout, "after:{after}\n")
+    Stdout.write(view stdout, "retained:{list.length[string](view retained)}\n")

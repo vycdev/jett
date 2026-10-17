@@ -1,0 +1,62 @@
+namespace app
+function positive_check(value: int64) returns bool:
+    string marker = "positive"
+    trace marker
+    return value > 0
+type Positive = int64 where positive_check(value)
+function nonempty_check(view values: list[Positive]) returns bool:
+    string marker = "nonempty"
+    trace marker
+    return list.length(view values) > 0
+type Nonempty = list[Positive] where nonempty_check(view value)
+struct Record:
+    values: Nonempty
+enum Event:
+    content(values: Nonempty)
+machine Session:
+    states:
+        content(values: Nonempty)
+        empty
+    transitions:
+        content to empty
+function seed() returns Nonempty:
+    Positive value = 7 handle error:
+        return seed()
+    Nonempty values = list(value) handle error:
+        return seed()
+    return run run values
+function record_selector() returns TypeField:
+    return list.get[TypeField](type.fields[Record](), 0) handle:
+        return record_selector()
+function event_selector(view value: Event) returns TypeField:
+    TypeVariant variant = type.variant_value[Event](view value)
+    return list.get[TypeField](variant.fields, 0) handle:
+        return event_selector(view value)
+function machine_selector(view value: Session) returns TypeField:
+    TypeMachineState state = type.machine_state_value[Session](view value)
+    return list.get[TypeField](state.fields, 0) handle:
+        return machine_selector(view value)
+function record_direct(view source: Record, view field: TypeField) returns Nonempty:
+    return type.field_value[Record, Nonempty](view source, view field)
+function record_pipe(view source: Record, view field: TypeField) returns Nonempty:
+    return source into view type.field_value[Record, Nonempty](view field)
+function event_direct(view source: Event, view field: TypeField) returns Nonempty:
+    return type.variant_field_value[Event, Nonempty](view source, view field)
+function event_pipe(view source: Event, view field: TypeField) returns Nonempty:
+    return source into view type.variant_field_value[Event, Nonempty](view field)
+function machine_direct(view source: Session, view field: TypeField) returns Nonempty:
+    return type.machine_field_value[Session, Nonempty](view source, view field)
+function machine_pipe(view source: Session, view field: TypeField) returns Nonempty:
+    return source into view type.machine_field_value[Session, Nonempty](view field)
+function report(view stdout: Stdout) returns nothing:
+    Record source = Record(values: seed()) handle error:
+        Stdout.write(view stdout, error)
+        return nothing
+    TypeField field = record_selector()
+    Nonempty extracted = record_direct(view source, view field)
+    trace extracted
+    trace source
+    Stdout.write(view stdout, "accepted\n")
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "before\n")
+    report(view stdout)

@@ -1,0 +1,10 @@
+namespace app
+struct Record:
+    divisor: int64
+function guarded(view record: Record) returns int64:
+    if record.divisor != 0:
+        return 8 / record.divisor
+    return 0
+function main(stdout: Stdout) returns nothing:
+    Record record = Record(divisor: 2)
+    Stdout.write(view stdout, "guarded:{guarded(view record)}\n")

@@ -1,0 +1,16 @@
+namespace app
+function inspect[Value, Failure](view shape: result[Value, Failure], raw: string) returns string:
+    use json
+    result[Value, Failure] parsed = raw into json.parse_exact[result[Value, Failure]]() handle error:
+        return "decode-error:{error}"
+    Value occupied = parsed handle error:
+        return "failure:{type.name[Failure]()}"
+    return "success:{type.name[Value]()}"
+function main(stdout: Stdout) returns nothing:
+    string valid = inspect(view fail("seed"), "{{\"fail\":\"next\"}}")
+    Stdout.write(view stdout, "valid:{valid}\n")
+    string occupied = inspect(view fail("seed"), "{{\"ok\":8}}")
+    Stdout.write(view stdout, "occupied:{occupied}\n")
+    string malformed = inspect(view fail("seed"), "{{\"ok\":8,\"fail\":\"bad\"}}")
+    Stdout.write(view stdout, "malformed:{malformed}\n")
+    return nothing

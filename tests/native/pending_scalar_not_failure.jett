@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    bool pending = run true
+    bool bad = not pending
+    trace bad
+    return nothing

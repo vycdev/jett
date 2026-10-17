@@ -1,0 +1,19 @@
+# ERROR: E0401 x6
+namespace app
+function return_parameter(view values: list[int64]) returns list[int64]:
+    return values
+function return_parenthesized(view values: list[int64]) returns list[int64]:
+    return((values))
+function return_mutable_parameter(view mutable values: list[int64]) returns list[int64]:
+    return values
+function return_explicit_view(view values: list[int64]) returns list[int64]:
+    return view values
+function return_forwarded_alias(view values: list[int64]) returns list[int64]:
+    list[int64] borrowed = view values
+    list[int64] forwarded = borrowed
+    return forwarded
+function inline_return() returns nothing:
+    function(view list[int64]) returns list[int64] callback = function(view values: list[int64]) returns list[int64]:
+        return values
+    trace callback
+    return nothing

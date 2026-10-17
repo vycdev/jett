@@ -1,0 +1,8 @@
+[package]
+name = "jett_intrinsics"
+description = "Closed compiler intrinsic identities shared across Jett phases"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

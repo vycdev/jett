@@ -1,0 +1,5 @@
+namespace app
+function main() returns nothing:
+    float64 value = math.max(2.0, run 3.0)
+    trace value
+    return nothing

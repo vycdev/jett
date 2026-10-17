@@ -1,0 +1,21 @@
+namespace app
+function main() returns nothing:
+    string pending = run "Ada"
+    string first = join pending handle error:
+        println(error)
+        return nothing
+    string second = join pending handle error:
+        println(error)
+        return nothing
+    trace pending
+    println(first, second)
+    int64 pending_number = run 7
+    int64 first_number = join pending_number handle error:
+        println(error)
+        return nothing
+    int64 second_number = join pending_number handle error:
+        println(error)
+        return nothing
+    trace pending_number
+    println(first_number, second_number)
+    return nothing

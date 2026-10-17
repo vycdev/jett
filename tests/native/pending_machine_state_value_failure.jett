@@ -1,0 +1,11 @@
+namespace app
+machine Session:
+    states:
+        active(name: string)
+    transitions:
+        active to active
+function main() returns nothing:
+    Session session = run Session(active, "Ada")
+    TypeMachineState state = type.machine_state_value[Session](view session)
+    println(state.name)
+    return nothing

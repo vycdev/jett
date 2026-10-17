@@ -1,0 +1,54 @@
+namespace app
+struct User:
+    id: string serialize "userId"
+    age: int64
+type UserAlias = User
+struct Envelope:
+    user: User
+    tags: list[string]
+type Identifier = string
+struct AliasUser:
+    id: Identifier
+function parse_user() returns string:
+    User user = json.parse[User]("{{\"userId\":\"Ada\",\"age\":37}}") handle error:
+        return error
+    return "{user.id}:{user.age}"
+function parse_alias_target() returns string:
+    UserAlias user = json.parse[UserAlias]("{{\"userId\":\"Alias\",\"age\":8}}") handle error:
+        return error
+    return "{user.id}:{user.age}"
+function parse_nested() returns string:
+    Envelope envelope = json.parse[Envelope]("{{\"user\":{{\"userId\":\"Lin\",\"age\":4}},\"tags\":[\"x\",\"y\"]}}") handle error:
+        return error
+    return "{envelope.user.id}:{list.length[string](view envelope.tags)}"
+function parse_list() returns string:
+    list[User] users = json.parse[list[User]]("[{{\"userId\":\"A\",\"age\":1}},{{\"userId\":\"B\",\"age\":2}}]") handle error:
+        return error
+    User second = list.get[User](users, 1) handle:
+        return "missing"
+    return "{second.id}:{second.age}"
+function parse_alias_field() returns string:
+    AliasUser user = json.parse[AliasUser]("{{\"id\":\"alias\"}}") handle error:
+        return error
+    return user.id
+function missing_field() returns string:
+    User user = json.parse[User]("{{\"userId\":\"Ada\"}}") handle error:
+        return error
+    return user.id
+function wrong_field_type() returns string:
+    User user = json.parse[User]("{{\"userId\":\"Ada\",\"age\":true}}") handle error:
+        return error
+    return user.id
+function exact_unknown_field() returns string:
+    User user = json.parse_exact[User]("{{\"userId\":\"Ada\",\"age\":37,\"extra\":1}}") handle error:
+        return error
+    return user.id
+function main() returns nothing:
+    println(parse_user())
+    println(parse_alias_target())
+    println(parse_nested())
+    println(parse_list())
+    println(parse_alias_field())
+    println(missing_field())
+    println(wrong_field_type())
+    println(exact_unknown_field())

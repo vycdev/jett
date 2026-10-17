@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    string separator = run ","
+    string joined = string.join(list("a", "b"), separator)
+    trace joined
+    return nothing

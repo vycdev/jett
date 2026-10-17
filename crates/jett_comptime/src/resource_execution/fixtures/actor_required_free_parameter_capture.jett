@@ -1,0 +1,8 @@
+namespace app
+function value() returns int64:
+    return 17
+actor Worker:
+    receive read(value: int64) responds int64:
+        function() returns int64 selected = comptime function() returns int64:
+            return value
+        respond selected()

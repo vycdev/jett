@@ -1,0 +1,15 @@
+namespace app
+function maybe(flag: bool) returns optional[int64]:
+    if flag:
+        return some(3)
+    return none
+function label(value: string) returns string:
+    println(value)
+    return value
+function fallback() returns int64:
+    println("fallback")
+    return 7
+function main() returns nothing:
+    println("value {maybe(true) handle: default fallback()}")
+    println("ordered {label("first")} {maybe(false) handle: default fallback()} {label("last")}")
+    return nothing

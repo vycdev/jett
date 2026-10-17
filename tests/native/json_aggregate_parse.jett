@@ -1,0 +1,67 @@
+namespace app
+function parse_list_error() returns string:
+    list[string] values = json.parse[list[string]]("[\"ok\",7]") handle error:
+        return error
+    return "unexpected {list.length[string](view values)}"
+function parse_map_bytes() returns string:
+    map[string, optional[bytes]] entries = json.parse[map[string, optional[bytes]]]("{{\"blob\":\"0x4869\",\"missing\":null}}") handle error:
+        return error
+    optional[optional[bytes]] maybe_entry = map.get[string, optional[bytes]](clone entries, "blob")
+    optional[bytes] maybe_blob = maybe_entry handle:
+        return "missing blob"
+    bytes blob = maybe_blob handle:
+        return "none blob"
+    bool has_missing = map.has[string, optional[bytes]](entries, "missing")
+    return "{bytes.length(blob)}:{has_missing}"
+function parse_more() returns nothing:
+    list[bool] flags = json.parse[list[bool]]("[true,false]") handle error:
+        return
+    println("{list.length[bool](view flags)}")
+    list[int64] numbers = json.parse[list[int64]]("[1,-2]") handle error:
+        return
+    println("{list.length[int64](view numbers)}")
+    println(parse_map_bytes())
+    optional[int64] present = json.parse[optional[int64]]("7") handle error:
+        return
+    int64 present_value = present handle:
+        default 0
+    println("{present_value}")
+function parse_numeric_lists() returns nothing:
+    list[uint64] unsigned = json.parse[list[uint64]]("[0,42]") handle error:
+        return
+    uint64 unsigned_value = list.get[uint64](view unsigned, 1) handle:
+        default 0
+    println("{unsigned_value}")
+    list[float64] fractions = json.parse[list[float64]]("[1.5,-2.25]") handle error:
+        return
+    float64 fraction_value = list.get[float64](view fractions, 1) handle:
+        default 0.0
+    println("{fraction_value}")
+    list[list[string]] nested = json.parse[list[list[string]]]("[[\"a\"],[\"b\",\"c\"]]") handle error:
+        return
+    println("{list.length[list[string]](view nested)}")
+    optional[int64] absent = json.parse[optional[int64]]("null") handle error:
+        return
+    int64 absent_value = absent handle:
+        default -1
+    println("{absent_value}")
+function parse_map_error() returns string:
+    map[string, int64] entries = json.parse[map[string, int64]]("{{\"bad\":true}}") handle error:
+        return error
+    bool has_bad = map.has[string, int64](entries, "bad")
+    return "unexpected {has_bad}"
+function main() returns nothing:
+    list[string] names = json.parse[list[string]]("[\"Ada\",\"Lin\"]") handle error:
+        return
+    string first = list.get[string](view names, 0) handle:
+        default "missing"
+    string last = list.get[string](view names, 1) handle:
+        default "missing"
+    println("{first}:{last}:{list.length[string](view names)}")
+    list[string] exact = json.parse_exact[list[string]]("[\"exact\"]") handle error:
+        return
+    println(list.length[string](view exact))
+    println(parse_list_error())
+    parse_more()
+    parse_numeric_lists()
+    println(parse_map_error())

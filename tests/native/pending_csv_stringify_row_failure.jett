@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    list[string] row = run list("a", "b")
+    string serialized = csv.stringify(list(row))
+    trace serialized
+    return nothing

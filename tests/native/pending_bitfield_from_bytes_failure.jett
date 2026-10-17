@@ -1,0 +1,8 @@
+namespace app
+bitfield Header:
+    version: 4 bits
+function main() returns nothing:
+    bytes encoded = run bytes.from_string("A")
+    result[Header, string] decoded = Header.from_bytes(encoded)
+    trace decoded
+    return nothing

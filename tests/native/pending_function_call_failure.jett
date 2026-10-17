@@ -1,0 +1,7 @@
+namespace app
+function increment(value: int64) returns int64:
+    return value + 1
+function main() returns nothing:
+    function(int64) returns int64 pending = run increment
+    println(pending(4))
+    return nothing

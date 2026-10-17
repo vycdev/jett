@@ -1,0 +1,39 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+struct Boxed[T]:
+    value: T
+implement Named for Boxed[int8]:
+    function name(view self: Boxed[int8]) returns string:
+        return "narrow"
+function inspect(view value: Named) returns nothing:
+    println(view value)
+    println(Named.name(view value))
+function argument(value: int64) returns list[int64]:
+    print("argument:", value, ";")
+    return list(value)
+function handled(view values: list[result[int64, string]]) returns nothing:
+    optional[int64] missing = none
+    println(view values, missing handle:
+        default 42
+    )
+    println(view values)
+function projected() returns nothing:
+    optional[int64] missing = none
+    println(view Boxed[list[int64]](value: list(3, 4)).value, missing handle:
+        default 9
+    )
+function main(stdout: Stdout) returns nothing:
+    println(none, list(), map(), ok(3), fail("no"), some(none))
+    println(bytes.from_string("hi"), set.new[string]())
+    list[result[int64, string]] values = list(ok(7), fail("retry"))
+    println(view values, view values)
+    list[result[int64, string]] pending = run run clone values
+    println(view pending)
+    println(view stdout)
+    inspect(Boxed[int8](value: 5))
+    println(argument(1), argument(2))
+    handled(view values)
+    projected()
+    print(view values)
+    println()

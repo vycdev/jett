@@ -1,0 +1,15 @@
+namespace app
+struct Inner:
+    value: int64
+struct State:
+    inner: Inner
+actor Store:
+    mutable State state = State(inner: Inner(value: 1))
+    receive change responds int64:
+        Inner alias = view state.inner
+        state.inner.value = 9
+        respond alias.value
+function main() returns nothing:
+    Store store = spawn Store()
+    int64 forbidden = ask store.change
+    return nothing

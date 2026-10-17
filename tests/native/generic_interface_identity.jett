@@ -1,0 +1,38 @@
+namespace records
+export interface Named:
+    function name(view self: Named) returns string
+export struct Box[T]:
+    item: T
+type Token = secret[string]
+export type IntBox = Box[int64]
+implement Named for Box[int64]:
+    function name(view self: Box[int64]) returns string:
+        return "integer:{self.item}"
+implement Named for Box[string]:
+    function name(view self: Box[string]) returns string:
+        return "text:{self.item}"
+implement Named for Box[Token]:
+    function name(view self: Box[Token]) returns string:
+        return "secret"
+export function show(view value: Named) returns string:
+    return Named.name(view value)
+export function hidden() returns Named:
+    return Box[Token](item: "generic-hidden-token")
+namespace app
+function main() returns nothing:
+    use records
+    records.Named number = records.Box[int64](item: 17)
+    records.Named text = records.Box[string](item: "hello")
+    records.Named hidden = records.hidden()
+    println(records.show(view number))
+    println(records.show(view text))
+    println(records.show(view hidden))
+    records.Named baked_number = comptime records.Box[int64](item: 23)
+    records.Named baked_hidden = comptime records.hidden()
+    println(records.show(view baked_number))
+    println(records.show(view baked_hidden))
+    records.Box[int64] concrete = records.Box[int64](item: 31)
+    println(records.IntBox.name(view concrete))
+    function(view records.Box[int64]) returns string callback = records.IntBox.name
+    println(callback(view concrete))
+    return nothing

@@ -1,0 +1,12 @@
+namespace app
+function make_label(prefix: string) returns function(int64) returns string:
+    return function(value: int64) returns string: return "{prefix}:{value}"
+function make_scale(factor: float32) returns function(float32) returns float32:
+    return function(value: float32) returns float32: return value * factor
+function make_offset(delta: int8) returns function(int8) returns int8:
+    return function(value: int8) returns int8: return value + delta
+function main() returns nothing:
+    function(int64) returns string label = make_label("item")
+    function(float32) returns float32 scale = make_scale(3.0)
+    function(int8) returns int8 offset = make_offset(-5)
+    println(label(7), scale(1.5), offset(12))

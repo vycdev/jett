@@ -1,0 +1,16 @@
+# ERROR: E0358 x4
+struct User:
+    id: int64
+enum Item:
+    empty
+    nested(value: optional[list[User]])
+function equal(view left: Item, view right: Item) returns bool:
+    return left == right
+function different(view left: Item, view right: Item) returns bool:
+    return left != right
+function generic[T](view left: T, view right: T) returns bool:
+    return left == right
+function specialized(view left: Item, view right: Item) returns bool:
+    return generic[Item](view left, view right)
+function baking() returns bool:
+    return comptime(Item.empty == Item.empty)

@@ -1,0 +1,23 @@
+namespace app
+struct Packet:
+    label: string
+    values: list[int64]
+enum Message:
+    empty
+    packet(value: Packet)
+function describe(view message: Message) returns string:
+    match message:
+        empty:
+            return "empty"
+        packet(value):
+            return "{value.label}:{list.length[int64](view value.values)}"
+function main() returns nothing:
+    Message original = Message.packet(Packet(label: "first", values: list(2, 3)))
+    trace original
+    println(describe(view original))
+    Message copied = clone original
+    println(describe(view copied), describe(view original))
+    list[Message] messages = list(original, copied, Message.empty)
+    for message in view messages:
+        println(describe(view message))
+    return nothing

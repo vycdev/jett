@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    map[int64, int64] values = run map(2: 3)
+    int64 length = map.length[int64, int64](view values)
+    trace length
+    return nothing

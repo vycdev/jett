@@ -1,14 +1,22 @@
 ---
 source: crates/jett_hir/src/lib.rs
+assertion_line: 8071
 expression: program
 ---
 Program {
+    resource_manifest: ResourceManifest {
+        data: None,
+    },
+    resource_source: ResourceSourceArchive {
+        authenticated: false,
+    },
     functions: [
         Function {
             id: FunctionId(
                 0,
             ),
             identity: FunctionIdentity {
+                scoped_type_bindings: [],
                 declaration: DeclarationId {
                     origin: Project,
                     namespace: "app",
@@ -16,12 +24,26 @@ Program {
                     kind: Function,
                 },
                 type_arguments: [],
+                specialization: CheckedGenericSpecialization {
+                    type_argument_kinds: [],
+                    type_argument_reflections: [],
+                    type_info_kinds: [],
+                    type_info_primitives: [],
+                    type_kind_values: [],
+                    type_primitive_values: [],
+                },
             },
+            debug_kind: Named(
+                "app.add",
+            ),
             source_definition: Some(
                 DefId(
                     51,
                 ),
             ),
+            actor_handler: None,
+            actor_state_views: [],
+            mutable_sum_backings: [],
             params: [
                 Param {
                     local: LocalId(
@@ -60,6 +82,7 @@ Program {
                     },
                 },
             ],
+            capture_count: 0,
             return_type: TypeId(
                 3,
             ),
@@ -72,7 +95,14 @@ Program {
                     ty: TypeId(
                         3,
                     ),
+                    debug_ty: TypeId(
+                        3,
+                    ),
+                    debug_type_name: Some(
+                        "int64",
+                    ),
                     mutable: false,
+                    view_source: None,
                     span: Span {
                         file: FileId(
                             0,
@@ -89,7 +119,14 @@ Program {
                     ty: TypeId(
                         3,
                     ),
+                    debug_ty: TypeId(
+                        3,
+                    ),
+                    debug_type_name: Some(
+                        "int64",
+                    ),
                     mutable: false,
+                    view_source: None,
                     span: Span {
                         file: FileId(
                             0,
@@ -185,6 +222,7 @@ Program {
                 1,
             ),
             identity: FunctionIdentity {
+                scoped_type_bindings: [],
                 declaration: DeclarationId {
                     origin: Project,
                     namespace: "app",
@@ -192,13 +230,28 @@ Program {
                     kind: Function,
                 },
                 type_arguments: [],
+                specialization: CheckedGenericSpecialization {
+                    type_argument_kinds: [],
+                    type_argument_reflections: [],
+                    type_info_kinds: [],
+                    type_info_primitives: [],
+                    type_kind_values: [],
+                    type_primitive_values: [],
+                },
             },
+            debug_kind: Named(
+                "app.main",
+            ),
             source_definition: Some(
                 DefId(
                     52,
                 ),
             ),
+            actor_handler: None,
+            actor_state_views: [],
+            mutable_sum_backings: [],
             params: [],
+            capture_count: 0,
             return_type: TypeId(
                 3,
             ),
@@ -211,7 +264,14 @@ Program {
                     ty: TypeId(
                         3,
                     ),
+                    debug_ty: TypeId(
+                        3,
+                    ),
+                    debug_type_name: Some(
+                        "int64",
+                    ),
                     mutable: false,
+                    view_source: None,
                     span: Span {
                         file: FileId(
                             0,
@@ -269,6 +329,152 @@ Program {
                                         1,
                                         0,
                                     ],
+                                    ownership: Source(
+                                        SourceCallOwnership {
+                                            target: Function(
+                                                FunctionId(
+                                                    0,
+                                                ),
+                                            ),
+                                            shape: Function {
+                                                signature_type: TypeId(
+                                                    47,
+                                                ),
+                                            },
+                                            context: Ordinary,
+                                            arguments: [
+                                                ArgumentOwnership {
+                                                    source_span: Span {
+                                                        file: FileId(
+                                                            0,
+                                                        ),
+                                                        start: 162,
+                                                        end: 163,
+                                                    },
+                                                    source_index: 1,
+                                                    parameter_index: 0,
+                                                    actual_type: TypeId(
+                                                        3,
+                                                    ),
+                                                    parameter_type: TypeId(
+                                                        3,
+                                                    ),
+                                                    syntax: Bare,
+                                                    origin: OwnedExpression,
+                                                    callee_access: Owned,
+                                                    physical_access: Owned,
+                                                    effect: Copy,
+                                                    staging: Original,
+                                                    witness: SourceArgumentWitness {
+                                                        source_span: Span {
+                                                            file: FileId(
+                                                                0,
+                                                            ),
+                                                            start: 162,
+                                                            end: 163,
+                                                        },
+                                                        source_index: 1,
+                                                        parameter_index: 0,
+                                                        actual_type: TypeId(
+                                                            3,
+                                                        ),
+                                                        occurrence_type: TypeId(
+                                                            3,
+                                                        ),
+                                                        parameter_type: TypeId(
+                                                            3,
+                                                        ),
+                                                        syntax: Bare,
+                                                        origin: OwnedExpression,
+                                                        callee_access: Owned,
+                                                        effect: Copy,
+                                                        context: Ordinary,
+                                                        observation: None,
+                                                        handled_result: None,
+                                                        projection_root: None,
+                                                        match_origin: None,
+                                                        temporary_origin: None,
+                                                    },
+                                                    retained_snapshot: None,
+                                                },
+                                                ArgumentOwnership {
+                                                    source_span: Span {
+                                                        file: FileId(
+                                                            0,
+                                                        ),
+                                                        start: 153,
+                                                        end: 154,
+                                                    },
+                                                    source_index: 0,
+                                                    parameter_index: 1,
+                                                    actual_type: TypeId(
+                                                        3,
+                                                    ),
+                                                    parameter_type: TypeId(
+                                                        3,
+                                                    ),
+                                                    syntax: Bare,
+                                                    origin: OwnedExpression,
+                                                    callee_access: Owned,
+                                                    physical_access: Owned,
+                                                    effect: Copy,
+                                                    staging: Original,
+                                                    witness: SourceArgumentWitness {
+                                                        source_span: Span {
+                                                            file: FileId(
+                                                                0,
+                                                            ),
+                                                            start: 153,
+                                                            end: 154,
+                                                        },
+                                                        source_index: 0,
+                                                        parameter_index: 1,
+                                                        actual_type: TypeId(
+                                                            3,
+                                                        ),
+                                                        occurrence_type: TypeId(
+                                                            3,
+                                                        ),
+                                                        parameter_type: TypeId(
+                                                            3,
+                                                        ),
+                                                        syntax: Bare,
+                                                        origin: OwnedExpression,
+                                                        callee_access: Owned,
+                                                        effect: Copy,
+                                                        context: Ordinary,
+                                                        observation: None,
+                                                        handled_result: None,
+                                                        projection_root: None,
+                                                        match_origin: None,
+                                                        temporary_origin: None,
+                                                    },
+                                                    retained_snapshot: None,
+                                                },
+                                            ],
+                                            bridge: Direct,
+                                            generated_operands: [],
+                                            certificate: SourceCallCertificate {
+                                                result_type: TypeId(
+                                                    3,
+                                                ),
+                                                generated_operands: [],
+                                                target: Function(
+                                                    FunctionId(
+                                                        0,
+                                                    ),
+                                                ),
+                                                shape: Function {
+                                                    signature_type: TypeId(
+                                                        47,
+                                                    ),
+                                                },
+                                                context: Ordinary,
+                                                bridge: Direct,
+                                            },
+                                            temporary_local_backing: None,
+                                        },
+                                    ),
                                 },
                                 ty: TypeId(
                                     3,
@@ -436,4 +642,5 @@ Program {
             },
         },
     ],
+    equality_methods: {},
 }

@@ -14,13 +14,13 @@ type NameList = list[string]
 type NonEmpty = string where string.char_count(value) > 0
 
 function bound_type_name() returns string:
-    string found = "missing"
+    mutable string found = "missing"
     comptime type Bound = type.info[int64]():
         found = type.name[Bound]()
     return found
 
 function bound_generic_field_kind() returns string:
-    string found = "missing"
+    mutable string found = "missing"
     comptime type Bound = type.info[Box[string]]():
         list[TypeField] fields = type.fields[Bound]()
         for field in fields:
@@ -29,7 +29,7 @@ function bound_generic_field_kind() returns string:
     return found
 
 function bound_generic_field_type_name() returns string:
-    string found = "missing"
+    mutable string found = "missing"
     comptime type Bound = type.info[Box[string]]():
         list[TypeField] fields = type.fields[Bound]()
         for field in fields:
@@ -52,7 +52,7 @@ function bound_reflected_field_types() returns string:
 
 function bound_reflected_generic_field_type() returns string:
     Box[list[int64]] box = Box[list[int64]](value: list(1, 2, 3))
-    string found = "missing"
+    mutable string found = "missing"
     for field in type.fields[Box[list[int64]]]():
         comptime type Field = field.type_info:
             Field field_value = type.field_value[Box[list[int64]], Field](view box, view field)
@@ -60,7 +60,7 @@ function bound_reflected_generic_field_type() returns string:
     return found
 
 function bound_direct_arg_type() returns string:
-    string found = "missing"
+    mutable string found = "missing"
     for arg in type.info[list[string]]().args:
         comptime type Arg = arg:
             found = type.name[Arg]()
@@ -71,25 +71,25 @@ function reflected_arg_type_info_name() returns string:
     return info.type_name
 
 function bound_direct_type_arg() returns string:
-    string found = "missing"
+    mutable string found = "missing"
     comptime type Value = type.arg[map[string, list[int64]]](1):
         found = type.name[Value]()
     return found
 
 function bound_alias_base_arg() returns string:
-    string found = "missing"
+    mutable string found = "missing"
     comptime type Base = type.arg[NameList](0):
         found = type.name[Base]()
     return found
 
 function bound_refinement_base_arg() returns string:
-    string found = "missing"
+    mutable string found = "missing"
     comptime type Base = type.arg[NonEmpty](0):
         found = type.name[Base]()
     return found
 
 function bound_nested_arg_type() returns string:
-    string found = "missing"
+    mutable string found = "missing"
     for outer in type.info[list[optional[string]]]().args:
         comptime type Outer = outer:
             for inner in outer.args:
@@ -99,7 +99,7 @@ function bound_nested_arg_type() returns string:
 
 function bound_field_arg_type() returns string:
     ListBox box = ListBox(values: list(1, 2, 3))
-    string found = "missing"
+    mutable string found = "missing"
     for field in type.fields[ListBox]():
         for arg in field.type_info.args:
             comptime type Arg = arg:

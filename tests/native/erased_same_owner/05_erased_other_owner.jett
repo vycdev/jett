@@ -1,0 +1,18 @@
+namespace app
+interface Pairable:
+    function combine(view self: Pairable, view other: Pairable) returns string
+struct Left:
+    name: string
+struct Right:
+    name: string
+implement Pairable for Left:
+    function combine(view self: Left, view other: Left) returns string:
+        return "left:{self.name}:{other.name}"
+implement Pairable for Right:
+    function combine(view self: Right, view other: Right) returns string:
+        return "right:{self.name}:{other.name}"
+function main() returns nothing:
+    Pairable first = Left(name: "one")
+    Pairable second = Right(name: "two")
+    println(Pairable.combine(view first, view second))
+    return nothing

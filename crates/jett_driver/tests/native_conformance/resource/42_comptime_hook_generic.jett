@@ -1,0 +1,14 @@
+namespace app
+function choose[T](flag: bool) returns function(resource_probe.TestHandle) returns nothing:
+    use resource_probe
+    string type_label = type.name[T]()
+    if flag and type_label == "int64":
+        return resource_probe.descriptor()
+    return resource_probe.descriptor()
+export function main(net: Network) returns nothing:
+    use resource_probe
+    function(resource_probe.TestHandle) returns nothing dispose = comptime choose[int64](true)
+    resource_probe.TestHandle token = resource_probe.create(view net, 761) handle error:
+        return nothing
+    dispose(token)
+    return nothing

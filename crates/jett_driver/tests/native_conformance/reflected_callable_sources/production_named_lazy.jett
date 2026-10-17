@@ -1,0 +1,24 @@
+namespace app
+function positive_check(value: int64) returns bool:
+    return value > 0
+type Positive = int64 where positive_check(value)
+struct Holder:
+    callback: function(view Stdout) returns int64
+function source_five(view stdout: Stdout) returns int64:
+    Stdout.write(view stdout, "source\n")
+    return 5
+function selected_field() returns TypeField:
+    return list.get[TypeField](type.fields[Holder](), 0) handle:
+        return selected_field()
+function main(stdout: Stdout) returns nothing:
+    Holder holder = Holder(callback: source_five)
+    TypeField field = selected_field()
+    function(view Stdout) returns Positive observed = type.field_value[Holder, function(view Stdout) returns Positive](view holder, view field)
+    Stdout.write(view stdout, "stored\n")
+    Positive first = observed(view stdout)
+    Stdout.write(view stdout, "first:{coarsen first}\n")
+    Positive second = observed(view stdout)
+    Stdout.write(view stdout, "second:{coarsen second}\n")
+    int64 original = holder.callback(view stdout)
+    Stdout.write(view stdout, "original:{original}\n")
+    return nothing

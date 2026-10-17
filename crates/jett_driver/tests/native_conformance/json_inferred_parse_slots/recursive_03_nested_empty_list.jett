@@ -1,0 +1,16 @@
+namespace app
+function inspect[T](view shape: list[list[T]], raw: string) returns string:
+    use json
+    list[list[T]] parsed = raw into json.parse_exact[list[list[T]]]() handle error:
+        return "decode-error:{error}"
+    list[T] first = list.first[list[T]](view parsed) handle:
+        return "outer:0"
+    return "outer:{list.length[list[T]](view parsed)}:inner:{list.length[T](view first)}"
+function main(stdout: Stdout) returns nothing:
+    string valid = inspect(view list(list()), "[[]]")
+    Stdout.write(view stdout, "valid:{valid}\n")
+    string occupied = inspect(view list(list()), "[[7]]")
+    Stdout.write(view stdout, "occupied:{occupied}\n")
+    string malformed = inspect(view list(list()), "[[")
+    Stdout.write(view stdout, "malformed:{malformed}\n")
+    return nothing

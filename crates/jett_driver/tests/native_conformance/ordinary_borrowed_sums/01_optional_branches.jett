@@ -1,0 +1,26 @@
+namespace app
+function inspect(view source: optional[list[int64]], label: string, view stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "before:{label}\n")
+    list[int64] alias = view((view source) handle:
+        optional[int64] missing = none
+        int64 marker = missing handle:
+            default 7
+        Stdout.write(view stdout, "none:{label}:{marker}\n")
+        return nothing
+    )
+    list[int64] repeated = view((view source) handle:
+        Stdout.write(view stdout, "unexpected repeat:{label}\n")
+        return nothing
+    )
+    Stdout.write(view stdout, "some:{label}:{list.length[int64](view alias)}:{list.sum[int64](view alias)}:{list.sum[int64](view repeated)}\n")
+    return nothing
+function main(stdout: Stdout) returns nothing:
+    optional[list[int64]] written_some = some(list(2, 3))
+    optional[list[int64]] written_none = none
+    optional[list[int64]] bare_some = some(list(5, 7))
+    optional[list[int64]] bare_none = none
+    inspect(view written_some, "written-some", view stdout)
+    inspect(view written_none, "written-none", view stdout)
+    inspect(bare_some, "bare-some", view stdout)
+    inspect(bare_none, "bare-none", view stdout)
+    return nothing

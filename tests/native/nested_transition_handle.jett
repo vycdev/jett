@@ -1,0 +1,31 @@
+namespace app
+machine Session:
+    states:
+        guest
+        active(label: string, name: string)
+    transitions:
+        guest to active
+function maybe_guest(valid: bool) returns result[Session at guest, string]:
+    println("source")
+    if valid:
+        return ok(Session(guest))
+    return fail("missing guest")
+function maybe_name(valid: bool) returns result[string, string]:
+    println("payload")
+    if valid:
+        return ok("Ada")
+    return fail("missing name")
+function transition(valid: bool) returns string:
+    mutable string label = "Before"
+    Session at active session = Session.transition(maybe_guest(valid) handle error:
+        default Session(guest)
+    , active, label, maybe_name(valid) handle error:
+        label = "Changed"
+        default "Fallback"
+    )
+    println(label)
+    return "{session.label}:{session.name}"
+function main() returns nothing:
+    println(transition(true))
+    println(transition(false))
+    return nothing

@@ -1,0 +1,8 @@
+namespace app
+function encode[Value, Failure](view candidate: result[Value, Failure]) returns string:
+    use json
+    return json.serialize[result[Value, Failure]](view candidate)
+function main(stdout: Stdout) returns nothing:
+    string encoded = encode(view fail("bad"))
+    Stdout.write(view stdout, "{encoded}\n")
+    return nothing

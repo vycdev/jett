@@ -1,0 +1,13 @@
+namespace app
+struct EmptyCollections:
+    items: list[int64]
+    rows: map[string, int64]
+function main() returns nothing:
+    EmptyCollections value = EmptyCollections(items: run list(), rows: run map())
+    trace value
+    list[int64] items = join value.items handle error:
+        return nothing
+    map[string, int64] rows = join value.rows handle error:
+        return nothing
+    println(list.length[int64](view items), map.length[string, int64](view rows))
+    return nothing

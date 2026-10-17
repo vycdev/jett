@@ -1,0 +1,5 @@
+namespace resource_companion_probe
+export function terminal_failure() returns nothing:
+    list[int64] numbers = list(1)
+    list[int64] removed = list.__remove_at[int64](numbers, -1)
+    return nothing

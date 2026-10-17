@@ -1,8 +1,8 @@
 # Print Debug Builtin Policy
 
 Status: decided by [#8](https://github.com/vycdev/jett/issues/8). The language
-policy and release-mode diagnostics are implemented; dedicated debug-event
-isolation and backend conformance remain pending.
+policy, release-mode diagnostics, and dedicated debug-event channel are
+implemented. Hidden-secret observation remains a separate open policy.
 
 `print` and `println` remain a stable compatibility surface as compiler-owned,
 debug-only builtins. There is no scheduled removal, but they are not ordinary
@@ -10,18 +10,38 @@ output APIs and must never become an implicit spelling of `Stdout.write`.
 
 ## Current Implementation
 
-The checker currently accepts arbitrary non-secret value arguments, returns
-`nothing`, and does not classify either builtin as capability-requiring. The
-interpreter formats arguments with spaces, adds a newline only for `println`,
-and uses the same stdout path as `Stdout.write`. Depending on the entrypoint,
-that path is either written directly to process stdout or captured into the
-combined run output.
+The checker accepts checked non-secret value arguments, returns `nothing`,
+and does not classify either builtin as capability-requiring. Formatting and
+ownership remain unchanged. Arguments finish evaluation before one complete
+event is emitted; failure in a later argument publishes no portion of that call.
 
-Those shared-channel details are transitional, not the stable contract.
-`--release` now reaches the checker and rejects both builtins with E0362. Verify
-execution does not yet isolate debug text from agent output. The remaining
-requirements below apply when those debug-event and backend boundaries are
-added.
+The interpreter records explicit Trace, Breakpoint, Print, and Println events in
+one ordered buffer. Event text contains exactly the operation's intended bytes,
+including partial prints and embedded CR/LF. Silent compilation and capture
+workers never write those bytes to process output. Human runtime entrypoints and
+the native DebugPrint leaf emit them to diagnostic stderr. Capability-backed
+`Stdout.write` retains application stdout.
+
+Driver captures preserve comptime, frontend verification, and runtime phases.
+Comptime observations are separate from baked values. Verification retains
+actual block/trial events, including first failure; shrinking and private replay
+stay isolated. Tools retain preceding observations on later build, lowering,
+linking, or runtime failure without rerunning workers. Agent renderers escape
+exact text with an explicit phase and kind; a printed trace prefix or protocol
+header is ordinary print text.
+
+Failed comptime recovery records actual attempted expression/context pairs
+without inserting a baked value. Duplicate checked contexts and namespace
+initializer markers do not repeat the error or its observations. Native property
+replay failures retain the original suite streams separately from the actionable
+replay cause; private runtime replay streams do not become public observations.
+This retention applies when the original attempt returned captured process
+output. An initial execution error or timeout retains its existing typed error
+contract; it does not invent a completed original-suite capture record.
+
+`--release` still rejects both names with E0362, checks their arguments, and
+preserves existing output artifacts. This channel change does not select the
+separate policy for secrets hidden by interfaces or builders.
 
 ## Decision
 
@@ -69,10 +89,11 @@ function emit(view stdout: Stdout, message: string) returns nothing:
 
 ## Compatibility And Migration
 
-The current interpreter behavior remains valid while the dedicated debug-event
-channel is pending. In particular, `tests/run_pass/stdlib_loading.jett` may keep
-its no-capability `println` fallback until the loader smoke test has a dedicated
-diagnostic assertion.
+`tests/run_pass/stdlib_loading.jett` keeps its no-capability `println` failure
+fallback as a debug event. Programs and tools that previously captured print
+text as application stdout must now read the diagnostic event capture. Native
+transport uses exact stderr bytes, and agent mode represents events in escaped
+structured rows.
 
 Production examples and APIs must use `Stdout.write`. Code that needs structured
 debug facts should prefer `trace` or `breakpoint`; unstructured `print` calls
@@ -80,30 +101,22 @@ are for short-lived inspection and simple fixtures only. Future mode
 diagnostics must say that directly instead of suggesting an implicit
 capability or silently changing the call's meaning.
 
-## Conformance Work
+## Conformance
 
-Existing coverage includes `stdout_output_can_be_captured` in
-`crates/jett_comptime/src/interpreter.rs` for spacing, newline, and current
-shared-channel order,
-`tests/compile_fail/secret_print.jett` for bare secrets, and
-`tests/compile_fail/refined_secret_exposure.jett` for refinement-wrapped
-secrets. The stdlib fallback lives in `tests/run_pass/stdlib_loading.jett`.
+Interpreter and driver tests cover exact spacing and terminators, empty events,
+partial and multiline text, Unicode, explicit kinds, and application/debug
+separation. A failed later argument retains preceding events while publishing
+none of the failed call. Dedicated native transport cases compare exact stderr
+with the ordered runtime event capture after source deletion, including event
+and terminal-error adjacency, ownership cleanup, and compiled suites.
 
-The remaining policy coverage is:
+Comptime and verification capture tests cover successful and failed evaluation,
+baked-value reads, property generation and trial order, and private shrinking.
+CLI renderer tests preserve phase and kind on success and failure and escape
+printed text resembling protocol headers. Existing direct-secret rejection and
+release E0362 gates remain separate, including typechecking rejected arguments
+and preserving existing artifacts.
 
-1. Add a driver fixture for multiple `print` / `println` calls and their
-   relative captured order.
-2. Add verify/comptime coverage once their debug events are isolated from plain
-   and agent protocol output.
-3. Release compile-fail coverage for both names is implemented by
-   `tests/compile_fail/release_debug_print.jett`; it also proves rejected call
-   arguments are still typechecked.
-4. Add backend conformance tests proving that unsupported debug builds reject
-   the calls and that supported debug builds use a diagnostic channel rather
-   than application `Stdout`.
-5. Add agent-output coverage that distinguishes captured debug events from
-   capability-backed application output.
-
-Until those phases exist, the conservative implementation rule is: do not add
-more capability-free output APIs, do not advertise `print` or `println` as
-logging, and do not lower either name as ordinary native I/O.
+The remaining hidden-secret observation choice is recorded in
+[debug_print_hidden_secrets.md](debug_print_hidden_secrets.md). No additional
+capability-free output APIs or implicit application I/O are introduced here.

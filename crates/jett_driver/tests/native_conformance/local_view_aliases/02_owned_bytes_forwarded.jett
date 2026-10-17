@@ -1,0 +1,9 @@
+namespace app
+struct Packet:
+    data: bytes
+function main(stdout: Stdout) returns nothing:
+    Packet packet = Packet(data: bytes.from_string("AB"))
+    bytes borrowed = view packet.data
+    bytes forwarded = borrowed
+    bytes grown = bytes.concat(clone forwarded, bytes.from_string("C"))
+    Stdout.write(view stdout, "{bytes.to_hex(view borrowed)}:{bytes.to_hex(view forwarded)}:{bytes.to_hex(view grown)}:{bytes.to_hex(view packet.data)}\n")

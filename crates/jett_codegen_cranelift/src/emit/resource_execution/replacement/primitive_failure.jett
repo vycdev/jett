@@ -1,0 +1,10 @@
+namespace app
+export function main(net: Network) returns nothing:
+    use resource_probe
+    mutable result[resource_probe.TestHandle, int64] token = fail(1)
+    token = fail(2)
+    resource_probe.TestHandle first = resource_probe.create(view net, 2701) handle error:
+        return nothing
+    token = ok(first)
+    token = fail(3)
+    return nothing

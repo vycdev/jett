@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    list[int64] keys = run list(2)
+    map[int64, int64] values = map.from_lists[int64, int64](keys, list(3))
+    trace values
+    return nothing

@@ -1,0 +1,9 @@
+trace marker: string = positive
+trace marker: string = high
+trace marker: string = positive
+trace marker: string = high
+trace marker: string = positive
+trace marker: string = high
+trace record: app.Holder = app.Holder(payload: list(12))
+trace event: app.Event = app.Event.content(list(12))
+trace session: app.Session = app.Session@content(list(12))

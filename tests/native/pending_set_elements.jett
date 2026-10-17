@@ -1,0 +1,29 @@
+namespace app
+function main() returns nothing:
+    set[int64] numbers = set.add[int64](set.new[int64](), run 4)
+    trace numbers
+    bool has_pending = set.contains[int64](view numbers, run 4)
+    bool has_plain = set.contains[int64](view numbers, 4)
+    trace has_pending
+    trace has_plain
+    set[int64] copied = clone numbers
+    trace copied
+    set[int64] kept = set.remove[int64](clone numbers, 4)
+    trace kept
+    set[int64] both = set.add[int64](clone numbers, 4)
+    trace both
+    set[int64] just_plain = set.remove[int64](both, run 4)
+    trace just_plain
+    mutable list[int64] iterated = list()
+    for item in copied:
+        iterated = list.append[int64](iterated, item)
+    trace iterated
+    set[string] words = set.add[string](set.new[string](), run "north")
+    trace words
+    bool has_pending_word = set.contains[string](view words, run "north")
+    bool has_plain_word = set.contains[string](view words, "north")
+    trace has_pending_word
+    trace has_plain_word
+    set[string] both_words = set.add[string](words, "north")
+    trace both_words
+    return nothing

@@ -1,0 +1,20 @@
+namespace test
+function identity(value: string) returns string:
+    return value
+function successful_task() returns result[string, string]:
+    return ok("ready")
+function failed_task() returns result[string, string]:
+    return fail("failed")
+function main() returns nothing:
+    string pending = run identity("hello")
+    string joined = join pending handle error:
+        default "unexpected"
+    result[string, string] success = run successful_task()
+    string successful = join success handle error:
+        default "unexpected"
+    result[string, string] failure = run failed_task()
+    string message = join failure handle error:
+        default error
+    string cancelled = run identity("discard")
+    cancel cancelled
+    println("{joined}:{successful}:{message}")

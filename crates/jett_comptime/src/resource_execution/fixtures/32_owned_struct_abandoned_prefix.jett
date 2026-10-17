@@ -1,0 +1,15 @@
+namespace app
+struct OwnedEnvelope:
+    token: resource_probe.TestHandle
+    marker: int64
+function fail_marker() returns result[int64, string]:
+    return fail("selected constructor marker failure")
+function retire_owned(token: resource_probe.TestHandle) returns nothing:
+    OwnedEnvelope held = OwnedEnvelope(token: token, marker: fail_marker() handle error: return nothing)
+    return nothing
+export function main(view net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle token = resource_probe.create(view net, 1004) handle error:
+        return nothing
+    retire_owned(token)
+    return nothing

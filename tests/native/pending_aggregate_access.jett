@@ -1,0 +1,213 @@
+namespace app
+struct Record:
+    label: string
+    items: list[int64]
+struct Envelope:
+    inner: Record
+machine Session:
+    states:
+        guest
+        active(label: string, number: int64)
+    transitions:
+        guest to active
+enum Choice:
+    empty
+    number(value: int64)
+    rows(items: list[int64])
+enum NarrowPayload:
+    wrapped(value: int8)
+enum FloatPayload:
+    wrapped(value: float32)
+enum BoolPayload:
+    wrapped(value: bool)
+enum NothingPayload:
+    wrapped(value: nothing)
+function record_label(view record: Record) returns string:
+    return record.label
+function choice_count(view choice: Choice) returns int64:
+    match choice:
+        empty:
+            return 0
+        number(value):
+            return value
+        rows(items):
+            return list.length[int64](view items)
+function joined_number(choice: Choice) returns int64:
+    match choice:
+        empty:
+            return 0
+        number(value):
+            int64 ready = join value handle error:
+                default 0
+            return ready
+        rows(items):
+            return list.length[int64](view items)
+function transition_label() returns string:
+    string marker = "transition payload must not execute"
+    trace marker
+    return "Ada"
+function direct_record_failure(view stdout: Stdout) returns nothing:
+    Record record = run Record(label: "Ada", items: list(7))
+    Stdout.write(view stdout, "before\n")
+    string copied = record.label
+    Stdout.write(view stdout, "{copied}\n")
+function nested_record_failure(view stdout: Stdout) returns nothing:
+    Envelope envelope = Envelope(inner: run run Record(label: "Ada", items: list(7)))
+    Stdout.write(view stdout, "before\n")
+    string copied = envelope.inner.label
+    Stdout.write(view stdout, "{copied}\n")
+function cloned_record_failure(view stdout: Stdout) returns nothing:
+    Record record = run run Record(label: "Ada", items: list(7))
+    Record copied = clone record
+    Stdout.write(view stdout, "before\n")
+    string label = record_label(view copied)
+    Stdout.write(view stdout, "{label}\n")
+function machine_field_failure(view stdout: Stdout) returns nothing:
+    Session at active session = run run Session(active, "Ada", 7)
+    Stdout.write(view stdout, "before\n")
+    string copied = session.label
+    Stdout.write(view stdout, "{copied}\n")
+function machine_state_failure(view stdout: Stdout) returns nothing:
+    Session at active session = run run Session(active, "Ada", 7)
+    Stdout.write(view stdout, "before\n")
+    bool checked = session at active
+    Stdout.write(view stdout, "{checked}\n")
+function broad_machine_state_failure(view stdout: Stdout) returns nothing:
+    Session session = run run Session(active, "Ada", 7)
+    Stdout.write(view stdout, "before\n")
+    bool checked = session at active
+    Stdout.write(view stdout, "{checked}\n")
+function machine_transition_failure(view stdout: Stdout) returns nothing:
+    Session at guest session = run run Session(guest)
+    Stdout.write(view stdout, "before\n")
+    Session at active changed = Session.transition(session, active, transition_label(), 7)
+    Stdout.write(view stdout, "{changed.label}\n")
+function enum_match_failure(view stdout: Stdout) returns nothing:
+    Choice choice = run run Choice.rows(list(7))
+    Stdout.write(view stdout, "before\n")
+    match choice:
+        empty:
+            Stdout.write(view stdout, "empty\n")
+        number(value):
+            Stdout.write(view stdout, "{value}\n")
+        rows(items):
+            int64 count = list.length[int64](view items)
+            Stdout.write(view stdout, "{count}\n")
+function enum_payload_failure(view stdout: Stdout) returns nothing:
+    Choice choice = Choice.number(run run 7)
+    Stdout.write(view stdout, "before\n")
+    match choice:
+        empty:
+            Stdout.write(view stdout, "empty\n")
+        number(value):
+            trace value
+            int64 joined = join value handle error:
+                default 0
+            trace joined
+            Stdout.write(view stdout, "{joined + 1}\n")
+        rows(items):
+            int64 count = list.length[int64](view items)
+            Stdout.write(view stdout, "{count}\n")
+function projected_iteration_failure(view stdout: Stdout) returns nothing:
+    Envelope envelope = Envelope(inner: run run Record(label: "Ada", items: list(7)))
+    Stdout.write(view stdout, "before\n")
+    for value in view envelope.inner.items:
+        Stdout.write(view stdout, "{value}\n")
+function observe_record(view record: Record, view stdout: Stdout) returns nothing:
+    int64 count = list.length[int64](view record.items)
+    Stdout.write(view stdout, "record:{record.label}:{count}\n")
+function record_controls(view stdout: Stdout) returns nothing:
+    Record plain = Record(label: "Ada", items: list(7))
+    observe_record(view plain, view stdout)
+    observe_record(view plain, view stdout)
+    Record pending = run run clone plain
+    Record once = join pending handle error:
+        return nothing
+    Record joined = join once handle error:
+        return nothing
+    observe_record(view joined, view stdout)
+    Envelope envelope = Envelope(inner: joined)
+    for value in view envelope.inner.items:
+        Stdout.write(view stdout, "{value}\n")
+function machine_controls(view stdout: Stdout) returns nothing:
+    Session at guest initial = Session(guest)
+    Session at active plain = Session.transition(initial, active, "Ada", 7)
+    bool plain_state = plain at active
+    Stdout.write(view stdout, "{plain_state}:{plain.label}:{plain.number}\n")
+    Session at active pending = run run clone plain
+    Session at active once = join pending handle error:
+        return nothing
+    Session at active joined = join once handle error:
+        return nothing
+    bool joined_state = joined at active
+    Stdout.write(view stdout, "{joined_state}:{joined.label}:{joined.number}\n")
+function enum_controls(view stdout: Stdout) returns nothing:
+    Choice plain = Choice.rows(list(7))
+    Stdout.write(view stdout, "{choice_count(view plain)}:{choice_count(view plain)}\n")
+    Choice pending = run run clone plain
+    Choice once = join pending handle error:
+        return nothing
+    Choice joined = join once handle error:
+        return nothing
+    Stdout.write(view stdout, "{choice_count(view joined)}:{choice_count(view joined)}\n")
+    Choice scalar = Choice.number(run 7)
+    int64 ready = joined_number(scalar)
+    Stdout.write(view stdout, "{ready}\n")
+function narrow_payload_control(view stdout: Stdout) returns nothing:
+    NarrowPayload choice = NarrowPayload.wrapped(run run 7)
+    match choice:
+        wrapped(value):
+            trace value
+            int8 once = join value handle error:
+                return nothing
+            trace once
+            int8 ready = join once handle error:
+                return nothing
+            trace ready
+            Stdout.write(view stdout, "int8:{ready + 1}\n")
+function float_payload_control(view stdout: Stdout) returns nothing:
+    FloatPayload choice = FloatPayload.wrapped(run run 1.25)
+    match choice:
+        wrapped(value):
+            trace value
+            float32 once = join value handle error:
+                return nothing
+            trace once
+            float32 ready = join once handle error:
+                return nothing
+            trace ready
+            Stdout.write(view stdout, "float32:{ready + 0.25}\n")
+function bool_payload_control(view stdout: Stdout) returns nothing:
+    BoolPayload choice = BoolPayload.wrapped(run run true)
+    match choice:
+        wrapped(value):
+            trace value
+            bool once = join value handle error:
+                return nothing
+            trace once
+            bool ready = join once handle error:
+                return nothing
+            trace ready
+            Stdout.write(view stdout, "bool:{!ready}\n")
+function nothing_payload_control(view stdout: Stdout) returns nothing:
+    NothingPayload choice = NothingPayload.wrapped(run run nothing)
+    match choice:
+        wrapped(value):
+            trace value
+            nothing once = join value handle error:
+                return nothing
+            trace once
+            nothing ready = join once handle error:
+                return nothing
+            trace ready
+            Stdout.write(view stdout, "nothing joined\n")
+function ready_and_joined_controls(view stdout: Stdout) returns nothing:
+    record_controls(view stdout)
+    machine_controls(view stdout)
+    enum_controls(view stdout)
+    narrow_payload_control(view stdout)
+    float_payload_control(view stdout)
+    bool_payload_control(view stdout)
+    nothing_payload_control(view stdout)
+function main(stdout: Stdout) returns nothing:
+    ready_and_joined_controls(view stdout)

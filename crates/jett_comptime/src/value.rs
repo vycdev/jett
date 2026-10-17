@@ -1,11 +1,56 @@
+use crate::checked_types::{CheckedFunctionTypes, CheckedScopedTypes};
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
 
-use jett_parser::ast::{Block, Param};
+use jett_parser::ast::{Block, Param, TypeExpr};
+use jett_types::ReflectionTypeInfo;
+
+/// Lexical generic context retained by an evaluated closure.
+#[derive(Debug, Clone, Default)]
+pub struct ClosureTypeContext {
+    /// The source return contract is resolved in the captured lexical context.
+    pub return_type: Option<TypeExpr>,
+    pub checked_scope: Option<Arc<CheckedScopedTypes>>,
+    pub scoped_type_bindings: Vec<ClosureScopedTypeBinding>,
+    pub checked_function: Option<Arc<CheckedFunctionTypes>>,
+    pub bindings: HashMap<String, TypeExpr>,
+    pub arguments: Vec<ClosureTypeArgument>,
+    /// Constructor-owned source witness; ordinary closure values need none.
+    pub(crate) reflected_capture: Option<Arc<closure_capture::CheckedClosureCapture>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ClosureScopedTypeBinding {
+    pub name: String,
+    pub canonical_name: String,
+    pub reflection: Option<ReflectionTypeInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClosureTypeArgument {
+    pub ty: TypeExpr,
+    pub canonical_name: String,
+    pub reflection: Option<ReflectionTypeInfo>,
+}
+
+#[path = "value/reflected_callable.rs"]
+mod reflected_callable;
+pub use reflected_callable::ReflectedCallableValue;
+pub(crate) use reflected_callable::original_source::body_may_mint_inline_function;
+
+#[path = "value/closure_capture.rs"]
+pub(crate) mod closure_capture;
 
 /// Runtime value for the compile-time interpreter.
 #[derive(Debug, Clone)]
 pub enum Value {
+    /// Checked concrete identity for a payload whose storage carrier erases it.
+    /// Arithmetic and formatting use the payload; interface dispatch uses the name.
+    Typed {
+        type_name: String,
+        value: Box<Value>,
+    },
     /// 64-bit signed integer.
     Int64(i64),
     /// 64-bit unsigned integer.
@@ -32,6 +77,12 @@ pub enum Value {
     Nothing,
     /// An opaque runtime-provided capability handle.
     Capability(String),
+    /// Physical carrier only; cleanup custody is never part of Value::Clone.
+    Resource(crate::resource_execution::ResourceCarrier),
+    /// Program-bound closed hook descriptor; storing it does not invoke a hook.
+    ResourceHook(crate::resource_execution::ResourceHookDescriptor),
+    /// Compiler-installed provenance-bearing authority, never a capability string.
+    GrantedNetwork(crate::resource_execution::GrantedNetwork),
     /// An opaque reflected construction builder.
     TypeConstruction {
         type_name: String,
@@ -42,6 +93,9 @@ pub enum Value {
     /// A user-defined struct instance: `Point(x: 1, y: 2)`.
     Struct {
         type_name: String,
+        /// Concrete generic identity retained across interface erasure. This
+        /// metadata does not change source display or value equality.
+        concrete_type: Option<String>,
         fields: Vec<(String, Value)>,
     },
     /// An enum instance: `Color.red` or `Shape.circle(5.0)`.
@@ -68,18 +122,113 @@ pub enum Value {
     Set(Vec<Value>),
     /// A named function reference retaining its canonical declaration identity.
     NamedFunction(String),
+    /// Checked lazy adapter retaining the original evaluated callback.
+    ReflectedCallable(Box<ReflectedCallableValue>),
     /// A captured inline function expression (closure).
     Function {
+        /// Keep generic metadata off the stack: inline storage enlarges every
+        /// Value variant and recursive interpreter frame, even without closures.
+        type_context: Box<ClosureTypeContext>,
         params: Vec<Param>,
         body: Block,
         captures: HashMap<String, Value>,
+        capture_types: HashMap<String, TypeExpr>,
+        namespace_aliases: HashMap<String, String>,
         namespace: Option<String>,
     },
 }
 
+impl Value {
+    /// Exact readonly observation; ordinary Value equality intentionally erases tags.
+    pub fn same_checked_snapshot(&self, other: &Self) -> bool {
+        closure_capture::same_snapshot(self, other)
+    }
+
+    /// Authenticate a callable descriptor without executing or joining it.
+    pub fn validate_checked_callable_source(
+        &self,
+        program: &Arc<jett_typecheck::CheckedResourceProgram>,
+        actual: jett_types::TypeId,
+    ) -> Result<(), String> {
+        ReflectedCallableValue::authenticate_source(self, program, actual)
+    }
+
+    pub(crate) fn contains_live_resource_or_grant(&self) -> bool {
+        match self {
+            Self::Resource(_) | Self::GrantedNetwork(_) => true,
+            Self::Typed { value, .. }
+            | Self::ResultOk(value)
+            | Self::ResultFail(value)
+            | Self::OptionalSome(value)
+            | Self::Pending(value) => value.contains_live_resource_or_grant(),
+            Self::List(values)
+            | Self::Set(values)
+            | Self::Enum { fields: values, .. }
+            | Self::Machine { fields: values, .. } => {
+                values.iter().any(Self::contains_live_resource_or_grant)
+            }
+            Self::Struct { fields, .. } => fields
+                .iter()
+                .any(|(_, value)| value.contains_live_resource_or_grant()),
+            Self::Map(values) => values.iter().any(|(key, value)| {
+                key.contains_live_resource_or_grant() || value.contains_live_resource_or_grant()
+            }),
+            Self::TypeConstruction { fields, .. } => fields
+                .iter()
+                .any(|(_, _, _, value)| value.contains_live_resource_or_grant()),
+            Self::ReflectedCallable(value) => value.source().contains_live_resource_or_grant(),
+            Self::Function { captures, .. } => {
+                captures.values().any(Self::contains_live_resource_or_grant)
+            }
+            Self::Int64(_)
+            | Self::Uint64(_)
+            | Self::Float64(_)
+            | Self::String(_)
+            | Self::Bool(_)
+            | Self::Bytes(_)
+            | Self::OptionalNone
+            | Self::Nothing
+            | Self::Capability(_)
+            | Self::Actor(_)
+            | Self::Error(_)
+            | Self::NamedFunction(_)
+            | Self::ResourceHook(_) => false,
+        }
+    }
+
+    pub(crate) fn primitive_carrier_name(&self) -> Option<&'static str> {
+        match self {
+            Self::Int64(_) => Some("int64"),
+            Self::Uint64(_) => Some("uint64"),
+            Self::Float64(_) => Some("float64"),
+            Self::String(_) => Some("string"),
+            Self::Bool(_) => Some("bool"),
+            Self::Bytes(_) => Some("bytes"),
+            Self::Nothing => Some("nothing"),
+            _ => None,
+        }
+    }
+
+    /// Borrow storage without discarding the identity retained by its owner.
+    pub fn payload(&self) -> &Self {
+        match self {
+            Self::Typed { value, .. } => value.payload(),
+            value => value,
+        }
+    }
+
+    /// Consume a value at a concrete operation or conversion boundary.
+    pub fn into_payload(self) -> Self {
+        match self {
+            Self::Typed { value, .. } => value.into_payload(),
+            value => value,
+        }
+    }
+}
+
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
+        match (self.payload(), other.payload()) {
             (Value::Int64(a), Value::Int64(b)) => a == b,
             (Value::Uint64(a), Value::Uint64(b)) => a == b,
             (Value::Float64(a), Value::Float64(b)) => a == b,
@@ -109,10 +258,12 @@ impl PartialEq for Value {
             ) => t1 == t2 && v1 == v2 && s1 == s2 && f1 == f2,
             (
                 Value::Struct {
+                    concrete_type: _,
                     type_name: t1,
                     fields: f1,
                 },
                 Value::Struct {
+                    concrete_type: _,
                     type_name: t2,
                     fields: f2,
                 },
@@ -157,6 +308,7 @@ impl PartialEq for Value {
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Value::Typed { value, .. } => value.fmt(f),
             Value::Int64(n) => write!(f, "{n}"),
             Value::Uint64(n) => write!(f, "{n}"),
             Value::Float64(n) => write!(f, "{n}"),
@@ -188,6 +340,9 @@ impl fmt::Display for Value {
             Value::OptionalNone => write!(f, "none"),
             Value::Nothing => write!(f, "nothing"),
             Value::Capability(name) => write!(f, "<{name} capability>"),
+            Value::Resource(_) => f.write_str("<opaque resource>"),
+            Value::ResourceHook(_) => f.write_str("<checked function>"),
+            Value::GrantedNetwork(_) => f.write_str("<runtime authority>"),
             Value::TypeConstruction {
                 type_name,
                 variant,
@@ -210,7 +365,11 @@ impl fmt::Display for Value {
                 }
                 write!(f, ")")
             }
-            Value::Struct { type_name, fields } => {
+            Value::Struct {
+                concrete_type: _,
+                type_name,
+                fields,
+            } => {
                 write!(f, "{type_name}(")?;
                 for (i, (name, value)) in fields.iter().enumerate() {
                     if i > 0 {
@@ -257,6 +416,7 @@ impl fmt::Display for Value {
                 Ok(())
             }
             Value::NamedFunction(name) => write!(f, "function({name})"),
+            Value::ReflectedCallable(value) => fmt::Display::fmt(value.source(), f),
             Value::Function { params, .. } => {
                 write!(f, "function(")?;
                 for (i, p) in params.iter().enumerate() {

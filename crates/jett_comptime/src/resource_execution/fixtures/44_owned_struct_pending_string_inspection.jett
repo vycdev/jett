@@ -1,0 +1,21 @@
+namespace app
+struct PendingTextEnvelope:
+    token: resource_probe.TestHandle
+    marker: string
+function expect(condition: bool) returns nothing:
+    use resource_companion_probe
+    if not condition:
+        resource_companion_probe.terminal_failure()
+    return nothing
+function retire_pending_text(token: resource_probe.TestHandle) returns nothing:
+    PendingTextEnvelope held = PendingTextEnvelope(token: token, marker: run run "retained")
+    string once = join held.marker handle error:
+        return nothing
+    expect(once == "retained")
+    return nothing
+export function main(net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle token = resource_probe.create(view net, 1108) handle error:
+        return nothing
+    retire_pending_text(token)
+    return nothing

@@ -1,0 +1,15 @@
+namespace app
+function main(stdout: Stdout) returns nothing:
+    trace stdout
+    Stdout pending = run stdout
+    trace pending
+    Stdout nested = run pending
+    trace nested
+    Stdout inner = join nested handle error:
+        return nothing
+    trace inner
+    Stdout joined = join inner handle error:
+        return nothing
+    trace joined
+    Stdout.write(view joined, "ready")
+    return nothing

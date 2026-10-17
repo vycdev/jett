@@ -1,0 +1,26 @@
+namespace app
+function select(view net: Network, label: int64, present: bool) returns optional[resource_probe.TestHandle]:
+    use resource_probe
+    if present:
+        resource_probe.TestHandle owner = resource_probe.create(view net, label) handle error:
+            return none
+        return some(owner)
+    return none
+export function main(net: Network) returns nothing:
+    use resource_probe
+    mutable optional[resource_probe.TestHandle] token = none
+    token = select(view net, 2801, true)
+    token = select(view net, 2899, false)
+    mutable int64 index = 0
+    while index < 2:
+        if index == 0:
+            token = none
+        else:
+            token = select(view net, 2802, true)
+        index = index + 1
+    resource_probe.TestHandle final = token handle:
+        return nothing
+    int64 observed = resource_probe.borrow(view net, view final) handle error:
+        return nothing
+    resource_probe.close(final)
+    return nothing

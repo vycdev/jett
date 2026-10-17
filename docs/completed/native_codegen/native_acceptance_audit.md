@@ -1,0 +1,4165 @@
+# Native parity acceptance audit
+
+Status: consolidated Windows MSVC (`x86_64-pc-windows-msvc`) landing. Native
+parity means the five fixture gates in `tests/native_parity.json`; the final
+`codex/native-codegen` SHA and six-command result are recorded in its draft PR.
+Whole-language parity and percentage tracking below are retired. Linux,
+installed-package, relocation and source-deleted gates are outside this landing.
+
+## Inventory gates
+
+`tests/native_parity.json` contains 207 fixtures: 182 run-pass files and 25
+runtime-contract files. The inventory validator compares it with the filesystem,
+rejects duplicate paths and malformed rows, and checks entry-point obligations.
+The verify/property gates discover test bodies from parsed source independently
+of each row's lowering marker.
+
+| Requirement | Denominator | Executable evidence |
+| --- | ---: | --- |
+| Checked HIR and MIR for every run-pass fixture | 182 | `backend_lowering::run_pass_backend_lowering_gaps_are_explicit_and_monotonic` lowers every discovered file and rejects any failure. |
+| Nonempty native objects, including test-only roots | 182 | `native_parity_manifest::native_parity_object_emit_obligations_emit_host_objects` uses native test lowering and emits every inventory obligation. |
+| Entry-point execution, exact output, and cleanup | 30 | `native_conformance::inventory_execution::native_inventory_main_execution_matches_interpreter` executes all manifest entries: 29 successful outcomes and one expected Graphics callback failure. |
+| Runtime contract execution, exact output, and cleanup | 25 | `native_conformance::inventory_execution::native_inventory_runtime_contracts_match_interpreter` executes 17 wrapping-success cases and eight expected failures. |
+| All checked verify bodies | 155 fixtures | `native_conformance::native_verify_suites_execute_for_all_run_pass_fixtures` discovers and executes every fixture with verify blocks. |
+| Deterministic property trials | 3 fixtures | `native_conformance::native_property_suites_execute_for_all_run_pass_fixtures` executes the generated cases in native suites; the HIR suite builder requires 100 trials per property. |
+
+The two inventory execution gates share provider-input decoding with the
+standalone `native_parity` report tool. Clock, Random, Environment, and Graphics
+inputs come from the manifest. Failure comparison requires exit 71 and exact
+stderr; a cleanup failure overriding entry failure with exit 72 cannot pass.
+The native launcher has a separate regression for that precedence.
+
+The larger `tests/native/` corpus supplements these denominators. It is not a
+replacement inventory or proof that every combination of language features has
+been audited. Likewise, a fixture's reference in Rust is not proof of execution.
+
+## Structural and distribution gates
+
+| Requirement | Evidence that must pass at the release revision |
+| --- | --- |
+| Canonical identities and closed compiler handoff | Driver origin/entry tests, HIR backend type validation, generic and reflected-body regressions, and codegen tests for symbols based on structural types rather than session-local IDs. |
+| Explicit control flow, evaluation order, ownership, and failure cleanup | MIR validation and ownership suites; linked handler, projected-view, temporary-owner, callback, actor, refinement, and terminal-failure regressions; native allocation-failure rollback tests. |
+| Versioned C ABI and exact resource retirement | Runtime ABI version/layout tests, mismatch rejection, cleanup probes and panic containment; native launcher tests for successful and failing entry cleanup. |
+| Deterministic objects, target selection, linking, and atomic publication | Codegen deterministic-object and unsupported-target tests; native driver linker/runtime validation and output-preservation tests. |
+| Required comptime evaluation stays at compile time | Explicit-comptime and namespace-constant evaluation/materialization tests, per-instantiation context regressions, primitive value-shape rejection, and rejection of unbaked markers by codegen. No runtime initializer or interpreter fallback is an acceptance substitute. |
+| Supported-host distribution | Local Linux GNU and Windows MSVC workspace/build/package gates, followed by clean installed checks with no checkout. Both runtime profiles must work after relocation and source removal. Historical workflow results retain their own revision and scope; GitHub CI is disabled at the user's request. |
+| Complete current workspace | `cargo test --locked --workspace --no-fail-fast` or equivalent test and doc-test invocations against a coherent revision. Rebuilding dependency artifacts during a run can invalidate later rustdoc inputs; such failures require a fresh doc-test run. |
+| Stable documentation matches the implementation | Review `docs/design.md`, `docs/architecture.md`, the parity plan, and the notes below against the final implementation and verified gate results. |
+
+The tested CI toolchain is Rust 1.97.1. Cross-compilation, future providers, and
+asynchronous scheduling must not be inferred from host packaging or the current
+sequential interpreter/native task model. Their implementation status remains
+separate from parity for existing accepted behavior.
+
+At the user's request to save GitHub Actions minutes, the sole native workflow
+(`native.yml`, workflow ID `369899180`) is `disabled_manually`. At the recorded
+check there were no queued or running jobs. GitHub CI is not an acceptance gate
+for the current work and must remain disabled. No current-revision workflow
+acceptance is claimed; equivalent local workspace,
+supported-host, installed-distribution and complete-corpus coverage still apply
+to the full goal. Earlier workflow links and CI requirements below describe
+historical receipts and their original scope, not a request to re-enable CI.
+The primary checkout's local failure audit,
+`native-codegen-recovery-2026-10-09/ci-disabled-failure-audit-v1/audit.json`, records
+existing PR-merge failures; their local repair and replacement acceptance remain
+pending.
+
+## Selected semantics and remaining acceptance
+
+The resolved decisions below distinguish selected contracts from remaining work. Recorded
+implementation evidence retains its revision and scope; remaining implementation,
+coherent-workspace and supported-host gates still prevent a full parity claim.
+
+- [Comptime actor graph materialization](native_comptime_actor_graph.md) implements the selected frozen-graph contract. Current bounded MSVC acceptance passes 32 Source-deleted executions; wider admitted compositions and coherent-revision release gates remain required. Actor closure capture remains rejected with E0402.
+- [Erased interface equality](../../open_design/interface_value_equality.md): **selected and implemented.** Interface-typed `==` and `!=` report E0376 before evaluation or lowering; concrete equality and explicit domain comparisons remain available. Recorded frontend, publication-refusal and Source-deleted positive-comparison controls cover this contract. Final-revision workspace and platform acceptance remain separate.
+- [Secrets hidden in debug print values](hidden_secret_debug_print.md): **selected and implemented.** Accepted non-release Print/Println values use recursive typed redaction for secrets hidden by interfaces, aggregates and builders. Direct-secret and Source release restrictions remain unchanged. The recorded nine-program/eighteen-execution gate is bounded acceptance; pending-sum and pipeline terminal diagnostics have separate bounded acceptance below.
+- [Owned mutable field updates](owned_mutable_field_updates.md): **selected contract.** Checked updates through live mutable owners retain the selected ownership, readiness, replacement and Resource-custody rules. Native implementation and execution acceptance are tracked separately from policy selection; frontend publication refusals do not supply execution evidence.
+- [List summation types](../../open_design/list_sum_type_contract.md): **selected and implemented.** `list.sum` and trusted `list.__sum` admit exactly the ten numeric primitives and their transparent aliases. Refinements, secret wrappers and nonnumeric elements report E0300 during checking, including empty and explicit-comptime calls. Checked width, typed zero, borrowing and pending behavior remain unchanged. Recorded focused controls retain their scope; final-revision acceptance is separate.
+- [Reflected field request compatibility](../../open_design/reflected_field_request_compatibility.md):
+  current checks admit some refinement/base requests with matching carriers and
+  secrecy. Preserving the actual owner on an admitted interface read does not
+  select the broader requested-type contract or authorize arbitrary nominal casts.
+
+[Exact concrete-owner preflight](native_erased_same_owner_arguments.md) now
+implements the selected runtime contract in reference direct/named-callback
+calls and generated native interface dispatch. It checks receiver-selected
+checked identities before argument normalization or body entry, preserving
+nominal types, generic arguments, primitive widths, ordinary view/owned modes
+and earlier argument failures. Native validation observes existing values
+without cloning or transferring ownership; existing unboxing guards remain.
+
+The restored integration's normal Debug and Release runtimes each pass thirteen
+original Source-deleted cases and four production-output executions spanning
+matching/mismatched owners and both Jett optimization settings: thirty-four
+executions overall. All 2,331 workspace library tests pass, including six runtime
+and eleven focused reference controls; twenty-seven broader interface tests pass.
+Full coherent native conformance, GNU, installed and exact-revision CI acceptance
+remain pending. Native Source coverage for refinement and pending combinations remains
+incomplete. Checker substitution remains at whole interface parameters;
+`list[Pairable]` retains its declared erased child contract without recursive
+Self substitution. Erased-interface equality is separately rejected by the
+frontend under the selected explicit-comparison contract. These bounded gates
+leave the rough 87% estimate and fixed inventory
+denominators unchanged.
+
+[Actor identity equality](actor_identity_equality.md) implements the selected
+live-instance contract in the reference evaluator and native backend. Direct
+comparisons require the same exact checked nominal actor type; recursive enum
+payload comparison checks identity and per-handle pending depth without reading
+state. The predecessor MSVC static-CRT checkpoint on 2026-10-12 passed nine
+Source-deleted executables per Debug/Release runtime profile, including
+production output with both Jett optimization settings. That checkpoint did not
+establish escaping comptime actor graph import. Current bounded graph import
+acceptance is recorded below and in the active graph note; full predecessor,
+GNU, installed-distribution and coherent-revision acceptance remain open. This bounded acceptance does not change the rough 87% planning estimate,
+the fixed inventory denominators or the whole-language completion requirement.
+
+The [inferred uninhabited JSON parser repair](native_json_uninhabited_parse_slots.md)
+is accepted at predecessor `08f9f7e7`: its 19 Source tests, frozen full workspace
+and all four supported-host jobs passed. Each later revision still requires its
+own coherent release gates.
+
+The [interface audit](native_interface_values.md) also retains the remaining
+facade, refinement-composition, and comptime combinations that need scrutiny.
+Passing its growing regression suite does not remove those audit obligations.
+
+## Selected boundaries and unimplemented extensions
+
+Namespace constants have a selected current domain in `docs/design.md`:
+implicitly copyable primitive values and transparent aliases are baked once by
+the shared required evaluator; aggregates, nominal refinements, resources,
+actors, function values and erased payloads report E9001. This is a frontend
+boundary for both execution paths, not missing positive native support.
+`native_global_constants_match_interpreter_without_source_in_both_profiles`
+executes the admitted values and suites after Source removal, while driver
+constant tests pin aggregate and hidden-pending rejection before publication.
+Revalidate those gates at the final revision. The
+[broader constant ownership note](../../open_design/global_constant_execution.md)
+records a possible extension and does not authorize runtime globals.
+
+Current task/actor execution is sequential: eager `run`, one-level `join`,
+no-op `cancel`, and synchronous actor dispatch. Existing run/join/cancel,
+actor/message ownership and scalar actor-comptime Source gates remain parity
+obligations. `docs/architecture.md` explicitly marks asynchronous scheduling
+and capability cancellation checkpoints unimplemented; the reference path also
+rejects Resource task/message transport and has no corresponding production
+provider APIs. Introducing those absent APIs or a scheduler is separate feature
+work, not a prerequisite for parity with the existing interpreter. Implemented
+portions of partial features, including occupied Resource custody, still require
+the complete original-Source evidence specified by the accepted plan.
+
+The current private Resource checkpoint is 138 shared scenarios /276 native runs
+in debug and release on MSVC, with Source absent at launch and zero obligations
+before teardown. The nested-view packet passes all 276 independent reference runs
+and all 276 native executions, including branch joins, scoped bodies, loops and
+Break/Continue. The approximate feature estimate advances from 85% to 86%; it is
+not measured code coverage or a changed inventory denominator. See the
+[nested lifetime contract](native_resource_nested_sums.md). Archive provenance,
+GNU private Source execution, and the final four supported-host workflow jobs
+remain separate gates.
+
+The [ordinary borrowed-sum implementation](native_ordinary_borrowed_sum_codegen.md)
+now passes 15 reference Sources and 30 Source-deleted native debug/release
+executions, including later handled-argument failures and mutable copied
+primitive/String destinations. The fresh runtime also re-passes all 138 Resource
+scenarios /276 native executions. Full affected MIR/codegen/object/CFG, runtime
+and driver-library checks pass; coherent full workspace and current platform
+acceptance remain required. The current rough feature estimate is about 87%,
+with the fixed inventory denominators unchanged and the full 100% objective open.
+
+[Direct collection and sum equality](../direct_collection_equality.md)
+is settled: both operators now report E0376 before comptime evaluation or native
+lowering, including wrapped and concretely instantiated types. Frontend fixture
+coverage and native debug/release publication checks pin this contract.
+
+[User structs nested inside enum payloads](../enum_payload_struct_equality.md)
+now invoke exact explicit `Equatable.equals` implementations. Recursive frontend
+validation, interpreter/comptime dispatch, and typed native cursor calls are
+implemented. Linked debug/release coverage includes generic owners, containers,
+recursive values, pending depth, method failures, and source removal. Compiler
+phase suites and all 589 frontend fixtures pass. This closes this equality gate;
+full inventory and platform CI are still independent acceptance obligations.
+
+Normal native builds run frontend verify/property checks before emission; a
+source-level failed property cannot be silently
+bypassed to claim native failure coverage.
+`native_builds_preserve_shrunk_property_diagnostics_and_existing_artifacts`
+pins that public pre-emission contract: a property fails on its fourth generated
+trial, shrinks both scalar and list inputs, and retains the exact E9000 message
+and property-name span in ordinary program, verify-suite, and property-suite
+builds. All three preserve an existing output artifact. The comparison also
+checks the structured `test_file` result, including the trial count.
+This verifies frontend diagnostic handoff; it does not establish native shrinking.
+`native::property_tests::native_property_failure_identifies_the_trial_and_cleans_owned_values`
+then changes a checked assertion only in test-owned MIR to exercise a failure
+that the frontend did not encounter. Both debug and optimized linked suites
+report the second property's name, trial 4, and original assertion text, with
+successful owned-value cleanup. A failure injected after a successful suite
+checks that the compiled calls cleared their context. Runtime ABI tests cover
+context clearing, repeated/undersized failure copies, and caught predicate
+errors. This supplies
+case-specific diagnostics without skipping frontend validation or disclosing
+argument values.
+
+The native driver now retains checked input and function identities for replay
+and shares the interpreter's bounded shrink search. The property inventory gate
+and standalone parity report both use this driver. The regression
+`native_property_runner_shrinks_native_failures_from_the_checked_session` injects
+a checked-HIR assertion failure after frontend validation, then verifies native
+prefix search, isolated replay, and scalar/list shrinking in debug and optimized
+modes. It matches the interpreter's counterexample after deleting the source;
+original suite output stays separate from replay output. Additional regressions
+reject timeouts and an initial MIR fault that checked-HIR replay cannot reproduce.
+Candidate generation/order and backend-error propagation are covered by the
+shared shrink-search tests. The integer-domain regression covers both signed
+and unsigned narrow pool boundaries and checks metadata through nested shrink
+candidates. `native_property_shrinking_preserves_narrow_boundaries_and_nested_inputs`
+compares debug and optimized native shrinking of an `int8` minimum with the
+interpreter, including generic record, list, and map inputs. It prevents an
+out-of-range positive candidate from replacing the signed minimum.
+Refinement identities now survive candidate generation too. The interpreter
+checks retained tags recursively, and native replay emits the existing checked
+predicate handlers before calling the property. The regression
+`native_property_shrinking_checks_refinement_chains_and_nested_predicates`
+compares debug and optimized counterexamples for a namespaced refinement chain,
+a generic record with a refined field, and a refined nonempty list whose elements
+are refined. It also rejects a candidate whose predicate raises a runtime error,
+without replacing the original property failure or failing cleanup. The direct
+`Positive` regression keeps its counterexample at one rather than zero, and unit
+tests cover nested container and sum shapes. Further failing-input combinations
+remain part of the semantic audit; successful inventory counts alone do not
+prove every shrink candidate can be replayed.
+
+`native_property_shrinking_reports_the_executed_float32_input` pins binary32
+counterexample fidelity: a generated `3.14` input is stored and reported as its
+actual rounded value, `3.140000104904175`. Debug and optimized native replay agree
+with the interpreter after source removal. Pool and shrink tests also check
+binary32 identity, negative zero, finite limits, and subnormal rounding; binary64
+values keep their original precision.
+
+`native_property_shrinking_preserves_generated_generic_interface_owners` checks
+canonical instantiated identities in generated records, including a transparent
+type argument alias and distinct implementations reached through interface lists.
+Its failure shrinks from three records to two records with zero-valued fields;
+losing the owner during field shrinking would instead introduce a dispatch error
+and wrongly accept a singleton. Native debug and optimized replay must match the
+interpreter's exact counterexample after source removal.
+
+The rejection-path audit found and addressed floating `modulo`, which was
+accepted by the checker and interpreter but rejected by native binary validation.
+`native_float_remainder_matches_interpreter_in_both_profiles` compares both
+widths, signs, signed zero, NaN/infinity/zero-divisor cases, generic functions,
+joined tasks, and explicit comptime results after source removal. Its pending
+operand companion requires matching diagnostics and exit 71 with owned locals
+on both operand sides and both profiles. The runtime leaf test also covers
+subnormal values and verifies that NaN results do not set runtime failure.
+
+The aggregate debug-print gate runs public values from five debug fixture
+families through `print`/`println` and compares complete native/interpreter
+output after source removal. It covers empty never-typed containers, absent
+sums, explicit views, pending values, concrete interface owners, and borrowed
+arguments spanning handlers. A terminal argument failure must produce no partial
+call output and exit 71 after cleanup. Runtime layout tests reject a fabricated
+inhabitant of an uninhabited debug node. These tests do not resolve the separate
+hidden-secret print policy above.
+The deep-value gate compares trace, print, breakpoint, and erased-interface
+observation of 160-level recursive values, including pending nodes and secret
+leaves, after deleting source. Runtime tests format 4,096-level values and shared
+children, reject alias and payload cycles (including dynamic interface layouts),
+and preserve output-buffer contents on failed formatting. This removes the
+formatter's former 128-level cutoff. A separate deep-enum equality gate compares
+debug and release binaries after source removal, including 160-level equal and
+unequal payloads, different chain lengths, pending wrappers, NaN, and signed zero.
+Runtime equality tests cover 4,096 levels, shared children, malformed cycles,
+and short-circuit ordering before invalid later fields. These gates retain the
+existing equality type restrictions and do not resolve the open policies above.
+The deep-reflection dispatch gate checks 70 nested list arguments both directly
+and through a named alias, comparing exact reflected names/kinds in debug and
+release binaries after source removal. Runtime identity tests cover 4,096 alias
+levels with alias preservation and erasure, shared metadata, cycles, and
+malformed alias arguments. These replace the former 64-level identity cutoff.
+The deep-interface conversion gate compiles 130 nested list types in debug and
+release, removes source, and checks the converted empty container against the
+interpreter. Runtime tests additionally convert populated 130-level lists,
+inspect the boxed leaf's identity and payload, and inject allocation failures
+at outer, middle, and innermost construction boundaries. Every failed conversion
+preserves its source and retires partial owners. Truncated and extra descriptor
+bytes are rejected before conversion.
+
+The standalone report intentionally keeps `complete` false while these release
+obligations are unresolved, even when every fixture count is full. The historical
+85% planning estimate is not a measured code-coverage or completion result.
+
+The refined-small-value interface gate executes `nothing`, inherited unit
+refinements, booleans, and bytes in runtime and comptime lists, with nested
+pending unit joins. It also checks borrowed coarsening/declassification through
+direct calls, callbacks, projected fields, and later-argument handlers. Both
+debug and release artifacts run after source removal. The companion failure
+gate covers direct/indirect calls and both transparent wrappers, requiring the
+interpreter's exact terminal error, no partial output, and exit 71 rather than
+cleanup failure. MIR and codegen suites validate the shared ownership handoff.
+
+The facade-context audit found a missing ownership-planner case: indirect calls
+returning move-only values did not reserve their result temporary. A list built
+from several callbacks returning interfaces failed native emission after
+exhausting the planned slots. MIR now counts each owned indirect result, while
+retaining separate slots for callee descriptors and argument evaluation.
+`native_indirect_owned_results_match_interpreter_in_both_profiles` checks records,
+enums, bitfields, machines, lists, sets, maps, bytes, optional/result values, and
+construction builders. A third callback failure must retire earlier results and
+the partially built collection, match the interpreter's error and output, and
+exit 71. Both profiles execute after source removal.
+
+`native_interface_math_facade_contexts_match_interpreter_in_both_profiles` checks
+all int64/float64 forms of the overloaded abs/min/max facades, secret taint from
+either argument, generic wrappers, captured public-value callbacks, wholly baked
+results, and comptime-created callbacks invoked at runtime. It verifies concrete
+owner dispatch through interface collections and exact output in debug/release
+after source removal. These probes strengthen the facade/comptime audit. The
+separate erased-interface equality contract rejects implicit operators at compile
+time and retains explicit domain comparison calls. Current concrete-owner
+preflight acceptance is recorded above.
+
+The refined-sum audit fixes direct optional/result refinement boundaries to
+validate their whole declared base before considering extraction. Its linked
+matrix preserves erased payload owners across inheritance, fields, callbacks,
+pending joins, and runtime/comptime values. Failure/absence cases and integer
+result errors pin the independent string refinement-error contract.
+The pending-candidate regression also exposed unguarded native sum extraction;
+native tag reads now reject outer pending depth before payload transfer.
+Debug/release terminal-error tests cover both sum families and branches, nested
+pending depth, and an owned record payload after source removal. Runtime tests
+verify that failed checks preserve owners and ready sums with pending payloads
+remain extractable. Hidden-secret diagnostic observation remains subject to the
+unresolved observation policy; native formatting retains its existing redaction.
+
+The wrapped-enum regression closes accepted secret constructor and equality
+paths through unit and narrow variants, collection and exact struct payloads,
+generic calls, projected fields named like variants, inherited refinements,
+secret-backed refinements, nested pending joins, and explicit comptime values.
+Debug and release artifacts execute after source removal and match the reference
+output. Adjacent mixed public/secret arithmetic and logic preserve result taint;
+malformed handoff tests reject lost secrecy and missing exact payload methods.
+Debug layout tests retain root redaction and reject nested secret equality graphs.
+These checks do not settle secret terminal-diagnostic observation policy.
+
+The namespace-constant handoff materializes literal values and earlier constant
+references in declaration order, including unused declarations. All required
+calculations, including operators, interpolation, and calls, require explicit
+`comptime`; ordinary calculation initializers report E0378. E0377 still forbids
+mutable globals. A shared declaration-keyed table supplies the reference,
+verify/property, and native drivers. HIR `Constant` reads are baked before MIR
+rather than emitted as startup work. Primitive shape checks reject hidden pending
+values with E9001.
+Debug constant traces retain declared type spelling through a scoped observation
+temporary; that temporary does not enter later breakpoint snapshots and release
+lowering removes the trace.
+
+The public-driver regressions in `global_constants.rs` cover literal-only
+programs, namespace isolation across files, generic and inline reads,
+verify/property contexts, required explicit calculations, initializer evaluation,
+unused aggregate and pending rejection, and preservation of diagnostics and
+existing native outputs.
+`native_global_constants_match_interpreter_without_source_in_both_profiles`
+provides the linked primitive-constant obligation, including test bodies and
+source removal. These regressions must pass against the final revision alongside
+the inventory and platform gates; they do not resolve move-only constant ownership
+or establish full native completion.
+
+Local checks for this slice pass: compiler-phase suites, all 593 frontend
+fixtures, all 182 run-pass backend-lowering cases, ten public constant-driver
+regressions, and linked constant programs and verify/property suites after
+source removal. Both program profiles are covered. The final revision still
+requires the independent workspace, inventory, and platform distribution gates.
+
+The primitive-list sum audit found that native admission accepted only `int64`,
+while the reference path also lost narrow-width wrapping and returned an integer
+zero for empty floating lists. Both paths now use the checked numeric primitive
+width, preserving per-addition binary32 rounding and IEEE infinity/NaN behavior.
+Runtime and interpreter regressions cover widths, empty values, and pending
+element failures. `native_primitive_list_sums_match_interpreter_in_both_profiles`
+adds linked program and verify/property execution after source removal. These
+supplemental cases do not change the inventory denominator or establish full
+native acceptance.
+
+The pending-aggregate audit found unchecked public field/tag reads and projected
+sequence ancestors, plus lost scalar payload depth during enum matching. Native
+consumers now reject outer pending owners before observation or transition
+payload execution, while raw internal projections remain usable. Scalar enum
+bindings retain their pending depth through match and one-level joins.
+`native_pending_aggregate_access_fails_before_observation_in_both_profiles`
+pins ten exact public reference failures, debug task traces, and successful
+failure cleanup. `native_ready_and_joined_aggregate_access_preserves_owners_in_both_profiles`
+covers repeated borrowed enum-list matches, ready/projected owners, and fully
+joined records, machines, enums, and scalar payloads. Its `int8`, `float32`,
+`bool`, and `nothing` enum payloads pin depth-two, depth-one, and ready traces
+through successive joins. Both profiles run after source removal. Runtime
+checks also preserve nested pending children and typed
+redaction. Hidden-secret diagnostic observation remains open; missing debug
+layouts use conservative redaction rather than proving public output parity.
+
+The projected-assignment prerequisite handoff rejects immutable, temporary, and
+known view roots before execution in functions, inline bodies, actor handlers,
+comptime requests, and verify/property bodies. It also rejects rebinding an
+owned mutable local from a move-only view, including parenthesized targets,
+without changing declaration facts across branches. Owned mutable field updates
+still need the open execution contract above. The known borrowed return and
+owned argument checks below extend this prerequisite; named view-type aliases
+and general call-produced borrow provenance remain separate ownership work.
+
+`projected_assignment.rs` pins frontend diagnostics, rejection before evaluation,
+and preservation of existing native outputs for both profiles and test suites.
+`native_projected_reads_and_reconstructed_owners_match_interpreter_in_both_profiles`
+executes reads, owned copies, and construction/rebinding after source removal,
+including verify and property suites. Local validation passes all 179
+typechecker tests, all 594 frontend fixtures, all 182 run-pass lowering cases,
+four public driver regressions, and five linked projected-value regressions.
+These checks establish the prerequisite handoff, not support for field updates
+or full native parity.
+
+The native list-ordering audit found three additional accepted-domain gaps:
+primitive-backed refinement sorts failed admission, narrow numeric sortedness
+and indexed sorting selected no comparison carrier, and pending strings/rows
+could be ordered by their hidden payload. Sort and comparison carrier selection
+now follows refinement bases at every numeric width while retaining the exact
+checked list type. Summation stays primitive-only. Pending strings, scalar keys,
+and rows compare as equal before payload access; ready floating sortedness uses
+IEEE `<=`, preserving empty/singleton and pending-pair behavior for NaN.
+
+`native_list_sort_refinements_and_ordering_match_interpreter_in_both_profiles`
+executes both ordering fixtures in debug and release and runs their native
+verify/property suites after source removal. It includes local explicit-comptime
+refined numeric/string lists, nominal method dispatch, numeric limits and
+rounding, duplicates, empty/singleton cases, NaN/infinity, indexed payload
+markers, and pending depth through joins. The separate outer-pending regression
+matches the public failure and exit 71 in both profiles. All 66 codegen tests,
+122 runtime unit tests and its integration suites pass, as do the existing
+pending-list and primitive-sum linked regressions. This closes these ordering
+mismatches without changing the inventory denominator or resolving the open
+summation domain.
+
+The native math-aggregate audit found that `math.average` and `math.median`
+accepted all ten primitive numeric list types in the checker and reference path,
+but native admission handled only the three wider carriers. Both native APIs
+now admit the complete checked primitive domain and transparent aliases, retain
+their exact `float64` result, and validate carrier bits before decoding. Signed
+narrow values extend with their sign and binary32 values widen after rounding;
+the existing binary64 aggregate algorithms and input ownership remain unchanged.
+Refinements, secret wrappers, and nonnumeric elements remain rejected.
+
+`native_math_aggregate_primitives_match_interpreter_in_both_profiles` compares
+all widths, aliases, ordinary generic calls, explicit-comptime results, extrema,
+large unsigned values, binary32 precision, and IEEE behavior. Program binaries
+in debug/release and native verify/property suites run after source removal.
+Its failure companion pins 20 typed-empty cases and six outer/first/later pending
+cases against exact interpreter output, diagnostics, and exit 71 in both profiles.
+All 68 codegen tests, 126 runtime unit tests and its integration suites pass,
+alongside the existing linked pending-math and extreme-value regressions.
+These supplemental regressions do not change the inventory denominator or
+settle the separate summation and other open policy gates.
+
+The uninhabited-iteration audit found accepted loops over inferred empty lists
+and maps failing native admission on their `never` bindings. HIR now omits
+lowering these checked bodies while retaining iterable expressions and reserved
+generic identities. Native sequence preparation preserves one-time evaluation,
+pending and projected-ancestor checks, and loan cleanup, then bypasses extraction.
+Only changed functions have unreachable blocks and unused locals compacted;
+retained spans, debug types, parameters, captures, and function identities remain
+intact. Dead concrete generic specializations with bare `never` signatures are
+excluded only from implicit project roots. Retained references still reach them
+and cannot acquire a fabricated runtime carrier.
+
+`native_empty_collection_iteration_matches_interpreter_in_both_profiles` pins
+ordinary generic calls, dead named/inline callbacks and debug events, borrowed
+and consuming loops, once-only argument effects, nested collections, contextual
+concrete empty values, joined inputs, and explicit-comptime results. Debug/release
+programs and native verify/property suites execute after source removal. Four
+runtime/comptime pending-list/map cases retain exact output and errors with exit
+71; a public-driver companion rejects invalid arithmetic, interpolation, and
+unresolved calls in dead bodies before lowering. Malformed MIR controls preserve
+invalid IDs and inline metadata for validation rather than hiding them in pruning.
+All 69 HIR tests, 32 MIR unit tests and its integration test, 71 codegen tests,
+and eight backend-lowering regressions covering all 182 run-pass cases pass.
+These checks retain the inventory denominator and do not establish full native
+acceptance or settle the remaining open policies.
+
+The uninhabited-handler audit found optional/result handlers attempting to
+extract impossible payloads, and generated callbacks retaining unused parent
+locals whose types have no native carrier. Native preparation selects the sole
+inhabited arm only for an exact checked `SumTag` branch. It retains source
+evaluation, snapshots, and pending validation, then compacts changed graphs.
+Explicitly generated inline functions also compact unused parent locals and
+become reachable through retained calls and descriptors. Original structural
+validation protects pruned graphs; global debug labels remain validated even
+for omitted functions.
+
+The proof depends on directional frontend compatibility: concrete values cannot
+populate `never` through defaults, declarations, calls, constructors, returns,
+or required comptime evaluation. Mixed collections and repeated generic
+arguments fill compatible absent slots in either order without promoting
+numeric widths, erasing nominal types, or weakening callable variance and view
+modes. Contextual handlers preserve producer signatures and convert inhabited
+nested payloads explicitly; empty owned containers receive their target
+ownership flags. Cloneable local sums snapshot their underlying source before
+conversion, preserving owned and borrowed reuse.
+
+Generic reflection now retains declared nested alias witnesses through
+identifiers, explicit views, parentheses, and concrete named/inline callback
+signatures. Root transparent aliases still peel, and repeated concrete witnesses
+follow declaration parameter order, including named arguments. The reference
+evaluator fills nested `never` slots using the same variance and source-witness
+rules. Field, returned-call, and clone-expression witness recovery remains a
+separate metadata audit; this handoff does not claim those expression forms.
+
+`native_uninhabited_sum_arms_match_interpreter_in_both_profiles` covers absent
+handlers, empty reverse, dead and surviving callbacks, once-only effects,
+contextual interfaces and function values, owned/view source reuse, nested
+pending joins, mixed collection inference, alias reflection, and required
+comptime values. Debug/release programs and native verify/property suites run
+after source removal. Its pending companion covers eight runtime/comptime
+sum/reverse failures with exact output and exit 71 in both profiles. Public
+driver controls reject invalid dead arms and manufactured `never` values before
+execution or native publication, retaining existing output files. These
+supplemental cases do not change the 207-obligation inventory denominator.
+
+Local validation passes all 195 checker tests, 325 reference/comptime tests,
+74 HIR tests, 46 MIR unit tests and its integration test, and 73 codegen tests.
+All 594 frontend fixtures and eight backend-lowering regressions covering all
+182 run-pass files pass. All 182 inventory object obligations emit nonempty
+native objects, with deterministic repeat-emission controls passing. The four
+new native regressions and eleven adjacent native tests pass, including both
+profiles and native verify/property execution after source removal. Formatting
+and whitespace checks pass. Complete workspace, inventory execution, and
+platform distribution results for the final revision remain independent gates;
+this handoff does not establish full native parity.
+
+The reflected-field owner audit found that an admitted read of an
+interface-backed refinement as its base interface reused the base box and lost
+the refinement's method implementation. Native record, enum, and machine reads
+now select conversion metadata from the actual declared field type and run the
+conversion after the existing metadata, requested-type, and pending checks.
+Conversion borrows and clones the source, preserves pending depth, and produces
+one owned result.
+Ordinary and reflected secret-qualified destinations choose the underlying
+nominal owner after removing only matching outer secret qualifiers. Unqualified
+interface destinations still select explicit secret-owned implementations;
+additional source qualifiers and nested secret payload redaction remain intact.
+
+All 78 codegen tests pass, including five unit controls pinning owner selection,
+unchanged admission, and nested redaction. Both new native conformance tests pass.
+`native_reflected_interface_field_owners_match_interpreter_in_both_profiles`
+covers direct/reflected dispatch, exact and ancestor reads, runtime/comptime
+values, source reuse, pending joins, qualified secrets, and native verify/property
+suites after source removal.
+`native_reflected_interface_field_failures_match_interpreter_in_both_profiles`
+checks requested-type, active-member, and pending-metadata failures in both
+profiles. All 19 adjacent interface conformance tests, three deep-conversion and
+reflection tests, and eight pending-reflection tests pass, including existing
+explicit secret-owner implementations.
+These supplemental cases leave the inventory denominator unchanged and do not
+settle the open reflected admission contract or establish full native parity.
+
+The qualified interface callback audit found that `Reader.read` checked as a
+function value but became a non-function in the reference evaluator and lacked
+a native dispatcher target. Checked method values now distinguish concrete
+source bodies from interface slots. Callback-only slots are collected through
+ordinary, generic, and nested reflected bodies and resolve to the existing
+dispatcher with exact parameter types and view modes. Declared slots remain
+available without an implementation, and creating a callback executes no body
+or authority. Runtime receivers still select the existing implementation.
+Transparent aliases resolve in declaration scope, including when a caller's
+namespace import or generic parameter has the same name as the target.
+
+An implementation of another interface for an interface type can share the
+declared method's qualified display name. The declaration's slot takes
+precedence during reference lookup, invocation, and explicit compile-time
+callback materialization; failure to select an implementation cannot fall back
+to the colliding source body. The source implementation retains its distinct
+native identity.
+
+All 201 checker, 332 reference/comptime, 77 HIR, 47 MIR, and 594 frontend fixture
+tests pass. The two
+new native conformance tests pass in debug and release after source removal,
+including compiled verify/property suites, aliases, multiple owners and slots,
+explicit receiver reuse, callback adapters, generic and compile-time values,
+capability parameters, argument-before-callee effects, canonical debug names,
+name collisions, and pending-receiver failures. All 13 adjacent linked function
+value tests and 19 adjacent interface tests pass. Complete inventory, workspace,
+and host distribution gates
+remain independent obligations for the final revision; the supplemental
+callback fixture does not change the inventory denominator or settle the
+concrete-owner argument policy for erased calls.
+
+The borrowed-boundary audit found known move-only views that could be returned
+or passed to owned parameters through local aliases and unchecked body
+contexts. The checker now reports E0401 for these boundaries across ordinary,
+generic, indirect, and pipeline calls, preserving view facts through
+parentheses, coarsening, and declassification. Explicit written view arguments
+retain E0375. Direct return-view annotations also report E0401, including unused
+generic headers and callable results; the check does not expand named aliases
+or prewalk unused generic bodies.
+
+`view_owned_returns.jett`, `view_owned_arguments.jett`,
+`view_explicit_owned_modes.jett`, and `view_return_annotations.jett` pin these
+diagnostics.
+`view_escapes::borrowed_values_cannot_escape_before_program_or_suite_execution`
+checks rejection before runtime, test suites, and explicit comptime evaluation.
+`view_escapes::borrowed_value_escapes_preserve_existing_native_publications`
+checks existing program outputs in both profiles and compiled test suites.
+`native_borrowed_return_clone_controls_match_interpreter_in_both_profiles` uses
+`borrowed_return_clone_controls.jett` for source removal, exact output, compiled
+verify/property suites, cloned returns and owned arguments, scalar/string
+copies, owned field copies, cloned coarsening/declassification, and closed
+comptime.
+
+Focused validation passes all 213 checker, 332 reference/comptime, 77 HIR,
+47 MIR, 78 codegen, and 598 frontend fixture tests. All eight backend-lowering
+tests pass, including the 182-fixture run-pass obligation. Both new public driver
+regressions and the linked clone-control regression pass, including debug and
+release after source removal and compiled verify/property suites.
+
+These supplemental regressions do not change the inventory denominator or
+establish full view support. At that checkpoint native local view-alias lowering
+remained unsupported; the frontend checks added no lifetime or projection policy.
+
+The direct contextual secret-constructor gap is resolved for source
+`list(...)`, `map(...)`, `some(...)`, `none`, `ok(...)`, and `fail(...)` with
+checked outer `Secret` qualification. HIR builds the exact inner container,
+then restores the original checked TypeId and span with the existing
+`InterfaceCoerce`. Payload interface, function, and inferred `never`
+conversions remain unchanged; nominal refinements and arbitrary producers are
+untouched. This correction adds no policy and keeps strict native constructor
+shape checks.
+Declared outer-secret local types are also retained, including repeated
+wrappers, while less-qualified initializers keep their checked producer types
+and use the existing initialization coercion. This closes the local/read
+metadata mismatch without extending contextual inference or changing the
+one-layer `declassify` rule.
+
+Focused constructor-normalization HIR validation has passed.
+`native_contextual_secret_constructor_failures_preserve_order_and_cleanup`
+passes five payload-failure cases in debug and release after source removal,
+preserving lexical effects, the terminal failure, and cleanup.
+`native_contextual_secret_constructors_match_interpreter_in_both_profiles` is
+the success regression for `contextual_secret_constructors.jett`. It passes
+in debug and release after source removal with all nine stdout lines matching
+the interpreter, root-secret debug redaction, and release trace omission. The
+compiled verify suite and 100 property trials also pass. All 82 HIR, 47 MIR,
+332 reference/comptime, and 78 codegen tests pass with the declared-local
+correction. All eight backend-lowering tests also pass, including the 182-file
+run-pass obligation. Complete workspace, inventory, and host distribution gates
+remain independent obligations for the final revision.
+
+Direct and forwarded immutable local view aliases now have a bounded native
+handoff. Checked binding modes retain immediate resolved origins separately in
+ordinary, generic, and reflected bodies. HIR validates immutable backing chains
+and allocation-free carrier-preserving initializers. MIR remaps and retains
+origins, expands every alias read into backing-owner liveness, and excludes
+aliases from cleanup slots. Owner consumption or rebinding after reachable
+alias creation remains a conservative native implementation error; this does
+not settle source loan expiry or temporary lifetime rules. The remaining domain
+is recorded in [the local alias note](native_local_view_aliases.md).
+
+Formal view modes survive direct and indirect handler staging. Copy-owned
+string and callback observations acquire independent snapshots where needed;
+ordinary clones and implicitly copied results acquire owning temporaries before
+entering containers. Borrowed arguments retain their existing backing handle.
+Plain string view expressions keep their existing copy behavior. Borrowed
+enum matches snapshot the scrutinee before payload extraction.
+
+`local_view_aliases.jett` and its two linked tests pass in debug and release
+after source removal. The success test pins fourteen stdout lines and four
+debug traces, including secret redaction and release trace omission. It covers
+list, bytes, string, struct, interface, enum, and function aliases; generic and
+reflected bodies; sibling scopes, loops, pending values, clone independence,
+handled later arguments, and container copies that outlive their helper frame.
+The compiled verify suite and 100 property trials pass. The terminal-failure
+test preserves lexical output and the exact error with exit 71 in both profiles,
+proving successful checked cleanup rather than a cleanup-error override.
+
+All 217 checker, 89 HIR, 59 MIR, 332 reference/comptime, and 78 codegen tests
+pass, as do all 598 frontend fixtures and eight backend-lowering tests, including
+the 182-file run-pass obligation. Thirteen adjacent function-value tests, nine
+handler tests, and three pending-string tests also pass. These supplemental
+fixtures do not change the inventory denominator or establish full workspace,
+inventory execution, or supported-host distribution parity for this revision.
+
+Strict native graphics decoding now preserves the reference distinction between
+terminal shape errors and handled domain failures. The reproduced `width: run 0`
+case previously read zero as a ready dimension and returned a handled failure;
+it now reports the exact terminal Config width error before rendering or provider
+use. The decoder checks pending record owners, field metadata, strings, list
+containers, and record elements before payload access, in reference field order.
+Complete decoding precedes domain bounds, and window dimensions are read only
+after successful Config validation. Existing ABI leaves and callback state
+metadata remain unchanged.
+
+Four linked regressions in `native_conformance/pending_graphics.rs` pass in debug
+and release after source removal. Their 53-case matrix covers Config, Scene,
+Color, Rect, and Text roots and fields; Scene list containers/elements; nested
+pending depth, partial joins, closed comptime values, competing errors, and ready
+domain failures. Initial and later render failures preserve lexical stdout and
+the exact terminal error with exit 71, including unused scripted input. The fully
+joined session control retains pending State across callbacks, pins three debug
+traces and release omission, and passes compiled verify and 100 property trials.
+
+Seven focused runtime regressions additionally check all 38 pending metadata
+sites at depths one and two, malformed payload guards, source preservation,
+one-layer joins, provider ordering, and unfinished-session cleanup. All 145
+runtime tests, 78 codegen tests, nine linked graphics tests, and fourteen graphics
+frontend/reference integration tests pass. These supplemental cases leave the
+inventory denominator unchanged; full workspace, inventory execution, and
+supported-host distribution gates remain independent final-revision obligations.
+
+Forwarded pending Graphics authority now fails at kernel entry before Config
+decoding or domain validation. The source-admitted helper probe previously
+returned a handled width-zero failure and continued execution; it now preserves
+the reference terminal `graphics.__run expects a Graphics capability` error.
+The emitter reuses the existing capability pending-depth leaf after lexical
+argument evaluation. It neither consumes nor implicitly joins authority and
+adds no ABI operation or callback policy.
+
+Three linked regressions in `native_conformance/graphics_authority.rs` pass in
+both profiles after source removal. The minimal probe and eleven companion
+cases pin nested depth, partial joins, capability-before-Config error precedence,
+ready/final-joined authority, and explicit-view reuse. Terminal outcomes require
+exact stdout/stderr and exit 71. A separate successful control opens and closes
+two scripted sessions with the same fully joined authority, proving that its
+context-bound identity remains usable at the provider boundary. All twelve
+linked graphics tests and 78 codegen tests pass with the guard. Supplemental
+coverage leaves the inventory denominator unchanged and does not replace the
+workspace, inventory, or supported-host distribution gates for this revision.
+
+The locked Windows workspace run at `22fcbf13` passed all inventory gates:
+182 HIR/MIR fixtures, 182 native objects, 30 entry cases, 25 runtime contracts,
+155 verify fixtures, and three property fixtures with 100 trials each. Its
+native conformance target reported 259 passes and three failures; all other
+workspace targets and doc-tests passed. The three failures exposed borrowed
+`coarsen` initializers that MIR had replaced with owned snapshots, invalidating
+their checked backing origins.
+
+MIR now preserves only local alias initializers accepted by the shared typed
+origin validator. Borrowed `coarsen`, `declassify`, and forwarded aliases retain
+their backing handles; ordinary owned expressions still acquire snapshots.
+Malformed clone, handler, and different-source initializers remain rejected.
+The earlier projected-local admission error is pinned directly, separately from
+source escape, conflicting borrow, and moved-owner errors. A portable debug and
+release regression verifies rejection before launcher lookup and preserves an
+existing executable.
+
+All 62 MIR tests, 78 codegen tests, 21 linked interface tests, both public
+view-escape tests, and four local alias regressions pass with this repair.
+The linked nonstring qualification regression runs in both profiles after
+source removal, checks independent returned clones and unchanged backing
+owners, and requires the exact later terminal failure with successful cleanup.
+The Linux-only projection-loan test
+expectation is updated but requires Linux validation. This repair does not
+change the inventory denominator or extend native view origins; full workspace
+and supported-host distribution results must still be established for the
+final revision.
+
+The implicit display-result gap is resolved at its interpolation boundary.
+The reproduced method returning `run "shown"` previously printed
+`value:pending(shown)` natively while the reference interpreter stopped after
+`before` with `Displayable.display returned pending(shown) instead of string`.
+HIR now carries `DisplayResult` around only the implicitly selected call.
+MIR preserves it inside staged segment initializers, and codegen checks its
+already owned string through a borrowed runtime leaf before later segments.
+Exact-string validation, reachability, ownership planning, pruning, and native
+constant baking retain the marker without adding an owning slot.
+
+Three linked regressions in `native_conformance/display_results.rs` cover the
+minimal failure, six terminal cases, and successful controls in both profiles
+after source removal. Terminal cases pin nested depth, Unicode and empty text,
+partial joins, primitive and erased-interface owners, method-failure precedence,
+once-only debug output, suppressed later handlers, exact stdout/stderr, and
+exit 71 with cleanup. Success controls pin ordinary pending-string formatting
+from explicit calls, fully joined implicit and generic display, namespaced
+implementations, receiver reuse, closed comptime, compiled verify, and 100
+property trials.
+
+All 91 HIR, 64 MIR, 80 codegen, 151 runtime, and 332 reference/comptime tests
+pass. Five focused runtime tests and the independent C ABI regression preserve
+string handles and reference counts, pending layers, exact dynamic failures,
+first-error status, and terminal cleanup. Supplemental cases leave the
+inventory denominator unchanged; complete workspace and supported-host
+distribution validation remain final-revision obligations.
+
+The locked Windows workspace run at `7cdf24b1` passed every workspace target
+and doc-test. Native conformance reported 267 passes with no failures. All
+inventory gates passed: 182 HIR/MIR fixtures, 182 native objects, 30 entry
+cases, 25 runtime contracts, 155 verify fixtures, and three property fixtures
+with 100 trials each. Source remained frozen throughout the run. Linux-only
+tests and both supported hosts' clean package jobs still require CI results for
+the final revision; a local Windows pass does not substitute for those gates.
+The [supported-host run for `7cdf24b1`](https://github.com/vycdev/jett/actions/runs/36872780921)
+has since completed successfully: both Linux and Windows workspace/build/package
+jobs and both clean installed-package jobs passed. That result proves the prior
+checkpoint's distribution gates, not those of a later compiler revision.
+
+Additional source probes at that checkpoint found two gaps outside the fixed inventory. A direct
+struct `Equatable.equals` returning `run true` is accepted by the checker but
+the reference interpreter reports `Equatable.equals must return bool`. Native
+`==` instead prints `pending(true)` and exits successfully; native `!=` reports
+`'not' requires a boolean operand` with exit 71. Secret-qualified operands show
+the same equality-result gap when the secret is initialized from a ready local.
+The enum payload callback already checks result depth; the direct operator
+call needed its own preserved result boundary before inequality negation.
+
+The direct equality-result gap is now resolved. HIR wraps only implicitly
+selected struct equality calls in `EquatableResult`; MIR preserves that boundary
+through operand and later-handler staging. Codegen checks pending depth with the
+existing `RejectPendingScalars` leaf before using the boolean or negating it.
+The child's exact checked boolean type, including leading secret qualification,
+is retained. Explicit method calls remain ordinary task-producing calls. No
+runtime ABI operation or owned temporary is added, and malformed boolean,
+qualification, and nominal-refinement metadata remains rejected.
+
+All 93 HIR, 66 MIR, 82 codegen, and 332 reference/comptime tests pass. Three
+linked regressions in `native_conformance/equality_results.rs` cover both
+operators in a minimal reproduction, 16 terminal matrix cases, and successful
+controls. Debug and release binaries run after source removal. Failures pin
+true and false payloads at depth one and two, partial joins, exact method-error
+precedence, left-to-right effects, once-only traces, suppressed later handlers
+and short-circuit effects, secret-qualified operands, exact stderr, and exit 71
+with successful cleanup. Successful controls cover ready and fully joined
+implicit equality, ordinary explicit pending calls, unchanged owners,
+namespaced generic and reflected comparisons, closed comptime, compiled verify,
+and 100 property trials. Six adjacent linked enum regressions also pass.
+Supplemental cases do not change the inventory denominator; the prior locked
+workspace result remains specific to `7cdf24b1`, and the final revision still
+requires workspace and supported-host distribution validation.
+
+The separate direct `secret[Item]` constructor admission gap is also resolved.
+Its checked construction previously retained the outer secret type without an
+inner constructor/qualification split, and native verification correctly
+rejected the inconsistent metadata. HIR now normalizes only source calls with
+their checked struct-construction fact and an exact, nonvalidating nominal
+target. Leading secret qualifiers are restored through the existing coercion
+after construction; field conversions, source order, pending depth, and owner
+identity remain intact. Validating result constructors, nominal refinements,
+ordinary producers, and reflected builder calls are preserved unchanged.
+
+All 96 HIR, 66 MIR, and 83 codegen tests pass. Three focused HIR tests cover
+direct/local/generic/specialized and parenthesized constructors, nested
+qualification and `run`, interface/function/refinement payloads, handlers,
+source construction provenance, unchanged producers and validating results,
+and strict normalization controls. The object regression independently rejects
+raw secret construction, a qualified inner constructor, a different nominal
+target with the same fields, and invalid refinement-validation metadata.
+
+Two linked regressions in `native_conformance/secret_struct_constructors.rs`
+pass in both profiles after source removal. Successful controls pin eight
+handwritten output lines and root-secret trace redaction, narrow fields,
+generic and nested constructors, function and inline returns, full joins,
+closed comptime, refinement-backed interface dispatch, callback adaptation,
+independent owned field copies, unchanged public producers, compiled verify,
+and 100 property trials. Three terminal field cases pin reversed named-field
+evaluation order, the exact earlier error, suppressed later effects, and exit
+71 cleanup. Both existing linked contextual collection/sum constructor
+regressions also pass. Neither repair changes the inventory denominator or authorizes a
+broader equality or constructor policy. Final-revision workspace and
+supported-host distribution validation remain required.
+
+Direct field reads from secret-qualified aggregates now pass native admission.
+A minimal ready `Item` promoted to `secret[Item]` previously printed `7` in the
+reference backend, while native verification rejected `hidden.value` with
+`field owner mismatch`. The verifier now mirrors the existing checker rule:
+one direct secret wrapper around the exact struct, bitfield, or machine-state
+owner; unchanged `nothing` and already-secret field types, including nominal
+secret-backed refinements; otherwise exactly one wrapper around the declared
+field TypeId. Nominal owners, indexes, and result qualification remain strict.
+Emission, pending checks, machine-state indexing, and field ownership paths
+are unchanged; no ABI operation is added.
+
+All 84 codegen tests pass. The new object regression rejects eight malformed
+field contracts, including erased secrecy or nominal identity, added or doubled
+secrecy, qualified `nothing`, different owners, invalid indexes, and nested
+secret receivers. Three linked regressions in `native_conformance/secret_fields.rs`
+pass in both profiles after source removal. Successful controls pin eight
+handwritten output lines, narrow numbers and Unicode strings, lists, refined
+interface owners and captured callbacks, already-secret fields, `nothing`,
+secret-backed nominal fields, bitfield and state-qualified machine reads,
+generic/reflected controls, owned field copies surviving their helper scope,
+independent list mutation, nested child depth and joins, closed comptime,
+compiled verify, and 100 property trials. Pending-child failures preserve exact
+depth, first-error precedence, and exit 71 cleanup.
+
+Pending secret receiver errors intentionally retain native typed redaction.
+Depth-one, depth-two, and partially joined receiver regressions pin the raw
+reference error separately from native `[redacted]`, with exact output and
+cleanup in both profiles. Those tests do not claim diagnostic parity or resolve
+the [hidden-secret observation policy](../../open_design/debug_print_hidden_secrets.md).
+
+A separate accepted-source probe still exposes direct contextual secret
+bitfield construction: `secret[Header] hidden = Header(value: 7)` runs and
+prints `7` in the reference backend, but HIR reports `checked bitfield
+construction has an invalid type`. Public construction followed by secret
+qualification works, as the linked field suite demonstrates. This is an
+implementation gap outside the fixed inventory; width-validating constructors
+and machine construction need their own evidence before extending that repair.
+Final-revision workspace and supported-host distribution gates remain open.
+
+The locked Windows workspace run at `65c6ba68` passed every workspace target
+and doc-test with source frozen throughout. All 275 native conformance tests
+passed, including the eight new linked equality, secret-struct-construction,
+and secret-field regressions. The independent inventory gates also passed:
+182 HIR/MIR fixtures, 182 native objects, 30 entry cases, 25 runtime contracts,
+155 verify fixtures, and three property fixtures with 100 trials each.
+This checkpoint does not certify a later revision or Linux-only execution;
+the [supported-host run for this revision](https://github.com/vycdev/jett/actions/runs/36884693314)
+has since passed both Linux and Windows workspace/build/package jobs and both
+clean installed-package jobs. This certifies that checkpoint's distribution,
+not a later compiler revision.
+
+The contextual secret bitfield and exact-state machine constructor gap is now
+resolved. HIR peels only leading secret wrappers while selecting an already
+resolved declaration, retaining the exact nominal bitfield or machine/state
+identity. Plain bitfields retain their value output; validating bitfields retain
+`result[Bitfield, string]` and their width-validation flag. The existing coercion
+restores the original checked secret type after construction. Field conversions,
+lexical evaluation order, pending depth, result tags, and ownership remain intact;
+native verification and the runtime ABI are unchanged.
+
+All 99 HIR, 66 MIR, 85 codegen, and 598 frontend fixture tests pass. Three new
+linked regressions cover literal and dynamic bitfields, successful and failed
+width validation, exact machine states, nested qualification, parentheses,
+generic bodies, namespace and destination aliases, returns, inline callbacks,
+full joins, closed comptime, unchanged public producers, owned payload copies,
+machine interface/callback payloads, compiled verify, and 100 property trials.
+Seven handwritten output lines pin the successful entry behavior. Debug and
+release binaries execute after source removal. Reversed named arguments and
+handled machine payloads preserve source order; terminal field failures suppress
+later effects and result handlers, retain the exact first error, and exit 71 with
+successful cleanup. The object test rejects 19 malformed nominal, result,
+validation-flag, state-index, payload, and qualification contracts. Three adjacent
+bitfield regressions, machine-transition and baked-machine regressions, and both
+contextual collection/sum constructor regressions also pass.
+
+The contextual secret validating struct constructor gap is resolved. HIR moves
+leading secret qualification outside the exact `result[Struct, string]`
+constructor while preserving its checked construction fact, nominal success
+type, validation flag, predicate chains and lexical field order. MIR's generated
+sums now retain their ordinary result type inside the qualification coercion.
+Empty predicate chains keep the constructor's result shape; ordinary producers
+and nonmatching nominal or result types are unchanged.
+
+The HIR and strict object regressions pass, including malformed outer/inner
+qualification, different nominal success types, wrong error or success types,
+validation flags and erased result shape. Three linked regressions in
+`native_conformance/secret_validating_struct_constructors.rs` pass in both
+profiles after source removal. Eight handwritten successful output lines cover
+generic/nested/parenthesized constructors, returned and inline values, public
+producers, closed comptime, full joins and independent string/list copies.
+Compiled verify and 100 property trials pass. Predicate failures retain captured
+result data and source order; field evaluation failures remain terminal, precede
+later predicates/handlers and exit 71 with successful cleanup.
+
+Qualified result joins now preserve their checked outer boundary in both
+backends. Exact results retain their type; secret-qualified and nominally
+refined results receive an additional result around the joined payload. The
+interpreter also reconstructs Join types from the active checked facts before
+declared fallback, so refinement handlers extract that outer result correctly.
+The native move planner admits only explicit-view borrowing for Join's owned
+copy and preserves ordinary view-consumption and escape rejections.
+
+All 339 interpreter, 69 MIR, 100 HIR, 86 codegen and 598 frontend tests pass.
+Three linked regressions in `native_conformance/qualified_result_tasks.rs` pass in both
+profiles after source removal. Handwritten Unicode output and typed debug
+observations pin exact/qualified/refined/aliased results, generic and reflected
+bodies, nested secrecy, closed comptime, one-layer joins, independent list
+copies, explicit-view owner reuse, pending scalar children and nonstring inner
+errors. Compiled verify and 100 property trials pass. The inner failure handler
+remains separate from the outer Join handler; its later terminal failure retains
+the first error, effect order and exit 71 cleanup. No runtime leaf signature,
+verifier type rule or fixture denominator changes.
+
+The direct local and struct-field predicate reuse repair follows the selected
+design: interpreter validation captures the original checked source type before
+evaluation or primitive normalization. Exact refinements reuse their invariant,
+and ancestor promotion runs only the remaining base-first predicates. Handled
+optional/result success payloads retain their checked proof; whole nominal sum
+refinements remain distinct. Coarsening supplies its selected output proof, and
+a sibling sharing the carrier proves nothing. Forced validation of changed
+property candidates and metadata-free calls remains on its existing path.
+
+The same audit exposed generic constructor type selection: reference execution
+returned a plain struct for `Box[Positive]`, while a caller's unrelated
+`T = Positive` made `Box[bool]` validate `true` as Positive. Constructor arguments
+now resolve in caller context and map to the declaration's own parameters.
+Field resolution, validation flags, normalization, and retained identities use
+the declaration context; caller imports cannot redirect canonical field names.
+The selected concrete fields determine the existing checked result contract,
+including an empty predicate chain. Caller context is restored after success,
+captured predicate failure, or terminal construction failure.
+
+All 350 interpreter tests pass, including eleven new proof, normalization,
+context, and generic-constructor controls. Four linked regressions in
+`native_conformance/refinement_reuse.rs` pass in debug and release after source
+removal. Handwritten stdout and trace expectations pin exact/local/field reuse,
+ancestor suffix order, explicit coarsening, owned string/list copies, one-layer
+pending joins, captured predicate errors, and rejection of pending inputs to new
+predicates. Concrete generic result shapes, closed comptime, compiled verify,
+and 100 property trials also pass. These additions retain the fixed inventory
+denominator and require final-revision workspace and distribution validation.
+The existing native shrink regression for refinement chains and nested
+predicates also passes in both profiles, preserving validation of changed
+candidates and caught predicate errors.
+
+Checked named function parameters and exact returns now retain their original
+expression proofs. Arguments and proofs are captured before evaluation and
+permuted together for named calls and source pipelines. Actual return-expression
+facts travel with return signals through nested handlers; destination annotations
+and runtime labels never supply that proof. Raw call entry points still force
+parameter and return validation, even with a checked body map installed. Proof
+reuse stays disabled throughout their nested invocation tree, including calls,
+locals, constructors, callbacks, and forced validators. Four additional unit
+controls reject forged refined struct children and list elements and check mode
+restoration after success and failure. Checked program and zero-argument legacy
+verify entries use an explicit bridge without synthesizing argument proofs.
+Reflected builder finish retains its documented validation of provided values.
+
+Seven new interpreter tests and four linked regressions in
+`native_conformance/refinement_calls.rs` pass. Debug and release programs run
+after source removal with handwritten output and trace expectations for scalar,
+string/list, method, NamedFunction, generic/reflected, pipeline, named-order,
+handler/default, and pending-depth cases. Pure closed comptime, compiled verify,
+100 property trials, and forced builder completion also pass. Inline descriptors
+now retain their declared return annotation in captured lexical context.
+Seven additional interpreter tests cover invalid fresh inline results before
+local, argument and return consumers; exact and ancestor proofs; owned Unicode
+strings and lists; pending depth; generic/reflected and namespace alias scope
+restoration; primitive normalization; and forced raw callbacks. Host-generated
+callbacks retain their separate forced-call path; these tests do not establish
+proof reuse for that scope.
+
+The proof audit found that the private list sum fallback can produce raw zero
+under a checked Positive result annotation. Source execution now forces
+validation of the fresh result against its actual intrinsic type argument before
+that annotation becomes reusable proof. Actual arguments resolve before nested
+evaluation. Four unit tests cover invalid/valid results, pending and mixed-type
+errors, second-generic selection, primitive aliases, ordinary and pipeline
+consumers, raw/no-metadata behavior, and partial checked maps. A driver control
+pins empty Positive summation's reference constraint failure and native codegen
+refusal in both profiles, preserving an existing publication before launcher
+lookup. This repairs proof safety without selecting the unresolved refined-sum
+domain or widening native admission.
+
+Ten reflected producer unit tests cover root refinements and admitted ready
+builtin wrappers across record, enum, and machine fields. Shape preflight finishes
+before predicates; only occupied arms and collection members are checked, in
+their existing order. Declared schemas preserve exact invariants and skip proven
+ancestor prefixes. Exact roots retain nominal identity and pending depth without
+rechecking. Changed nested pending, secret, callable, and nominal generic requests
+fail conservatively before publishing proof; diagnostics do not render values.
+Raw and metadata-free field readers preserve their existing consuming boundaries.
+Five frontend-admitted source probes now reject zero-as-Positive before optional,
+list, declassify, callable, or nominal-field consumers. This reference safeguard
+does not select broader reflected admission or certify native producer predicates.
+
+Fourteen additional boundary and canonical-type unit tests preserve written view
+validation, resolved primitive widths, generic parameter identities, captured
+closure metadata, reflected bindings, inferred call/debug types, and caller
+imports on success and failure. Written aliases resolve once; installed and checked
+types keep their canonical owners. Fresh CLI runtime and closed comptime probes
+pass under colliding imports, including enum and machine payload loops and a
+closure fixture containing Unicode strings and owned lists. All 396 interpreter
+tests and all 598 frontend fixtures pass. The four linked call regressions and the
+refined-sum refusal control also pass against this combined source revision.
+Final workspace and supported-host distribution validation remain required.
+
+Reference reflected reads now also reuse a stronger declared refinement as proof
+of its requested root ancestor. The lookup follows only the actual declaration's
+root chain, preserves normalized result identity and pending depths, and never
+uses a runtime label or descends through an outer qualifier or child schema.
+Three regressions cover all three getters, both metadata modes, transparent
+aliases, owned Unicode values, source preservation, pending depths 0/1/2, and
+raw, disabled, unrelated-fact, and forged-label controls. All 399 interpreter
+tests pass. A fresh CLI success probe matches the independent scalar, owned,
+pending, operand-order, and predicate-trace oracle, including five reciprocal
+ancestor reads with no extra predicate. Native execution remains a separate
+producer-validation obligation.
+
+Native returns now establish newly requested root refinements before exposing
+their checked result type. Returning `-1` under Positive, or a Positive value of
+7 under High constrained above 10, rejects with the reference error. The original
+checked expression supplies source proof before coercion: exact returns skip
+predicates, and ancestor returns check only their missing suffix. Concrete
+generic/method signatures select destinations; nested inline targets restore the
+enclosing function, and reflected body facts keep the selected return target.
+MIR stages the candidate once, preserves pending depths, and forwards the first
+predicate failure through a private exact-string `RuntimeFailureMessage` boundary
+and the existing borrowed runtime failure leaf. Owned candidates and error strings
+retain their cleanup slots. No source spelling, ABI operation, or broader outer
+secret/container return admission is added.
+
+Eleven focused HIR, MIR, and object-emission tests and all 214 HIR/MIR/codegen
+unit tests pass. Three linked return regressions and two inline regressions pass
+in debug and release after source removal, with handwritten scalar/ancestor,
+owned Unicode/string/list, generic/method/reflected, alias capture, pending,
+predicate-error, operand-precedence, and exit-71 cleanup expectations. Closed
+comptime, compiled verify suites, and 100-trial property suites also pass.
+These five supplemental tests bring native conformance to 298 tests without
+changing the fixed acceptance inventory. Full workspace and supported-host
+distribution checks still need to certify the final revision. Return proof reuse
+cannot replace validation at a reflected producer.
+
+Native reflected root-refinement producers now validate their selected cloned
+field after the original getter completes its selector and payload checks. Exact
+and stronger declared sources reuse established proof; ancestor promotions
+evaluate only their missing suffix, and sibling or base sources check the whole
+requested chain. HIR retains complete per-slot plans and exact canonical
+predicate identities. MIR consumes those plans before exposing its internal
+raw-read marker, preserving owned cleanup, pending depths, source identity, and
+the first original error. Requested admission and outer secret/callable/nominal
+conversion rules are unchanged.
+
+Fourteen focused HIR, MIR, and object tests, all 224 HIR/MIR/codegen library tests,
+and all 55 object-emission tests pass. Three linked regressions pass through both
+direct and piped getter forms in debug and release after source removal,
+including all three getters, dynamic selectors, thirteen terminal failure cases,
+owned Unicode/string/list values, unchanged sources, pending depths 1/2,
+operand staging, closed comptime, verify, and 100-trial property execution.
+The pipeline helper shares the direct getter's metadata expansion, preserving
+source/selector order, complete slot plans, bitfields, and narrowed machine owners.
+Native conformance now has 301 supplemental tests; the fixed inventory denominator
+is unchanged. At that checkpoint, new native nested-container invariants were
+implementation gaps; the recursive builtin checkpoint below closes that bounded
+producer work. The other admitted one-operand reflection pipeline forms
+are covered by the later checkpoint below.
+Final workspace and supported-host distribution gates still require verification.
+
+The locked Windows workspace run at `52bd4dcb` passed every target and doc-test
+with tracked source frozen throughout. All 284 native conformance tests passed,
+including the six new qualified-result and secret validating-constructor tests.
+The independent gates passed for 182 HIR/MIR fixtures, 182 native objects,
+30 entry cases, 25 runtime contracts, 155 verify fixtures, and three property
+fixtures with 100 trials each. The
+[supported-host run for that revision](https://github.com/vycdev/jett/actions/runs/36898786909)
+passed both workspace/build/package jobs and both clean installed jobs.
+This checkpoint does not certify the later refinement
+reuse repair or its final workspace and distribution obligations.
+
+The locked Windows workspace run at `a57d69a6` also passed every target and
+doc-test with source frozen throughout. All 288 native conformance tests passed,
+including the four direct refinement reuse regressions. Its independent inventory
+gates passed for 182 HIR/MIR fixtures, 182 native objects, 30 entry cases,
+25 runtime contracts, 155 verify fixtures, and three property fixtures with
+100 trials each. The
+[supported-host run for this revision](https://github.com/vycdev/jett/actions/runs/36905939310)
+passed both workspace/build/package jobs and both clean installed jobs. This
+certifies that checkpoint, not the later
+call-proof or native-return changes.
+
+The frozen workspace run at `8ad7b1e4` and the supported-host runs at
+[`768fdb15`](https://github.com/vycdev/jett/actions/runs/36923339203) and
+[`8ad7b1e4`](https://github.com/vycdev/jett/actions/runs/36970926217) failed with a
+reference runtime stack overflow during native conformance. Sequential isolation
+identified nested machine JSON parsing. The source call path is finite: a
+temporary diagnostic stack increase completed the case, and unoptimized Windows
+assembly showed the general expression evaluator reserving 79,328 bytes per
+expression. Ordinary and generic calls now dispatch before that large match,
+retaining central checked-result normalization and signal propagation. The
+production stack budget remains 8 MiB. All six adjacent nested JSON conformance
+tests and all 396 interpreter tests pass with the repair. Complete workspace and
+supported-host distribution validation still need to certify the repaired
+revision; the failed runs do not establish those gates.
+
+The locked Windows workspace run at `f8e70722` passed every target and doc-test
+with tracked source frozen throughout. All 399 interpreter tests, 598 frontend
+fixtures, and 301 native conformance tests passed. The independent inventory
+gates passed for 182 HIR/MIR fixtures, 182 native objects, 30 entry cases,
+25 runtime contracts, 155 verify fixtures, and three property fixtures with
+100 trials each. This checkpoint includes the call-frame stack repair, declared
+ancestor proof reuse, native return validation, and direct/piped reflected root
+producer validation. It does not close the remaining nested-container or other
+reflection pipeline gaps, or the unresolved language policies.
+
+The [supported-host run for the stack repair at `57e0b003`](https://github.com/vycdev/jett/actions/runs/36974175496)
+passed both workspace/build/package jobs and both clean installed jobs. The
+[run for `f8e70722`](https://github.com/vycdev/jett/actions/runs/36975813263)
+passed both workspace/build/package jobs and the Linux clean installed job.
+Its Windows clean installed job failed when the native linker exceeded its
+60-second deadline on the first relocated debug build, without linker output.
+This does not establish the fourth distribution gate. The
+[run for `cca40a2e`](https://github.com/vycdev/jett/actions/runs/36980991837)
+is live in both platform workspace checks; its eventual installed-package result
+must determine whether the linker timeout recurs. The earlier repair's green
+distribution evidence does not certify these later changes.
+
+The admitted one-operand observers `type.variant_value`,
+`type.machine_state_value`, and `type.arg` now append their existing checked
+metadata through a shared direct/pipeline HIR helper. Pipeline result signatures
+select metadata types; the step span describes the input. Source operands run
+first and once. Variant ordinals remain distinct from discriminants, and narrowed
+machines retain the complete base layout. Admission, runtime ABI, pending/index
+checks, and ownership semantics are unchanged.
+
+Five focused HIR/object tests, all 227 HIR/MIR/codegen library tests, and all
+57 object-emission tests pass. Three linked regressions pass through direct and
+pipeline forms in debug and release after source removal, covering exact metadata,
+independent field ownership, operand/consumer order, nine terminal errors, closed
+comptime, compiled verify, and 100-trial property execution. The fixtures use
+ordinary return factories to keep a separate whole-machine reassignment defect
+outside these observer tests. Native conformance now has 304 supplemental tests;
+the fixed inventory denominator is unchanged. Full workspace and supported-host
+distribution validation remain obligations for this later revision.
+
+Reference reflected-type comparison now removes completed aliases/refinements
+from its active expansion path. Repeated map/result arguments therefore normalize
+independently, while actual recursive re-entry remains bounded. Four regressions
+cover all three selectors, map key/value and occupied-arm order, exact pending
+depths 0/1/2, changed-pending refusal, unchanged source, selector precedence,
+declaration namespace, cycles, and protected conversion refusals. All 403
+interpreter tests and all 598 frontend fixtures pass. Fresh CLI map and result
+controls pass through all three getters with the expected predicate traces and
+unchanged sources. This reference repair does not widen the native raw getter's
+currently narrower nested-type compatibility gate.
+
+Native whole-machine local storage now retains the checked bare machine
+annotation instead of the initializer's precise state. Owned mutable locals can
+therefore be rebound to another valid state of the same nominal machine, as the
+existing annotation-erasure rule selects. Producer types, owner identities, and
+source spans remain precise. Assignment verification retains the storage/owner
+check and additionally enforces an exact checked state target when a visible
+guard narrows a full-machine slot; foreign owners and other states still fail.
+
+Two HIR and two object regressions pass, along with all 229 HIR/MIR/codegen
+library tests and all 59 object-emission tests. The linked regression passes in
+debug and release after source removal, including owned replacement, move and
+clone independence, self-clone, 32 repeated cleanup cycles, same-state guarded
+replacement, pending depths 2/1, closed comptime, compiled verify and 100-trial
+property execution. Fresh reference CLI output and traces match the independent
+oracle. This closes the separate whole-machine reassignment defect found while
+isolating the observer pipeline fixtures. Native conformance now has 305
+supplemental tests; the fixed inventory denominator is unchanged. Full workspace
+and supported-host distribution gates remain required for this later revision.
+
+The admitted alias-as-constructor spelling also remains an unresolved source
+contract; see [type alias constructor calls](../../open_design/type_alias_constructor_calls.md).
+Supplemental cases do not change the inventory denominator. Full workspace and
+supported-host distribution validation remain obligations for the final revision.
+
+The frozen `b733296a` workspace, whose compiled source is unchanged from
+`cca40a2e`, passed `cargo test --locked --workspace --no-fail-fast`, including
+all doc-tests. This verifies 403 interpreter tests, 598 frontend fixtures,
+305 supplemental native conformance tests, all 182 native object obligations,
+and the complete verify/property inventory. The log is
+`target/native-workspace-b733296a.log`; later changes need their own verification.
+
+Native verify/property suite APIs now forward explicit build options through
+lowering, emission, and executable building. Existing default wrappers retain
+debug behavior. Three focused regressions pass: default and explicit-debug
+objects match; debug/release suites execute with matching runtime manifests
+after source removal, with 100 property trials and release traces omitted;
+release debug printing reports E0362 before publication and preserves existing
+output; and emitted release objects match optimized codegen while differing
+from unoptimized controls. Both runtime manifest profiles reject a mismatched
+selection. Native conformance now contains 308 supplemental tests. This repairs
+suite mode selection; it does not close the remaining language-policy gaps.
+
+Deep reflected requests exposed parser lookahead ceilings before either backend
+could check the requested type. Generic calls and typed locals now recognize
+balanced type syntax across the complete logical line, with iterative callable
+return prefixes and no fixed 20/40/60-token cutoff. All 92 parser tests and all
+598 frontend fixtures pass. The five new parser regressions cover direct and
+pipeline requests, nested callable arguments and locals, source spans,
+non-consuming recognition, missing EOF sentinels, and malformed-input recovery.
+This repairs recognition of existing syntax; recursive reflected-field native
+execution remains a separate obligation.
+
+### Recursive builtin reflected producers
+
+Native reflected field reads now establish newly requested refinements inside
+the five already admitted builtin wrappers: list, set, map, optional, and result.
+Typed HIR trees retain actual and requested types, canonical predicate identities,
+and proven prefixes. MIR completes all occupied structural checks before any new
+predicate, then checks values in collection order with each map key before its
+value. Both passes preserve the independent candidate and original source.
+Exact schemas, named ancestors, and shared root prefixes reuse declared proof;
+changed wrappers retain readiness even when their child predicates are skipped.
+
+Canonical generic argument TypeIds distinguish nominal fields from arguments.
+An ordinary Element containing a Positive field does not request new invariants
+through list[Element]. Used or unused Positive generic arguments do retain
+wrapper readiness, including transparent aliases. Closed backend validation
+visits unused argument edges and rejects malformed or forged plans.
+
+All ten new linked groups pass over 96 source cases. They cover every getter,
+direct and pipeline calls, debug/release runtime profiles, source deletion,
+ready/empty/inactive wrappers, recursive combinations, Unicode ownership,
+operand order, exact and ancestor pending exceptions, first-failure order,
+selector precedence, terminal-handler bypass, and compiled verify/property
+suites with 100 trials. Fresh reference admission and literal output/trace
+oracles agree. The logs are `target/native-recursive-linked-all.log` and
+`target/native-recursive-linked-nominal.log`.
+
+All 494 types/typechecker/HIR/MIR/codegen library tests, 141 runtime tests,
+62 object-emission tests, and 598 frontend fixtures pass. Native conformance
+contains 318 supplemental tests; the fixed inventory denominator remains 207.
+This closes the bounded recursive builtin producer gap, without selecting
+broader requested-type admission, changed nominal/callable/interface casts,
+or protected secret observation. Final frozen workspace and supported-host
+distribution gates remain required for this revision.
+
+### Selected debug-event channel isolation
+
+The decided print/println diagnostic channel is implemented across reference
+and native execution. One typed interpreter buffer preserves Trace, Breakpoint,
+Print, and Println events with exact text; no newline is inserted between events.
+Native DebugPrint emits the same staged bytes to stderr, apart from application
+Stdout. Native differential gates compare only runtime events, excluding actual
+frontend/comptime observations and private replay.
+
+Build, lowering, native artifact, test, and run outcomes retain preceding events
+on success and failure. Compiler captures keep phase and test/file association;
+baked values do not replay events and property shrinking remains private. CLI
+agent rows encode known phase and kind and escape exact text instead of
+classifying prefixes or leaking raw worker output. Human tools emit captured
+debug bytes to diagnostic stderr before later errors.
+
+Failed comptime recovery records actual span/context attempts separately from
+baked values, so repeated checked contexts and namespace initializer markers do
+not duplicate failures or events. Failed values remain unavailable. Native
+property replay errors retain the original suite streams when that attempt
+returned captured process output and suppress private replay runtime streams in
+the public error chain. Initial execution errors and timeouts retain their
+existing typed error contract rather than inventing an original-suite record;
+actual linker diagnostics remain available.
+
+Focused verification passes: 416 comptime tests, 83 driver library tests,
+144 runtime tests, all 50 CLI unit/command tests, and all five new linked native
+transport tests. The latter cover exact event boundaries and kind controls,
+frontend/runtime separation, failed argument ownership cleanup, partial-print
+terminal error adjacency, source deletion, compiled verify/property suites,
+release E0362 plus argument checking, and preservation of an existing output.
+The final focused logs are `target/native-debug-isolation-comptime-final.log`,
+`target/native-debug-isolation-driver-final.log`,
+`target/native-debug-isolation-cli-final.log`, and
+`target/native-debug-isolation-native-transport-final.log`; the unchanged runtime
+gate is in `target/native-debug-isolation-library-driver-check.log`.
+
+The frozen `b1cf8943` workspace passed
+`cargo test --locked --workspace --no-fail-fast`, including all doc-tests,
+323 supplemental native conformance tests, all 182 native object obligations,
+598 frontend fixtures, and the complete fixed inventory gates. The log is
+`target/native-workspace-b1cf8943.log`. This verifies that frozen revision;
+the later JSON changes require their own workspace acceptance.
+
+The prior `3bc23e6a` revision passed its frozen workspace and doc-tests in
+`target/native-workspace-3bc23e6a.log` and all four supported-host jobs in
+[workflow run 36995400983](https://github.com/vycdev/jett/actions/runs/36995400983).
+The `b1cf8943` supported-host
+[workflow run 37002829148](https://github.com/vycdev/jett/actions/runs/37002829148)
+passed all four Linux/Windows build/package and installed-package jobs.
+The installed-package jobs cover clean relocation, execution after source
+removal, and both debug/release profiles. This accepts the frozen debug
+isolation revision on its supported hosts; later JSON source changes still
+require their own workspace and supported-host acceptance.
+The broad estimate remains about 85%; the fixed inventory denominator remains
+207. Hidden-secret policy and other semantic obligations remain independent.
+
+### Qualified machine JSON and parser pipeline dispatch
+
+Native JSON source eligibility now matches the existing public admission
+boundary: a state-qualified machine visits only its selected payload, while a
+bare machine still visits every declared state. The unrelated state in the
+regression schema contains an integer-keyed map; qualified ready-state JSON is
+admitted, but bare and cached-state requests retain E0343. Public policy,
+all-state reflection metadata, secret projection, and qualified builder-finish
+checks are unchanged.
+
+Nested `state.fields` loops originating in `type.machine_states[T]()` receive
+checked field-type and source-alias candidates from every declared state,
+including canonical `Machine at state` requests. Source aliases in these
+candidates belong to field TypeInfo; top-level aggregate aliases remain
+non-matching probes with empty metadata. Runtime state metadata remains complete,
+so an unselected field must not reach an unmatched reflected dispatch arm.
+Direct active-state field loops retain their selected-payload candidates.
+This compiler handoff repair is distinct from selected-state JSON eligibility.
+
+The private fallback decoder now uses the direct canonical condition
+`type.name[T]() == "json.JsonTree"` for raw-tree copying, matching the
+named decoder's existing checked static selection. An ordinary pure metadata
+helper call had left the raw return body typechecked under unrelated T,
+exposing E0311 for inactive callable, interface, and actor fields. Pure-call
+folding does not control source validity. This narrow source repair keeps
+the raw body out of those specializations without changing public JSON
+eligibility, reflection metadata, or the existing typed wrapper paths.
+
+Completing those candidates exposed a private map decoder branch that returned
+`map[string, Val]` for a non-string-keyed T. An alias-aware closed key guard now
+limits typed string-map construction to exact string keys. Public non-string
+map targets still fail E0343. A malformed qualified envelope naming another
+state's unsupported map payload instead returns an unsupported-key failure
+when its field decoder is reached, before the eventual qualified builder
+mismatch. Required-field lookup and exact validation retain their order.
+This bounded diagnostic-precedence tradeoff is recorded in the
+[machine JSON contract](../../open_design/state_machine_json_contract.md);
+it introduces no key cast, dummy value, early state gate, or global builder
+change. Fresh reference characterization pins the actual first wrapped
+error for empty and nonempty cached-state maps as
+`cached.entries: JSON object maps require string keys, got int64`. Lenient
+numeric entries reach the same key refusal; exact numeric entries retain
+the earlier `entries: expected object, got number` validation error. Missing
+entries still report `missing required field 'entries' for app.Session at ready.cached`.
+The expanded direct/pipeline controls compare these exact error prefixes,
+continued successful parsing, retained owners, and complete reference/native
+streams. All 22 groups passed (323 filtered) in 175.92 seconds in
+`target/native-json-qualified-driver-final.log`.
+
+Parser pipelines now record the declared `json.parse` or `json.parse_exact`
+source facade from their checked `result[T, string]` payload using the existing
+direct-call handoff mechanism and recursive eligibility predicate. Argument
+checking, input ownership, pipeline order, step-local handlers, and intrinsic
+identity are unchanged. An independent int64 pipeline witness exposes this
+dispatch defect without requiring machine qualification.
+
+Fresh pre-change CLI witnesses checked and ran successfully through the
+reference path while native lowering refused the generic JSON intrinsic. Bare
+machine controls reported E0343. These characterization results identify the
+defects; they are not validation of the new implementation or regression suite.
+
+The qualified-JSON repair suite contains 23 independent tests and 32 Jett fixtures.
+It is intended to cover all four JSON operations in direct and pipeline forms,
+qualified aliases in lists, wrong-state handling, lenient and exact extra fields,
+borrowed-value preservation, primitive parser input clone/reread, debug and
+release profiles, source deletion, output publication controls, and pure
+selected-state serialization through explicit comptime, verify, and 100-trial
+property suites. Additional controls exercise exact string-key aliases and
+independent all-state reflection with field aliases, canonical ready/empty
+qualifiers, and direct selected-field loops. Runtime fixtures use
+capability-backed Stdout, with debug and frontend observations checked
+separately. Missing entries in the wrong-state payload are now covered;
+unknown or missing state tags, missing payloads, other missing required
+fields, secrecy, and broader wrapper combinations remain outside this
+suite's claim. One new group over three inactive callable/interface/actor
+payloads checks all four direct JSON APIs for a valid selected ready state,
+both runtime profiles, retained source owners, and source deletion. Those
+cases do not admit the unsupported payloads themselves as JSON targets or
+claim malformed-input behavior for them.
+
+Recorded phase checks pass: 40 codegen and 416 comptime library tests in
+`target/native-json-qualified-compiler-phases.log`, plus 125 HIR, 79 MIR,
+and 221 typechecker tests in `target/native-json-qualified-remaining-phases.log`.
+The driver library batch reported 82 passes and one temporary capture-file
+creation PermissionDenied failure; the exact failed test passed its isolated
+retry (one pass, 82 filtered) in
+`target/native-json-qualified-driver-permission-retry.log`. The original
+batch is not described as an uninterrupted passing run.
+
+At this qualified-JSON checkpoint, the compiled supplemental corpus contains
+346 tests, confirmed
+by the final JSON family gate's 39 passes and 307 filtered in
+`target/native-json-qualified-json-family-final.log` (438.34 seconds).
+That gate includes all 23 new groups on the final source and 16 existing JSON
+regressions; it is not 346 executed passes. The earlier 22-group checkpoint
+and additional group's pass remain recorded separately in
+`target/native-json-qualified-driver-final.log` and
+`target/native-json-qualified-unselected-payloads-final.log`.
+All 598 frontend fixtures pass on the repaired source
+in `target/native-json-qualified-frontend-fixtures.log` (20.66 seconds).
+The frozen `23ac34c4` complete workspace passes in
+`target/native-workspace-23ac34c4.log`, including all 346 native conformance
+tests (838.03 seconds), all 182 native object obligations, all 598 frontend
+fixtures (22.88 seconds), and doc-tests. Its full driver library batch also
+passes all 83 tests, separately from the earlier temporary-file retry.
+The head and worktree remained unchanged throughout that run. Supported-host
+acceptance for this revision remains pending in
+[workflow run 37013565734](https://github.com/vycdev/jett/actions/runs/37013565734):
+the Windows build/package job has passed; Linux and clean installed-package
+acceptance are not yet complete. Earlier phase results do not validate later
+source additions.
+This slice supplements the unchanged 207-fixture inventory; the
+broad estimate remains about 85%.
+
+### Qualified machine JSON inside optional, result, and map wrappers
+
+An additional 24 linked tests cover `optional[Session at ready]`, both arms of
+`result[Session at ready, Session at ready]`, and `map[string, Session at ready]`.
+Each wrapper crosses all four public JSON APIs with direct and pipeline calls.
+The machine's unrelated cached state contains an unsupported integer-keyed map.
+The controls exercise occupied and absent optionals, both result arms, populated
+and empty maps, and retained original owners. Three additional bare-machine
+controls keep E0343 for an empty optional, an inactive result arm, and an empty
+map; runtime emptiness does not exempt a target from public type policy.
+
+All 27 new Jett fixtures passed frontend/reference preflight in
+`target/native-json-qualified-wrapper-preflight/results.json`: the 24 valid
+cases produced exact literal stdout and empty stderr, and the three invalid
+cases reported E0343. All 24 linked tests then passed (346 filtered) in
+`target/native-json-qualified-wrapper-linked.log` (190.12 seconds), using both
+matching runtime profiles after source removal. The extended policy group
+passes (one test, 369 filtered) in `target/native-json-qualified-wrapper-policy.log`
+(7.93 seconds), preserving existing output artifacts in both profiles.
+All 27 source-format checks and Rust formatting checks pass.
+
+This test-only extension registers 370 supplemental native tests. The frozen
+346-test workspace result and these focused passes remain separate evidence;
+a complete 370-test workspace and supported-host run have not yet been accepted.
+Wrong-state wrapper errors, deeper wrapper combinations, aliases, secrets, and
+pending values retain their independent audit obligations. The broad estimate
+remains about 85%, and the fixed inventory remains 207 fixtures.
+
+### Stable ordinary-struct field local-view checkpoint
+
+The typed borrowed initializer now proves ordinary-struct field paths rather
+than requiring the selected endpoint to equal its whole owner's type. Exact
+source identity, field types, nominal refinement qualification, initializer
+coverage, and original-function validation before native compaction remain
+required. Alias storage is non-owning; dependent reads retain the real owner.
+Copied inline-function tables discard origins belonging to another body.
+
+`target/native-stable-projected-view-final-phases.log` passes all 896 library
+tests across codegen/comptime/HIR/MIR/typechecking. The final native alias gate
+passes all 12 tests (366 filtered, 11.78 seconds) in
+`target/native-stable-projected-view-final-linked.log`: eight linked cases,
+mutable/temporary publication boundaries, and three existing broad alias tests.
+Both runtime profiles execute after source deletion with exact output/status,
+independent clone ownership, and later-failure cleanup. The initial unused-type
+negative-test lookup was corrected to the actual type interner before the final
+passing phase batch; it did not require a compiler behavior change.
+
+The final driver/frontend batch passes all 83 driver library tests and all 598
+frontend fixtures in `target/native-stable-projected-view-final-driver-frontend.log`.
+The stale capture test now uses the existing mutable-root HIR boundary. The
+Linux-only projection-loan gate now checks owner consumption after creating a
+valid field alias; its zero-test Windows target is not an executed pass. Linux
+CI remains required, and the matching Windows CLI source independently refuses
+the owner change before archive lookup.
+
+This ordinary-struct checkpoint registered 378 native tests. Its later frozen
+a0bf12df workspace passed all local gates, while supported-host acceptance
+retains its separate revision-specific obligation. A qualified machine-field
+alias was source-valid but native-refused before the exact-state follow-up
+below. Neither this checkpoint nor the fixed inventory establishes full-
+language parity; the planning estimate stays about 85% and denominator 207.
+
+### Exact qualified-machine field local-view focused acceptance
+
+The exact declared MachineState owner lookup is integrated with unchanged
+source/nominal proof, persistent loans, non-owning slots and runtime ABI.
+Malformed unused state/index/endpoint/root metadata and concrete generic
+contexts pass the compiler gate: 261 tests (41 codegen, 134 HIR, 86 MIR) in
+`target/native-machine-projected-view-phases.log`. All 83 driver library tests
+pass in `target/native-machine-projected-view-driver-frontend.log`; all 598
+frontend fixtures pass in `target/native-machine-projected-view-frontend.log`
+under the corrected `fixture_suite` target.
+
+The 25-test local-alias batch passes (366 filtered, 17.72 seconds) in
+`target/native-machine-projected-view-pending-linked.log`; the typed-endpoint
+case passes separately (one test, 391 filtered, 2.80 seconds) in
+`target/native-machine-projected-view-typed-linked.log`. These are 26 distinct
+executed tests, not one combined batch. Linked cases use matching runtime
+profiles and execute after source removal, preserving original owners, clone independence, exact
+pending/intermediate errors, depth-two traces and explicit joins, terminal
+status/cleanup. Separate boundary cases prove before-publication owner-change
+refusal without looking up the archive. Generic endpoint
+modes and nominal/secret field identities are pinned by the final case. All 15
+machine Jett source-format checks and Rust formatting checks pass. Initial
+source-only preflight and the corrected E0308 fixture handler are recorded in
+[the scoped note](native_local_view_aliases.md#exact-state-qualified-machine-field-follow-up).
+
+Bare flow-narrowed machine origins, mutable backing chains, temporary roots,
+projected writes, allocating conversions and owner consume/rebind/transition
+after reachable alias creation remain outside this bounded native support.
+The actual owner-change group reaches the existing typed ownership refusal
+before archive lookup and preserves the output sentinel in both profiles.
+No source loan-expiry or temporary-lifetime contract is selected.
+
+The previous frozen a0bf12df workspace passed with unchanged head/worktree
+and exit zero at 16:01:32 UTC in `target/native-workspace-a0bf12df.log`: all 378
+native tests (785.23 seconds), all 182 object obligations (491.87 seconds), 598
+frontend fixtures (20.05 seconds), 83 driver library tests (75.05 seconds), and
+the remaining workspace/doc-tests. That prior result does not validate later
+machine source/test additions.
+
+The earlier a0f0c982 workflow
+[37019114837](https://github.com/vycdev/jett/actions/runs/37019114837) passed all
+four jobs. The a0bf12df workflow
+[37027835546](https://github.com/vycdev/jett/actions/runs/37027835546) also passes
+all four Linux GNU/Windows MSVC build/package and clean installed-package jobs.
+These accepted predecessor revisions do not establish new-source platform
+acceptance.
+
+### Current frozen revision and inferred JSON follow-up
+
+The exact-state machine repair is committed as `774b13e7`. Its complete frozen
+workspace passes with unchanged source and exit zero at 17:12:39 UTC in
+`target/native-workspace-774b13e7.log`, including all 392 native tests (858.92
+seconds), all 182 object obligations (the four-test object manifest gate passes
+in 505.90 seconds), the remaining workspace targets and doc-tests. Its
+[workflow 37035818971](https://github.com/vycdev/jett/actions/runs/37035818971)
+now passes all four supported-host jobs. Broader owner/endpoint
+combinations and independent language surfaces remain audit obligations.
+
+The applied inferred JSON serializer repair passes 14 new linked/publication
+tests (8.09 seconds), 948 crossed compiler library tests, 83 driver library
+tests, all 598 frontend fixtures, and 17 Jett format checks. Both profiles pin
+source-deleted execution, pending failure/cleanup, pure/comptime/verify/property,
+public policy and owner rereads. Its actual captures, exact logs and boundaries
+are centralized in [the scoped note](native_json_uninhabited_slots.md).
+The serializer revision `05494ed4` passes its complete frozen workspace with
+unchanged source, clean start/end and exit zero at 18:03:56 UTC in
+`target/native-workspace-05494ed4.log` and its JSON summary: all 406 native tests
+(873.42 seconds), all 182 object obligations (four-test manifest gate, 508.07
+seconds), 83 driver library tests (65.72 seconds), all 598 frontend fixtures
+(20.69 seconds), remaining workspace targets and doc-tests. Its
+[workflow 37041625704](https://github.com/vycdev/jett/actions/runs/37041625704)
+passes all four Linux GNU/Windows MSVC build/package and clean installed-package
+jobs. These accepted serializer results do not validate subsequent parser or
+bitfield changes.
+
+The applied parser source-selector repair passes all 19 direct, pipeline and
+recursive linked tests together (14.08 seconds, 406 filtered), pinning actual
+valid, occupied-slot and malformed-input lines in both profiles after source
+removal. The metadata unit passes once; the crossed library gate passes 949
+tests, followed by 83 driver library tests, all 598 frontend fixtures and all
+19 new source format checks.
+The parser revision `08f9f7e7` passes its complete frozen workspace with
+unchanged head, clean start/end and exit zero at
+`2026-10-02T19:49:44.2598850Z`, recorded in
+`target/native-workspace-08f9f7e7.log` and its JSON summary: all 425 native
+tests (878.50 seconds), all 182 object obligations (four-test manifest gate,
+506.38 seconds), 83 driver library tests (70.43 seconds), all 598 frontend
+fixtures (21.95 seconds), remaining workspace targets and doc-tests. Its
+[workflow 37053539878](https://github.com/vycdev/jett/actions/runs/37053539878)
+passes all four Linux GNU/Windows MSVC build/package and relocated installed-
+package jobs (last completion `2026-10-02T20:19:29Z`). This accepted predecessor
+does not validate the later bitfield source changes. Exact parser behavior
+and focused logs are in [the parser contract](native_json_uninhabited_parse_slots.md).
+The objective remains whole-language native parity; the about-85% planning
+estimate and fixed 207-fixture denominator do not measure completion of
+these focused slices.
+
+
+### Bitfield field local views: focused acceptance
+
+The declaration-backed Bitfield Field step now preserves exact semantic field
+type, canonical zero-based identity and the existing immutable root/path proof.
+No MIR, runtime ABI, payload schema or lifetime policy changes are required.
+Both focused HIR tests pass (134 filtered) in
+`target/native-bitfield-local-view-hir.log`. All seven new linked cases pass
+together in 3.89 seconds (425 filtered) in
+`target/native-bitfield-local-view-linked.log`, using matching profiles and
+source removal with exact application bytes, status, stderr and typed traces.
+Pending whole-owner access fails before the after-binding marker with status
+71; cleanup status 72 cannot pass. Explicit payload-copy joins preserve the
+original depth-two payload, and release omits trace events.
+
+The crossed compiler gate passes 951 library tests (41 codegen, 416 comptime,
+136 HIR, 86 MIR, 48 resolve and 224 typecheck) in
+`target/native-bitfield-local-view-phases.log`. All 83 driver library tests pass
+(86.96 seconds) in `target/native-bitfield-local-view-driver.log`, and all 598
+frontend fixtures pass (21.88 seconds) in
+`target/native-bitfield-local-view-frontend.log`. All seven new source-format
+checks pass in `target/native-bitfield-local-view-format.json`; Rust formatting
+and diff checks pass.
+
+The bitfield checkpoint registers 432 supplemental tests. The later clean
+`cb617ecf` workspace below includes this repair and passes all 182 object
+obligations. Supported-host jobs for both owner-view revisions now pass, as
+recorded below. Initial source characterization,
+exact qualification/ownership limits and required gates are in
+[the bitfield contract](native_bitfield_projected_local_views.md). The accepted
+08f9f7e7 result above is predecessor evidence, not new-head acceptance. The
+about-85% coarse estimate and fixed 207 inventory remain unchanged.
+
+
+### Direct secret aggregate local views: focused acceptance and open observation
+
+The selected exact one-Secret owner/endpoint proof is integrated. It retains
+declared nothing/already-secret nominal exceptions, root/index/type anchoring,
+immutable loans, non-owning storage and existing pending guards. Three focused
+HIR tests pass (136 filtered, 0.00 seconds) in
+`target/native-secret-owner-local-view-hir.log`. The warning-interrupted first
+invocation produced no test result and is not acceptance evidence.
+
+All seven linked cases pass together (2.82 seconds, 432 filtered) in
+`target/native-secret-owner-local-view-linked.log`, with matching profiles and
+source-deleted execution. Six pin successful outcome parity. The pending case
+separately pins the raw reference message and native `[redacted]` error, matching
+`before:secret\n`, status 71 and cleanup. This preserves the already recorded
+[open observation boundary](../../open_design/debug_print_hidden_secrets.md);
+it neither weakens native redaction nor claims diagnostic parity.
+The initial six-pass/one-failure attempt (4.56 seconds) is retained in
+`target/native-secret-owner-local-view-linked-initial-mismatch.log`. Its mistaken
+shared error oracle was corrected to the existing separate-backend contract;
+no source policy or interpreter behavior was changed.
+
+All 954 crossed compiler library tests pass (41 codegen, 416 comptime, 139 HIR,
+86 MIR, 48 resolve, 224 typecheck) in
+`target/native-secret-owner-local-view-phases.log`.
+All 83 driver library tests pass (66.62 seconds) in
+`target/native-secret-owner-local-view-driver.log`; all 598 frontend fixtures
+pass (22.51 seconds) in `target/native-secret-owner-local-view-frontend.log`.
+All seven source-format checks, Rust formatting and diff checks pass in
+`target/native-secret-owner-local-view-format.json`.
+
+The corpus registers 439 supplemental tests. The exact `cb617ecf` workspace
+passes with clean start/end and unchanged head at
+`2026-10-02T20:55:57.0941072Z`, recorded in
+`target/native-workspace-cb617ecf.log` and its JSON summary. All 439 native
+conformance tests pass (905.04 seconds), all 182 object obligations pass in the
+four-test manifest gate (516.91 seconds), and all 83 driver library tests
+(91.44 seconds), 598 frontend fixtures (19.08 seconds), remaining workspace
+targets and doc-tests pass. The wrapper reports exit zero and 92 successful
+result groups. This accepts both owner-view repairs at that exact source
+revision; it does not settle the preserved observation-policy boundary.
+The documentation-only `194ce065` revision has identical compiler/runtime/test
+sources and passes all four jobs in
+[workflow 37064035604](https://github.com/vycdev/jett/actions/runs/37064035604):
+Windows MSVC static-CRT and Linux GNU build/package jobs, followed by both
+relocated installed-package jobs (last completion `2026-10-02T22:10:29Z`).
+The standalone `cb617ecf` run 37060490263 was superseded and cancelled before
+starting any job; that cancelled run is not acceptance evidence. The bitfield
+`5d919052` revision separately passes all four jobs in
+[workflow 37058389987](https://github.com/vycdev/jett/actions/runs/37058389987)
+(last completion `2026-10-02T21:16:06Z`). Exact selected rules and actual seven-source
+characterization are in
+[the secret-owner contract](native_secret_owner_projected_local_views.md).
+The about-85% estimate, fixed 207 inventory and whole-language 100% objective
+remain unchanged; the independent MIR staging repair is not applied.
+
+
+### Uninhabited-input callback descriptors: focused acceptance
+
+An inferred empty-list callback remains an inhabited function descriptor even
+when a non-capture input cannot exist. Native emission now retains its exact
+captures, label, cloning, pending state and cleanup with a nonzero trap entry;
+it creates no Never argument/result carrier and emits no original body effect.
+Original descriptor metadata and all original local/debug types are checked
+before preparation. Named enclosing functions compact only unused frame slots
+across all original blocks and typed dependencies; surviving callable Never
+parameters, locals and invocations remain invalid.
+
+All 966 compiler library tests pass (52 codegen, 416 comptime, 139 HIR, 87 MIR,
+48 resolve and 224 typecheck) in `target/native-uninhabited-callback-phases.log`.
+All nine linked regressions pass together (3.65 seconds, 439 filtered) in
+`target/native-uninhabited-callback-linked.log`, using matching profiles and
+source deletion. Direct/returned/captured descriptors, owned cloning, pending
+joins, Never-result identity, loop/equality bodies, invoked integer controls and
+terminal failure cleanup retain exact outcomes. Nine Jett source-format checks
+and Rust formatting pass. The corpus registers 448 supplemental cases.
+All 83 driver library tests pass (69.44 seconds) in
+`target/native-uninhabited-callback-driver.log`; all 598 frontend fixtures pass
+(24.60 seconds) in `target/native-uninhabited-callback-frontend.log`.
+
+The first isolated unit attempts failed before MIR because their loader does
+not load the stdlib facade. Declared source helpers corrected those test inputs;
+the driver cases retain full stdlib evaluation. The actual factory diagnostic
+then exposed unused child formals in the enclosing frame table. Initial logs,
+pre-change captures, exact bounds and remaining gates are in
+[the descriptor contract](native_uninhabited_callback_descriptors.md).
+The subsequently repaired `90d82701` full workspace/object and supported-host
+results are recorded below. The earlier 439-case predecessor alone could not
+supply that proof. The whole-language objective remains 100%, the fixed
+inventory remains 207, and the broad planning estimate stays about 85%.
+
+## Original function metadata in absent sum arms
+
+The clean `d14b830b` full native suite reports 446 passes and two existing
+sum-arm failures (941.02 seconds). Original preflight rejects a closure's exact
+Never result before checked impossible-arm preparation can remove the closure.
+The remaining object/workspace targets were stopped after that complete native
+suite failed; `target/native-workspace-d14b830b.json` records exit -1, unchanged
+clean head and the stop reason. No complete-workspace or object acceptance is
+claimed for this attempt.
+
+OriginalMetadata type validation now permits that exact function-result
+metadata recursively while preserving view-schema and inhabited child checks.
+NativeValue classification remains strict, and a return-only Never signature
+still grants no descriptor authority or runtime capture/value representation.
+The three new codegen units pin all three absent optional/result arms, omitted
+closure symbols, nested metadata validity, malformed child/result/view schemas
+in both local and debug types, and surviving return-only rejection.
+
+All 969 compiler library tests pass in
+`target/native-original-function-metadata-phases.log`. The two previously failing
+linked tests pass (48.51 seconds) in
+`target/native-original-function-metadata-linked-sum-arms.log`, retaining both
+profiles, pending diagnostics, source deletion and native verify/property
+execution. All nine callback cases pass again (3.82 seconds) in
+`target/native-original-function-metadata-linked-callbacks.log`. Exact repaired
+head `90d82701` subsequently passes its clean complete workspace and all 182
+object obligations. Its unchanged-head log and JSON are
+`target/native-workspace-90d82701.log` and `.json`: 448 native cases pass in
+944.48 seconds; the four-test object manifest gate passes in 553.77 seconds;
+all 83 driver library tests, 598 frontend fixtures, remaining targets and
+doc-tests pass. Exit zero and 92 successful groups complete at
+`2026-10-03T08:31:51.9056689Z`. Exact-head supported-host workflow 37108099164
+passes all four Windows/Linux build/package and relocated installed jobs, last
+completing `2026-10-03T09:03:23Z`. The corpus is 448, the fixed inventory 207, and the
+planning estimate about 85%.
+
+## Internal call-view stages across handlers
+
+Original explicit borrowed arguments use typed MIR Begin/End scopes when the
+existing cloneable snapshots cannot preserve the borrow. Exact checked local
+and field origins, pending receiver order, normal owned temporary storage and
+post-operation owner use are covered; source alias lifetime rules and ownership
+changes during later operands remain independent. The focused execution record
+and complete acceptance obligations are in
+[the call-view contract](native_scoped_call_view_staging.md). This is additional
+native implementation coverage, not whole-language completion or a denominator
+change.
+
+## Latent nested and secret-result callback metadata
+
+The isolated follow-up preserves exact Never-input descriptor authority while
+checking latent nested function bodies and direct Secret[Never] result metadata.
+Validated target/signature/mode/capture edges precede cycle-safe body traversal;
+no nested environment, native callable root, runtime carrier or ABI is created.
+Live return-only callbacks, created Never captures, phantom values, malformed
+metadata and opaque Resource layouts remain rejected. Exact selected proof and
+centralized execution evidence are in
+[the descriptor note](native_uninhabited_callback_descriptors.md#latent-nested-closures-and-direct-secret-results).
+
+All 63 codegen tests and 27 linked regressions pass with unchanged source hashes.
+The broader compiler run passes 1052 tests (989 library units plus 63 integration
+tests); its wrapper's incorrect expected-count guard is not a compiler failure.
+The 83 driver, 598 frontend and eight backend-lowering gates also pass with
+unchanged sources. Exact clean `72237c4a` subsequently passes its complete
+464-case workspace, all 182 object obligations and 92 successful result groups;
+its supported-host workflow remains in progress. Independently, `55027914`
+passes all four supported-host jobs as well as its complete local workspace.
+Exact-head acceptance records are centralized in the descriptor note above.
+The fixed inventory remains 207, object obligations 182, broad estimate about
+85%, and whole-language goal 100%.
+
+## Resource type-only kind tags
+
+The checked builtin enum schema and shared reflection mapper now agree on the
+accepted opaque `resource_type` tag. Three regressions cover source comparisons,
+reference type metadata with empty shapes, and a native object reached through
+an ordinary project caller. The affected 800 compiler tests and 598 frontend
+fixtures pass with unchanged source hashes. This adds no live Resource carrier,
+provider, source constructor or cleanup behavior. Clean `616b51b9` subsequently
+passes its full workspace; supported-host acceptance for that head remains
+separate. Exact evidence and remaining
+lifecycle prerequisites are in [the active note](native_resource_kind_tags.md).
+
+## Checked private resource-hook identities
+
+The identity-only prerequisite creates associated private Function DefIds through
+ordinary resource declaration resolution and checks complete function types and
+ownership modes against the exact nominal Resource definition. Stdlib FileId
+and independent loader origin, ordinary privacy/order/duplicates and unused
+metadata validation are required. Production catalogs stay empty; no source
+constructor, provider operation, runtime Resource value or native carrier is
+created. See [the selected contract and scope](native_resource_hook_identity.md).
+
+The isolated final focused run passes six resolver, seven checker and one
+span-collision test with ten unchanged Rust source hashes. Exact results/logs
+are retained in `target/native-resource-hook-focused-after-diagnostic.json` and
+its referenced per-gate logs. The earlier missing-`mut` compile failure and
+source-body diagnostic expectation correction are not successful gates. The
+broader 1037 compiler library tests, 63 codegen object integration tests, 83
+driver tests, 598 frontend fixtures and eight backend-lowering tests also pass
+with unchanged sources in `target/native-resource-hook-phases.json`. The
+subsequent clean `616b51b9` full workspace passes, as recorded below; its
+supported-host run remains in progress. No reference or native Resource
+lifecycle was executed. This is checked identity proof, not a
+resource-provider parity row closure or inventory/percentage increase.
+
+
+## Resource static ownership boundaries
+
+The accepted local predecessor is exact clean `616b51b9`: its frozen full
+workspace exits zero with all 92 result groups, 464 supplemental native cases
+(940.26 seconds), all 182 object obligations (four manifest groups, 534.07
+seconds), remaining workspace targets and doc tests passing. Start/end HEAD and
+cleanliness agree in `target/native-workspace-616b51b9.json`; the run ends at
+`2026-10-03T12:11:54.8924860Z`. The older `62de6505` supported-host workflow
+[37118139645](https://github.com/vycdev/jett/actions/runs/37118139645) succeeds in
+all four Windows/Linux build and installed relocation jobs. The exact
+`616b51b9` workflow 37119573097 is still in progress; predecessor platform
+acceptance does not transfer to this head or the new guards.
+
+The new static guards refuse recursive Resource-copy acquisitions (E0364),
+known Resource views stored in owning payloads (E0401), and exact Resource-root
+printing/value reflection (E0300). Exact Resource-bearing machine transition
+sources reuse existing owned-argument checks. Safe views, unrelated copyable
+fields, actual owned payload transfers, empty carriers and type-only metadata
+remain admitted. Nested printing, hidden-Secret observation and other ownership
+paths remain separate work; no runtime/provider/native Resource value is enabled.
+
+All 36 focused groups pass, including 21 new source groups, in
+`target/native-resource-source-guards-focused-after-diagnostic.json`. The original
+20 sources and additional 14 payload sources all parse/resolve and are checked
+in both profiles with stable inputs. Their reports show the intended refusals
+and retained controls; these probes do not evaluate comptime/property bodies,
+install providers or execute native Resource code. See the
+[complete static scope and source evidence](native_resource_ownership_boundaries.md).
+
+The broader wrapper passes 1058 library units (254 typechecker units), 63
+codegen object integration tests (1.11 seconds), 83 driver tests (69.79 seconds),
+598 frontend fixtures (22.13 seconds) and eight backend-lowering tests. All three
+source hashes remain unchanged; `target/native-resource-source-guards-phases.json`
+ends with exit zero at `2026-10-03T12:28:58.9045108Z`. New complete-workspace and
+supported-host acceptance remain pending. This prerequisite adds no linked
+Resource case or object obligation: the about-85% estimate, fixed 207 inventory,
+182 obligations, 464 supplemental cases and whole-language 100% objective stay
+unchanged.
+
+
+## Immutable checked Resource program handoff
+
+Exact clean `b7180bd9` completes its frozen full workspace with exit zero and
+all 92 successful result groups. It passes 464 supplemental native cases
+(958.70 seconds), all 182 object obligations (four-test manifest gate, 650.63
+seconds), remaining workspace targets and doc tests. Start/end HEAD and
+cleanliness match in `target/native-workspace-b7180bd9.json`; the actual session
+1952 is terminal with exit zero and ends `2026-10-03T13:18:31.4769949Z`.
+Its supported-host workflow
+[37123835396](https://github.com/vycdev/jett/actions/runs/37123835396) now succeeds
+in all four Windows/Linux build and installed relocation jobs. The last Windows
+installed job ends `2026-10-03T14:14:19Z`; the exact-head receipt is retained in
+`target/native-platform-b7180bd9.json`. Earlier in-progress observations are
+superseded by that result, without transferring acceptance to exact94.
+
+Exact predecessor `616b51b9` now also has supported-host acceptance: workflow
+[37119573097](https://github.com/vycdev/jett/actions/runs/37119573097) succeeds in
+both Windows/Linux build and installed relocated-package jobs. The final
+Windows installed job completes `2026-10-03T13:14:20Z`. This supersedes that
+run's earlier in-progress observations; it does not validate the new handoff.
+
+`CheckedResourceProgram::prepare` owns its ParseResult and derives resolution
+and checking internally with explicit loader origins/private catalog input.
+Only immutable source/resolver/checker/interner observations are exposed. Error
+diagnostics from each source phase prevent sealing, and complete unused hook
+identity/signature checks still apply. Public hook validation adds independent
+checker-error refusal while ordinary checking keeps inspectable source repair
+diagnostics. No private operation executes or Resource carrier is installed.
+
+The root-owned focused gate passes all **43 Resource groups**, including seven
+new source-driven snapshot groups and the strengthened invalid-body phase-gate
+assertion. The broader **454 library tests** pass: 139 HIR, 54 resolver and 261
+typechecker. Five compiler hashes remain unchanged in
+`target/native-resource-checked-program-focused.json` and
+`target/native-resource-checked-program-phases.json`, both exit zero. The
+[scope and evidence note](native_resource_checked_program.md) preserves the
+pre-Rust contract and separates this handoff from driver retention, reached-hook
+runtime eligibility, call ownership, cleanup and native Resource admission.
+
+Full-workspace and supported-host validation for this new change remain pending.
+The fixed 207 inventory, 182 object obligations and 464 supplemental native
+cases are unchanged; the about-85% estimate is still coarse planning and the
+whole-language native-codegen objective remains 100%.
+
+
+## Retained reference preparation
+
+The isolated reference follow-up over exact `94bb6b2e` retains a private
+`Arc<CheckedResourceProgram>` and primary FileId0 main span/namespace alongside
+unchanged public BuildResult observations. Required evaluation uses that same
+merged AST and checked facts. Runtime gates compilation and missing-snapshot
+failures before providers, registers the saved module once and performs no
+post-preparation read/parse/rediscovery. The macOS preliminary graphics-thread
+read remains scoped outside this guarantee. Through-failure diagnostics preserve
+earlier phase warnings and typed metadata causes. This enables no live Resource,
+provider, callable descriptor authority or native ABI. See
+[the selected contract and scope](native_prepared_reference_driver.md).
+
+All **46 focused Resource groups** and **four new driver groups** pass in
+`target/native-prepared-reference-driver-focused.json`, ending
+`2026-10-03T14:12:41.4871736Z` with exit zero and both formatted source hashes
+unchanged. These include three new warning/cause groups and four driver controls
+for deleted or mutated sources, primary selection despite a support main,
+once-only frontend/runtime observations, and failure before provider setup.
+All **544 driver/HIR/resolver/typechecker tests** also pass: 87 driver, 139 HIR,
+54 resolver and 264 typechecker. `target/native-prepared-reference-driver-phases.json`
+ends with exit zero at `2026-10-03T14:15:36.7702211Z`; both source hashes remain
+unchanged. All **eight backend-lowering regressions** (198.73 seconds), including
+the fixed inventory lowering check, and **598 frontend fixtures** (24.41 seconds)
+pass in `target/native-prepared-reference-driver-frontend.json`, ending
+`2026-10-03T14:20:34.8384468Z` with exit zero and the same two source hashes.
+New full-workspace and supported-host acceptance remain pending.
+
+Exact94's frozen full workspace is **not accepted**: it ends with Cargo exit101,
+91 successful result groups and stable clean HEAD in
+`target/native-workspace-94bb6b2e.json` at `2026-10-03T14:10:25.5278499Z`.
+Its native suite passes 463 cases and fails one NamedTempFile.reopen operation
+with PermissionDenied. All four object-manifest tests pass (562.05 seconds),
+but that does not make the workspace successful. The affected exact94 native
+case passes its separate rerun (one passed, 463 filtered, 7.98 seconds) under
+elevated execution; this is a changed permission context, not acceptance of the
+failed whole-workspace run. The original failure remains evidence.
+
+The last accepted local predecessor remains `b7180bd9`, with its 464 native
+cases, 182 object obligations and 92 result groups recorded above. The same b718 head also has all-four supported-host acceptance, recorded above;
+616 remains historical. These receipts do not transfer to exact94 or this
+follow-up. The exact94 workflow 37126837754 is still in progress. No linked native case or
+object obligation is added: fixed 207 inventory/182 obligations, 464 supplemental cases, about-85% planning
+and the whole-language 100% goal remain unchanged.
+
+## Typed caller ownership integration
+
+The isolated caller-ownership change over `a9a6cd63` implements Rule24 caller
+disposition and Rule25 ordinary-data observation. Sealed source-call facts rejoin
+exact declarations, argument permutations and raw/physical types through HIR,
+MIR and native validation. Generated calls, temporary staging, viewed loops and
+handled defaults carry separate checked proofs. The
+[implementation contract](native_call_ownership_facts.md) records the scope.
+
+The earlier formatted caller-core checkpoint passed 304 checker, 188 HIR,
+196 MIR, 70 backend and 63 object-emission tests, plus the MIR doctest. Focused
+handled-producer and builder-generation checks passed 66 MIR acquisition groups,
+seven generation groups, three native emission groups and both original native
+regressions. All seven failures of the historical 472/479 run subsequently
+passed their individual replays.
+
+The complete Windows native suite now passes **480/480** at exact committed
+`a63f891016fac7dc50fffdde33be8b0ce45c655f`. Root terminal `06b7f8` and
+`target/native480-after-owner-generation/receipt.json` record zero failures and
+stable HEAD/tracked sources, ending `2026-10-04T14:20:12.987780+00:00`
+(2320.39 seconds). Resource candidate changes are absent from that run.
+This is complete native-corpus acceptance for that caller head, not whole-language
+completion or new current full-workspace/platform acceptance. Fixed lowering
+remains 182 fixtures; a separate earlier stable recovery scan passed all 182.
+Current 182-object, workspace and supported-host receipts remain required.
+
+The accepted unchanged a9 baseline passed 92 workspace result groups, 464 native
+cases and all 182 object obligations. Workflow 37130142896 passed all four
+Windows/Linux build and installed jobs. Those historical receipts do not transfer
+to the Resource candidate. The fixed inventory remains 207 with 182 object
+obligations and the rough feature estimate stays 85%. Async/actor lifetimes,
+broader caller-generation/capture/reflection cases and Resource backend/provider
+execution remain in the full 100% objective.
+
+## Resource reference lifecycle execution
+
+The private reference Resource implementation over a63 passes all **36 focused
+tests** in `target/native-resource-after-checked-call-relay-focused.log`
+(root terminal `923450`; zero failures, 418 filtered, 0.07 seconds).
+The suite includes exact ordinary/mutual declaration identity, retained source
+registration, real both-profile Source construct/borrow/move/close and reverse
+cleanup, occupied returns, indirect close, later lexical actual failure,
+ordinary closure return7, exact terminal list-kernel failure and mixed cleanup
+failure precedence. Provider events and zero live custody/registry entries are
+asserted before teardown. Closed descriptor/absence and required-worker purpose
+controls do not invoke a runtime provider. The
+[detailed reference scope](native_resource_hook_identity.md#reference-lifecycle-execution)
+keeps runtime eligibility, custody and catalog authority separate.
+
+These are private reference tests with a compiler-test-only scripted provider,
+not native Resource execution. Production catalogs/providers remain disabled;
+no shipped Resource API or native hook/carrier/drop path is admitted. Whole
+scoped/reflected/indirect/worker and aggregate ownership breadth, real providers,
+async/actor cancellation and late-completion paths remain pending. Broad library,
+whole-workspace and supported-host acceptance of the Resource candidate are
+also pending. The 36 tests add no native inventory row and do not change the
+480-case caller receipt, 207/182 fixed denominators or about-85% estimate.
+
+## Checked Resource reference transport follow-up
+
+The later scoped/required/generic, pipeline and mutable-assignment transport
+passes **83/83** focused reference groups (`61a351`) in
+`target/native-resource-concrete-intrinsic-pipeline-syntax-fixed-focused.log`.
+Exact original region/body/step/statement proofs survive nested entry and restore
+metadata/cursors. Concrete intrinsic metadata preserves generic substitutions
+and alias names; copied source packets and foreign contexts remain refused.
+The complete formatted gate passes **1,186/1,186** (501 Comptime, 87 driver, 598 frontend; `4ba85c`) in `target/native-resource-transport-formatted-property-fixed-broad.log`. Pipeline actuals retain lexical order, and assignment replacement retains the
+previous owner until RHS succeeds and cleanup/publication complete.
+
+The prior 36/43 receipts remain historical. The foundation `7157f564`
+[supported-host run](https://github.com/vycdev/jett/actions/runs/37217759157) passed
+all four jobs and excludes this follow-up and custody core `92421063`. These reference
+controls do not execute native Resource values. The 480-case native caller receipt,
+fixed 207/182 inventory and approximate 85% estimate keep their separate scopes;
+full providers, aggregates, capture/reflection/refinement breadth and
+async/actor/cancellation native execution remain whole-goal requirements.
+
+## Checked Resource HIR/MIR handoff
+
+The original checked Resource manifest and exact Source hook calls now survive
+HIR-to-MIR lowering, including unused hook validation and lexical argument
+order. The five focused Source groups pass (`852dfc`). The formatted complete
+phase gate passes **522/522**: 191 HIR, 198 MIR, 70 codegen and 63 object-emission
+tests (`961b04`, `target/native-resource-manifest-metadata-fixed-phase.log`).
+Earlier foreign nested-type rejection is pinned at manifest validation, with
+the lower native type gate still tested independently.
+
+This is checked metadata preservation. Native Resource custody operations,
+ownership/drop CFG, registration/ABI and linked Source execution remain pending.
+These phase receipts do not extend the separate 480-case native caller receipt
+or foundation-only platform acceptance. The fixed 207/182 inventory, approximate
+85% feature estimate and whole-language 100% objective remain unchanged.
+
+## Native Resource registration protocol
+
+The bounded private runtime metadata issuer now validates every layout row and
+issues context-bound nominal kind/slot metadata without creating a provider,
+payload, grant, owner or loan. Exact guarded application and independent
+byte/API review precede the initial **9/9** registration replay (`f753aa`). A
+separate containing-function signature consistency correction adds an unused
+Return-frame refusal control. The formatted full runtime passes **167/167**,
+including ten registration and thirteen core custody controls (`56e7ac`,
+`target/native-resource-registration-formatted-library.log`).
+
+These are runtime Rust protocol tests. The new metadata issuer has no connected
+native Source ABI or provider, and the compiler still refuses Resource execution
+without the dedicated ownership/drop plan. They do not enlarge the separate
+480-case native caller acceptance, fixed 207/182 inventory or approximate 85%
+estimate. Matching native Resource linked execution in both profiles, then full
+providers, aggregates and concurrency breadth, remain required.
+
+## Source-authenticated ownership handoff
+
+The original checked HIR/type archive and constructor-emitted MIR witness now
+support a separate `ResourceOwnershipPlan`. It records exact scopes, operation
+and provisional-return frames, owner holders, incoming views, bounded loans,
+transfers, occupied sum extraction and cleanup obligations. Original/current
+Source call associations preserve bare owned Resource-to-view custody without
+creating ordinary owning operand claims. Copied queries, changed call sites,
+operands, Source certificates, evaluation order and nominal type meanings are
+refused. Unnamed Resource-bearing intermediate expressions retain their witness.
+Canonical block/local compaction retains exact current associations.
+
+All **12 focused ownership groups** pass (`155203`,
+`target/native-resource-ownership-associated-focused.log`). The Source-derived
+missing nominal-table regression passes (`fe7b0a`), returning the precise error
+without a panic. The original nominal fixture retains both field-corruption
+oracles after copying the complete original nominal tables and selecting its
+actual Source Holder type. The malformed-type phase controls exposed a validation
+ordering bug; valid type/invocation metadata is now required before custody
+queries, preserving the exact manifest diagnostic and independent scalar refusals.
+
+The complete formatted affected gate passes **535/535** (192 HIR, 210 MIR,
+70 codegen, 63 object-emission), plus 32 type-library tests and one MIR doctest
+(`3c6a8a`, `target/native-resource-ownership-valid-metadata-phase.log`). Earlier
+failed runs remain diagnostic evidence. This is initial compiler ownership
+analysis: connected native frames, provider/ABI operations, operational cleanup,
+handled actual normalization, complete aggregates/reflection and linked binaries
+executed after source deletion remain required. The separate 480-case caller
+receipt, fixed 207/182 inventory and approximate 85% estimate are unchanged.
+
+The broader driver/frontend gate also passes **693/693**: 87 driver library,
+8 backend-lowering tests (including all 182 run-pass lowering obligations) and
+598 frontend fixtures (`450ea4`,
+`target/native-resource-ownership-driver-frontend.log`). The previous registration
+commit's Windows CI job failed its CLI native-setup capture test with a main-thread
+stack overflow; that separate platform regression is under investigation and is
+not represented as current ownership or whole-workspace acceptance.
+
+## Native context adapter and custody operations
+
+The private runtime adapter connects the existing authenticated stationary
+context lease, bounded layout issuer, registry and custody core. Exact current
+attempt, frame, owner, loan, prepared hook and Resource sum records retain the
+non-cloneable core tokens. Ordinary and Resource lookup IDs share one checked
+monotonic allocator. Installation publishes a scripted provider and paired
+ordinary Network grant transactionally after preflight; that provider is test
+only. Production state starts absent with disabled providers and no new exported
+Resource leaf.
+
+Real core operations now cover root entry, Operation frames, direct/descriptor
+hooks, acquisition, moves, bounded borrowing, close/drop, occupied sums, staged
+replacement and protected reverse cleanup. Completion preserves the observed
+body status verbatim and separately selects cleanup, host panic and current
+ordinary/Resource body failure. Ordinary FailureTake is neither invoked nor
+reset by the adapter. Refused transfers retain the old owner; a cleanup fault
+cannot publish success. Borrow domain Fail stays ordinary Result data.
+
+Initial compilation found three private API/field-name integration errors. The
+first runnable focused check passed 13/14 and exposed string-only cleanup being
+used for an ordinary borrow Result. The bridge now uses the existing recursive
+native destructor, and an additional real-provider BorrowFail control checks
+sum/string retirement, duplicate-drop refusal, clean completion and exact events.
+All **15/15 focused groups** pass (`fd8577`,
+`target/native-resource-state-adapter-companion-fixed-focused.log`). After
+formatting, the full runtime package passes **182 unit + 13 integration tests**
+(`96d995`, `target/native-resource-state-adapter-formatted-runtime.log`). The
+earlier compile/failure logs remain diagnostic evidence.
+
+These are runtime host-protocol controls, not linked Source execution. Exact
+Source child Scope/Return activation, resident incoming views, connected C leaves
+and emission, operational compiler cleanup, the matched archive and linked
+source-deleted binaries in both profiles remain required. The adapter-head Windows
+CLI setup-capture stack overflow is recorded separately; the later helper
+repair below supersedes that pending local regression. Broader
+aggregate/reflection/refinement, provider and concurrency coverage remains part
+of the full goal. Native caller 480/480, the fixed 207/182 inventory and the
+approximate **85%** feature estimate retain their separate scopes.
+
+## Windows lowering stack repair
+
+The unchanged CLI native-setup capture test reproduced a main-thread stack
+overflow at Resource ownership and adapter heads. The adapter-head Windows CI
+also completed the native conformance suite with **480/480 passing** before the
+workflow failed its separate CLI capture target (`b32d80`, workflow
+`37244085637`). This is current adapter-head supported native execution evidence;
+it still includes no native Resource lifecycle case.
+
+The repair extracts the existing heavy HIR statement/equality/inline-function
+branches and MIR expression/per-actual branches into private helpers. Original
+Source facts, Resource call capture, preflight, lexical order, shared call-view
+scope, rollback, spans, diagnostics and context restoration remain at the same
+operations. Source fixtures, assertions, snapshots, launcher order and stack
+sizes are unchanged. Exact guarded application reconstructs both files and all
+39 hunks (`3a8820`); the independent reconstruction record agrees.
+
+The original regression now passes **1/1** (`285533`), and the formatted full
+CLI capture target passes **9/9** (`508636`). The formatted phase gate passes
+**535/535** HIR/MIR/codegen/object checks plus 32 type tests and the MIR doctest
+(`f8fe67`). The broader gate passes **693/693**: 87 driver library, 8 lowering
+checks including all 182 run-pass fixtures, and 598 frontend fixtures (`647ede`,
+`target/native-windows-stack-decomposition-driver-fixtures.log`). An initial
+command used the nonexistent test target frontend; no driver test ran in that
+attempt. The corrected fixture_suite command supplies the actual receipt.
+
+Actual Debug assembly measurement (`779571`,
+`target/native-windows-stack-decomposition-frame-measurements.json`) records
+MIR lower_value decreasing from 169,448 to 15,272 bytes and the ordered-call
+loop from 73,736 to 4,504 bytes. Its separate per-actual helper uses 70,104 bytes.
+HIR lower_expression decreases from 117,624 to 106,200 bytes and lower_statement
+from 108,552 to 100,216 bytes. These are individual function-frame measurements,
+not a whole-program stack limit or proof of every recursion shape.
+
+The local platform regression is repaired. Whole-head supported-host CI and
+connected Resource Source ABI/emission/cleanup and linked lifecycle execution
+remain required. The fixed 207/182 inventory and approximate 85% coverage
+estimate remain unchanged; runtime/metadata checks do not supply the missing
+Resource native execution.
+
+## Resource execution family and layout prerequisite
+
+Resource-free original direct Source callers now belong to the authenticated
+Resource execution family. Fresh whole-program ownership plans project exact
+formal facts, sum shell roles, Scope/Return distinctions and the actual
+driver-selected entry into deterministic immutable v2 layout metadata. The
+readonly object accessor emits no Source body or provider execution.
+
+Eight focused groups pass in both compiler profiles. The formatted compiler
+gate passes **543/543** plus the MIR doctest (`fc3f02`); the final Return
+projection passes all **74 codegen and 63 object checks** (`45ddfe`). The driver
+gate passes **693/693** (`b9de51`). Corrections preserve the existing owned
+runtime-capability entry rule and private constructor authority. See the
+[implementation receipt](native_resource_hook_identity.md#resource-execution-family-and-emitted-layout).
+
+Native Resource Source execution remains unaccepted until dedicated body/ABI
+emission and cleanup run in linked binaries with Source inputs removed. The
+native **480/480** result remains the separate adapter-head Windows test receipt;
+it contains no admitted Resource lifecycle case. The approximate **85%** feature
+coverage estimate remains unchanged. Remaining aggregate, captured/reflected,
+refinement, provider and concurrency cases stay within the full goal.
+
+## Native Source runtime transition gate
+
+At the Source runtime successor, all nine focused Source controls pass, as do
+three v2 registration, two all-or-nothing transfer and fifteen retained adapter
+controls. The repaired formatted runtime package passes 196 unit and thirteen
+integration tests (`fd04d3`). One historical malformed-header assertion was
+updated because v2 is now supported; unsupported versions remain refused.
+
+This supplies host/runtime and C-boundary evidence only. It does not add a
+Source-native lifecycle fixture or close the Resource execution row. Generated
+bodies, ordinary companion cleanup, matched archive and Source-deleted linked
+runs remain pending; whole-language parity remains the goal and the broad
+estimate stays about 85%. See the [runtime handoff](native_resource_hook_identity.md#native-source-runtime-and-custody-leaves).
+
+The final Source runtime successor additionally passes three causal ordinary
+companion ownership regressions and five exact root-outcome controls. The final
+formatted runtime gate is **204 unit plus thirteen integration tests**
+(`716d31`). The malformed companion controls were observed failing before the
+fix (`bf61fa`) and passing after it (`5af1b8`). Root-outcome evidence (`4f200a`)
+preserves original body zero independently of cleanup failure and rejects
+active/stale/foreign or wrong-purpose observations before effects. These remain
+host/C protocol checks; generated Source-native lifecycle admission is pending.
+
+## Resource ordinary companion compiler gate
+
+The fresh-plan companion analysis passes three both-profile Source groups and
+**546 HIR/MIR/codegen/object checks plus the MIR doctest** (`f48b08`). It preserves
+ordinary initialization/liveness/alias/move/type/Source call checks and excludes
+Resource endpoints from ordinary owned storage. Current expression identity
+selects already validated roles; public ordinary Resource refusals remain.
+Readonly acquisitions borrow the same fresh immutable program. This compiler
+gate does not establish emitted Resource bodies or linked lifecycle execution;
+the fixed inventory and approximate 85% feature estimate are unchanged.
+
+## Direct Resource body and matched archive checkpoint
+
+The direct Resource emitter's five original-Source object/ABI groups pass in
+both compiler profiles. The formatted codegen/object/HIR/MIR gate passes
+551 checks plus the MIR doctest; a detected ordinary CFG regression is repaired
+by allocating Resource failure blocks and cleanup slots only in the selected
+family. Ordinary runtime checking passes 217 tests. Four exact report encoder
+controls and six actual driver decoder controls also pass.
+
+Both private Windows MSVC runtime profiles are compiled and inspected with
+the actual static-CRT flags, native-library vector and discovered SDK/linker.
+Each archive contains exactly one main, eight private test exports and 32
+Resource leaves. The production archive excludes private main/test exports.
+The HOST C ABI controls pass with each measured archive, including malformed
+input, foreign/stale context, repeated entry and output-capacity refusals. These
+handwritten controls add no Source coverage. Their actual primary report shows
+zero obligations before destroy and exact Constructed/Finalized events.
+
+The real reference gate and native gate each pass five original Source scenarios
+under both profiles: connected ownership/borrow/return/close, factory failure,
+later-actual ordinary failure, implicit drop and finalizer panic. Native binaries
+run after both Project and synthetic Stdlib directories are deleted. The strict
+report checks original body/cleanup outcomes, messages, events, exhausted script,
+ordinary storage and every Resource obligation before exactly one destroy.
+These are ten native executions in one conformance group, separate from the
+earlier 480-case corpus. The first local Windows compiler-test slice is accepted;
+production provider and supported-host distribution acceptance remain pending.
+
+The actual broader driver gate passes 693 tests, including all 182 lowering
+fixtures. Indirect/aborted/Replace and broader Resource semantics remain within
+the full goal. The fixed 207/182 inventory and rough 85% feature estimate retain
+their separate scopes. The private measured library order begins bcrypt then
+advapi32; the production canonical vector reverses those first two. The reviewed
+private prerequisite retains actual measured ordering and changes no production
+launcher validation or installed manifest.
+
+### Plain Resource replacement pre-effect validation
+
+At the runtime successor to cc06aa1f, `native-resource-replacement-preflight-focused.log` passes four replacement groups and `native-resource-replacement-preflight-runtime.log` passes 220 runtime checks. Exact loan, consumed-handle and private generation-exhaustion controls preserve both owners before any old finalizer, then verify valid once-only cleanup. No wire or C ABI change is made. This evidence does not establish Source-native mutable replacement, aggregate replacement, or current supported-host acceptance. The earlier 486 native regression result and ten Source runs remain evidence for cc06aa1f. Rebuilt matched archives and Source replacements are required next; overall tracking remains about 85%.
+
+### Source plain Resource replacement acceptance
+
+The formatted Source replacement successor to `2b9442b1` passes 558 compiler/object/HIR/MIR checks plus one MIR doctest, and all 606 frontend/backend-lowering fixture checks. `native-resource-replacement-final-reference.log` and `native-resource-replacement-final-native.log` each pass eleven shared original Source scenarios in both profiles. The native launch deletes Project and synthetic Stdlib Source, observes exact events/body/cleanup/messages/scripts, retires every Resource/ordinary obligation before one destroy, and preserves body 255/cleanup 255 for executed old-finalizer failure. Exact self-reseat emits no finalizer/transfer, while failed RHS evaluation leaves old available to its handler. The fixed 207 inventory/182 obligations and broad 85% estimate are unchanged.
+
+The new measured archive receipt `54a38248` preserves exact CRT/library/symbol provenance; both HOST C ABI controls pass. The broad driver-library attempt is 86 passed/1 failed due to CaptureLinkerOutput PermissionDenied during pre-spawn capture setup; the exact isolated property replay passes. The error alone does not identify capture creation versus second-handle opening. This is not a clean full driver-library result. The previous 486 native regression result remains specific to `cc06aa1f` until the complete suite is rerun on the new commit. Conditional/aggregate/projected replacement, other Resource execution and supported-host production distribution remain unproven.
+
+
+### Exact native Resource replacement regression
+
+The clean pushed `cda86ac7` Source replacement commit passes the complete default
+native gate: 486 tests, zero failures and one ignored Resource group, in 1355.37
+seconds. All 2099 recorded Rust/Jett/Cargo inputs remain exact after termination.
+The ignored group was separately executed in all 22 native and 22 real-reference
+scenario/profile runs. The earlier 86/87 driver-library result remains a recorded
+capture setup failure; its isolated pass alone did not make that broad gate clean.
+
+### Retained native output capture
+
+The driver retains append-only capture files, gives children owned duplicate
+handles, and reads bounded snapshots with explicit offsets. It no longer opens
+the second file object through ReOpenFile. Private error context identifies
+creation, duplication or snapshot while retaining the original I/O source.
+The original PermissionDenied log proves a pre-spawn setup failure, but does
+not distinguish creation from reopening or establish an external cause.
+
+After correcting the authored Windows test commands' quoting without changing
+their stream/status/deadline oracles, all 12 capture checks and three command
+checks pass. The unchanged property replay regression passes twice in isolation,
+then the complete driver library passes all 92 tests (152.85 seconds). Existing
+Source deletion, both optimize modes, 104 trials, trial-4 sentinel, counterexample
+and original-stream requirements remain intact. Child polling/kill/reap and
+deadline behavior are unchanged. This verification repair does not increase the
+about-85% feature estimate. Full native and supported-host acceptance of the next
+combined Source implementation remain separate gates.
+
+## Checked Source call staging and active-frame sums (2026-10-05)
+
+Direct Resource calls with handled actuals now lower to constructor-owned typed
+Begin/Stage/Invoke/End regions. The sealed witness keeps the complete original
+Source tuple and current graph; fresh CFG analysis proves lexical argument order,
+arrived-prefix custody, exact endpoints and retirement before a handler Return
+operand. Complete prepared Source and borrowed-formal metadata exists even when
+Invoke is skipped. Public graph edits cannot recreate that authority.
+
+A genuine first-factory failure initially returned native protocol refusal after
+ConstructionFailed, while the reference returned cleanly. The repair separates
+Scope storage from active execution: a private exact-site projection supplies the
+current frame for sum observations, transfers and extraction. Runtime top-frame,
+slot ancestry and original Source checks remain strict. Both first-factory
+success and failure now execute with their original outcomes.
+
+Eighteen shared Source cases pass in both reference and native profiles (36
+executions each). Native launch follows Source deletion; exact body, cleanup,
+channel, messages, events, script consumption and zero obligations are observed
+before teardown. Seven additions cover minimal and original-helper abandonment,
+successful invocation, retained written views, first-factory failure and success,
+and cleanup panic. The formatted compiler/object gate passes 573 checks plus the
+MIR doctest; 606 frontend/lowering fixture checks, all four inventory gates
+(including 182 host objects), and the complete 92-test driver library pass.
+The final formatted Source replay also passes all 36 reference and 36 native
+executions. The full current native regression and supported-host jobs remain
+separate release gates.
+
+Whole-language coverage remains about 85%. Indirect/refinement/aggregate calls,
+static region selection, broader exits and projections, production providers and
+shared scheduling remain part of the full objective. These local Source results
+do not establish complete native parity.
+
+### Return-prefix and completed failure propagation (2026-10-06)
+
+The shared original Source gate now passes 22 scenarios in both reference and
+native profiles (44 executions each). Later handled argument failure retires
+both temporary view owners in reverse lexical acquisition order. A handler
+Return retires its earlier temporary owner before its original helper borrows
+an independent retained owner. A default continues to one invocation; actual
+cleanup panic prevents the Return helper and still cleans the retained owner.
+All native programs launch after Source deletion and require exact channels,
+messages, events, script consumption and zero obligations before one destroy.
+
+Two causal mismatches were repaired without changing those oracles. The reference
+Return operand originally ran before pending-operation retirement; ordinary
+callables then exposed an inherited caller-floor regression. Each callable now
+has its own boundary. Native cleanup already retired both owners, but SourceStatus
+converted the callee's recorded status 255 into generic refusal 1. A private
+terminal completion record preserves original body and actual cleanup separately,
+while exact caller/Source identity and retired Scope/Return guards remain strict.
+
+All 508 reference-library, 92 driver-library and 222 runtime checks pass. Six
+Return-prefix controls cover floor/Scope/receipt/refusal/panic behavior; eleven
+native Source controls include exact body 71, clean body 0 with real cleanup
+panic, wrong activation/tuple and absent completion authority. Fresh measured
+single-runtime archives in both profiles retain one main, eight private exports,
+32 Resource leaves, static CRT, ABI 1 and layout wire 2. The source-deleted gate
+passes against those archives; production providers remain disabled.
+
+The parent a30ca97e source tree has all four supported-host jobs green, with
+full workspace and 486 default native tests on each host. Its local full run's
+26 deadline failures subsequently passed unchanged deadlines in 25 plus one
+replays; that does not replace a clean complete local run. Full successor
+workspace/platform release acceptance remains distinct from the local gates.
+The full 100% objective is active, with the coarse estimate unchanged at 85%.
+
+
+### Required Resource values and exact ordinary helper bodies (2026-10-06)
+
+The latest local shared Source checkpoint is 61 scenarios and 122 executions per
+backend in debug/release. It supersedes the earlier 22/32/46-scenario checkpoints
+above. Required evaluation runs once through a provider-free checked cache before
+runtime registration; the native path retains original Source provenance through
+materialization, production value conversion, MIR validation, object emission,
+linking and Source-deleted launch. Exact events, script consumption, failure
+channels and zero obligations before teardown remain mandatory.
+
+All nine required-value MIR controls and 251 MIR library tests pass. The genuine
+scalar-helper baseline accepted a changed required value and canonical pruning;
+current body-only proof capture rejects both without changing that helper's
+ordinary calling convention. Typed sum headers and normalized operation nodes
+also participate in disconnected-custody detection. Exact guarded absence still
+creates no Resource payload owner or finalizer at runtime.
+
+These results are local MSVC private-archive acceptance. GNU private execution,
+full current workspace/default-native/platform gates and the remaining semantic
+families remain separate requirements. Whole-language tracking remains about 85%;
+the full 100% objective is active.
+
+The complete affected codegen suite passes 100 library and 63 object tests;
+all 93 driver-library tests also pass. Final Rust/Jett formatting and whitespace
+checks pass, and all 2,168 frozen source/config inputs revalidate unchanged.
+
+### Verified borrowed optional/result Resource payloads (2026-10-07)
+
+Sources 45..56 add twelve scenarios covering written/bare None/Some/Fail/Ok,
+named-argument prefix abort, and handled borrow-domain failure. The unchanged
+baseline passed all 73 shared scenarios / 146 reference executions but refused
+Source45 at HIR stable-origin admission. The complete corpus now passes 146
+Source-deleted native executions against freshly measured Debug/Release MSVC
+private runtime archives, with exact events and zero obligations before teardown.
+
+All 305 checker, 203 HIR, 254 MIR and 215 runtime library tests pass. Three focused
+MIR groups and six runtime groups cover original-body custody, guarded projections,
+conditional shell lifetimes, failure companions, argument aborts and forgery.
+The full codegen suite passes 102 library and 63 object tests, including unchanged
+prior invalid-MIR controls. Archives contain 37 Resource leaves, eight private
+exports and one main; independent source/symbol/CRT receipts remain mandatory.
+
+Admission is limited to root-body Resource aliases. Nested/scoped aliases,
+ordinary non-Resource borrowed sums and alternate Default payload lifetimes remain
+pending. The rough full-language estimate stays about 85%, and the full 100%
+native-codegen goal, GNU Resource gate and broader language/platform requirements
+remain open. See [the integration contract](native_resource_borrowed_sums.md).
+
+All 521 reference-evaluator and 93 driver-library tests pass. The existing
+Source33 required-value assertion now verifies its exact two original proofs,
+including scalar 761 and the unique checked hook; other fixtures retain exact
+one-value counts. This separately fixes the sole failure observed on both hosts
+at 17d6c841. Rust and all twelve new Jett Source format checks pass, and the
+2,188 frozen source/config inputs revalidate. The final MIR-only formatting change
+is exactly one error-return line wrap and passes all 254 MIR tests again.
+
+
+### Verified nested Resource lexical lifetimes (2026-10-07)
+
+Sources57..95 extend the original shared corpus to 138 scenarios. The Source-only
+baseline passed all 276 reference executions but refused native Source57 at exact
+constructor-scope admission. Private declaration/exit records and ordered native
+loan retirement now pass all 276 Source-deleted MSVC executions in both profiles,
+including owned backing reuse, sibling identities, borrow failures, Break and
+Continue. All 2,234 frozen inputs revalidate; runtime bytes and the measured
+37-leaf ABI1/wire2 archives remain unchanged.
+
+All 261 MIR, 103 codegen library, 63 object, 521 reference-evaluator and 93 driver
+library tests pass. Six public object baselines and eighteen forged-exit refusals
+bind codegen admission to exact private records. The rough feature estimate now
+tracks about 86%, with unchanged fixed 207/182 inventory denominators. The whole
+100% objective stays active. Ordinary borrowed list sums have a separate genuine
+12-Source reference baseline and 24 native unsupported-handler refusals; their
+implementation is not included here. Updated coherent-revision workspace/platform
+and private GNU execution remain independent gates.
+
+
+### Accepted ordinary borrowed-sum checkpoint (2026-10-08)
+
+The ordinary borrowed-sum implementation is accepted at clean committed HEAD
+`2c9f9aa8f2cd481c1d99ce6340ddf63688b2657a`. Its coherent locked workspace passes
+**3,446 tests across 92 result groups**, with **0 failed and 1 ignored**,
+including **491 default native-conformance tests** and the **182-object inventory
+gate**. All **3,637 tracked inputs remain unchanged** after execution, and the
+worktree remains clean. The receipt is
+`target/native-ordinary-2c9-workspace-evidence/after-evidence.json`, SHA-256
+`07fb0df1d059420c2705111a00da6d56b820e5e168eb37fc757c3fdadbe2dd1a`; its workspace
+log SHA-256 is
+`42657fc3b9ca894ee3a3a2d9b4997c1af044e15520f5b2031e6aeb01bf7b2e4f`.
+
+The exact-revision [CI run 37673804359](https://github.com/vycdev/jett/actions/runs/37673804359)
+passes all four jobs: Windows MSVC and Linux GNU build/conformance, plus both
+relocated installed-package jobs. This closes the coherent-workspace and
+supported-host workflow requirements for this accepted ordinary-sum revision.
+It does not establish the later expanded Resource pipeline test packet or a
+complete language/distribution gate.
+
+The [ordinary borrowed-sum family](native_ordinary_borrowed_sum_codegen.md)
+advances the broad planning estimate to **about 87%**. That judgment remains
+separate from the fixed **207-fixture / 182-run-pass inventory**; neither
+denominator changes. Other ordinary-carrier, Resource, reflection and semantic
+obligations remain open.
+
+### Source-only Resource pipeline checkpoint (2026-10-08)
+
+The [pipeline packet](native_resource_pipelines.md) has measured **23 cases / 46
+Debug-and-Release attempts** through each distinct local gate: checked Source
+reference execution, Cranelift object emission, and linked native execution with
+Project and synthetic Stdlib Source files absent at launch. The reference focus
+is included in the accepted **161-case / 322-profile-execution reference
+corpus**, with **522 reference tests passing**. The reference observation tuple
+proves exact events and zero outstanding owners/registry entries; it does not
+measure script consumption. Native reports additionally require zero remaining
+scripted inputs and zero obligations before teardown.
+
+`target/native-resource-pipeline-source-evidence/acceptance-v2.json` records all
+**3,648 frozen repository inputs unchanged**; both matched local MSVC archives
+and six nested receipts separately revalidate. Provider-panic retirement and cleanup-error precedence now
+pass through genuine Source pipeline fixture 20: body/cleanup/channel and exit
+are respectively **1/0/2, 73** and **1/255/3, 71**, with exact runtime-operation
+and cleanup-error messages. These are tests of existing behavior, with no
+language or ABI change.
+
+The preserved full **161-case / 322-execution linked native corpus passes**
+(1256.05 seconds), with all frozen inputs and measured archives unchanged.
+Its separate receipt is `full-acceptance-v2.json` in the same evidence directory.
+Object emission is not execution, and these matched local MSVC runs do not prove
+GNU or other platform acceptance of the expanded packet. Broader Resource
+`For`/`Match`, reflected bodies and ordinary families remain separate work. This
+checkpoint leaves the **207/182** inventory and **about 87%** estimate unchanged.
+
+### Expanded Resource For/Match transport (2026-10-08)
+
+The [control-flow successor](native_resource_control_flow.md) preserves custody
+through consuming Resource-free list ForEach and ordinary Resource-free enum
+Switch, without a language or ABI change. Constructor-owned reconstruction
+authenticates the three temporary headers, source/cursor/length initialization,
+extraction/increment prefix and original CFG; independent original/current
+borrowed, lexical, call and descriptor proofs remain mandatory. Strict joins and
+final raw ForEach refusal are unchanged. Historical v2 acceptance remains
+22 cases / 44 Source-deleted MSVC executions, three focused MIR groups and
+450 affected phase checks.
+
+V3's seven accepted Source files 01..05/07/08 cover consecutive and nested loops
+as well as Fallthrough/Break/Continue and both unit-enum arms. All 30 cases /
+60 focused Source-deleted MSVC executions pass in Debug/Release (204.35 seconds),
+with exact outcomes/events/channels/messages, script exhaustion and zero ordinary/
+Resource custody before teardown. Reference zero-owner/registry observations do
+not measure that full native tuple. The receipt
+`target/native-resource-control-flow-source-evidence/focused-acceptance-v3.json`,
+SHA-256 `7f41c389daa268942afe8a645085daac18d746f553f3be32e93d14f798fc30ea`, records
+all 3,658 frozen inputs and both measured archives plus six nested receipts
+unchanged at HEAD `50ad73a0693c502d1fa05720091b80a4ab623104`. Four focused MIR
+groups pass; 89 Resource reference groups include all 191 cases / 382 profile
+executions, and final object preflight separately emits 60 objects.
+
+The clean base `50ad` workspace independently passes 3,448 tests with zero
+failures across 92 result groups. That is separate from the modified successor's
+coherent-revision gate. Full 191/382 Source-deleted MSVC native execution now
+passes in 1,288.83 seconds. `full-acceptance-v3.json` records actual exit zero,
+all 3,658 frozen inputs, both measured archives, six nested receipts and the
+executable unchanged; its SHA-256 is
+`08bcf865bfed8a9b49f262a6c611336260cd0446ba8517139c71ab10627fb806`.
+Successor workspace and exact-revision CI acceptance remain pending. Source06's
+separate GNU reference repair passes authority, recursion and pure control-flow
+tests plus 74 strict Resource entry attempts, including same-grant reentry after
+failures; `after-v3.json` records all 3,662 inputs unchanged. Its native
+HIR/MIR/codegen ordinal bridge remains pending, and no GNU native acceptance
+follows from those reference results.
+Erased carriers, borrowed/projected/Never-element or other iterators and broader
+For/Match/reflected combinations remain compiler proof obligations under existing
+Source semantics. The full goal stays active at the rough 87% planning estimate;
+fixed 207/182 inventory denominators remain unchanged.
+
+### Checked reflected-field reference repair (2026-10-08)
+
+[Direct field selection](native_resource_reflected_fields.md) now passes all
+541 comptime tests, including 19 added authority/recursion/control/metadata and
+Resource tests. Strict original Source06/derived controls pass 74 entry attempts
+in both checking profiles, including same-provider/grant reentry after every
+selected failure. `after-v5.json` records all 3,664 inputs unchanged at the
+complete crate gate. This checkpoint proves checked reference behavior; its
+receipt alone establishes no native reflected Resource emission or Source-deleted
+execution. Accepted native successor gates are recorded below; the full goal
+remains active.
+
+### Checked Resource reflected-field native ordinal bridge (2026-10-08)
+
+The [direct-field bridge](native_resource_reflected_fields.md) now carries exact
+nominal-struct TypeFields ordinal/body correspondence through checked Resource
+HIR and MIR. An immutable original archive retains the checked program, original
+For/binding and resolver identity, concrete owner and ordered full metadata,
+checker-selected body and original lexical path. Every ordinal receives its own
+original-field-index guard and one-arm TypeInfo dispatch, preserving distinct
+bodies for fields with equal type and reflection while retaining native dispatch
+uniqueness. Independent original/current seals reject changed metadata, guards,
+targets, paths and public HIR before runtime effects. No runtime leaf, ABI or
+wire-v2 row changes.
+
+Ordinary helpers inside the checked Resource program receive proof-only witnesses
+and keep ordinary execution classification and sequence preparation. They gain
+no Resource plan, hidden Scope parameter, provider permission or custody. The
+ordinary `lower_program` entry retains its existing equal type/reflection
+coalescing. Checking specializes type-level facts while field-index/name branches
+use the current runtime binder; existing native fixtures already distinguish
+same-type fields. Independent ordinary positive controls now pass 30
+Source-deleted native executions without a production change. Their bounded
+parity establishes no ordinary coalescing defect or required production repair;
+broader checked Resource reflection transport remains a separate obligation.
+
+The complete affected-phase run passes **1,202 checks**: **542 comptime, 203 HIR,
+286 MIR, 107 Cranelift codegen, 63 object and one CFG check**, with zero failed or
+ignored tests across ten result groups. Integrated controls include canonical view
+iteration and an inferred empty list, exact ordinal guard/body validation and
+full ownership rejection of redirected or stale selections. The receipt
+`target/native-resource-reflected-field-native-bridge-evidence/after-v4.json`
+records actual session **4116**, terminal **1335da**, exit **0**, and all **3,679
+frozen inputs unchanged** at parent HEAD
+`f9fa84a6f05b2886a83e09fad4ae3b6dcb22c74a`. Its SHA-256 is
+`a043e2b9b4b1b1e908f4037941c0e6ca5113309e08fe167979a046fbdea963ad` and it explicitly records `native_execution_accepted: false`.
+
+This earlier compiler phase gate is distinct from the native execution acceptance
+recorded below. Generic/alias owners, bitfields, variants, machines, TypeInfo.args,
+nested producers and broader reflected combinations retain their compiler proof
+and Source-evidence obligations. This boundary adds no policy ban. The full goal
+remains active at the rough **87%** estimate with fixed **207/182** denominators.
+
+#### Native execution acceptance
+
+Four focused Sources retain the original Source06 bytes and separately test
+distinct field-index bodies, distinct field-name bodies and a proof-only ordinary
+helper. They pass **16 Source-deleted native executions / 24 entries** in
+Debug/Release: eight single-entry executables and eight clean two-entry
+executables, with the same Session/provider/grant retained across both entries.
+Each entry checks exact outcomes, ordered events and zero ordinary/Resource
+obligations before teardown. The combined script is exhausted before one Session
+destruction.
+`target/native-resource-reflected-field-native-bridge-evidence/native-acceptance-v5.json`
+records actual session **29429**, terminal **9cfc8d**, exit **0**; its SHA-256 is
+`0b05489e3b97201ba0aee4642c2f157e81d5f9684e818f347eb403f775cda10a`.
+
+The unchanged predecessor corpus independently passes **191 cases / 382
+Source-deleted native executions** in Debug/Release in **1,273.64 seconds**, with
+all strict reports accepted.
+`target/native-resource-reflected-field-native-bridge-evidence/full-native-acceptance-v5.json`
+records actual session **49641**, terminal **1d2132**, exit **0**; its SHA-256 is
+`31d6b59bebc1e11c18b9dfb6102b5f5486f28dfd69d1439fce15498aa4050db9`. Both gates retain all
+**3,686 frozen inputs** and **nine runtime files** unchanged, including the matched
+measured MSVC archives and their build/CRT/native-static-libs receipts. The frozen
+test executable SHA-256 remains
+`76fe2a90106ee8ede00eb86758cefbaa4cefb42d6b818e90a06337b029aba39d`.
+These receipts establish the bounded direct nominal-field native bridge and clean
+reentry. Original Source06's separate exceptional acceptance is recorded below;
+derived native control acceptance is recorded below; broader aggregate custody
+remains a separate obligation.
+
+#### Independent ordinary reflection positive control
+
+Three Source families produce five forms covering nominal/generic and alias
+fields, bitfields, variant/state fields, type arguments, nested fields and getter
+pipelines. Main, verify and property suites in both checking profiles pass
+**30 Source-deleted native executions**, matching reference stdout/empty debug
+events and explicit-comptime stdout.
+`target/native-ordinary-reflected-ordinal-control-evidence/after-v1.json` records
+actual session **21527**, terminal **6befe6**, exit **0**, and all **3,703 frozen
+inputs unchanged**; its SHA-256 is
+`4a282285082fc411b4d8714a890b13c7146d81970533522469eb5848d4a0177e`. The receipt explicitly records
+`production_changed: false` and no established ordinary equal-type coalescing
+defect. These ordinary controls do not establish Resource transport for their
+broader reflection families. The full goal remains active at the rough **87%**
+estimate; fixed **207/182** inventory denominators remain unchanged.
+#### Original reflected Source06 exceptional single-entry acceptance
+
+The eight original failure/cleanup scripts pass in both checking profiles:
+**16 reference observations / 16 object attempts / 16 Source-deleted native
+executions**, with unchanged exact 929-byte Source06. Strict completion channels,
+messages, event order, script exhaustion and zero obligations before one teardown
+all pass. The existing four READY cases and 191-case catalog are retained unchanged.
+`target/native-reflected-exceptional-native-evidence/after-v1.json` records actual
+session **2180**, terminal **aa0907**, three command exits **0**, and all **3,720
+frozen inputs / nine runtime files unchanged** at `2be038c7`; its SHA-256 is
+`38662e59e4dfebfbbde4236ee0a8d6b2cc647b6a9554ea8afb9f2b1119bf3085`.
+Original Source06 exceptional same-grant reentry is accepted separately below.
+The bounded derived native control matrix is accepted separately below.
+This single-entry evidence adds no aggregate transport acceptance and leaves the
+full goal, rough **87%** estimate and fixed **207/182** inventory intact.
+
+#### Original reflected Source06 exceptional same-grant reentry acceptance
+
+All **nine original scripts followed by READY** pass in both profiles on the same
+Session/provider/paired Network grant: **18 Source-deleted native executables /
+36 entries**, plus **36 actual shared reference calls**. Both per-entry completion
+tuples, exact diagnostic bytes, event boundaries and continuous ordered events are
+retained. Each entry observes zero owners/loans/frames/registry entries,
+owner/loan/frame handles and provisional returns, plus empty ordinary storage,
+before teardown. The combined script is exhausted and the Session is destroyed
+once. Exceptional first completions keep their original nonzero process exit
+after clean READY, including cleanup-wins handled Return body 0 / cleanup 255 /
+Cleanup channel / exit 71.
+
+The private launcher completes and copies real observations before continuing
+after retired Resource cleanup failure with current ordinary status zero. The
+existing next `entry_begin` independently enforces installed-entry/budget,
+ordinary first-error/cleanup and active/live-custody checks. No failure latch is
+cleared, no provider/grant is reinstalled and no reset/failure-taking API is added.
+The immutable first failure remains observable after the clean second entry.
+
+Fresh MSVC Debug/Release archives were built in actual session **23542**, terminal
+**e09148**, exit **0**, and independently measured at
+`target/native-reflected-exceptional-reentry-archives/measurements-01/receipt.json`;
+the compiled receipt pin is
+`96721717326f7d6f96dd2bb98dc1d6e919f7119235e33e103e5ac89bd6f29d0a`.
+Runtime ABI 1, Source wire 2 and script/report protocol 1 remain unchanged.
+
+`target/native-reflected-exceptional-reentry-evidence/after-v3.json` records actual
+session **30992**, terminal **22c716**, both Rust harness exits **0**, and all
+**3,722 frozen inputs / nine runtime files unchanged** in the tested candidate
+based on parent `b5c55ac7`; its SHA-256 is
+`f3dc34c6a13079c6e0be04716d37af9a69580a7b99b859a4ebd5301376e3aa8b`.
+The corrected exact manifest filters each executed **one real test**. Earlier
+session **52970**, terminal **e8c3b4**, selected zero tests; preserved `after-v2.json`
+explicitly records zero executions and **nonacceptance**. Only the corrected real
+gates supply this acceptance.
+
+The exact 929-byte original Source06 and prior single-entry/four READY/191-case
+evidence remain unchanged. This is bounded local MSVC original-script reentry
+acceptance; the bounded derived matrix and dedicated Return successor are
+accepted below. Broader Default lifetimes, fresh-archive predecessor compatibility,
+coherent-workspace/exact-revision CI gates and broader
+aggregate Resource transport remain required. The full goal stays active at the
+rough **87%** estimate and fixed **207/182** inventory denominators.
+
+#### Derived reflected control single-entry and same-grant native acceptance
+
+The exact existing Sources7/8/9 and historical ten scripts pass both profiles.
+Actual control paths are **three handled Returns, two Break paths, two Continue
+paths and three scalar Handle Default paths**. The failure handlers return before
+the named Break/Continue statements. A separate eleventh Source9 READY baseline
+was checked before use as that same Source's reentry tail; the original ten rows
+and all three Source byte sequences are unchanged.
+
+Break preserves total17 and selected-body retirement; Continue preserves total34
+and skips the statement after its scoped-type body; scalar Default substitutes
+17, resumes the selected body and preserves both field visits and total34.
+The outer optional Resource owner is retained
+until the existing close or handled Return. These are exact selected-body/scalar
+Default lifetimes, not general Resource-valued Default or arbitrary lifetime
+composition evidence.
+
+The accepted gates are **22 single-entry reference calls + 40 same-grant reference
+calls = 62**, **22 object attempts**, **22 Source-deleted single-entry executables /
+22 entries**, and **20 same-grant reentry executables / 40 entries**, totaling
+**42 native executables / 62 entries**. Each historical first script uses its own
+Source's READY on one retained Session/provider/paired Network grant. Exact
+completion tuples/messages, continuous events and entry boundaries, zero all
+eight Resource counts and empty ordinary storage before teardown, script
+exhaustion and one clean destruction all pass. The three explicit-close cleanup
+cases preserve body255 / cleanup255 / Cleanup channel / exit71 and exact
+`native Resource cleanup failed`, including the immutable original completion
+and first nonzero process exit after READY. Existing entry-begin checks remain
+authoritative; no reset, latch clearing or provider/grant reinstallation occurs.
+
+`target/native-reflected-derived-control-native-evidence/after-v1.json` records
+actual session **18249**, terminal **e1bcf6**, all five command exits **0**, and
+**one real test selected by each filter**; its SHA-256 is
+`f9cfe12b7a2013fd63ac0e73672a1c4fbee617e01a366e5747a1ab17a1e6da24`.
+All **3,725 frozen inputs / nine runtime files** remain unchanged in the tested
+candidate based on parent `f4c63a0f`. The measured MSVC Debug/Release archives use
+the unchanged compiled receipt pin
+`96721717326f7d6f96dd2bb98dc1d6e919f7119235e33e103e5ac89bd6f29d0a`.
+Original Source06's nine-script matrix and earlier single-entry/four READY/
+ordinary-control/191-case evidence retain their original counts, receipts and
+archive pins. This is local MSVC derived-control acceptance; GNU carrier/fresh-v3
+native execution is separate. The dedicated Return successor is recorded below.
+Broader body/Default lifetimes, aggregate transport, fresh-archive predecessor,
+coherent-workspace and exact-revision CI remain required. No Source policy ban is
+added; the rough **87%** estimate and fixed **207/182** denominators stay unchanged.
+
+#### Dedicated reflected body and owned Resource Return acceptance
+
+The additive Sources10/11 and twelve shared rows pass in both profiles. Each
+retains three equal-int64 fields and the statements following its conditional
+Return and loop. Finite provider scripts/sentinels establish true successful
+first/second-field Return and skipped later fields/statements, independently of
+the original Sources7/8/9 ten-script matrix, which remains unchanged.
+
+Source10 returns nothing with scoped projection/outer owner retirement. Its two
+implicit-cleanup cases retain **body0 / cleanup255 / Cleanup / exit71**, empty
+ordinary message and exact `native Resource cleanup failed`. Source11 returns
+owned survivor892 while outer891 retains the selected body's alias; successful
+outer cleanup precedes publication and exact caller Borrow892(29)/close. The
+successful events place F891 before B892. Its two cleanup cases suppress
+publication/consumer borrowing, retire891 then provisional892, and retain root
+**body255 / cleanup255 / Cleanup / exit71**. The helper Source follows a normal
+Return path; the report directly observes the entry-root completion and exact
+retirement/publication-suppression events, without reading a nested callee
+completion.
+Clean/handled-domain Return cases retain body0/cleanup0/clean/empty messages/exit0.
+
+Actual reference/object session **64018**, terminal **0b2a26**, passes three
+one-test filters with exits0: **24 single reference calls + 48 same-grant calls =
+72**, and **24 final objects**. Actual linked session **47358**, terminal
+**dcfb82**, passes two one-test filters with exits0: **24 Source-deleted single
+executables / 24 entries** and **24 same-grant reentry executables / 48 entries**,
+for **48 native executables / 72 entries**. READY retains the same byte-identical
+Source, Session/provider/paired Network grant. Increasing attempt IDs, immutable
+first completion/diagnostics/first nonzero exit, continuous events and boundaries,
+all eight zero Resource counts and empty ordinary storage before teardown,
+combined-script exhaustion and one destruction pass. No reset or latch clearing
+is introduced.
+
+`target/native-reflected-body-return-native-evidence/after-v1.json` records the
+reference/object checkpoint. Linked acceptance is recorded in
+`target/native-reflected-body-return-native-evidence/after-v2.json`, SHA-256
+`9250a5d37375cd66ba212e1cfcaa489ef0b55571dba0efa72dc59a6d306baa18`.
+All **3,730 frozen inputs / nine measured v2 runtime files** remain unchanged at
+tested parent `91105876e5dbbbe9bbaa1d19bc2408ec9a274255`, using the unchanged
+measured MSVC Debug/Release receipt pin
+`96721717326f7d6f96dd2bb98dc1d6e919f7119235e33e103e5ac89bd6f29d0a`.
+This local MSVC gate gives no fresh-v3/GNU carrier or successor-workspace/CI
+credit; predecessor receipts retain their original counts and archive pins.
+
+Owned operands still precede certified lexical retirement. A same-owner move
+while its resident lease remains live is not covered by the distinct-survivor
+success. That lifetime seam, broader Resource-valued Default/body compositions,
+generic/nested reflection, aggregate live custody, fresh-archive predecessor
+compatibility and coherent-workspace/exact-revision CI remain full-goal
+obligations under unchanged Source semantics. The rough87% estimate and fixed
+207/182 inventory denominators remain unchanged.
+
+
+#### Current comptime actor graph MSVC acceptance
+
+Actor handles retained by an admitted pure `comptime` expression now form an
+immutable graph template. Each evaluation imports fresh actors while preserving
+aliases, sharing, evaluated state and authenticated callback/hook metadata.
+Graph producer and iterator proofs preserve list/map behavior. Ordinary required
+replacements preserve their checked archives; ordinary actor/interface wrappers
+retain original entry metadata through canonical sequence iteration. These paths
+keep ordinary heap ownership without Resource custody or capability authority.
+Entry completion retires its actors, and required constants use one checked
+attempt. The negative graph fast path leaves positive admission proofs intact.
+
+The current four affected libraries pass **793 tests across four groups**, with
+zero failures or ignored tests: codegen 133, Driver 95, HIR 220 and MIR 345. The actual
+log is `target/native/graph-affected-libraries-current-v6.log`, SHA256
+`6b16b29fa296b6955587a123ad9c206544ff80c660f0876467481c8a0a84436d`.
+The terminal source-freeze record binds all 947 unchanged compiler/Source inputs:
+`native-codegen-recovery-2026-10-09/graph-affected-libraries-acceptance-v6.json`,
+SHA256 `58e25727552b941da02784f323039011fe0515c45b5735ccd4007ed5fd2f3a3f`.
+A pinned predecessor command contributes **1,673 passing tests across 18 other
+package result groups**, excluding its codegen, Driver and HIR rows. That log's
+SHA256 is `7d27eecec6261eb2d28d6fc0d945ca9fcf587672aa78c69839cb2a07e3b693e6`.
+These historical results remain separate. The mixed 2,466 count does not establish
+a fresh full workspace library or integration run.
+
+Two focused HIR controls and one MIR control pass the required-value and ordinary
+wrapper-sequence repairs, including foreign/pre/post-edit and builder transcript
+refusals, five iterator/header/body/Source alterations and real Resource-owner/
+direct-call refusals. All three original interface native regression tests pass
+with Source present. Their unchanged-input receipt is
+`target/native/interface-archive-native-controls-v2/after.json`, SHA256
+`04b66bd7b53c564f6983ff35799d8aeb0dd517b64aa3034e41b1466167d1619b`.
+These tests provide no Source-deleted execution credit.
+
+The current normal MSVC Debug/Release bundles pass **32 Source-deleted graph
+executions: 24 public and eight protected hook cases**. Original ordinary fixtures
+and the adapted callback use Debug Source. The production Stdout callback and both
+hook Sources cover both Jett optimization choices. Independent reference/stream
+oracles, object hashes, successful terminal/reap records and absent Source/case
+executables pass with all 947 compiler/Source inputs and used-launcher guards
+unchanged. The receipt is `target/native/actor-graph-native-acceptance-v6/after.json`,
+SHA256 `ecbba9f7539f250d8c48be4ee9ef9256e918bf95ab2d1731c39ee10460366d76`.
+
+Normal v4 and private v8 Runtime/Launcher archives retain the 56-export production
+Resource catalog, static CRT and separate private hooks. Actual compiler native
+library notes and the canonical manifest vector remain distinct records; linked
+acceptance establishes the selected vector. Archive receipt pins are
+`e7f818891a707382ae9066bed5f26079a3da93dda0aa7d29124abe7e21e56a9d`
+and `f40be801d5f609b0010a747ebc3a428d5ccc10e4e20989c83c3555dbde7595b9`.
+
+The current bounded startup matrix passes **80 Source-deleted executions**: 48 normal and 32 private, with 40 decoded private entries, 60 successful exits and 20 expected exit71 refusals. Source, terminal reaping, original case oracles and artifact guards pass; no case executables remain. Source33 wire3 is object-only and supplies no linked execution credit. The receipt is `target/native/startup80-current-graph-v3/after.json`, SHA256 `467f5b21d331f568543cdadec9390a05038d305e70b16d56976786a9219a4596`.
+
+The current interface compatibility subset passes **25 native tests** with unchanged inputs: all 21 original `native_interface_` tests plus four generic, deep-conversion and reflected-interface controls. Its receipt is `target/native/graph-interface-regressions-current-compiler3/after.json`, SHA256 `766080cb513147f87c056a9452457f6ba07ff40443a16a05f33310b953731607`. This selection does not establish all normal callback, Owner or Actor regression acceptance; their earlier 17-test result retains its predecessor revision. The current Source-deleted Graph gate independently covers its joint Graph/callback cases.
+
+All **16 current Resource gates pass**, covering **754 Source-deleted executions and 900 entries** on the freshly compiled compiler 3 test artifact. The whole lifecycle gate reports 382 executions and 246 observed builds. The occupied two, predecessor twelve and clean-reentry two gates retain exact selectors, current compile-time archive pins and unchanged compiler/Source guards. The counts receipt is `target/native/resource-msvc-v8-current-compiler3/current-gate-counts.json`, SHA256 `4d9409982e937fa19dcdfa9c1c8a7cb9467569988b5df9050005888152ce813e`.
+
+Broader normal native regressions and a complete workspace run remain pending. Predecessor receipts retain their original revision and scope. The
+published helper revision 0eb3ce5f passed four CI jobs, which does not establish
+acceptance for the current Graph revision. Exact-head supported-host CI, GNU and
+clean installed distribution remain separate obligations. The rough **87%**
+estimate and fixed **207/182** inventory are unchanged. Existing sequential
+reference parity remains required; absent scheduler/provider APIs remain separate
+feature work.
+
+
+#### Occupied Resource primitive companion MSVC acceptance
+
+The occupied constructor path now carries every implicitly copyable primitive
+and transparent alias with exact checked schema and written argument order.
+uint64 retains its unsigned carrier, float32 normalization remains separate
+from physical validation, and integer/float/bool pending depth remains separate
+from payload bits. Nothing retains its scalar-word depth representation across
+the carrier boundary; strings retain depth in their handles. No new Source
+admission, Resource custody or authority is introduced. Original Sources33..35
+and their support remain unchanged.
+
+The original all-target check, formatting checks, 82 measurement-helper controls
+and eleven focused groups/46 tests passed. After the Scope completion repair,
+actual Cargo runs pass 1,322 compiler tests (Comptime 620, HIR 221, MIR 347,
+Codegen 134), and Runtime passes 366. These unit runs precede the private report
+copier and two-file oracle correction. Only those three exact guarded files
+differ afterward. Broad receipt: `native-codegen-recovery-2026-10-09/scalar-v9/current-broad-cargo-acceptance.json`, SHA-256 `f4b2217d6ed8228de432922f3ee90fc066d20ed4dbb40c420dbc79794289ce9c`.
+These groups do not establish a fresh whole-workspace test run.
+
+The correction changes six expected Resource-message fields for ordinary-only
+Bounds failures and introduces no root/nested special case. Original Source,
+reference messages, body/cleanup statuses, process exits, events, custody and
+reentry assertions remain unchanged. Oracle correction:
+`native-codegen-recovery-2026-10-09/scalar-v9/ordinary-diagnostic-oracle-correction/manifest.json`, SHA-256 `aafc67f2455050bc0b15bfc535a859fc4a01662ef8e6291e8200c5efed328d44`.
+
+Fresh normal and private MSVC Debug/Release measurements retain 58 production
+exports (38 ordinary, 15 carrier, five startup), eight separate private hooks,
+ABI1/wire3 and static CRT. Receipt pins:
+2cdef1b1c334389e624407ceb819246a9ea61737539f1943d1d167ec95470fd6 and
+46bbe5fd5116b9093afa374f15c64e70f8747cd5cba0670ff607281d90df3738.
+The fresh corrected Resource gate binds exact current Source and dep-info.
+All sixteen predecessor gates pass 754 Source-deleted executions/900 entries;
+both new scalar gates pass 92 executions/138 entries, totaling 846 executions
+and 1,038 entries. Scalar receipt: `target/native/scalar-resource18-oracle-corrected-v4/scalar-gate-acceptance.json`, SHA-256 `902e3f6ec6cb946c646b4fa12917ba365ccecfa7eedbcf43b9b83ec9d4dda2b6`.
+Its reentry counts derive from guarded 23-case/two-profile loops and internally
+decoded two-entry reports; individual per-child counts are not logged.
+Predecessor counts: `target/native/scalar-resource18-oracle-corrected-v4/current-gate-counts.json`, SHA-256 `adf33cbab4544509dc66dce176493fcbab18bcfc22f0713ca007cb33636be991`.
+
+Before the isolated two-file oracle correction, Graph acceptance passed 32
+Source-deleted executions (24 public, eight hooks), and selected Callback, Owner,
+Actor and interface regressions passed 42 tests. Only those two exact
+expected-message tables differ from their source snapshots. Production and
+selected test behavior are unchanged. These retain bounded prior evidence,
+not a fresh run of the corrected test binary. Receipts:
+`target/native/actor-graph-current-scalar-v2/after.json`, SHA-256 `11dc2e66b2cffa23cb502111307e3b40d544d67456e37b7613194d1a1a13700e` and `target/native/scalar-normal-regressions-v2/after.json`, SHA-256 `314ef80985d15d79e130747a7b1cd973db802498f152f2630cbd03151b3dba77`.
+The current guarded Startup rerun passes 80 executions (48 normal, 32 private).
+Earlier failed attempts supply no acceptance. Startup:
+`target/native/startup80-current-scalar-v4/after.json`, SHA-256 `09c79ae568c54ca818f37aa928b3f3857653826aba21565b62f506299b03dcaa`.
+Source33 wire3 remains object-only and gains no linked execution credit.
+
+All scopes remain bounded local MSVC evidence. Full coherent-workspace and
+fixed-inventory conformance, exact-revision CI, GNU and clean installed
+distribution remain required. Known deterministic CI failures remain a separate
+repair obligation; this slice claims no exact-revision CI acceptance. Other
+incomplete language parity compositions remain full-goal obligations. The rough
+87% estimate and fixed 207/182 inventory denominators remain unchanged.
+
+#### Canonical native Verify-suite construction
+
+The native audit now appends a suite through an authenticated HIR factory when
+required values retain a protected checked table. It preserves all existing
+functions and selects only original zero-argument Verify bodies in source order.
+Foreign archives, edited old bodies, extra table entries, and changed generated
+calls or headers cannot renew the protected table. Source syntax, compile-time
+eligibility, Resource authority and ABI remain unchanged.
+
+Focused checks pass nine tests: four ordinary/Graph factory controls, one Driver
+control over the four original failing fixtures in both checking modes, and
+four existing Graph/reflected forgery controls. Receipt:
+`target/native/verify-factory-focused-v3/focused-results.json`, SHA-256
+`9b3e7afeb67e12afad4bb9f5474a8b51036f9df2193d6ef6e4496a4bae880cb6`.
+The four previously failing fixtures pass sixteen Source-deleted native
+executions across both checking modes and both normal MSVC runtime profiles.
+Receipt `target/native/verify-four-current-v1/after.json`, SHA-256
+`bcad338942b98cd538e6d435cb110cbaa83d6a1d925528dac7f4e577e4a19bbd`.
+
+The unchanged complete native Verify audit passes 155/155 fixtures, with the
+Debug runtime, default Jett source mode and original Sources present. This is
+separate from the sixteen Source-deleted executions above. Receipt:
+`target/native/verify-fixture155-current-v1/after.json`, SHA-256
+`cbf5d51341bcce173027afb9181ab07b57c4045b022c2b3a605b118c09c5227e`.
+Current source, dependency and archive guards remain unchanged in both native
+runs; measured Runtime sources and artifacts are reused without modification.
+These results resolve the local Verify-suite regression. The two required-owner
+CI failures, exact-head supported-host/installed acceptance and broader language
+parity remain open. The rough 87% estimate and fixed 207/182 denominators remain
+unchanged; this does not complete the native-codegen goal.
+
+
+#### Original required regions inside inline bodies and refinement predicates
+
+Required evaluation now selects exact original inline-body regions and checked
+refinement predicates while retaining the enclosing declaration and complete
+generic/scoped context. The executable walker still stops at callable boundaries.
+Canonical HIR extraction and predicate declaration joins retain private archive,
+header and operand authentication. Canonical resolver names and original HIR
+alias leaves are checked separately. Copied syntax or matching spelling grants
+no proof, capability or runtime Resource permission. Closed and pure eligibility
+and once-per-original-attempt evaluation remain unchanged.
+
+Focused checks pass 20 tests across 17 actual invocations, with no failures or ignored tests, including meaningful foreign,
+clone, owner, context, header, operand, alias-name and runtime-purpose refusals.
+Receipt: `target/native/required-owner-focused-v2/focused-results.json`, SHA-256 `14494e22ef31e941ea97e87fb2a06dee503e9daf929279bd633150aae0d5f96e`.
+Affected-library breadth passes 1,334 complete library tests (Cranelift 134, Comptime 624, HIR 229 and MIR 347), plus 25 selected Driver tests (library 14, backend lowering 7, generic function values 2 and named arguments 2), all with no failures or ignored tests.
+Receipt: `target/native/required-owner-broad-v3/broad-results.json`, SHA-256 `4241e0b95302f388f2d748f2c8cbb6599262541d66b1af72723ed479c82e5797`.
+The broad run's final guard authenticates 2,099 current Source/fixture inputs
+and 68 unchanged Runtime artifacts. Its library run completed successfully in
+v2; v3 resumed only the Driver batches after independently checking unchanged
+inputs. The later test-only restoration extension passes one focused control:
+`native-codegen-recovery-2026-10-09/scalar-v9/required-owner-restoration-acceptance.json`, SHA-256 `a6ba8bf827ff749e400c7460ef7cf5d39399c541b4f1c77236fc06dc19f691e0`.
+It checks same-program failure, full metadata restoration and successful reentry.
+This changes no production code. The earlier 20-test and native receipts precede
+that test-only extension and retain their own snapshot; the final breadth
+includes it. The two native fixtures and their expected streams remain exact.
+
+The two unchanged original contextual-comptime and refinement-declaration gates
+pass two Debug native main executions and two interpreter mains with Source
+present. Exact stdout and rendered debug-event stderr match their reference
+oracles. Receipt: `target/native/required-owner-native2-v2/after.json`, SHA-256 `a8e1014f3c7f79d10bff2b0077f353a9357d69f74b5486681d3f90f3ce9f225d`.
+The gates supply no Release execution, Verify/Property suite or Source-deleted
+lifecycle credit. Measured Runtime archives are reused unchanged; neither archive
+guards nor compilation supply execution credit for other profiles or platforms.
+
+This closes the local RequiredOwner regression; published Graph's earlier E9001
+results remain historical. Full coherent-workspace/inventory conformance,
+exact-revision supported-host CI, GNU and clean installed distribution remain
+pending. The separate VerifySuite and capture-owner results retain their existing
+scope. The rough 87% estimate and fixed 207/182 denominators remain unchanged.
+
+#### Generated reflected callback suites: bounded MSVC acceptance
+
+The current successor retains checked Verify/Property closure owners and restores
+capture/purpose metadata on error and panic. HIR authenticates immutable
+CallbackHolder constructors/aliases and their exact callable read. The public
+reference test path retains the checked program. Property sampling now produces
+an opaque same-program/successful-cache witness; the canonical HIR wrapper and
+replay constructor preserve original trial/function order and protected tables.
+Changed shrink inputs are validated before body entry. Public raw wrapper edits,
+lookalike snapshots and matching signatures supply no authority.
+
+The permanent Driver leaf preserves byte-exact Sources19/20. Its three nonignored
+tests require the actual two-block/100-trial reference reports, six ordinary
+Program/Verify/Property objects and twelve Source-deleted normal MSVC
+Debug/Release launches. The existing normal bundle selector remains the CI path;
+supplied measured manifests are available for the controlled local gate. Each
+executable is reaped and removed immediately. No private Resource Main is linked,
+and no ordinary context-retirement counters are fabricated.
+
+All three exact permanent tests now pass. Each original Source's reference
+report passes both blocks and records 100 Property trials. The object-only gate
+emits six Program/Verify/Property objects; the linked gate separately emits six
+objects, deletes each Source before linking/launch and passes twelve actual
+normal MSVC Debug/Release executions. Exact exit0, empty stdout, Program stderr
+`5\n`, empty suite stderr, object/entry/target identities and executable reaping
+and removal are checked. Source checking retains release=false independently of
+the runtime profile. Receipt: `target/native/callback-current-normal-v2/after.json`,
+SHA-256 `0bb9987813fd2bf7735badf637edfe1882c8966f024156c1df535643f827611a`.
+The fresh current compiler gate is
+`target/native/callback-current-compile-v4/gate-acceptance.json`, SHA-256
+`25dde5c3c4b66ce083e98aacf530090e77ee06311dc0b3129d0d0c6ebd13fbcf`.
+Complete compiler/Source, dependency and selected artifact guards remain
+unchanged. Measured normal58 Debug/Release archives are reused unchanged, not
+remeasured. Ordinary public launchers provide no context-retirement observation.
+
+Separately, 20 public reference/test-loading controls pass. Both corrected
+six-test Comptime/HIR groups pass without changing original Sources19/20. All
+eight native Property controls pass, including counterexample shrinking through
+refinements, generic interface owners and float32 inputs, source-absent replay,
+unreproducible failures and timeout handling. The timeout fault uses a canonical
+internal MIR block and still passes ordinary validation before execution.
+
+The five affected compiler libraries pass all 1,664 tests: Codegen 134,
+Comptime 636, HIR 241, MIR 347 and Typecheck 306. Logs are
+`target/native/callback-interface-libraries-v1.log`,
+`target/native/callback-property-replay-other-v1.log` (seven controls) and
+`target/native/callback-property-replay-focused-v3.log` (timeout/replay control).
+Initial failed attempts retain their historical scope; the corrected controls
+now pass.
+
+The test-only Property harness applies faults to freshly lowered MIR for both
+initial execution and replay, then runs the unchanged validators and codegen.
+It does not reseal edited HIR or grant production authority. Existing shrink,
+timeout and initial-MIR-only replay controls retain their original oracles.
+
+Final evidence must bind the corrected test inputs, current compiler/dependencies
+and unchanged measured normal58 archives. Existing receipts retain their own
+revision and scope. Full workspace/inventory conformance, exact-revision CI,
+GNU and installed-distribution acceptance remain separate. The rough 87%
+estimate, fixed 207 fixtures/182 object obligations and full native-codegen goal
+are unchanged.
+
+#### Owned mutable field updates: bounded MSVC acceptance
+
+Ordinary record and exact-state machine writes now use one checked place from
+frontend ownership through reference/required evaluation, HIR, MIR and native
+preflight/commit. The ordinary occupied-slot leaf transfers a staged replacement
+atomically and leaves displaced-value cleanup to the caller. Exact builtin
+reflection metadata stays read-only internally. Nonzero field guards retain
+exact paths and lose stale facts after writes, across loop backedges and inside
+condition prefixes. Borrowed enum match payloads retain exact arm origins;
+transparent borrowed coarsening/declassification takes an independent native
+snapshot before payload extraction. Owned matches retain owned transfer.
+
+All seven affected libraries pass 2,162 tests: Codegen 135, Comptime 659, HIR 246,
+MIR 355, Runtime 378, Typecheck 354 and Types 35. All 97 Driver library controls
+pass across two invocations: the broad run passed 96, and its sole missing-runtime-
+manifest Graph test passed after supplying the measured bundle. All eight backend
+lowering tests pass, including every one of the 182 run-pass fixtures; all ten
+field reference/frontend tests pass. The measurement helper passes 93 controls.
+Full formatting and whitespace checks pass. Logs below refer to the primary
+checkout's shared `target/native`:
+`field-update-libraries-full-v5.log`, `field-driver-broad-v1.log`,
+`field-driver-graph-configured-v1.log`, and
+`field-driver-lowering-reference-v2.log`. The corrected Python result is
+`native-codegen-recovery-2026-10-09/field-runtime-measurement-prepare-v1/measurement-controls-corrected.log`.
+
+All four permanent native field tests pass: 18 positive mains in both paired
+profiles (36 executions), three expected pending failures in both profiles (six),
+and Verify/Property suites in both profiles (four): **46 actual executions**.
+Each compiled temporary Source is removed before launch. Exact success output,
+exit 71 and exact failure streams, early RHS/preflight order, owning-field clone
+independence, generic/inline/reflected bodies, and repeated borrowed enum owners
+are checked. Eighteen frontend publication refusals pass separately; they supply
+no execution credit. Source Debug/default and Release/optimized are paired with
+normal Runtime Debug and Release respectively, not a full profile cross-product.
+
+The fresh compiler gate is `field-gate-compile-v2/gate-acceptance.json`, SHA-256
+`179bd113686808bd0d5ae2c1a6f0ffbd5e0d673912fbeb0ef861c4fa5f271143`.
+`field-native-execution-v3/accepted-counts.json`, SHA-256
+`db72c9958a614156347fea8c099fc4c4cdb8013d5304d5d3a3c888853df09c9a`,
+records the passing counts and exact test-harness/log/guard pins. Before/after
+checks retain 1,012 compiler Source inputs, 68 measured runtime artifacts and all
+32 fixture hashes. The guarded set includes the unexecuted actor-future fixture.
+The measured normal/private v2 archives contain the new ordinary leaf; Resource
+exports remain 58, private hooks eight, and ABI version one. Public ordinary
+launchers supply no private Resource-retirement observation. Earlier failed
+attempts retain their own scope and supply no linked acceptance.
+
+This earlier field gate did not execute actor handler updates. The bounded
+checked-actor successor below records their later identity/state acceptance;
+Resource-bearing replacement and wider unarchived reflected/generic compositions
+remain separate obligations. The following typed pending-sum section records its
+separate reference repair and native acceptance. Full coherent workspace,
+fixed-inventory execution/object gates, exact-revision supported-host CI, GNU and
+clean installed-package acceptance remain separate. Earlier workflow
+38685454101 passed all four jobs at its own head; it does not validate this
+change. The fixed 207-fixture/182-object denominators and full native-codegen goal
+remain unchanged.
+
+#### Typed pending-sum terminal diagnostics
+
+Direct `handle` and pipeline failures now render the original wrapped receiver
+through the existing typed formatter before consumption. Direct checked target
+types are retained before evaluation; full pipeline result types remain separate
+from ready-handler error payload types. Public pending depth stays visible,
+secret subtrees are redacted, and earlier producer failures/once-only effects,
+ready sum extraction and error typing retain their behavior. No native renderer,
+runtime ABI or Source admission change is part of this reference repair.
+
+All 659 Comptime tests pass. Six permanent native controls cover nine programs
+and pass 18 Source-deleted executions against both normal Runtime profiles,
+with default Source policy. Three original leak witnesses remain byte-exact.
+Additional checked Sources cover parenthesized named-callable views, named
+view-parameter pipelines and retained view-parameter callbacks. Exact stdout,
+stderr and exit status are asserted. Existing public borrowed-sum controls pass
+both tests over twelve Sources and 24 Source-deleted native executions, including
+unchanged public pending some/none/ok/fail messages and owning/view behavior.
+
+The fresh compiler gate is `target/native/pending-sum-gate-compile-v2/gate-acceptance.json`,
+SHA-256 `4cb64bde30e531c6808e2be372e3aff262118fb9cb9b3280a5d5a4bb21f55c65`.
+The secret matrix summary is `pending-sum-native-execution-v2/execution-summary.json`,
+SHA-256 `95d9d1ba48a58799cbb2284013832a0c5320c9dc874240f2a5858b61f083129d`;
+the public matrix summary is `pending-sum-public-regressions-v1/execution-summary.json`,
+SHA-256 `65ec51c31cf7d268a6e35570e21fb0ea787492c42102b08e1cc274df39b58541`.
+Both run under the primary checkout's shared `target/native`; their permanent
+passing test loops establish the respective execution counts. Before/after
+guards preserve 1,019 compiler Source inputs and 68 reused measured runtime
+artifacts, with separate six-secret/twelve-public fixture hashes. No private
+Resource retirement observation is claimed by these ordinary launchers.
+
+Full coherent workspace/inventory execution, other remaining language
+compositions and exact-revision supported-host/installed acceptance remain open.
+The fixed 207/182 denominators and full native-codegen goal are unchanged.
+
+
+#### Checked actor handler field updates: bounded MSVC acceptance
+
+Original actor syntax, canonical actor type and handler ordinal retain one private
+checked identity through original Send/Ask joins, handler execution and native
+publication. Exact capability/state/message roles retain declarations, access
+modes and physical slots. An accepting ownership traversal checks persistent
+captures at every real normal exit after acquiring the response. Direct/projected
+persistent views retain their actual backing owner and loan path. Early Respond
+abandons an unfinished field commit; owning Handle replies are acquired before
+publication. Nonresponding Return is sealed only for the original no-response
+declaration, canonical nothing, an absent/exact-nothing operand and no view escape.
+Responding Return and fallthrough, including `responds nothing`, remain unsealed.
+Verify/Property factories retain the exact ordinary checked archive and protected
+function table even without reflected callable plans. No Resource authority or
+function-body exemption follows from these transitions.
+
+All eleven permanent native tests pass: **24 Source-deleted executions**, comprising
+nine main programs in paired Source/runtime profiles (eighteen), Verify/Property
+suites in both paired profiles (four), and the original nested receiver against
+both runtime profiles (two). Main and suite controls pair Source Debug/default
+with Runtime Debug and Source Release/optimized with Runtime Release. The original
+receiver keeps Debug Source policy because it uses println. Exact stdout/stderr,
+exit status and Source absence are checked; this is not the full profile
+cross-product. **48 publication refusals** pass separately: eight invalid Sources
+across Main, Verify and Property roots with both Source options, rejected during
+checking before archive lookup while preserving the sentinel publication.
+Refusals supply no process-execution credit.
+
+The fresh compiler gate is `target/native/actor-field-gate-compile-v2/gate-acceptance.json`,
+SHA-256 `dff2c66924781008aa15566c025eac6286ef8837df45abe0e4465dd2aa5d9033`.
+The execution summary is `actor-field-native-execution-v2/execution-summary.json`,
+SHA-256 `3e8a2da1d475964aee5aec4e8d810bc5686f6f56f0b56aea19f6bfb0e8ccb41f`.
+These paths use the primary checkout's shared `target/native`. Before/after guards
+preserve 1,035 compiler inputs, 68 runtime artifacts and eighteen fixture hashes:
+sixteen actor fixtures, unchanged original24, and the original nested receiver.
+Actor Source03 is unchanged and also supplies the Verify/Property bodies. Source16
+pins nothing-valued helper returns after state updates, abandoned field commits,
+and independent instances. The failed predecessor matrix remains historical and
+grants no accepted execution count.
+
+Fresh normal/private MSVC Debug/Release measurements bind the new ordinary
+`ActorReplaceOccupied` leaf alongside `StructReplaceOccupied`. The normal receipt
+is `actor-field-normal-msvc-v1/receipt.json`, SHA-256
+`2b2b9cd529c451c216072dc2b563253149f409bd3ef9ea867a1a86da1c637069`;
+the private receipt is `actor-field-private-msvc-v1/receipt.json`, SHA-256
+`35db08fbe46f339dad36731e24998497fdd77b459b0a283ed236cd124638db60`.
+Resource exports remain 58, private hooks eight and ABI version one. Ordinary
+launchers supply no private Resource-retirement observation. Measurements alone
+supply no Source execution credit.
+
+All 21 non-Driver library targets pass 2,572 tests; the Driver library passes all
+97 controls in a separate invocation. The seven core affected libraries total
+2,211 tests: Codegen 135, Comptime 663, HIR 251, MIR 362, Runtime 389, Typecheck 376 and
+Types 35. Resolve also passes all 56. All ten actor reference/frontend tests and all
+eight backend-lowering tests pass, including all 182 run-pass fixtures. Original
+checked initializer/capture Graph controls additionally pass four Source-deleted
+executions using the Debug runtime with both Source options; original Source and
+Support are removed before launch. Their hook descriptors retain exact checked
+program identity, without live custody or handler Resource entry. Logs:
+`actor-workspace-libs-except-driver-v4.log`, SHA-256
+`63d63df60d1431db6a9e8a4be1f9b9d5895263a7a1a7b00258e089d8383448f0`,
+and `actor-driver-libs-reference-lowering-v2.log`, SHA-256
+`69e73107d884c4dc29adc5dd6e681bc5426da23a14e746668a445f2348b4a78f`.
+The unchanged measurement helper passes 98 controls; formatting and whitespace
+checks pass. These independent library runs are not the full workspace/inventory
+execution gate.
+
+Resource-bearing replacement, wider generic/reflected and frozen-graph
+compositions, real asynchronous scheduling, complete fixed-inventory execution,
+exact-revision GNU/MSVC CI and clean installed-distribution acceptance remain
+separate obligations. Responding-handler Return/fallthrough remain identified in
+the actor note. The fixed 207-fixture/182-object denominators and full native-codegen
+goal are unchanged.
+
+#### Mutable owned local-view backing: bounded MSVC acceptance
+
+An immutable local alias chain may now end at a mutable owned local or owned
+parameter when the exact original DefId-to-LocalId mapping, declaration,
+concrete type, mutable flag and active checked Owned fact agree. Alias slots
+remain immutable. Typed initializer/field proofs, readiness, backing liveness
+and non-owning storage remain mandatory; names, absent alias metadata and flat
+global facts supply no ownership authority. Persistent may-created aliases keep
+blocking owner changes across CFG joins, including after the last read.
+
+The unchanged original Source08 and observable nested bytes/list Source11 pass
+four Source-deleted executions in paired Source/runtime Debug and Release.
+Forwarding, borrowed calls, explicit clones and ordinary owned-field copies
+preserve the original owner and independent copied values. All 753 affected
+library tests pass: HIR 254, MIR 364 and Codegen 135. The log is
+`target/native/mutable-view-hir-mir-codegen-v3.log`, SHA-256
+`856819c888d339a80aed7c8680648bee7713cf3ce56a2b69655204b3d3133983`.
+
+The full selected native matrix passes 31 tests and **64 Source-deleted
+executions**: the complete local-view module, two exact actor persistent-view
+controls and the three-Source ordinary borrowed-sum supplemental packet. The
+four new-fixture executions are included in that total. Fifty-six executions
+pair Source Debug/default with Runtime Debug and Source Release/optimized with
+Runtime Release. Eight older local-view executions use only the Debug harness
+runtime, including default Verify/Property suites. Overall runtime counts are
+Debug 36 and Release 28; this is not a full Source/runtime cross-product.
+Six existing publication-boundary checks pass separately: two temporary-origin
+and four machine-owner-change refusals. They supply no process-execution credit
+and do not turn admitted Source limitations into language bans.
+
+Fresh compiler gate: `target/native/mutable-view-gate-compile-v1/gate-acceptance.json`,
+SHA-256 `b5a9edea952a73a8f945a867fe57e09325361a36c5e4cdc20a0adbdea30c8b0c`.
+Execution summary: `target/native/mutable-view-native-execution-v1/execution-summary.json`,
+SHA-256 `581f6f92ce8ec279d7886017c05155a0fac207d3c4d50b4167b02cfa521e2600`.
+Before/after guards retain 1,036 compiler inputs, 68 reused runtime artifacts and
+32 fixture hashes unchanged. Runtime source/ABI and measured bundles are
+unchanged; no runtime rebuild or additional Resource authority is part of this
+slice.
+
+Temporary roots, mutable alias slots, mutable view-parameter backing, missing
+reflected outer-owner facts and borrowed-sum Handle aliases requiring immutable
+backing remain separate implementation/proof limits. This change selects no
+lifetime extension, loan expiry or write-through-alias rule. Complete Resource
+transport, full coherent workspace/inventory execution and exact-revision
+supported-host/installed acceptance remain open. The fixed 207-fixture/182-object
+denominators and full 100% native-codegen goal are unchanged.
+
+#### Reflected local-view backing facts: bounded MSVC acceptance
+
+The checked producer retains the transitive binding dependencies of actual
+local-view facts from their supplied concrete body map. Every binding DefId
+joins its exact declaration and matching fact; forwarding and nested reflected
+snapshots preserve original types, ownership modes and mutable flags. A visited
+DefId set bounds malformed cycles. No Owned mode, global fallback, unrelated
+enclosing capture or new session authority is synthesized. Missing or
+inconsistent selected facts still refuse admission even when another enclosing
+or concrete-instance map contains a valid fact. Existing HIR original-local and
+typed-initializer joins, MIR persistent loans, liveness and cleanup remain
+authoritative.
+
+All five affected libraries pass **1,797 tests**: Typecheck 379, Comptime 663,
+HIR 256, MIR 364 and Codegen 135. The three producer and two HIR focused controls
+also pass. Source12 formatting, full Rust formatting and whitespace checks pass.
+Library log: `target/native/reflected-mutable-view-core-libraries-v1.log`,
+SHA-256 `62f7c3649a3c21f8308c149e2735d08f082cdc439d3bd3a679351a78e1d4dcbd`.
+
+Source12 passes reference checks and two Source-deleted executions covering a
+direct scoped mutable root, generic repeated reflected fields and nested
+forwarded aliases. Those executions are included in the passing selected matrix:
+32 native tests and **66 Source-deleted executions**, with six separate
+publication-boundary checks. Fifty-eight executions pair Source Debug/default
+with Runtime Debug and Source Release/optimized with Runtime Release; eight
+older controls use only the Debug harness runtime. Overall runtime counts are
+Debug 37 and Release 29, not a full profile cross-product. Refusals supply no
+execution credit and do not create new Source bans.
+
+Fresh compiler gate:
+`target/native/reflected-mutable-view-gate-compile-v1/gate-acceptance.json`,
+SHA-256 `f7bfc37055da8f4ea9d659d369be1df137561bc18f2d12bed34bf940ed596a8d`.
+Native summary:
+`target/native/reflected-mutable-view-native-execution-v1/execution-summary.json`,
+SHA-256 `abebafba9097acd0e366a9dde03102cbe48380485c8d51bdcc35dd01b44bec38`.
+Before/after guards preserve 1,037 compiler inputs, 68 reused runtime artifacts
+and 33 fixture hashes unchanged. First-slice 753/31/64 evidence retains its
+original revision and scope. Runtime/helper/ABI and measured archives are
+unchanged.
+
+Absent/mismatched selected root facts, mutable alias slots, mutable
+view-parameter backing, temporary roots and mutable borrowed-sum Handle backing
+retain their separate proof/implementation limits. No lifetime extension, loan
+expiry, Resource authority or flat-map fallback is introduced. Full coherent
+workspace/inventory, complete Resource transport and exact-revision
+supported-host/installed acceptance remain open. The fixed
+207-fixture/182-object denominators and full 100% native-codegen goal are unchanged.
+
+#### Mutable owned borrowed-sum backing: bounded MSVC acceptance
+
+The canonical explicitly viewed Handle admits a mutable root through its
+original checked Owned local/parameter receipt. Exact declaration, root and alias
+facts, initializer, concrete context and complete real function remain joined.
+MIR rejoins the immutable original HIR record before independent current CFG,
+tag/arm, field and remapping checks. Canonical conversion and private exact
+callable-token transitions cannot reseal an arbitrary current tree. Generated
+alias slots remain immutable and nonowning. Persistent move-only aliases keep
+blocking owner changes after their last read; primitive/String copies retain
+ordinary ownership and survive shell replacement. The detailed
+[mutable-sum note](native_mutable_borrowed_sum_backings.md) records the proof and
+Source controls.
+
+All five affected compiler libraries pass **1,807 tests**: Typecheck 379,
+Comptime 663, HIR 261, MIR 369 and Codegen 135. The log is
+`target/native/mutable-sum-core-libraries-v1.log`, SHA-256
+`6ab23ff17459a6000209349df28c39fcb77dcd903288974836eeb6a815f0a895`.
+Focused HIR and corrected MIR groups each pass five tests, counted within that
+total; full Rust formatting passes. This is not a full workspace/Driver gate.
+
+The selected native matrix passes **10 tests** and **46 Source-deleted
+executions**: five additive mutable-sum programs contribute ten, the unchanged
+ordinary packet 24, the supplemental packet six, and exact actor direct-view,
+actor projected-view and reflected mutable-owned-view controls two each.
+Every run pairs Source Debug/default with normal Runtime Debug or Source
+Release/optimized with normal Runtime Release: 23 Debug and 23 Release
+executions, not a full profile cross-product. Exact output, status, Source
+absence and terminal-failure oracles pass. There are **zero publication
+refusals** in this selection; expected runtime failures supply execution evidence.
+The normal-runtime controls establish output/status/order parity, not new
+private cleanup-counter observations, complete physical cleanup counts or
+full Resource-corpus acceptance.
+
+Fresh compiler gate:
+`target/native/mutable-sum-gate-compile-v1/gate-acceptance.json`, SHA-256
+`4e2cd94e7ccc2cb23ae22b14a65e66a547d4136e148cf7f2708294cfb147c819`.
+Native summary:
+`target/native/mutable-sum-native-execution-v2/execution-summary.json`, SHA-256
+`df43d3141cbef95c2c68402cb1fff94e78f5aa753c50d9ab523ad241d45ea7b4`.
+Before/after guards preserve 1,046 compiler/source inputs, 68 reused runtime
+artifacts and 50 fixture hashes; those fixtures are not the 23-program execution
+denominator. Runtime/helper/ABI and measured bundles are unchanged. The
+interrupted v1 attempt supplies no completed-matrix or additional acceptance
+credit. Earlier 753/31/64 and 1,797/32/66 local-view results retain their own scope.
+
+Temporary-backed Handle roots, mutable view-parameter roots, borrowed binders,
+absent/mismatched selected facts, alternate outer Default payload lifetimes,
+scoped copied-Handle contexts without genuine selected source facts,
+erased/capability/actor/Resource carriers and
+baked/materialized callable composition retain their separate proof or
+implementation limits. The lexical whole-owner temporary-backing contract at
+`f865e3f1` remains unchanged and pending implementation and cleanup gates,
+including unchanged Source09. No last-use expiry, implicit clone, invented
+Source identity or wider escape is added. Full coherent local workspace and
+inventory execution, complete Resource transport, wider actor/task compositions,
+asynchronous scheduling and local supported-host/installed acceptance remain
+open. GitHub CI remains disabled at the user's request; this bounded receipt
+neither requires re-enabling it nor completes the local full-coverage goal.
+The fixed 207-fixture/182-object denominators and full native-codegen goal are
+unchanged.
+
+#### Private HIR storage: Windows CLI stack regression
+
+Two private retained values now use owned heap storage: the complete field-update
+Source target and the complete Source-call certificate. The constructor values,
+immutable target accessor, full target/certificate comparisons and controlled
+remaps remain the same. Derived cloning and equality still operate on complete
+pointees, retaining existing checked identity and nonce behavior. This changes
+compiler storage/allocation cost; it adds no Source rule, proof authority,
+Runtime helper or ABI change.
+
+The unchanged Windows CLI control
+`native_setup_failure_keeps_the_object_builds_captured_frontend_events`
+first reproduces the child stack overflow (exit 3221225725), then passes with
+both storage changes. All **nine CLI capture tests** pass without changing their
+fixtures, stack settings or object-build/manifest-lookup order. Full affected
+libraries pass **765 tests**: HIR 261, MIR 369 and Codegen 135. Logs under
+`target/native/`:
+
+- `local-regression-cli-stack-before-v1.log`, SHA-256
+  `7abe5336663c42d415bb9d9c10657c26c4da24a3d08f4ee9e95aed816319f5f7`.
+- `local-regression-cli-stack-both-box-v1.log`, SHA-256
+  `fa7912c02f2e1274ae6ce558ebbfd3bab20bc051ce2eb3a2dc0ce44c0208b7e0`.
+- `local-regression-cli-capture-all-v1.log`, SHA-256
+  `e34111882036d853626fafd6d1cd667c565c8ad0d65ba49ab3282f7d36cdf016`.
+- `local-regression-box-hir-mir-codegen-v1.log`, SHA-256
+  `32552a35ddb6b487efc23d765200e2b763e3422908bcea8ab628afdf0a266535`.
+
+The same Rust layout probe records Expression **944 to 592 bytes**, Statement
+**3,104 to 1,456**, FieldUpdatePlace **1,200 to 256**, SourceCallOwnership
+**760 to 400** and CallOwnership **760 to 416**. Before/after HIR archives are
+pinned respectively to SHA-256
+`cf0ff42e7a679478c82775246c4ae3510c489206419abf356685a590fb072f2c` and
+`1c8e96896d5cddf34c12e10de1a13301c223a5544c9473535f16a2fc84f2f41b`.
+Probe outputs and the after-archive receipt are in
+`native-codegen-recovery-2026-10-09/ci-disabled-failure-audit-v1/`.
+These layout measurements are not post-change frame measurements or a proof of
+a universal stack bound.
+
+This local regression receipt supplies no new Source-deleted executions or
+full workspace, inventory, GNU/installed-distribution or Resource acceptance.
+The remaining coverage obligations and fixed 207-fixture/182-object denominators
+are unchanged. GitHub CI remains disabled at the user's request.
+
+#### Frontend regression expectations after owned-view support
+
+The Driver HIR-failure capture test now uses a nested temporary field view in
+place of the supported mutable-owned local view. It retains the exact ordered
+comptime/Verify observations, absent BuildResult, HIR diagnostic prefix, current
+stable-local-origin diagnostic and error source chain. The nested temporary
+case records a current HIR implementation limit; it does not prohibit valid
+Source or change the selected temporary-backing lifetime contract.
+
+The readonly-root fixture changes only its expected diagnostic distribution:
+E0404 x13 and E0401 x10 still require all 23 errors. A payload matched from a
+viewed enum retains its borrowed origin, so its field write reports E0401. This
+matches the existing isolated borrowed-match control and the design's read-only
+view rule. No compiler policy or fixture body changes.
+
+Focused Driver capture and compile-fail fixture tests each pass. All four
+projected-assignment integration tests and the full **603-test fixture suite**
+pass. The fixture suite supplies reference/frontend evidence, not full native
+execution acceptance. Logs under `target/native/`:
+
+- `local-regression-driver-hir-capture-v1.log`, SHA-256
+  `792dc6b6ab7b7f06285025c4c3532f65384c0ca9de433fcc41681d159dc06465`.
+- `local-regression-projected-fixture-v1.log`, SHA-256
+  `db6da58cb0332c43b32039a2908a29869710feef1e4515c5c0c1b9d990b74081`.
+- `local-regression-projected-assignment-v1.log`, SHA-256
+  `be4be8393b246b8ffae2f7bff72e636c6fedd521b37325ff9bcffd3ca7373d1d`.
+- `local-regression-fixture-suite-v1.log`, SHA-256
+  `df7168797468b39cc14403ab1398d69600faab17af85d3ba5c01fd333dbbee1b`.
+
+This is regression maintenance, with no new native execution or full
+workspace/inventory acceptance. Coverage denominators and remaining obligations
+are unchanged. GitHub CI remains disabled at the user's request.
+
+#### Pending actor send error parity
+
+The checked reference actor-message path again includes the rejected value in
+its error, matching the existing unchecked interpreter and native Runtime.
+The native conformance control requires the exact reference message before
+comparing the complete native output and diagnostic stream. Runtime code and
+the pending actor fixture are unchanged.
+
+`native_pending_actor_send_matches_interpreter_error` passes locally with the
+supplied normal Debug Runtime bundle: one reference failure oracle and one
+Source-present native failure execution, with exact output/status/error parity.
+This is not a Source-deleted run or paired Debug/Release acceptance. The log is
+`target/native/local-regression-pending-actor-native-v1.log`, SHA-256
+`2d1afb32c7f1a7e3da61b1ed0fc450af3f8c48280b5d5a147d48ea99563df694`.
+All 68 reused Runtime artifact hashes remain unchanged.
+
+All 663 Comptime library tests also passed with this diagnostic repair in
+`target/native/local-regression-driver-comptime-libraries-v1.log`, SHA-256
+`3aaebe06f8079f0e68e24ba40fa20c3aaa4d62d5fcb717b954c2b9b22d74853f`.
+That combined invocation had a separate Driver test failure caused by its
+missing required bundle environment; the successful focused rerun does not
+turn that invocation into a fully passing Driver gate. Full workspace/native
+acceptance remains open, and GitHub CI stays disabled.
+
+#### Canonical field owners in checked ordinary reflection
+
+A fresh diagnostic-only probe confirms that the required
+`comptime reflected_generic_secret()` call in `interface_values.jett` failed at
+the existing complete reflected-loop item comparison. The ordinary producer
+stamped the source spelling `Box[Token]`, while the immutable checked loop
+required canonical `Box[secret[string]]`. The probe changed only error context
+and was removed before product verification; its log is
+`target/native/local-regression-interface-probe-check-v1.log`, SHA-256
+`09fa4c39b0963f3036fabb4f21253cf05aa738f6eaefc2a46f861e88d2062280`.
+
+The interface fixture explicitly clones the actor's retained `initial` value
+when initializing its mutable current item. Both actor bindings remain usable,
+preserving the intended original/current behavior under move-only ownership.
+This Source repair removes the earlier moved-value error without changing the
+ownership rule or the fixture's observation oracles.
+
+The ordinary field adapter now validates its original call or physical pipeline
+step and checked body before selecting canonical struct/bitfield owner data.
+The complete canonical field table must match the retained checked program.
+Field enumeration, field access and construction start/put/finish use the same
+owner; later type arguments and existing metadata comparisons remain intact.
+Source-visible alias names and nested `TypeInfo` remain distinct. Top-level
+aliases and refinements keep empty field probes and empty checked loop schemas.
+Reflection-only programs receive the ordinary checked context independently of
+actors, field writes or Resources. No purity marker, Source ban, refinement
+proof, Resource cursor authority, Runtime helper or ABI change is introduced.
+
+Three new controls cover actorless closed comptime and reference construction,
+nested alias metadata, empty outer alias/refinement probes, and rejection of
+copied same-span callees, type-argument slices and pipeline steps. The focused
+selector passes **four tests**, including one existing control. All affected Comptime and Driver
+libraries and the frontend/reference fixture suite pass **1,366 tests**:
+Comptime 666, Driver 97 and fixtures 603. The four focused tests are included in
+the Comptime total. Logs under `target/native/`:
+
+- `canonical-reflection-focused-v1.log`, SHA-256
+  `f4c6d14f7ff235a07db77ccfcdacf80b656e12fd026fdba5036f1d4564651f3c`.
+- `canonical-reflection-comptime-fixtures-v1.log`, SHA-256
+  `d446e34c9b35b65ec564eecd874bc91ab91981bf4db46ca1e948b1e4d62c97ee`.
+
+All **nine CLI capture tests** also pass. A fresh default-profile CLI
+`build --check --agent` of the actual interface fixture passes without E9001,
+and its formatter check passes. The Release check is not accepted: the existing
+fixture's debug-only `println` calls produce 58 E0362 errors. The fixture was
+not changed to obtain Release acceptance; the actorless pure regression above
+separately passes Debug and Release checking. Logs under `target/native/`:
+
+- `canonical-reflection-cli-capture-v1.log`, SHA-256
+  `28f36c537a97ca32e44ef361d34b3f85b39f8c6525967ee74a3151ea5b2618a4`.
+- `canonical-reflection-interface-check-debug-v1.log`, SHA-256
+  `58b8a099048311576253ba2181377581d34273bf274a6e52c54ccf8671ec719a`.
+- `canonical-reflection-interface-check-release-v1.log`, SHA-256
+  `cba8bacb65d80059410fb5a3143e964b64a06e4872c177558af1addb087b0328`.
+- `canonical-reflection-interface-format-v1.log`, SHA-256
+  `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+
+`native_interface_values_match_interpreter` passes with one Source-present
+native execution, default/Debug Source and the normal Debug Runtime. It requires
+successful execution and exact reference/native stdout and diagnostic-stream
+parity. The existing trace oracles retain redaction and the visible generic
+interface value while rejecting hidden-token and `reflection-failed` trace
+text. This is neither a Source-deleted run nor paired Debug/Release execution.
+The log is `target/native/canonical-reflection-interface-native-v1.log`, SHA-256
+`ad3b588d3e58c2b6c4a67ced4e1a585ee7281cc12bbe1a3996c568d8b576a00b`.
+
+This receipt supplies no new Source-deleted execution, complete native corpus,
+full workspace/doc-test, GNU/installed-distribution or complete Resource
+acceptance. The fixed 207-fixture/182-object denominators and remaining native
+coverage obligations are unchanged. GitHub CI remains disabled at the user's
+request.
+
+
+#### Temporary local backing: bounded MSVC acceptance
+
+The selected full lexical-backing contract now has an initial ordinary
+function-body implementation. The alias declaration and direct named factory
+are original nongeneric ordinary functions; the whole returned finite struct
+backs an exact typed bytes/list field path. The native whole-owner proof
+admits finite primitive/string/bytes/list/struct data; other wrapper, sum,
+collection, recursive and runtime-authority shapes remain outside this slice.
+HIR/MIR cover those endpoints, while
+the checked reference adapter currently supports bytes only. List reference
+transport, nested declaration scopes/loops, actor/Resource/generic/reflected
+contexts and broader producer families remain owed. None becomes a checker ban
+or a narrower completion denominator.
+
+Private original-declaration/producer/scope receipts and a single-use canonical
+capture join the retained checked archive. Its immutable expected inventory
+prevents current marker/function erasure from hiding a temporary obligation
+while the archive is retained. MIR checks the complete graph and exact owning
+acquisition before pruning, then pins the whole owner through lexical cleanup
+independently of reads. Alias and forwarded slots remain nonowning. The checked
+reference path uses whole-owner activations, payload-free tickets and exact
+acquired-output packets. Existing native result acquisition precedes cleanup;
+no Runtime helper or ABI changes are introduced.
+
+The actual checked Source staged-argument test establishes factory acquisition
+after its temporary call loan and later handled argument, followed by the loan
+End and whole-result move into the persistent owner. Genuine nonidentity local
+compaction also passes. Synthetic disconnected-block preimages are refused by
+the public Resource graph guard and pruner. Isolated private temporary replay
+can restore their original graph and unchanged independent receipts, supplying
+no Source-generated unreachable-block or public-pruning acceptance.
+
+The initial focused gate passes **27 tests**: reference 7, HIR 10 and MIR 10.
+One added ordinary-entry regression also passes. The reference adapter gives
+activations only to original ordinary root declarations, preserves interface
+method dispatch outside that receipt family, and refuses edited claimed roots
+or methods attempting to import a temporary frame. The mutual lookup also
+joins a later original definition through its immutable
+resolver name-span edge to the same declaration DefId, preserving exact unique
+root identity, full typed AST, canonical name, namespace, signature and
+activation. Two additional controls pass for mutual producer/caller/borrowed
+callee execution in Debug and Release checking and adversarial edited facts
+refused before acquisition. The full current core gate passes **1,842 library
+tests**: typechecker 379, Comptime 678, HIR 271, MIR 379 and codegen 135,
+including the written-declaration classification controls below. All compiler
+focused controls are included in that library total.
+Logs under `target/native/`:
+
+- `temporary-local-view-focused-v4.log`, SHA-256
+  `cd3f32de06fed2008516fe2e3297f1e9a8310b5cfe01accba68caee4390b7251`.
+- `temporary-ordinary-entry-focused-v1.log`, SHA-256
+  `92da6acdfeaa20c57522508a9d12194d30fff5707da15b416338d70cd58cada3`.
+- `temporary-mutual-entry-focused-v1.log`, SHA-256
+  `02ba9c2b11b282641211dcc89aed18d2a34db2d882ca3c8d26492e245ea8200f`.
+- `temporary-local-view-core-libraries-v4.log`, SHA-256
+  `e1fa74d244fc54b25e3044a349fe321d25c94198694c17e05cae4de872ab13b9`.
+
+The earlier full fixture attempt failed with **546 passes and 57 failures**.
+The diagnostic joined `json.json_tree_parse` to its original definition in
+stdlib file 10016 while DefId 299 retained the `mutual:` declaration span in
+file 10015. Requiring those spans to match incorrectly refused genuine checked
+Source. The shared immutable resolver join repairs this without weakening
+registration or inventing a new source identity. The failed log is
+`temporary-local-view-fixtures-v1.log`, SHA-256
+`8fe22530ee635e56f2ef5b82ade5766dc2444d9b7307d4fe03e9ddf4b4b9e5bd`.
+The successor fixture attempt fails with **549 passes and 54 failures** and
+`temporary local view body needs its original checked entry or caller`. Its
+log is `temporary-local-view-fixtures-v2.log`, SHA-256
+`34eb9d0f7e4d6a4bc4d0ec0f15f66494b99f792aaf3ab1abffbebc9bf037b0bb`.
+The written-declaration classification repair requires an authentic immutable
+original `VarDecl` with a written `view` initializer and its canonical variable
+definition/name/span and checked `Other` fact. Existing viewed pattern and
+iteration binders keep their ordinary borrowed paths and mint no temporary
+owner authority. Complete nested AST lookup retains true temporary raw-entry
+and unsupported-region refusals. All **12 reference call controls** pass,
+including two new classification controls and the mutual controls, in
+`temporary-written-view-focused-v1.log`, SHA-256
+`47be7144f0e2a90ea9879053d4cadf00613d300e7ec9957ee8ca7f21cbd9a33b`.
+The real JSON namespace smoke passes one test in
+`temporary-written-view-namespace-smoke-v1.log`, SHA-256
+`105f1d0a3bd723d623e3c57f568b18bdac2b79e1a29140fd76af403fbfde1ef5`.
+The full successor fixture gate passes **603 tests** in
+`temporary-local-view-fixtures-v3.log`, SHA-256
+`da41cfcf837bc381f0cfecd23f11e210f9c6f48c5f9f9f9926c20b9ee59c5d65`.
+That fixture selection includes the namespace smoke. All **nine CLI capture
+tests** pass in `temporary-local-view-cli-capture-v1.log`, SHA-256
+`317b28bbd05dbfff3f68519d86c2cb52bd7cc80066a67a342cf2f48efca00745`.
+The successful successors do not turn either earlier failed invocation into a
+passing gate.
+
+Original Source09 remains byte-exact SHA-256
+`c0f288b659bdf84bf87fb7f46576eb7cadd3b440c000f726b5b1c099ccfd83af`.
+Its driver control now expects success. The new formatted Source13 covers
+producer-once output, later direct/forwarded reads, an unviewed owned sibling
+and explicit-clone independence. Source13 is unchanged SHA-256
+`48391e6a0fa7390f6d36cb190c8e4100d835218ca317232a64ec8ec228cd59aa`.
+
+The fresh MSVC gate passes compile-only acceptance, with zero Source execution
+credit. The subsequent complete selection passes **23 tests and 46 paired
+Source-deleted native executions**: Source Debug/Runtime Debug and Source
+Release/Runtime Release, 23 per Runtime profile. No full profile cross-product,
+legacy Debug-only executions or publication refusals are counted. The two
+new bytes temporary controls account for four executions; the rest are eight
+stable projected-view, eight scoped-call, two mutable-owner, one reflected
+mutable-view and two actor persistent-view regression tests. Their passing
+regressions grant no temporary-owner acceptance in actor or reflected contexts.
+The helpers remove the written Source before executing the binaries and assert
+exact reference/native stdout, stderr, status and debug observations. All
+1,056 compiler/Source, 68 reused Runtime, 64 fixture and 182 original run-pass
+input guards remain unchanged.
+
+- `temporary-local-view-gate-compile-v2/gate-acceptance.json`, SHA-256
+  `fb39b49856ad89bbdfb5777008a1b9365b6ca4d95a04940a89e5285be4eb6891`.
+- `temporary-local-view-native-execution-v2/execution-summary.json`, SHA-256
+  `314b6e92a7cd0235bbf92292e49df9e92ebb86490de290982ae23c6865876c0a`.
+
+Both pin the actual gate image SHA-256
+`a1f9a700a5219d91bbbf784a5768dc9ec87558a78a72ecd3ae7a9be7a8e28a14`.
+The earlier matrix attempt failed, with zero accepted execution credit in
+`temporary-local-view-native-execution-v1/execution-summary.json`, SHA-256
+`dcc869793d07c776035c7a95e88c122e8e310b04298f569606b8a7a7c97d38c8`.
+Its partial observations are not added to the successful successor.
+
+Source09 empty output and Source13 producer/read/clone markers establish the
+selected output behavior, not physical owner lifetime or absence of hidden
+cloning. Native mid-scope allocation/destruction timing,
+full connected lifecycle/failure traces, earlier-owner cleanup ordering and the
+remaining full-contract gates are still open in
+[the temporary local-view note](native_temporary_local_views.md).
+
+This bounded receipt does not establish full workspace/doc-test, complete native
+corpus, GNU/installed-distribution, complete Resource or whole-language native
+acceptance. The fixed 207-fixture/182-object denominators and remaining coverage
+obligations are unchanged. GitHub CI remains disabled at the user's request.
+
+#### Bounded temporary List transport — 2026-10-16
+
+The [List transport note](native_temporary_list_views.md) records accepted local
+MSVC behavior for exact retained generic observer instances and List endpoints.
+It preserves canonical mutual DefId/body joins, registered Source authentication,
+the immutable written-VarDecl classifier, all prior 23 selected tests and original
+Source09/13. Existing enum/iteration borrows gain no temporary-owner authority.
+
+Five new List and twelve existing reference controls pass together: **17 passed /
+0 failed** in temporary-list-transport-focused-v1.log, SHA-256
+cac01d28dac98fada049d521bd80b9139d842d10e9495ebb4861998d7dabd90c.
+After a warning-only Rust or-pattern parentheses cleanup, selected successor
+checks pass **1847 compiler library tests** (135 + 683 + 271 + 379 + 379),
+**603 fixtures** and **nine CLI capture tests**, all with zero failures:
+
+- temporary-list-transport-core-v1.log, SHA-256
+  d86f8177789a9aed444317787a49a81854a0e5cd1ca3eb7101ea2d9dde8ebd7b.
+- temporary-list-transport-fixtures-v1.log, SHA-256
+  d7d77d9c9b9641516890253923c3d822b8b2af2727a532e92f11cf40c1e6594a.
+- temporary-list-transport-cli-v1.log, SHA-256
+  56c1b715305b34e36cbb7bf0f537b8ae1e94a510668201b59935adce20db6033.
+
+The first All matrix fails exit 101: authored Source14 incorrectly uses
+match/some/none optional patterns, so its checked-reference parse fails before
+List native build/execution. That aggregate accepts **zero** executions, despite
+two earlier retained selectors passing; partial results are not added to the
+successor. All guards pass in the failed attempt. Its summary is
+temporary-list-view-native-execution-v1/execution-summary.json, SHA-256
+55751b44050f635c90b0972c39f0f26938ee91171a5fc74448da7d82387be711.
+Its List diagnostic log is SHA-256
+907fdd85438cc9b59e77c39d1957e175c00bfc323720e4885b22556fb8ae5550.
+
+The fixture-only canonical bare-handle repair preserves numeric/String producer,
+alias, mutual generic, list/bounds/clone observations and fixed expected stdout.
+Formatted Source14 is ae81376d38a94f9890146138609ee5df641cf49bca9e15530464a50fea6d1c99.
+The frontend receipt in temporary-list-fixture-handle-repair-v1/frontend-receipt.json
+is SHA-256 c8eb735fb7d852c9a3388ba556548f96b1a865df8d07aa9165a98cb4519a45f0:
+format and Debug/Release checks exit zero; both frontend checks have zero errors
+and warnings. The initial format-only and compile-v1 observations did not prove
+fixture validity and remain bound to their earlier Source inventory.
+
+The matching fresh compile-v2 gate passes compile-only acceptance; its own
+Source-execution credit is zero. The focused repaired List selector then passes
+**one test/two paired Source-deleted executions**. The complete successor passes
+**24 tests/48 paired Source-deleted executions**, split **24 Source Debug/Runtime
+Debug** and **24 Source Release/Runtime Release**. The new List control accounts
+for one test/two executions within those totals. There are no publication
+refusals, legacy Debug-only runs or full profile cross-product claims. All 16
+selection log hashes and exact zero-failure terminal counts were independently
+verified. The full 48 include the earlier focused 2; the distinct accepted packet
+total is 48, not 50. The historical byte 23/46 receipt is not added either.
+
+- temporary-list-view-gate-compile-v2/gate-acceptance.json, SHA-256
+  40ad0d06d7a5585659b3e39311d60363cbd39848b2384bd5fe9d4760dd4c2968.
+- temporary-list-view-native-focused-v2/execution-summary.json, SHA-256
+  ae05fa796b52584804f5004fbd3315a0839a5963fc5a92760dec15b49a4e0411.
+- temporary-list-view-native-execution-v2/execution-summary.json, SHA-256
+  a2b39a53402f88709493b2b022d97d6d8ce342c8b46b62252ce7007d7cd1ee84.
+
+The compiled and executed gate image is SHA-256
+76f8a7020fb82fd53d573324f5a38730df68261581add438025243798f3a0c82.
+All 1058 compiler/Source, 68 reused Runtime, 65 fixture and 182 original run-pass
+guards remain unchanged. The fixture inventory adds only Source14 to the prior
+64. All six count/launcher sources, original Source09/13, selectors and fixed
+expected stdout remain; the ready-v2 runner changes only the fixture pin.
+
+This bounded receipt supplies no physical destruction/no-hidden-clone proof,
+actor/Resource temporary authority, full connected lifetime contract,
+Resource/Graph integration, suite-factory, full native inventory/corpus,
+workspace/doc-test, installed-host or whole-goal acceptance. The fixed 207/182
+denominators and rough planning estimate remain unchanged. CI remains disabled.
+
+#### Canonical value conversions: bounded compiler and native regression acceptance — 2026-10-16
+
+The [canonical conversion note](native_canonical_value_conversions.md) records
+a private receipt around completion's single actual canonical coercer execution. It
+retains complete immutable before/after Programs and the same borrowed type
+arena, then replays the actual occurrence-specific callable tokens and adapters.
+It does not independently remint expected output or accept a caller-provided
+current table. Actor, mutable-sum and temporary peers retain original-proof
+checks and exact current-operation comparisons. Graph, baked and temporary
+joins see the same unchanged-before archive. Completion publishes its local
+candidate only after all peer, callable-sealing, HIR and backend-type checks
+succeed. No Runtime, ABI, provider, custody or Source semantics change.
+
+The first positive attempt fails 0/1 before conversion because its authored
+main-body asserts are invalid Source (E0340). The fixture-only repair replaces
+them with typed call/coarsen locals for both required occurrences. All Rust
+proof assertions remain intact, including exact distinct sealed plans, one
+genuine temporary owner, unchanged original Source inventory and repeated
+completion. The corrected positive passes one test in Debug and Release
+checking; all **nine focused receipt controls** and the existing **one genuine
+Graph/baked/temporary composition control** pass. The positive is included in
+the nine, not added to them. Synthetic hidden-archive and NaN comparisons
+remain private comparison evidence, without Source or native execution credit.
+
+- canonical-conversion-compound-positive-v1.log (failed), SHA-256
+  f4891373dff5eacdf2c9a1e175f8eb67f6eff0ca6f33324bcd812334142f1c99.
+- canonical-conversion-compound-positive-v2.log, SHA-256
+  fa986958329d859de65978f79ec9ea14a815a77c66fa0533f890b1023f01abca.
+- canonical-conversion-focused-v1.log, SHA-256
+  38c3a8d6d82b51e86113dfb633525d6242c1531d6200c67f31f71a04e5ddaf5c.
+- canonical-conversion-graph-baked-temporary-v1.log, SHA-256
+  fb2129d0a82a5e1c62b7dcd2c13859a9add435fad6e18e83bca3604d79d08f06.
+
+Broader successors pass **1,856 compiler library tests** (Codegen 135, Comptime
+683, HIR 280, MIR 379 and Typecheck 379), **603 frontend/reference fixtures**
+and **nine CLI capture tests**, all with zero failures. Focused compiler
+controls are included in the HIR total. Exact logs under target/native/:
+
+- canonical-conversion-core-v1.log, SHA-256
+  b712b29d7f69f505131282b590218c5242e3af5ede42494b01717b45b14691a0.
+- canonical-conversion-fixtures-v1.log, SHA-256
+  89dd139d83b8821d845158c2a74fd644270155f87cee02da2c54c1c182c5f94f.
+- canonical-conversion-cli-v1.log, SHA-256
+  45cafe79af2294857dbb443e83c7b4db81e728c3cfa0e7ae4ae821b8d26ef279.
+
+The outer sequence reports command-input-too-long warnings while repeating VS
+setup on its fourth/fifth wrapper calls. The actual Cargo gates and overall
+sequence exit zero using the initialized environment. This is not fresh
+installed-host evidence.
+
+The fresh MSVC compile-only gate then passes with zero Source execution credit.
+The current-image existing-view regression selection passes **24 tests and 48
+paired Source-deleted native executions**: 24 Source Debug/Runtime Debug and
+24 Source Release/Runtime Release. No publication refusals, legacy Debug-only
+runs or full profile cross-product are counted. All 16 pinned selection logs
+and exact zero-failure terminal test counts pass independently. The helpers
+remove the written Source before native execution and require exact reference/
+native stdout, stderr, status and debug observations. All 1,060 compiler/Source,
+68 reused Runtime, 65 fixture and 182 original run-pass guards remain unchanged.
+
+- canonical-conversion-native-gate-v1/gate-acceptance.json, SHA-256
+  41ca89ea180268d5df296355dc45fded45c98bcd0676cfa1d86fc896cd94f637.
+- canonical-conversion-native-views-v1/execution-summary.json, SHA-256
+  fda6e2118a9a00409a45ea53429f490b1010242523877d9feb305f70e2097394.
+
+Both pin the compiled and executed gate image SHA-256
+b37a2366042a3e0326825156eb151e72c3026cc3d593516400b78f5cb1fc6695.
+The existing bytes/List temporary, stable, scoped-call, mutable-owner, reflected
+and actor persistent-view regressions grant current-compiler regression
+acceptance. They do not execute the new compound required-callable or Source17
+Verify/Property suite witnesses; those native obligations remain unproven.
+Historical byte/List matrices are not added to this distinct 48-execution total.
+
+Archive identity now compares all four current optional Arcs even without
+original data. The separate unapplied suite transition must preserve the
+transaction, add native_suites and required_cache to both exhaustive patterns
+and comparisons, and keep every peer on the unchanged before archive. Source17
+still requires actual suite Verify/Property order, distinct ordinal occurrences
+for equal sampled values, its configured trials, Source-deleted Debug/Release
+executions, measured zero provider acquisitions/live custody, cleanup and
+same-context reentry. None is inferred from a closed Source or absent Network
+parameters. Exact actor-handler/actor-state-view callable-sealing transitions
+and nested callback-return identity coverage also remain unproven. The draft
+actor witness first needs valid checked Source; a predicted mismatch is not an
+observed failure.
+
+This bounded receipt does not complete full Resource/Graph suite integration,
+physical temporary destruction/no-hidden-clone proof, the selected lifetime
+contract, the full native inventory/corpus, workspace/doc-tests, installed-host
+or whole-goal acceptance. The fixed 207-fixture/182-object denominators and rough
+planning estimate remain unchanged. GitHub CI remains disabled.
+
+#### Private Resource observation v2: local checks and archive checkpoint — 2026-10-16
+
+The double-private recorder and strict v2 decoder are integrated across 16 Rust
+paths. Production ABI 1/layout 3, 58 production and 8 private C exports,
+Counts 72/ArchiveInfo 32 bytes and receipt/normal-launcher manifest version 1 are
+unchanged. Private test protocol 2/JTRRP002 and JTRHC002 add bounded observation,
+not Source/custody/provider authority. Five acquisition-pipeline stages stay
+separate; successful Property history and supported installed int64 bits remain
+actual runtime observations only when captured by a matched native run. See the
+[observation checkpoint](native_resource_private_observations.md).
+
+**407 focused local checks pass**: 389 Runtime library, 12 report decoder, one
+Source17 history oracle and five host decoder controls. Six actual MSVC archives
+are measured in matched Debug/Release profiles: normal Runtime+Launcher and
+private Runtime. Their exact target/native/ receipt pins are:
+
+- private-observation-v2-normal-msvc-v1/receipt.json:
+  4e41eca939e70f4c1ea162639b3f714510726a118a200d38bb89bddc6d575e8c.
+- private-observation-v2-private-msvc-v1/receipt.json:
+  d19cc38b1d38a6f84783ad0fd1dc219cea722d88ce5e1db8ddba2b025d64dbe0.
+- private-observation-v2-measurement-paired-v1-terminal.json:
+  411f53b3f27b98962ed900c336bd1a7c89f88c7836c7ccebdccd3b53ee6aa52f.
+
+Both measurement processes exit zero and are reaped. Source/config/helper/tool
+maps and 68 historical artifact guards remain unchanged. The actual terminal
+records 7.4653 GiB maximum cache usage, within its 8 GiB limit. This is a bounded
+measurement observation, not a claim that the cache ceiling was maintained
+through earlier historical runs. Archive measurement grants zero Source
+executions. The Source17 normal pin is updated only from its actual receipt;
+its Source is unchanged.
+
+The verifier retains the actual receipt bytes. Its successor checks physical
+linker identity/digest without rewriting recorded argv and authenticates the
+known terminal duplicate-liveness serialization defect through the exact genuine
+preflight receipt. Four real command baselines and 12 negative controls pass.
+The full compiler-before guard passes. The accepted fresh compiler gate now
+binds 1,089 compiler/Source, 69 fresh Runtime, 33 measurement and 68 historical
+artifact inputs plus 27 helper entries and 182 original run-pass inputs.
+
+At this checkpoint the fresh compiler gate is **accepted**, with zero Source
+execution credit. Native ingress and whole Source17 v2 now have separate bounded
+**accepted** execution receipts. Historical protocol 1 Suite/View/lifecycle receipts retain
+their original scope and are not promoted to current-v2 coverage. Actor 8827
+separately accepted two unchanged Sources/four Source-deleted Debug/Release
+processes before this Runtime change; its required-value summary
+f9f2e093ac3806fd48c24f426b5eace86ef745697fe46f494ed8e44dbe2aaa5d and
+direct-getter summary cb01bf437b69d6906e526035e955050d906c654cbe356ac7e7065c3aef591fdd
+remain historical and grant no fresh v2 regression credit. Per-kind ordinary
+storage, private artifact retainers, normal custody/reentry, physical lifetime,
+whole inventory/workspace/installed-host acceptance and the full native goal
+remain open. No coverage percentage is inferred. GitHub CI remains disabled.
+
+The accepted compile-only gate is
+private-observation-v2-gate-compile-v3/gate-acceptance.json, SHA-256
+3d05e4499c87c4d606ca515ca1ab2c7c9ece96331749bb564b62dfe017f78cc3;
+its inner terminal is 55d5c2889f7fa5fae6e19a668c3cee6f07e71c9a7bdfd35bfc75de219691b3e6
+and outer private-observation-v2-compile-supervisor-v4/terminal.json is
+2276b0b86a8469365642ce61179a323573a013e1b255cedcaab8c474a75866a5.
+The image is 40,563,712 bytes, SHA-256
+7a626568c675d99fe8464843efe69735232d9e0b8fb0d786853193801fde6205.
+Both terminals complete with exit zero, reaped quiet owned processes, disposed
+root handle, released leases and no errors. The outer watcher observes a maximum
+7.5453 GiB within its 8 GiB limit. Five pure PowerShell and eight pure Python
+identity controls pass separately from the 407 local tests; none grants Source
+execution credit.
+
+The first gate attempt remains unaccepted after a recycled-child-PID monitor
+refusal following successful Cargo compilation. The second keeps unchanged
+guards and releases leases but refuses the cached test image. Both failed
+outputs remain preserved. For the accepted third gate only the test target
+timestamp changes; Source bytes remain 1eb3316afe08153c48f4da8e9e33cc233ac30896d6b3695947f5e45d0c4b7e75
+and Source17 remains unchanged. No failed-attempt observations are promoted to
+accepted native execution.
+
+The fresh native ingress gate accepts 32 actual processes: eight Source
+processes/10 report-header entries, 22 host ABI controls and two pure writer
+controls. Four linked artifact rows supply no execution credit, and the Source
+processes cover two distinct original Source hashes. Acceptance is
+native-bounded-ingress-execution-v3/execution-acceptance.json, SHA-256
+56c746359c5fcd7ab73399ed98f64de5fe80d048d94f2d4a33b0706d09c773fb;
+its catalogue is 4347e7b4a69a43b43466954538f07dad69a99c83aee5a0d127eabb97d231ae39.
+
+Whole unchanged Source17 accepts eight processes/four objects/eight private
+entries across paired Debug/Release normal and private launchers. Both private
+Property profiles observe two 100-trial entries and 6,404 history records each;
+Verify observes four history records per private profile. Every private
+incomplete flag is zero, all five separate acquisition counters are measured
+zero, and same-context reentry passes. All eight statuses are zero; Source/
+objects are deleted, checked-program Weak/input-Arc roots released, and reaped
+executables/PDBs removed. Exact installed int64 bits are checked by the Rust
+oracle against original hashed bytes, without JavaScript-number rewriting.
+Acceptance is native-bounded-source17-execution-v3/execution-acceptance.json,
+SHA-256 a59a3d4cadf23a05d30b7ecceb034f501dd40d02f404570f33309d787192087b;
+the harness summary is 271caf5fbd93f9fd4733185188ad270b344f2dcebba0f126ed93df984ffdb5e6.
+
+The accepted v4 runner uses 15-second helper startup, 5-second CIM operations,
+a 30-second single cleanup deadline and 3,600-second active deadline. The two
+preserved prelaunch refusals—physical-tool PATH and helper startup—grant no
+Source execution credit. Normal telemetry remains null and unmeasured. The
+per-kind ordinary storage, private retainer, normal custody/reentry, physical
+lifetime and full native acceptance obligations remain open; full_acceptance
+stays false and GitHub CI stays disabled. Historical protocol 1 limitations above
+are not rewritten or promoted.
+
+#### Original actor and retained temporary-owner finalization: compiler checkpoint
+
+The consuming Lowerer now retains its exact mint-time temporary-proof inventory
+through a separate initial actor transition. The actual sealer's BEFORE values,
+finite earlier-declaration dependencies, open cells and complete actor/sum
+checkpoint are validated before the first OnceLock write. The unchanged 970-byte
+Packet/list witness is
+a1f3fa32e14828daebb472f316608683b303187eba63b987edbab56d381a2f0f.
+No Source restriction, marker erasure or current-table recapture grants coverage.
+See the [finalization note](native_actor_temporary_owner_finalization.md).
+
+All 35 focused HIR controls pass. Broad local regression passes **2,553 distinct
+tests**: Codegen 135, Comptime 691, HIR 311, MIR 384, Typecheck 379, 603 frontend/
+reference fixtures and 50 CLI tests. Focused controls are included in HIR 311.
+The three logs under target/native/ are:
+
+- actor-temporary-owner-core-regression-v1.log, SHA-256
+  0745179c292cc76b55510000b8530bd17073909042a09f57d51d8af913f5c11b.
+- actor-temporary-owner-fixture-regression-v1.log, SHA-256
+  66e11f2cff69c9394ca1aa9e36167af3662d654a2148267ba6038ddf9f4d4e49.
+- actor-temporary-owner-cli-regression-v1.log, SHA-256
+  a077a1eb56e2638311665196eb3e980f9ce548fe61a6927fa2ec5924dd030b14.
+
+The fresh compile-only gate is accepted, with 1,093 compiler/Source inputs and
+image SHA-256 c308ff075c6dc904684867a3854e6f9d82961c1e417a01a05dd899dbe138237d.
+Gate acceptance is private-observation-v2-gate-compile-v4/gate-acceptance.json,
+SHA-256 290a8b403a76aec6b10d7e1e0b5e27cce268a78cc6600a717761c82914498160.
+Compilation grants zero native execution credit. The separate native selector
+passes one Rust test and accepts one unchanged Source/two objects/two native
+processes across paired Debug and Release. Both produce exact observed:5 plus LF,
+empty stderr and exit zero. The written Source is deleted and host object
+dropped before executable-only launch; children are reaped, executables and
+temporary directories removed. The outer process is quiet/reaped, its root
+handle closed and lease released, with no failures.
+
+Acceptance is
+native-bounded-actor-temporary-owner-execution-v1/execution-acceptance.json,
+SHA-256 076ac84a3717a56fafa9a5450edc96003a2ec3035e50c4fd10ef3eada9fe78b4.
+Its 5,863-byte schema-v1 native-evidence/actor-temporary-owner.json is
+2b19eea41a33e6a94d89050443cad25062e1802e3a76159b7243c982525bbe34;
+the actual process receipt is
+9782953688918c25d1d42adc161145ba03d9a7fd21934e0b79227d2f44446fb6.
+The intentionally incomplete prerelease terminal is not the acceptance leaf. Historical actor 8827 and Resource e916 observations retain their own
+revision, runtime and execution scope; neither is relabeled as current Source17
+regression or added to the new actor execution count. Physical actor/callback/queue
+ownership, same-context reentry, changed canonical producers, broader proof
+transport and the full native goal remain open. CI remains disabled.
+
+#### Direct Resource optional/result replacement: local checkpoint
+
+Distinct live owned optional/result Resource shells now use the existing
+composite Replace contract: stage the RHS once, validate both owners and exact
+failure companions, retire old before publication, and retire staged RHS once
+if old cleanup fails. Typed failure packing/extraction preserves scalar versus
+owned representations. Sealed nested lexical owner records supply exact Drop/
+clear behavior through ordinary exits and canonical remapping. Existing Source
+policy, capabilities, ABI 1/layout 3 and private report protocol 2 remain unchanged.
+See the [Resource sum replacement note](native_resource_sum_replacement.md).
+
+The frozen local receipt passes **3,038 distinct checks**: 409 Runtime, 1,976
+compiler/phase, 603 frontend/reference fixtures and 50 CLI tests. Its SHA-256 is
+325751dfe2bf1335c12114667a7a21017bdacb6a449d82abcc5e72991510405f.
+Six fresh normal Runtime/Launcher and private Runtime Debug/Release archives are
+measured. Their normal/private/paired receipt hashes are respectively
+be980ae18006737304ae69af4d254f78cad15c51fe8e6226c6a2b9ca9cf4b6b4,
+454be0bf810ecc500e362fd99de37e02a909ca3abfc4d89c92afb06e8d1cfc50 and
+b725c561901d53bc2fd27b5ae6f5cf07265051be498efc6e4b7a7b1a283395a9.
+Measurement supplies zero Source execution credit.
+
+The fresh compile-only gate is accepted with 1,111 compiler/Source inputs,
+image 03a6ffebbcd1b5a56d986d61bddbaec3ebf164c7af9c480d068df19e2ba4924d,
+and gate receipt f8e0623b59056bf3a6da1b5f94c4bcd54948a83df67863bbfd8c516cfb719be3.
+Quiet/reaped completion, unchanged guards and released leases supply zero
+Source/host execution credit. The separate object-emission control passes all
+six original Sources in Debug/Release and adds no linked Source execution.
+Single entry accepts 38 child rows/38 attempts/12 fresh programs; retained-
+Session reentry accepts 38 child rows/76 attempts/38 fresh programs. Across both
+matrices that is **76 native children, 114 attempts and 50 fresh programs**, with
+a union of six distinct Sources. Each matrix observes 22 child exits zero and
+16 expected status 71, empty streams, zero incomplete report flags, retired
+logical Resources and empty aggregate ordinary storage. Written Source/support
+is absent before launch; single-entry compilation artifacts remain for reuse,
+whereas reentry closes and removes its complete temporary directory. These are
+private observations and do not establish checked-program Weak expiry or
+per-kind physical lifetime. Exact acceptance pins are in the linked note.
+Preserved SDK-preflight and shared-harness import failures receive no accepted
+credit. Prior actor/Runtime receipts retain their
+historical scope and do not renew current Source17 coverage. Physical/per-kind
+retainer observations, normal custody/reentry, wider replacement/transport and
+full workspace/inventory/installed-host acceptance remain open. Full acceptance
+stays false; rough tracking is unchanged and CI remains disabled.
+
+#### Pure replacement suite execution and current Source17 regression
+
+This follow-up closes the earlier pure-suite execution obligation; previous
+checkpoint counts retain their scope.
+
+Two ordinary preparation controls pass (two native selectors ignored), and the
+v4 compiler-only gate is accepted with 1,111 inputs. The six measured archives
+are reused, not remeasured. Separate pure-suite execution accepts one unchanged
+Source, eight native processes, four emitted object groups/four distinct hashes
+and eight private entries. Private Property records 400 actual trial calls,
+with 2,404 history records/profile; Verify records four/profile. Flags and all
+five measured counters are zero, with matched private same-context reentry.
+Normal custody/reentry remains null and unmeasured. All child statuses are zero,
+streams empty; Source/object deletion, checked-root/input-Arc release and child/
+executable/PDB cleanup are observed. Exact receipts and remaining limits are in
+the [Resource sum note](native_resource_sum_replacement.md). Separate current
+Source17 regression also accepts eight processes/four object groups/eight
+private entries/400 private Property trial calls, with 6,404 Property history
+records/profile and four Verify records/profile. The same v4 gate and reused
+archives bind both runs. These counts remain separate from the earlier
+replacement checkpoint and historical Source17 receipts. Physical/per-kind
+retainers, normal custody/reentry and full acceptance stay open; rough tracking
+and disabled CI are unchanged.
+
+#### Ordinary corpus attempt: unaccepted supervision terminal
+
+The accepted current inventory remains 602 registered tests: 576 ordinary and
+26 opt-in, with 1,191 fixture-input hashes. Its two listing processes execute
+zero test bodies. The subsequent ordinary attempt ends without a complete
+libtest result or accepted corpus credit. Its partial stdout has 43 ok status
+lines and 3 ignored lines, no failed status line and no terminal summary; stderr
+is empty. These partial observations are not a completed pass count or a
+measured native Source/child/object count.
+
+Supervision refuses a CIM observation of an owned link.exe whose ExecutablePath
+is null (RuntimeError: expected JSON string). The final cleanup probe also
+collides with the existing probe-00045.json artifact. At the frozen terminal,
+the root process is reaped and its handle closed, but owned-tree quiet is
+unconfirmed and the shared lease is unreleased; complete=false. Before/after
+input guards have no failures, and final cache 8,395,662,274 bytes remains below
+the 8,589,934,592-byte cap. This is an unaccepted monitoring/cleanup result.
+
+Under target/native/native-bounded-ordinary-execution-v1/, execution-terminal.json
+is e367039f70c81efef89603fc37e3084323b907fa930ca4f4fce491de36f220d0;
+test-process.json is
+f93bf7c70e11376ccfce3478dc649b0be3a3b2543667b5145689fe19a3016749.
+The later recovery is accepted under
+ordinary-native-unaccepted-cleanup-v1/recovery-acceptance.json, SHA-256
+0fdfdc10cbecd5e30f79669301e2d14222cf2518592a5e45600453669efa28fc.
+Two independent CIM snapshots are empty, their helpers are reaped with handles
+closed, and the exact held lease is released. Recovery terminates no processes
+and executes no Sources. It does not convert the earlier run into acceptance.
+
+The v13 supervisor controls pass six positive and 25 negative in-process cases,
+with zero child processes, native API calls or filesystem mutations. Their
+actual result is native-adapter-v13-root-control-run-v1/result.json, SHA-256
+f6ac4118b88bc888868dbc9742e76ceffc21d67fb55459885fbd7272fca4b900.
+These controls grant no ordinary corpus or Source execution credit. Successor
+ordinary execution remains pending. The prior accepted
+replacement/pure/Source17 scopes and the fixed 182 manifest, remaining opt-ins,
+full workspace and installed-host obligations are unchanged. Full/physical
+acceptance remains false; rough tracking is unchanged and CI stays disabled.

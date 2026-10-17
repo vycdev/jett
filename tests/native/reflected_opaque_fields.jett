@@ -1,0 +1,61 @@
+namespace app
+actor Counter:
+    mutable int64 count = 1
+    receive add(amount: int64):
+        count = count + amount
+    receive read responds int64:
+        respond count
+struct Holder:
+    worker: Counter
+    output: Stdout
+function copy_holder(source: Holder) returns result[Holder, string]:
+    mutable TypeConstruction builder = type.construct_start[Holder]()
+    for field in type.fields[Holder]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[Holder, Field](view source, view field)
+            builder = type.construct_put[Holder, Field](builder, view field, value) handle error:
+                return fail(error)
+    return type.construct_finish[Holder](builder)
+function pending(view stdout: Stdout) returns nothing:
+    Counter worker = run run spawn Counter()
+    Stdout output = run run clone stdout
+    Holder source = Holder(worker: worker, output: output)
+    Holder copied = copy_holder(clone source) handle error:
+        println(error)
+        return nothing
+    trace source
+    trace copied
+    Counter inner = join copied.worker handle error:
+        return nothing
+    Counter ready = join inner handle error:
+        return nothing
+    Stdout inner_output = join copied.output handle error:
+        return nothing
+    Stdout ready_output = join inner_output handle error:
+        return nothing
+    send ready.add(4)
+    Counter source_inner = join source.worker handle error:
+        return nothing
+    Counter source_ready = join source_inner handle error:
+        return nothing
+    int64 count = ask source_ready.read
+    println("pending:{count}")
+    Stdout.write(view ready_output, "ready\n")
+    return nothing
+function plain(view stdout: Stdout) returns nothing:
+    Counter worker = spawn Counter()
+    Holder source = Holder(worker: worker, output: clone stdout)
+    Holder copied = copy_holder(clone source) handle error:
+        println(error)
+        return nothing
+    trace source
+    trace copied
+    send copied.worker.add(4)
+    int64 count = ask source.worker.read
+    println("plain:{count}")
+    Stdout.write(view copied.output, "ready\n")
+    return nothing
+function main(stdout: Stdout) returns nothing:
+    plain(view stdout)
+    pending(view stdout)
+    return nothing

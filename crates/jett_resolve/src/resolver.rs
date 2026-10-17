@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use jett_common::{FileId, Span};
+use jett_common::{FileId, SourceOrigin, Span};
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
 use jett_parser::ast::{
     ActorDef, AssertStmt, AssignStmt, Block, BreakpointStmt, CallArg, ComptimeTypeBindStmt, Expr,
@@ -10,6 +10,9 @@ use jett_parser::ast::{
 };
 
 use crate::errors;
+use crate::resource_hooks::{
+    ResolvedResourceKernels, ResourceKernelError, ResourceKernelSpec, validate_specs,
+};
 use crate::scope::{DefId, DefKind, DefVisibility, ScopeId, ScopeTable};
 
 /// The result of name resolution.
@@ -21,19 +24,38 @@ pub struct ResolveResult {
     pub resolutions: HashMap<Span, DefId>,
     /// Map from namespace import definitions to their fully qualified targets.
     pub namespace_aliases: HashMap<DefId, String>,
+    /// Sealed privileged declaration associations; empty in production.
+    pub resource_kernels: ResolvedResourceKernels,
     /// Diagnostics emitted during resolution.
     pub diagnostics: Vec<Diagnostic>,
 }
 
 /// Resolve all names in a parsed `Module`.
 pub fn resolve(module: &Module) -> ResolveResult {
+    finish_resolution(module, Resolver::new())
+}
+
+/// Resolve a compiler-owned private catalog. Never exposed to source/config.
+pub fn resolve_with_resource_kernels(
+    module: &Module,
+    origins: &HashMap<FileId, SourceOrigin>,
+    specs: &[ResourceKernelSpec],
+) -> Result<ResolveResult, ResourceKernelError> {
+    validate_specs(module, origins, specs)?;
     let mut resolver = Resolver::new();
+    resolver.resource_kernel_specs = specs.to_vec();
+    resolver.resource_kernels = ResolvedResourceKernels::with_catalog(origins, specs);
+    Ok(finish_resolution(module, resolver))
+}
+
+fn finish_resolution(module: &Module, mut resolver: Resolver) -> ResolveResult {
     resolver.resolve_module(module);
     resolver.check_unused();
     ResolveResult {
         scope_table: resolver.scope_table,
         resolutions: resolver.resolutions,
         namespace_aliases: resolver.namespace_aliases,
+        resource_kernels: resolver.resource_kernels,
         diagnostics: resolver.sink.into_diagnostics(),
     }
 }
@@ -47,6 +69,8 @@ struct Resolver {
     resolutions: HashMap<Span, DefId>,
     namespace_aliases: HashMap<DefId, String>,
     sink: DiagnosticSink,
+    resource_kernel_specs: Vec<ResourceKernelSpec>,
+    resource_kernels: ResolvedResourceKernels,
     /// The current scope during the walk.
     current_scope: ScopeId,
     /// Namespace introduced by the latest `namespace` item in the current file.
@@ -165,6 +189,8 @@ impl Resolver {
             resolutions: HashMap::new(),
             namespace_aliases: HashMap::new(),
             sink: DiagnosticSink::new(),
+            resource_kernel_specs: Vec::new(),
+            resource_kernels: ResolvedResourceKernels::default(),
             current_scope: root,
             current_namespace: None,
             current_file: None,
@@ -302,6 +328,7 @@ impl Resolver {
                         resource.exported,
                     ) {
                         self.resolutions.insert(resource.name.span, def_id);
+                        self.declare_resource_kernels(resource.name.span, def_id, index);
                     }
                 }
                 Item::TypeAlias(ta) => {
@@ -320,6 +347,30 @@ impl Resolver {
                 }
                 // Verify, property, and implement blocks don't declare new names in the module scope.
                 Item::Verify(_) | Item::Property(_) | Item::Implement(_) => {}
+            }
+        }
+    }
+
+    fn declare_resource_kernels(&mut self, span: Span, resource: DefId, order: usize) {
+        let Some(namespace) = self.current_namespace.clone() else {
+            return;
+        };
+        let specs = self
+            .resource_kernel_specs
+            .iter()
+            .filter(|spec| spec.resource_declaration == span)
+            .cloned()
+            .collect::<Vec<_>>();
+        for spec in specs {
+            if let Some(definition) = self.declare_namespaced_top_level(
+                &spec.member,
+                DefKind::Function,
+                span,
+                order,
+                false,
+            ) {
+                self.resource_kernels
+                    .insert(&spec, definition, resource, namespace.clone());
             }
         }
     }
@@ -609,6 +660,13 @@ impl Resolver {
                 Item::Enum(enm) => {
                     self.resolve_enum(enm, index);
                 }
+                Item::Machine(machine) => {
+                    for state in &machine.states {
+                        for field in &state.fields {
+                            self.resolve_type_expr(&field.ty, index);
+                        }
+                    }
+                }
                 Item::VarDecl(v) => {
                     self.resolve_global_constant_initializer(v, index);
                 }
@@ -621,7 +679,7 @@ impl Resolver {
                 Item::Actor(actor) => {
                     self.resolve_actor(actor, index);
                 }
-                // Namespace and Enum declarations have no bodies to walk.
+                // Remaining declarations have no references to walk.
                 _ => {}
             }
         }
@@ -638,6 +696,7 @@ impl Resolver {
     }
 
     fn resolve_global_constant_initializer(&mut self, decl: &VarDecl, item_index: usize) {
+        self.resolve_type_expr(&decl.ty, item_index);
         let previous_policy = self.project_namespace_policy;
         self.project_namespace_policy = ProjectNamespacePolicy::Forbid;
         self.resolve_expr(&decl.value, item_index);
@@ -655,6 +714,7 @@ impl Resolver {
 
         // State fields are in scope for handlers.
         for field in &actor.state_fields {
+            self.resolve_type_expr(&field.ty, item_index);
             self.resolve_expr(&field.value, item_index);
             self.declare_local(&field.name.name, DefKind::Variable, field.name.span);
         }
@@ -1240,11 +1300,6 @@ impl Resolver {
             return;
         }
 
-        // Builtin module names (e.g., `math`) are always in scope as callee prefixes.
-        if is_builtin_module(name) {
-            return;
-        }
-
         if let Some(def_id) = self.lookup_local_non_root(name) {
             self.record_resolution(name, span, item_index, def_id, false);
             return;
@@ -1262,6 +1317,12 @@ impl Resolver {
         if let Some(def_id) = self.scope_table.lookup(self.current_scope, name) {
             let imported = self.direct_path_uses_import(name);
             self.record_resolution(name, span, item_index, def_id, imported);
+            return;
+        }
+
+        // A declared name wins over a builtin module prefix when used bare.
+        // Dotted calls still resolve their builtin prefix separately.
+        if is_builtin_module(name) {
             return;
         }
 
@@ -1890,6 +1951,24 @@ mod tests {
                 Some(namespace)
             );
         }
+    }
+
+    #[test]
+    fn source_function_named_like_builtin_prefix_resolves_as_function() {
+        let source = "namespace app\nfunction validate(value: int64) returns int64:\n    return value + 1\nfunction main() returns nothing:\n    println(validate(4))\n";
+        let result = resolve(&parse_module(source));
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+        let definition = def_by_name(&result, "app.validate");
+        let call_start = source.rfind("validate(4)").expect("source call") as u32;
+        assert_eq!(
+            result.resolutions.get(&sp(call_start, call_start + 8)),
+            Some(&definition.id)
+        );
     }
 
     #[test]
@@ -2698,6 +2777,64 @@ function main() returns int64:
             result.resolutions.contains_key(&x_span),
             "usage of x should be resolved"
         );
+    }
+
+    #[test]
+    fn machine_fields_resolve_namespaced_types() {
+        let module = parse_module(
+            "namespace app\ninterface Named:\n    function name(view self: Named) returns string\nmachine Session:\n    states:\n        empty\n        active(item: Named, items: list[Named])\n    transitions:\n        empty to active\n",
+        );
+        let result = resolve(&module);
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        let Item::Machine(machine) = module.items.last().unwrap() else {
+            panic!("expected machine");
+        };
+        let TypeExpr::Named(item) = &machine.states[1].fields[0].ty else {
+            panic!("expected named field type");
+        };
+        let id = result
+            .resolutions
+            .get(&item.span)
+            .expect("resolved machine field");
+        assert_eq!(result.scope_table.def(*id).name, "app.Named");
+        let TypeExpr::Generic(_, arguments, _) = &machine.states[1].fields[1].ty else {
+            panic!("expected list field type");
+        };
+        let TypeExpr::Named(item) = &arguments[0] else {
+            panic!("expected named element type");
+        };
+        assert_eq!(result.resolutions.get(&item.span), Some(id));
+    }
+
+    #[test]
+    fn machine_fields_enforce_visibility_and_declaration_order() {
+        for (source, code) in [
+            (
+                "machine Session:\n    states:\n        empty\n        active(item: Later)\n    transitions:\n        empty to active\nstruct Later:\n    count: int64\n",
+                205,
+            ),
+            (
+                "namespace api\nstruct Hidden:\n    count: int64\nnamespace app\nmachine Session:\n    states:\n        empty\n        active(item: api.Hidden)\n    transitions:\n        empty to active\n",
+                207,
+            ),
+        ] {
+            let result = resolve(&parse_module(source));
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.severity == Severity::Error && d.code.code() == code),
+                "expected E{code}, got {:?}",
+                result.diagnostics
+            );
+        }
     }
 
     // ---- Test: no forward reference enforcement ----
@@ -3544,5 +3681,58 @@ function main() returns int64:
             .get(&resource.name.span)
             .expect("resource declaration should resolve to a definition");
         assert_eq!(result.scope_table.def(*def_id).kind, DefKind::Resource);
+    }
+    #[test]
+    fn actor_state_annotations_resolve_prior_nominal_types_in_their_namespace() {
+        let module = parse_module(
+            "namespace app\nstruct Inner:\n    value: int64\nactor Store:\n    mutable Inner inner = Inner(value: 1)\n    receive read responds int64:\n        respond inner.value\n",
+        );
+        let result = resolve(&module);
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        let Item::Struct(record) = &module.items[1] else {
+            panic!("record");
+        };
+        let Item::Actor(actor) = &module.items[2] else {
+            panic!("actor");
+        };
+        let TypeExpr::Named(annotation) = &actor.state_fields[0].ty else {
+            panic!("nominal type");
+        };
+        let resolved = result
+            .resolutions
+            .get(&annotation.span)
+            .expect("checked state annotation");
+        assert_eq!(result.scope_table.def(*resolved).span, record.name.span);
+        assert_eq!(result.scope_table.def(*resolved).kind, DefKind::Struct);
+    }
+
+    #[test]
+    fn actor_state_annotations_keep_top_to_bottom_type_visibility() {
+        let module = parse_module(
+            "namespace app\nactor Store:\n    mutable Later inner = Later(value: 1)\n    receive read responds int64:\n        respond inner.value\nstruct Later:\n    value: int64\n",
+        );
+        let result = resolve(&module);
+        let Item::Actor(actor) = &module.items[1] else {
+            panic!("actor");
+        };
+        let TypeExpr::Named(annotation) = &actor.state_fields[0].ty else {
+            panic!("nominal type");
+        };
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == Severity::Error
+                    && diagnostic.span == annotation.span),
+            "{:?}",
+            result.diagnostics
+        );
     }
 }

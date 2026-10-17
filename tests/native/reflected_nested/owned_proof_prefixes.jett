@@ -1,0 +1,142 @@
+namespace app
+function positive_check(value: string) returns bool:
+    string marker = "text"
+    trace marker
+    return string.char_count(value) > 0
+type Text = string where positive_check(value)
+function high_check(value: string) returns bool:
+    string marker = "long"
+    trace marker
+    return string.char_count(value) > 2
+type Long = Text where high_check(value)
+function sibling_check(value: string) returns bool:
+    string marker = "siblingtext"
+    trace marker
+    return string.char_count(value) >= 0
+type SiblingText = string where sibling_check(value)
+struct Holder:
+    raw: list[string]
+    positive: list[Text]
+    high: list[Long]
+    sibling: list[SiblingText]
+enum Event:
+    first(raw: list[string], positive: list[Text], high: list[Long], sibling: list[SiblingText])
+    mirror(sibling: list[SiblingText], high: list[Long], positive: list[Text], raw: list[string])
+machine Session:
+    states:
+        first(raw: list[string], positive: list[Text], high: list[Long], sibling: list[SiblingText])
+        mirror(sibling: list[SiblingText], high: list[Long], positive: list[Text], raw: list[string])
+    transitions:
+        first to mirror
+function positive_seed(value: string) returns Text:
+    Text ready = value handle error:
+        return positive_seed("fallback")
+    return ready
+function high_seed(view value: Text) returns Long:
+    Long ready = clone value handle error:
+        return high_seed(view value)
+    return ready
+function sibling_seed(value: string) returns SiblingText:
+    SiblingText ready = value handle error:
+        return sibling_seed("fallback")
+    return ready
+function record_seed(value: string) returns Holder:
+    Text positive = positive_seed(clone value)
+    Long high = high_seed(view positive)
+    SiblingText sibling = sibling_seed(clone value)
+    return Holder(raw: list(value), positive: list(positive), high: list(high), sibling: list(sibling))
+function event_seed(value: string, reversed: bool) returns Event:
+    Text positive = positive_seed(clone value)
+    Long high = high_seed(view positive)
+    SiblingText sibling = sibling_seed(clone value)
+    if reversed:
+        return Event.mirror(list(sibling), list(high), list(positive), list(value))
+    return Event.first(list(value), list(positive), list(high), list(sibling))
+function session_seed(value: string, reversed: bool) returns Session:
+    Text positive = positive_seed(clone value)
+    Long high = high_seed(view positive)
+    SiblingText sibling = sibling_seed(clone value)
+    if reversed:
+        return Session(mirror, list(sibling), list(high), list(positive), list(value))
+    return Session(first, list(value), list(positive), list(high), list(sibling))
+function record_field(index: int64) returns TypeField:
+    return list.get[TypeField](type.fields[Holder](), index) handle:
+        return record_field(0)
+function event_field(view source: Event, index: int64) returns TypeField:
+    TypeVariant variant = type.variant_value[Event](view source)
+    return list.get[TypeField](variant.fields, index) handle:
+        return event_field(view source, 0)
+function session_field(view source: Session, index: int64) returns TypeField:
+    TypeMachineState state = type.machine_state_value[Session](view source)
+    return list.get[TypeField](state.fields, index) handle:
+        return session_field(view source, 0)
+function record_read(view source: Holder, index: int64) returns list[Long]:
+    TypeField field = record_field(index)
+    return type.field_value[Holder, list[Long]](view source, view field)
+function event_read(view source: Event, index: int64) returns list[Long]:
+    TypeField field = event_field(view source, index)
+    return type.variant_field_value[Event, list[Long]](view source, view field)
+function session_read(view source: Session, index: int64) returns list[Long]:
+    TypeField field = session_field(view source, index)
+    return type.machine_field_value[Session, list[Long]](view source, view field)
+function record_weaker(view source: Holder) returns list[Text]:
+    TypeField field = record_field(2)
+    return type.field_value[Holder, list[Text]](view source, view field)
+function event_weaker(view source: Event, index: int64) returns list[Text]:
+    TypeField field = event_field(view source, index)
+    return type.variant_field_value[Event, list[Text]](view source, view field)
+function session_weaker(view source: Session, index: int64) returns list[Text]:
+    TypeField field = session_field(view source, index)
+    return type.machine_field_value[Session, list[Text]](view source, view field)
+function summarize(items: list[Long]) returns string:
+    mutable string output = ""
+    for item in items:
+        output = "{output}:{coarsen item}"
+    return output
+function summarize_weaker(items: list[Text]) returns string:
+    mutable string output = ""
+    for item in items:
+        output = "{output}:{coarsen item}"
+    return output
+function record_report(value: string) returns string:
+    Holder source = record_seed(value)
+    string raw = summarize(record_read(view source, 0))
+    string suffix = summarize(record_read(view source, 1))
+    string exact = summarize(record_read(view source, 2))
+    string sibling = summarize(record_read(view source, 3))
+    string ancestor = summarize_weaker(record_weaker(view source))
+    return "{raw}/{suffix}/{exact}/{sibling}/{ancestor}"
+function event_report(value: string, reversed: bool) returns string:
+    Event source = event_seed(value, reversed)
+    mutable int64 step = 1
+    mutable int64 index = 0
+    if reversed:
+        step = -1
+        index = 3
+    string raw = summarize(event_read(view source, index))
+    string suffix = summarize(event_read(view source, index + step))
+    string exact = summarize(event_read(view source, index + step + step))
+    string sibling = summarize(event_read(view source, index + step + step + step))
+    string ancestor = summarize_weaker(event_weaker(view source, index + step + step))
+    return "{raw}/{suffix}/{exact}/{sibling}/{ancestor}"
+function session_report(value: string, reversed: bool) returns string:
+    Session source = session_seed(value, reversed)
+    mutable int64 step = 1
+    mutable int64 index = 0
+    if reversed:
+        step = -1
+        index = 3
+    string raw = summarize(session_read(view source, index))
+    string suffix = summarize(session_read(view source, index + step))
+    string exact = summarize(session_read(view source, index + step + step))
+    string sibling = summarize(session_read(view source, index + step + step + step))
+    string ancestor = summarize_weaker(session_weaker(view source, index + step + step))
+    return "{raw}/{suffix}/{exact}/{sibling}/{ancestor}"
+function report(value: string, reversed: bool) returns string:
+    string record = record_report(clone value)
+    string event = event_report(clone value, reversed)
+    string session = session_report(value, reversed)
+    return "{record}|{event}|{session}"
+function main(stdout: Stdout) returns nothing:
+    string value = report("Agent-λ🙂", true)
+    Stdout.write(view stdout, "proof:{value}\n")

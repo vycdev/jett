@@ -1,0 +1,9 @@
+namespace test
+actor Holder(seed: string):
+    mutable string label = "{seed}!"
+    receive noop:
+        return nothing
+function main() returns nothing:
+    Holder first = spawn Holder(seed: "alpha")
+    Holder second = spawn Holder(seed: "beta")
+    println("spawned")

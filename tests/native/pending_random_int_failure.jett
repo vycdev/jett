@@ -1,0 +1,6 @@
+namespace app
+function main(rng: Random) returns nothing:
+    Random pending = run rng
+    result[int64, string] sampled = random.int64(view pending, 0, 10)
+    trace sampled
+    return nothing

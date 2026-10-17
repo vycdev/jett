@@ -1,5 +1,6 @@
 # ERROR: E0312
 # ERROR: E0400
+# ERROR: E0404
 machine Session:
     states:
         guest

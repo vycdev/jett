@@ -1,0 +1,13 @@
+namespace app
+function receive(marker: int64, view token: resource_probe.TestHandle) returns nothing:
+    return nothing
+function fail_marker() returns result[int64, string]:
+    return fail("later marker")
+export function scenario(view net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle token = resource_probe.create(view net, 501) handle error:
+        return nothing
+    receive(token: token, marker: fail_marker() handle error:
+        return nothing
+    )
+    return nothing

@@ -1,0 +1,18 @@
+# ERROR: E0376 x4
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+type Selected = secret[Named] where true
+enum Entry:
+    empty
+    nested(value: optional[list[Selected]])
+function equal(view left: Entry, view right: Entry) returns bool:
+    return left == right
+function unequal(view left: Entry, view right: Entry) returns bool:
+    return left != right
+function generic[T](view left: T, view right: T) returns bool:
+    return left == right
+function selected(view left: Entry, view right: Entry) returns bool:
+    return generic[Entry](view left, view right)
+function baking() returns bool:
+    return comptime(Entry.empty == Entry.empty)

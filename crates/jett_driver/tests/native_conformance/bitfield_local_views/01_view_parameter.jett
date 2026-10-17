@@ -1,0 +1,21 @@
+namespace app
+bitfield network Packet:
+    version: 4 bits
+    flags: 4 bits
+    payload: list[uint8]
+function describe(view source: Packet) returns string:
+    list[uint8] borrowed = view source.payload
+    list[uint8] forwarded = borrowed
+    mutable list[uint8] copied = clone forwarded
+    uint8 added = 9
+    copied = list.append[uint8](copied, added)
+    bytes encoded = Packet.to_bytes(clone source)
+    return "{list.length(view borrowed)}:{list.length(view forwarded)}:{list.length(view copied)}:{list.length(view source.payload)}:{bytes.to_hex(view encoded)}"
+function main(stdout: Stdout) returns nothing:
+    uint8 first = 7
+    uint8 second = 255
+    Packet packet = Packet(version: 4, flags: 0, payload: list(first, second))
+    string observed = describe(view packet)
+    Stdout.write(view stdout, "view:{observed}\n")
+    Stdout.write(view stdout, "owner:{packet.version}:{list.length(view packet.payload)}\n")
+    return nothing

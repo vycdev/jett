@@ -1,0 +1,29 @@
+namespace app
+struct Fragile:
+    id: int64
+    label: string
+implement Equatable for Fragile:
+    function equals(view self: Fragile, view other: Fragile) returns bool:
+        if self.id == -1:
+            string rejected = string.repeat("ab", 9223372036854775807)
+            return string.char_count(rejected) == 0
+        return self.id == other.id
+enum Probe:
+    empty
+    pair(first: Fragile, second: Fragile)
+    users(values: list[Fragile])
+function value(id: int64) returns Fragile:
+    return Fragile(id: id, label: "owned")
+function prefix_checks() returns bool:
+    Probe first = Probe.pair(value(1), value(-1))
+    Probe different = Probe.pair(value(2), value(-1))
+    Probe longer = Probe.users(list(value(-1), value(-1)))
+    Probe shorter = Probe.users(list(value(-1)))
+    return first != different && longer != shorter && first != Probe.empty
+function operand(view stdout: Stdout, label: string) returns Probe:
+    Stdout.write(view stdout, label)
+    return Probe.pair(value(1), run value(-1))
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "{prefix_checks()}\n")
+    bool failed = operand(view stdout, "left\n") == operand(view stdout, "right\n")
+    Stdout.write(view stdout, "{failed}")

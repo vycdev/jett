@@ -1,0 +1,9 @@
+namespace app
+actor Keeper:
+    mutable function(resource_probe.TestHandle) returns nothing dispose = resource_probe.close_descriptor()
+    receive alive responds bool:
+        respond true
+function main() returns nothing:
+    Keeper keeper = comptime spawn Keeper()
+    bool okay = ask keeper.alive
+    return nothing

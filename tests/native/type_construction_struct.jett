@@ -1,0 +1,105 @@
+namespace app
+struct User:
+    id: string
+    age: int64
+struct Box[T]:
+    value: T
+    label: string
+struct Other:
+    id: string
+    age: int64
+type Identifier = string
+struct AliasField:
+    id: Identifier
+function clone_user() returns string:
+    User source = User(id: "u1", age: 42)
+    mutable TypeConstruction builder = type.construct_start[User]()
+    for field in type.fields[User]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[User, Field](view source, view field)
+            builder = type.construct_put[User, Field](builder, view field, value) handle error:
+                return error
+    User built = type.construct_finish[User](builder) handle error:
+        return error
+    return "{built.id}:{built.age}"
+function clone_box() returns string:
+    Box[string] source = Box[string](value: "payload", label: "name")
+    mutable TypeConstruction builder = type.construct_start[Box[string]]()
+    for field in type.fields[Box[string]]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[Box[string], Field](view source, view field)
+            builder = type.construct_put[Box[string], Field](builder, view field, value) handle error:
+                return error
+    Box[string] built = type.construct_finish[Box[string]](builder) handle error:
+        return error
+    return "{built.value}:{built.label}"
+function alias_field() returns string:
+    mutable TypeConstruction builder = type.construct_start[AliasField]()
+    for field in type.fields[AliasField]():
+        builder = type.construct_put[AliasField, string](builder, view field, "alias") handle error:
+            return error
+    AliasField built = type.construct_finish[AliasField](builder) handle error:
+        return error
+    return built.id
+function missing_field() returns string:
+    User source = User(id: "u1", age: 42)
+    mutable TypeConstruction builder = type.construct_start[User]()
+    for field in type.fields[User]():
+        if field.name != "age":
+            comptime type Field = field.type_info:
+                Field value = type.field_value[User, Field](view source, view field)
+                builder = type.construct_put[User, Field](builder, view field, value) handle error:
+                    return error
+    User built = type.construct_finish[User](builder) handle error:
+        return error
+    return built.id
+function duplicate_field() returns string:
+    User source = User(id: "u1", age: 42)
+    mutable TypeConstruction builder = type.construct_start[User]()
+    for field in type.fields[User]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[User, Field](view source, view field)
+            builder = type.construct_put[User, Field](builder, view field, value) handle error:
+                return error
+            if field.name == "id":
+                Field duplicate = type.field_value[User, Field](view source, view field)
+                builder = type.construct_put[User, Field](builder, view field, duplicate) handle error:
+                    return error
+    return "no duplicate"
+function mismatched_metadata() returns string:
+    User source = User(id: "u1", age: 42)
+    mutable TypeConstruction builder = type.construct_start[Other]()
+    for field in type.fields[User]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[User, Field](view source, view field)
+            builder = type.construct_put[Other, Field](builder, view field, value) handle error:
+                return error
+    Other built = type.construct_finish[Other](builder) handle error:
+        return error
+    return built.id
+function mismatched_finish() returns string:
+    TypeConstruction builder = type.construct_start[User]()
+    Other built = type.construct_finish[Other](builder) handle error:
+        return error
+    return built.id
+function cloned_builder() returns string:
+    User source = User(id: "cloned", age: 17)
+    mutable TypeConstruction builder = type.construct_start[User]()
+    for field in type.fields[User]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[User, Field](view source, view field)
+            builder = type.construct_put[User, Field](builder, view field, value) handle error:
+                return error
+    TypeConstruction copy = clone builder
+    User built = type.construct_finish[User](copy) handle error:
+        return error
+    return "{built.id}:{built.age}"
+function main() returns nothing:
+    println(clone_user())
+    println(clone_box())
+    println(alias_field())
+    println(missing_field())
+    println(duplicate_field())
+    println(mismatched_metadata())
+    println(mismatched_finish())
+    println(cloned_builder())

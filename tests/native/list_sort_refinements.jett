@@ -1,0 +1,234 @@
+namespace app
+type Narrow = int8 where true
+type Unsigned = uint64 where true
+type Decimal = float32 where true
+type Integer = int64 where true
+type Word = string where string.char_count(value) > 0
+type Flag = bool where true
+type Nested = Narrow where true
+type Alias = Nested
+type RawAlias = int64
+interface Named:
+    function name(view self: Named) returns string
+implement Named for Narrow:
+    function name(view self: Narrow) returns string:
+        return "narrow:{coarsen self}"
+implement Named for Nested:
+    function name(view self: Nested) returns string:
+        Narrow parent = coarsen self
+        return "nested:{coarsen parent}"
+struct Words:
+    items: list[Word]
+function sorted_values[T](items: list[T]) returns list[T]:
+    return list.sort[T](items)
+function narrow_values() returns list[Narrow]:
+    int8 high_base = 127
+    int8 low_base = -128
+    int8 zero_base = 0
+    Narrow high = high_base handle error: return list()
+    Narrow low = low_base handle error: return list()
+    Narrow zero = zero_base handle error: return list()
+    return list(high, clone low, zero, low)
+function unsigned_values() returns list[Unsigned]:
+    uint64 high_base = 18446744073709551615
+    uint64 middle_base = 9223372036854775808
+    uint64 low_base = 2
+    Unsigned high = high_base handle error: return list()
+    Unsigned middle = middle_base handle error: return list()
+    Unsigned low = low_base handle error: return list()
+    return list(clone high, low, middle, high)
+function decimal_values() returns list[Decimal]:
+    float32 rounded_base = 16777217.0
+    float32 high_base = 16777216.0
+    float32 low_base = -2.25
+    float32 zero_base = 0.0
+    Decimal rounded = rounded_base handle error: return list()
+    Decimal high = high_base handle error: return list()
+    Decimal low = low_base handle error: return list()
+    Decimal zero = zero_base handle error: return list()
+    return list(rounded, low, high, zero)
+function integer_values() returns list[Integer]:
+    int64 high_base = 9223372036854775807
+    int64 low_base = -9223372036854775808
+    int64 middle_base = 2
+    Integer high = high_base handle error: return list()
+    Integer low = low_base handle error: return list()
+    Integer middle = middle_base handle error: return list()
+    return list(high, clone low, middle, low)
+function word_values() returns list[Word]:
+    Word high = "zebra" handle error: return list()
+    Word low = "apple" handle error: return list()
+    Word middle = "eclair" handle error: return list()
+    return list(high, clone low, middle, low)
+function flag_values() returns list[Flag]:
+    Flag yes = true handle error: return list()
+    Flag no = false handle error: return list()
+    return list(clone yes, clone no, no, yes)
+function nested_values() returns list[Alias]:
+    int8 first_raw = 2
+    int8 second_raw = -3
+    Narrow first_base = first_raw handle error: return list()
+    Narrow second_base = second_raw handle error: return list()
+    Alias first = first_base handle error: return list()
+    Alias second = second_base handle error: return list()
+    return list(first, clone second, second)
+function narrow_report() returns string:
+    list[Narrow] items = sorted_values[Narrow](narrow_values())
+    mutable string text = ""
+    for value in view items:
+        int8 raw = coarsen value
+        text = "{text}{raw},"
+    Narrow first = list.first[Narrow](view items) handle: return "empty"
+    return "{text}|{Named.name(view first)}"
+function unsigned_report() returns string:
+    list[Unsigned] items = sorted_values[Unsigned](unsigned_values())
+    mutable string text = ""
+    for value in view items:
+        uint64 raw = coarsen value
+        text = "{text}{raw},"
+    return text
+function decimal_report() returns string:
+    list[Decimal] items = sorted_values[Decimal](decimal_values())
+    mutable string text = ""
+    for value in view items:
+        float32 raw = coarsen value
+        text = "{text}{raw},"
+    return text
+function integer_report() returns string:
+    list[Integer] items = sorted_values[Integer](integer_values())
+    mutable string text = ""
+    for value in view items:
+        int64 raw = coarsen value
+        text = "{text}{raw},"
+    return text
+function word_report() returns string:
+    Words words = Words(items: word_values())
+    list[Word] items = sorted_values[Word](words.items)
+    mutable string text = ""
+    for value in view items:
+        string raw = coarsen value
+        text = "{text}{raw},"
+    return "{text}|source:{list.length[Word](view words.items)}"
+function flag_report() returns string:
+    list[Flag] items = sorted_values[Flag](flag_values())
+    mutable string text = ""
+    for value in view items:
+        bool raw = coarsen value
+        text = "{text}{raw},"
+    return text
+function nested_report() returns string:
+    list[Alias] items = sorted_values[Alias](nested_values())
+    mutable string text = ""
+    for value in view items:
+        Narrow parent = coarsen value
+        int8 raw = coarsen parent
+        text = "{text}{raw},"
+    Alias first = list.first[Alias](view items) handle: return "empty"
+    return "{text}|{Named.name(view first)}"
+function alias_report() returns string:
+    list[RawAlias] items = sorted_values[RawAlias](list(3, -2, 3))
+    mutable string text = ""
+    for value in view items:
+        text = "{text}{value},"
+    return text
+function refined_sortedness() returns string:
+    list[Narrow] original = narrow_values()
+    bool before = list.is_sorted[Narrow](view original)
+    list[Narrow] ordered = sorted_values[Narrow](original)
+    bool after = list.is_sorted[Narrow](view ordered)
+    return "refined:{before}:{after}"
+function edge_report() returns string:
+    list[Narrow] empty = sorted_values[Narrow](list())
+    list[Word] empty_words = sorted_values[Word](list())
+    int8 raw_base = 5
+    Narrow base = raw_base handle error: return "rejected"
+    Alias only = base handle error: return "rejected"
+    list[Alias] singleton = sorted_values[Alias](list(only))
+    Alias first = list.first[Alias](view singleton) handle: return "empty"
+    Narrow parent = coarsen first
+    int8 raw = coarsen parent
+    Word word = "solo" handle error: return "rejected"
+    list[Word] single_word = sorted_values[Word](list(word))
+    Word found = list.first[Word](view single_word) handle: return "empty"
+    return "empty:{list.length[Narrow](view empty)}:{list.length[Word](view empty_words)};single:{raw}:{coarsen found}"
+function nan_sortedness() returns bool:
+    float32 zero = 0.0
+    float32 one = 1.0
+    float32 nan = zero / zero
+    list[float32] values = list(nan, one)
+    return list.is_sorted[float32](view values)
+function baked_report() returns string:
+    list[Narrow] baked = comptime sorted_values[Narrow](narrow_values())
+    Narrow first = list.first[Narrow](view baked) handle: return "empty"
+    Narrow last = list.last[Narrow](view baked) handle: return "empty"
+    list[Word] words = comptime sorted_values[Word](word_values())
+    Word first_word = list.first[Word](view words) handle: return "empty"
+    Word last_word = list.last[Word](view words) handle: return "empty"
+    bool nan_sorted = comptime nan_sortedness()
+    return "baked:{Named.name(view first)}:{coarsen last}:{coarsen first_word}:{coarsen last_word}:{nan_sorted}"
+function ordered_pair(first: Narrow, second: Narrow) returns bool:
+    list[Narrow] items = sorted_values[Narrow](list(first, second))
+    mutable int8 previous = -128
+    for value in view items:
+        int8 raw = coarsen value
+        if raw < previous:
+            return false
+        previous = raw
+    return list.length[Narrow](view items) == 2
+function pending_word_control(view stdout: Stdout) returns nothing:
+    Word high = "zebra" handle error: return nothing
+    Word low = "apple" handle error: return nothing
+    list[Word] items = sorted_values[Word](list(run run high, low))
+    Word head = list.first[Word](view items) handle: return nothing
+    trace head
+    Word once = join head handle error: return nothing
+    trace once
+    Word joined = join once handle error: return nothing
+    trace joined
+    Word tail = list.last[Word](view items) handle: return nothing
+    Stdout.write(view stdout, "pending:{coarsen joined}:{coarsen tail}\n")
+    list[Word] ready = sorted_values[Word](list(joined, tail))
+    Word first = list.first[Word](view ready) handle: return nothing
+    Word last = list.last[Word](view ready) handle: return nothing
+    Stdout.write(view stdout, "ready:{coarsen first}:{coarsen last}\n")
+function pending_string_control(view stdout: Stdout) returns nothing:
+    list[string] items = sorted_values[string](list(run "zebra", "apple"))
+    bool pending_sorted = list.is_sorted[string](view items)
+    string head = list.first[string](view items) handle: return nothing
+    trace head
+    string joined = join head handle error: return nothing
+    trace joined
+    string tail = list.last[string](view items) handle: return nothing
+    Stdout.write(view stdout, "plain-pending:{joined}:{tail}\n")
+    list[string] unsorted = list(joined, tail)
+    bool before = list.is_sorted[string](view unsorted)
+    list[string] ready = sorted_values[string](unsorted)
+    bool after = list.is_sorted[string](view ready)
+    string first = list.first[string](view ready) handle: return nothing
+    string last = list.last[string](view ready) handle: return nothing
+    Stdout.write(view stdout, "plain-ready:{first}:{last};sorted:{pending_sorted}:{before}:{after}\n")
+function pending_outer_failure(view stdout: Stdout) returns nothing:
+    list[Narrow] values = run run narrow_values()
+    Stdout.write(view stdout, "before\n")
+    list[Narrow] items = sorted_values[Narrow](values)
+    Stdout.write(view stdout, "{list.length[Narrow](view items)}\n")
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "narrow:{narrow_report()}\nunsigned:{unsigned_report()}\ndecimal:{decimal_report()}\ninteger:{integer_report()}\nword:{word_report()}\nflag:{flag_report()}\nnested:{nested_report()}\nalias:{alias_report()}\n{edge_report()}\n{refined_sortedness()}\n{baked_report()}\n")
+    pending_word_control(view stdout)
+    pending_string_control(view stdout)
+verify refined_sorts:
+    assert narrow_report() == "-128,-128,0,127,|narrow:-128"
+    assert unsigned_report() == "2,9223372036854775808,18446744073709551615,18446744073709551615,"
+    assert decimal_report() == "-2.25,0,16777216,16777216,"
+    assert integer_report() == "-9223372036854775808,-9223372036854775808,2,9223372036854775807,"
+    assert word_report() == "apple,apple,eclair,zebra,|source:4"
+    assert flag_report() == "false,false,true,true,"
+    assert nested_report() == "-3,-3,2,|nested:-3"
+    assert alias_report() == "-2,3,3,"
+    assert edge_report() == "empty:0:0;single:5:solo"
+    assert refined_sortedness() == "refined:false:true"
+    assert baked_report() == "baked:narrow:-128:127:apple:zebra:false"
+property refined_pairs:
+    given first: Narrow
+    given second: Narrow
+    assert ordered_pair(first, second)

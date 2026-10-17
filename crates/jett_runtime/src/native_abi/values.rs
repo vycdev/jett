@@ -1,0 +1,11386 @@
+//! Typed native leaf operations. See docs/active/native_value_abi.md.
+//! Every pointer must refer to a live stationary ABI context, except literal
+//! bytes which are borrowed for the call. No Rust value crosses this ABI.
+use super::*;
+use crate::clock;
+use crate::crypto;
+use crate::csv;
+use crate::encoding;
+use crate::environment::{self, LaunchEnvironmentSnapshot};
+use crate::graphics;
+use crate::math;
+use crate::random::{self, RandomProvider};
+use std::cell::RefCell;
+use std::cmp::Ordering as CompareOrdering;
+use std::sync::atomic::{AtomicU64, Ordering};
+use subtle::ConstantTimeEq;
+use unicode_segmentation::UnicodeSegmentation;
+
+mod actor_graph_import;
+mod checked_graph_hooks;
+mod debug_equal;
+mod debug_format;
+#[cfg(test)]
+mod field_update_tests;
+mod graphics_decode;
+pub mod interface_conversion;
+mod ordinary_attempts;
+mod resource_sum_replacement;
+
+#[cfg(test)]
+mod interface_argument_tests;
+
+pub type NativeHandle = u64;
+type Failure = (JettRuntimeStatusV1, &'static [u8]);
+type LeafResult<T> = Result<T, Failure>;
+const INVALID_HANDLE: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native string handle",
+);
+const INVALID_STRING_SCALAR_INDEX: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native string scalar index",
+);
+const INVALID_STRUCT: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native struct handle or field",
+);
+const INVALID_INTERFACE_ARGUMENT: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"interface dispatch concrete argument owner mismatch",
+);
+const INVALID_FUNCTION: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native function descriptor or label",
+);
+const INVALID_ACTOR: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native actor handle or field",
+);
+const UNSUPPORTED_ACTOR_COMPARISON: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"unsupported binary operation on pending actor",
+);
+const INVALID_CAPABILITY: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native capability authority or task",
+);
+const INVALID_GRAPHICS: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native Graphics authority or session",
+);
+const INVALID_CONSTRUCTION: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native TypeConstruction builder",
+);
+const INVALID_CONSTRUCTION_LAYOUT: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native TypeConstruction layout",
+);
+const INVALID_REFLECTED_FIELD: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"type.field_value: field metadata does not match the checked owner and requested type",
+);
+const INVALID_REFLECTED_VARIANT_FIELD: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"type.variant_field_value: field metadata does not match the active variant and requested type",
+);
+const INVALID_REFLECTED_MACHINE_FIELD: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"type.machine_field_value: field metadata does not match the active state and requested type",
+);
+const INVALID_REFLECTED_OWNER: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid reflected enum or machine value",
+);
+const INVALID_TYPE_INFO: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid reflected TypeInfo for native type dispatch",
+);
+const INVALID_TYPE_ARG_INDEX: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"type.arg index is out of range for the checked type",
+);
+const INVALID_LIST: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native list handle",
+);
+const INVALID_PENDING_SCALAR_CHECK: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native pending scalar check",
+);
+const INVALID_PENDING_HANDLE_CHECK: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native pending handle check",
+);
+const INVALID_SET: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native set handle or element",
+);
+const PENDING_SET_LENGTH: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"set.__length expects a set argument",
+);
+const PENDING_SET_CONTAINS: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"set.__contains expects a set as first argument",
+);
+const PENDING_SET_ADD: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"set.__add expects a set as first argument",
+);
+const PENDING_SET_REMOVE: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"set.__remove expects a set as first argument",
+);
+const PENDING_ITERABLE: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"for loop requires a list, string, map, or set value",
+);
+const INVALID_MAP: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native map handle or entry",
+);
+const PENDING_MAP_LENGTH: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"map.__length expects a map argument",
+);
+const PENDING_MAP_HAS: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"map.__has expects a map as first argument",
+);
+const PENDING_MAP_GET: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"map.__get expects a map as first argument",
+);
+const PENDING_MAP_INSERT: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"map.__insert expects a map as first argument",
+);
+const PENDING_MAP_REMOVE: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"map.__remove expects a map as first argument",
+);
+const PENDING_MAP_FROM_LISTS: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"map.__from_lists expects two list arguments",
+);
+const INVALID_BYTES: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native bytes handle",
+);
+const INVALID_BITFIELD_LAYOUT: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native bitfield layout",
+);
+const INVALID_TRACE_LABEL: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native trace label",
+);
+const INVALID_FAILURE_COPY: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native failure message copy buffer",
+);
+const INVALID_SUM: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native sum handle or tag",
+);
+const EXHAUSTED: Failure = (
+    JettRuntimeStatusV1::RESOURCE_EXHAUSTED,
+    b"native value capacity exhausted",
+);
+const INVALID_NOTHING_COMPARISON: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native nothing comparison",
+);
+const UNSUPPORTED_NOTHING_COMPARISON: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"unsupported binary operation on pending nothing",
+);
+const UNSUPPORTED_SCALAR_BINARY: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"unsupported binary operation on pending scalar",
+);
+const PENDING_BOOL_NEGATION: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"'not' requires a boolean operand",
+);
+const PENDING_NUMERIC_NEGATION: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"unary '-' requires a numeric operand",
+);
+const PENDING_BOOL_CONDITION: Failure =
+    (JettRuntimeStatusV1::INVALID_ARGUMENT, b"expected boolean");
+const UNSUPPORTED_STRING_COMPARISON: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"unsupported binary operation on pending string",
+);
+const UNSUPPORTED_ENUM_COMPARISON: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"unsupported binary operation on pending enum",
+);
+const PENDING_FUNCTION_CALL: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"expected function value",
+);
+const INVALID_DISPLAY_RESULT: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"Displayable.display did not return a ready string",
+);
+const PENDING_ACTOR_MESSAGE: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"send/ask: expected actor value",
+);
+
+fn format_nothing(depth: u64) -> LeafResult<String> {
+    format_pending_value("nothing", depth)
+}
+
+fn format_pending_value(inner: &str, depth: u64) -> LeafResult<String> {
+    let depth = usize::try_from(depth).map_err(|_| EXHAUSTED)?;
+    let length = depth
+        .checked_mul("pending()".len())
+        .and_then(|length| length.checked_add(inner.len()))
+        .ok_or(EXHAUSTED)?;
+    let mut text = String::new();
+    text.try_reserve_exact(length).map_err(|_| EXHAUSTED)?;
+    for _ in 0..depth {
+        text.push_str("pending(");
+    }
+    text.push_str(inner);
+    for _ in 0..depth {
+        text.push(')');
+    }
+    Ok(text)
+}
+
+struct NativeString {
+    text: String,
+    references: u64,
+    pending_depth: u64,
+}
+/// Stable discriminants for optional and result storage (not terminal status).
+pub const SUM_FAILURE: u32 = 0;
+pub const SUM_SUCCESS: u32 = 1;
+pub const DEBUG_NOTHING_KIND: u32 = 12;
+pub const DEBUG_BYTES_KIND: u32 = 13;
+
+/// Native function records own their environment (when present) and display
+/// label. Code addresses are borrowed and are never inspected by debug output.
+pub const NATIVE_FUNCTION_FIELD_COUNT: u64 = 3;
+pub const NATIVE_FUNCTION_CODE_FIELD: u64 = 0;
+pub const NATIVE_FUNCTION_ENVIRONMENT_FIELD: u64 = 1;
+pub const NATIVE_FUNCTION_LABEL_FIELD: u64 = 2;
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeDebugTag {
+    Primitive,
+    Nothing,
+    Bytes,
+    List,
+    Set,
+    Map,
+    Optional,
+    Result,
+    Record,
+    Enum,
+    Machine,
+    Capability,
+    Alias,
+    Function,
+    Actor,
+    TypeConstruction,
+    Redacted,
+    Interface,
+    Uninhabited,
+}
+
+impl NativeDebugTag {
+    fn from_raw(value: u8) -> LeafResult<Self> {
+        Ok(match value {
+            0 => Self::Primitive,
+            1 => Self::Nothing,
+            2 => Self::Bytes,
+            3 => Self::List,
+            4 => Self::Set,
+            5 => Self::Map,
+            6 => Self::Optional,
+            7 => Self::Result,
+            8 => Self::Record,
+            9 => Self::Enum,
+            10 => Self::Machine,
+            11 => Self::Capability,
+            12 => Self::Alias,
+            13 => Self::Function,
+            14 => Self::Actor,
+            15 => Self::TypeConstruction,
+            16 => Self::Redacted,
+            17 => Self::Interface,
+            18 => Self::Uninhabited,
+            _ => return Err(INVALID_TRACE_LABEL),
+        })
+    }
+}
+
+enum NativeGraphicsSession {
+    Window(graphics::Session),
+    Scripted { width: i64, height: i64 },
+}
+
+struct ActiveGraphicsSession {
+    identity: u64,
+    session: NativeGraphicsSession,
+}
+
+thread_local! {
+    static GRAPHICS_SESSION: RefCell<Option<ActiveGraphicsSession>> = const { RefCell::new(None) };
+}
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeSortKind {
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+    Uint8,
+    Uint16,
+    Uint32,
+    Uint64,
+    Float32,
+    Float64,
+    Bool,
+    String,
+}
+impl NativeSortKind {
+    fn from_raw(value: u32) -> LeafResult<Self> {
+        Ok(match value {
+            0 => Self::Int8,
+            1 => Self::Int16,
+            2 => Self::Int32,
+            3 => Self::Int64,
+            4 => Self::Uint8,
+            5 => Self::Uint16,
+            6 => Self::Uint32,
+            7 => Self::Uint64,
+            8 => Self::Float32,
+            9 => Self::Float64,
+            10 => Self::Bool,
+            11 => Self::String,
+            _ => return Err(INVALID_LIST),
+        })
+    }
+    fn from_comparison_raw(value: u32) -> LeafResult<Option<Self>> {
+        if value == u32::MAX {
+            return Ok(None);
+        }
+        Self::from_raw(value).map(Some)
+    }
+    fn compare(self, left: u64, right: u64) -> CompareOrdering {
+        match self {
+            Self::Int8 => (left as u8 as i8).cmp(&(right as u8 as i8)),
+            Self::Int16 => (left as u16 as i16).cmp(&(right as u16 as i16)),
+            Self::Int32 => (left as u32 as i32).cmp(&(right as u32 as i32)),
+            Self::Int64 => (left as i64).cmp(&(right as i64)),
+            Self::Uint8 | Self::Uint16 | Self::Uint32 | Self::Uint64 | Self::Bool => {
+                left.cmp(&right)
+            }
+            Self::Float32 => f32::from_bits(left as u32)
+                .partial_cmp(&f32::from_bits(right as u32))
+                .unwrap_or(CompareOrdering::Equal),
+            Self::Float64 => f64::from_bits(left)
+                .partial_cmp(&f64::from_bits(right))
+                .unwrap_or(CompareOrdering::Equal),
+            Self::String => unreachable!("string ordering uses the string registry"),
+        }
+    }
+    fn valid_bits(self, bits: u64) -> bool {
+        match self {
+            Self::Int8 | Self::Uint8 => bits <= u8::MAX as u64,
+            Self::Int16 | Self::Uint16 => bits <= u16::MAX as u64,
+            Self::Int32 | Self::Uint32 | Self::Float32 => bits <= u32::MAX as u64,
+            Self::Bool => bits <= 1,
+            Self::Int64 | Self::Uint64 | Self::Float64 | Self::String => true,
+        }
+    }
+}
+#[repr(u32)]
+#[derive(Clone, Copy)]
+pub enum NativePendingBinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Modulo,
+    Eq,
+    NotEq,
+    Lt,
+    Gt,
+    LtEq,
+    GtEq,
+    And,
+    Or,
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy)]
+pub enum NativeSequenceKind {
+    List,
+    String,
+    Map,
+    Set,
+}
+
+impl NativeSequenceKind {
+    fn from_raw(raw: u32) -> LeafResult<Self> {
+        Ok(match raw {
+            0 => Self::List,
+            1 => Self::String,
+            2 => Self::Map,
+            3 => Self::Set,
+            _ => return Err(INVALID_LIST),
+        })
+    }
+}
+
+impl NativePendingBinaryOp {
+    fn from_raw(raw: u32) -> LeafResult<Self> {
+        Ok(match raw {
+            0 => Self::Add,
+            1 => Self::Sub,
+            2 => Self::Mul,
+            3 => Self::Div,
+            4 => Self::Modulo,
+            5 => Self::Eq,
+            6 => Self::NotEq,
+            7 => Self::Lt,
+            8 => Self::Gt,
+            9 => Self::LtEq,
+            10 => Self::GtEq,
+            11 => Self::And,
+            12 => Self::Or,
+            _ => return Err(INVALID_TRACE_LABEL),
+        })
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Add => "Add",
+            Self::Sub => "Sub",
+            Self::Mul => "Mul",
+            Self::Div => "Div",
+            Self::Modulo => "Modulo",
+            Self::Eq => "Eq",
+            Self::NotEq => "NotEq",
+            Self::Lt => "Lt",
+            Self::Gt => "Gt",
+            Self::LtEq => "LtEq",
+            Self::GtEq => "GtEq",
+            Self::And => "And",
+            Self::Or => "Or",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct NativeField {
+    bits: u64,
+    owned: bool,
+    pending_depth: u64,
+}
+struct NativeStruct {
+    fields: Vec<Option<NativeField>>,
+    pending_depth: u64,
+}
+#[derive(Clone)]
+struct NativeBuilderInfo {
+    owner: String,
+    metadata_owner: String,
+    unsupported_kind: Option<String>,
+    variant: Option<String>,
+    state: Option<String>,
+    target_state: Option<String>,
+    field_offset: usize,
+    field_names: Vec<String>,
+    field_type_names: Vec<String>,
+    field_types: Vec<String>,
+    field_debug_layouts: Vec<Vec<u8>>,
+    put_order: Vec<usize>,
+    validation: Vec<BuilderFieldValidation>,
+}
+#[derive(Clone)]
+enum BuilderFieldValidation {
+    None,
+    SignedBits(u32),
+    UnsignedBits(u32),
+    EnumBits(u32, String, Vec<(String, i64)>),
+}
+struct NativeList {
+    elements: Vec<Option<u64>>,
+    element_pending_depths: HashMap<usize, u64>,
+    owned: bool,
+    pending_depth: u64,
+}
+struct NativeSet {
+    elements: Vec<Option<u64>>,
+    element_pending_depths: HashMap<usize, u64>,
+    strings: bool,
+    pending_depth: u64,
+}
+#[derive(Clone, Copy)]
+struct NativeMapEntry {
+    key: u64,
+    value: u64,
+    key_pending_depth: u64,
+    value_pending_depth: u64,
+    key_taken: bool,
+}
+struct NativeMap {
+    entries: Vec<Option<NativeMapEntry>>,
+    key_strings: bool,
+    value_owned: bool,
+    pending_depth: u64,
+}
+struct NativeSum {
+    tag: u32,
+    bits: u64,
+    owned: bool,
+    pending_depth: u64,
+    payload_pending_depth: u64,
+}
+struct NativeBitfieldLayout {
+    name: String,
+    network_order: bool,
+    fields: Vec<NativeBitfieldField>,
+}
+enum NativeBitfieldField {
+    Bits {
+        name: String,
+        width: u8,
+        enum_type: Option<(String, Vec<i64>)>,
+    },
+    Payload {
+        name: String,
+    },
+}
+enum DecodedBitfieldField {
+    Plain(u64),
+    Enum(u32),
+    Payload(Vec<u8>),
+}
+#[derive(Clone)]
+struct NativeDebugLayout {
+    root: usize,
+    nodes: Vec<NativeDebugNode>,
+}
+#[derive(Clone)]
+enum NativeDebugNode {
+    Primitive(u32),
+    Nothing,
+    Bytes,
+    List(usize),
+    Set(usize),
+    Map(usize, usize),
+    Optional(usize),
+    Result(usize, usize),
+    Record(String, Vec<(String, usize)>),
+    Enum(String, Vec<(String, Vec<usize>)>),
+    Machine(String, Vec<(String, Vec<usize>)>),
+    Capability(String),
+    Alias(usize),
+    Function,
+    Actor,
+    TypeConstruction,
+    Redacted,
+    Interface,
+    Uninhabited,
+}
+impl NativeDebugLayout {
+    fn parse(bytes: &[u8]) -> LeafResult<Self> {
+        let mut cursor = BitfieldLayoutCursor { bytes, position: 0 };
+        if cursor.take(3).map_err(|_| INVALID_TRACE_LABEL)? != b"JD\x01" {
+            return Err(INVALID_TRACE_LABEL);
+        }
+        let count = usize::try_from(cursor.u32().map_err(|_| INVALID_TRACE_LABEL)?)
+            .map_err(|_| INVALID_TRACE_LABEL)?;
+        let root = usize::try_from(cursor.u32().map_err(|_| INVALID_TRACE_LABEL)?)
+            .map_err(|_| INVALID_TRACE_LABEL)?;
+        if count > bytes.len() || root >= count {
+            return Err(INVALID_TRACE_LABEL);
+        }
+        let mut nodes = Vec::new();
+        nodes.try_reserve_exact(count).map_err(|_| EXHAUSTED)?;
+        for _ in 0..count {
+            let length = usize::try_from(cursor.u32().map_err(|_| INVALID_TRACE_LABEL)?)
+                .map_err(|_| INVALID_TRACE_LABEL)?;
+            let node_bytes = cursor.take(length).map_err(|_| INVALID_TRACE_LABEL)?;
+            let mut node = BitfieldLayoutCursor {
+                bytes: node_bytes,
+                position: 0,
+            };
+            let tag = NativeDebugTag::from_raw(node.byte().map_err(|_| INVALID_TRACE_LABEL)?)?;
+            let index = |node: &mut BitfieldLayoutCursor<'_>| -> LeafResult<usize> {
+                usize::try_from(node.u32().map_err(|_| INVALID_TRACE_LABEL)?)
+                    .map_err(|_| INVALID_TRACE_LABEL)
+            };
+            let name = |node: &mut BitfieldLayoutCursor<'_>| -> LeafResult<String> {
+                node.name().map_err(|_| INVALID_TRACE_LABEL)
+            };
+            let parsed = match tag {
+                NativeDebugTag::Primitive => {
+                    NativeDebugNode::Primitive(node.u32().map_err(|_| INVALID_TRACE_LABEL)?)
+                }
+                NativeDebugTag::Nothing => NativeDebugNode::Nothing,
+                NativeDebugTag::Bytes => NativeDebugNode::Bytes,
+                NativeDebugTag::List => NativeDebugNode::List(index(&mut node)?),
+                NativeDebugTag::Set => NativeDebugNode::Set(index(&mut node)?),
+                NativeDebugTag::Map => NativeDebugNode::Map(index(&mut node)?, index(&mut node)?),
+                NativeDebugTag::Optional => NativeDebugNode::Optional(index(&mut node)?),
+                NativeDebugTag::Result => {
+                    NativeDebugNode::Result(index(&mut node)?, index(&mut node)?)
+                }
+                NativeDebugTag::Record => {
+                    let type_name = name(&mut node)?;
+                    let fields = index(&mut node)?;
+                    if fields > node_bytes.len() {
+                        return Err(INVALID_TRACE_LABEL);
+                    }
+                    let mut definitions = Vec::new();
+                    definitions
+                        .try_reserve_exact(fields)
+                        .map_err(|_| EXHAUSTED)?;
+                    for _ in 0..fields {
+                        definitions.push((name(&mut node)?, index(&mut node)?));
+                    }
+                    NativeDebugNode::Record(type_name, definitions)
+                }
+                NativeDebugTag::Enum | NativeDebugTag::Machine => {
+                    let type_name = name(&mut node)?;
+                    let count = index(&mut node)?;
+                    if count > node_bytes.len() {
+                        return Err(INVALID_TRACE_LABEL);
+                    }
+                    let mut variants = Vec::new();
+                    variants.try_reserve_exact(count).map_err(|_| EXHAUSTED)?;
+                    for _ in 0..count {
+                        let variant_name = name(&mut node)?;
+                        let fields = index(&mut node)?;
+                        if fields > node_bytes.len() / 4 {
+                            return Err(INVALID_TRACE_LABEL);
+                        }
+                        let mut types = Vec::new();
+                        types.try_reserve_exact(fields).map_err(|_| EXHAUSTED)?;
+                        for _ in 0..fields {
+                            types.push(index(&mut node)?);
+                        }
+                        variants.push((variant_name, types));
+                    }
+                    if tag == NativeDebugTag::Enum {
+                        NativeDebugNode::Enum(type_name, variants)
+                    } else {
+                        NativeDebugNode::Machine(type_name, variants)
+                    }
+                }
+                NativeDebugTag::Capability => NativeDebugNode::Capability(name(&mut node)?),
+                NativeDebugTag::Alias => NativeDebugNode::Alias(index(&mut node)?),
+                NativeDebugTag::Function => NativeDebugNode::Function,
+                NativeDebugTag::Actor => NativeDebugNode::Actor,
+                NativeDebugTag::TypeConstruction => NativeDebugNode::TypeConstruction,
+                NativeDebugTag::Redacted => NativeDebugNode::Redacted,
+                NativeDebugTag::Interface => NativeDebugNode::Interface,
+                NativeDebugTag::Uninhabited => NativeDebugNode::Uninhabited,
+            };
+            if node.position != node_bytes.len() {
+                return Err(INVALID_TRACE_LABEL);
+            }
+            nodes.push(parsed);
+        }
+        if cursor.position != bytes.len() {
+            return Err(INVALID_TRACE_LABEL);
+        }
+        Ok(Self { root, nodes })
+    }
+}
+struct BitfieldLayoutCursor<'a> {
+    bytes: &'a [u8],
+    position: usize,
+}
+impl BitfieldLayoutCursor<'_> {
+    fn take(&mut self, count: usize) -> LeafResult<&[u8]> {
+        let end = self
+            .position
+            .checked_add(count)
+            .ok_or(INVALID_BITFIELD_LAYOUT)?;
+        let value = self
+            .bytes
+            .get(self.position..end)
+            .ok_or(INVALID_BITFIELD_LAYOUT)?;
+        self.position = end;
+        Ok(value)
+    }
+    fn byte(&mut self) -> LeafResult<u8> {
+        Ok(self.take(1)?[0])
+    }
+    fn u32(&mut self) -> LeafResult<u32> {
+        Ok(u32::from_le_bytes(
+            self.take(4)?.try_into().expect("four bytes"),
+        ))
+    }
+    fn i64(&mut self) -> LeafResult<i64> {
+        Ok(i64::from_le_bytes(
+            self.take(8)?.try_into().expect("eight bytes"),
+        ))
+    }
+    fn name(&mut self) -> LeafResult<String> {
+        let length = usize::try_from(self.u32()?).map_err(|_| INVALID_BITFIELD_LAYOUT)?;
+        let bytes = self.take(length)?;
+        Ok(std::str::from_utf8(bytes)
+            .map_err(|_| INVALID_BITFIELD_LAYOUT)?
+            .to_owned())
+    }
+}
+impl NativeBitfieldLayout {
+    fn parse(bytes: &[u8]) -> LeafResult<Self> {
+        let mut cursor = BitfieldLayoutCursor { bytes, position: 0 };
+        if cursor.take(3)? != b"JB\x01" {
+            return Err(INVALID_BITFIELD_LAYOUT);
+        }
+        let network_order = match cursor.byte()? {
+            0 => false,
+            1 => true,
+            _ => return Err(INVALID_BITFIELD_LAYOUT),
+        };
+        let name = cursor.name()?;
+        let count = usize::try_from(cursor.u32()?).map_err(|_| INVALID_BITFIELD_LAYOUT)?;
+        if count > bytes.len() {
+            return Err(INVALID_BITFIELD_LAYOUT);
+        }
+        let mut fields = Vec::new();
+        fields.try_reserve_exact(count).map_err(|_| EXHAUSTED)?;
+        for _ in 0..count {
+            let kind = cursor.byte()?;
+            let width = cursor.byte()?;
+            let field_name = cursor.name()?;
+            let field = match kind {
+                0 if (1..=64).contains(&width) => NativeBitfieldField::Bits {
+                    name: field_name,
+                    width,
+                    enum_type: None,
+                },
+                1 if (1..=64).contains(&width) => {
+                    let enum_name = cursor.name()?;
+                    let variant_count =
+                        usize::try_from(cursor.u32()?).map_err(|_| INVALID_BITFIELD_LAYOUT)?;
+                    if variant_count > bytes.len() / 8 {
+                        return Err(INVALID_BITFIELD_LAYOUT);
+                    }
+                    let mut discriminants = Vec::new();
+                    discriminants
+                        .try_reserve_exact(variant_count)
+                        .map_err(|_| EXHAUSTED)?;
+                    for _ in 0..variant_count {
+                        discriminants.push(cursor.i64()?);
+                    }
+                    NativeBitfieldField::Bits {
+                        name: field_name,
+                        width,
+                        enum_type: Some((enum_name, discriminants)),
+                    }
+                }
+                2 if width == 0 => NativeBitfieldField::Payload { name: field_name },
+                _ => return Err(INVALID_BITFIELD_LAYOUT),
+            };
+            fields.push(field);
+        }
+        if cursor.position != bytes.len() {
+            return Err(INVALID_BITFIELD_LAYOUT);
+        }
+        Ok(Self {
+            name,
+            network_order,
+            fields,
+        })
+    }
+    fn decode(&self, bytes: &[u8]) -> Result<Vec<DecodedBitfieldField>, String> {
+        let mut bit_index = 0_usize;
+        let mut fields = Vec::with_capacity(self.fields.len());
+        for field in &self.fields {
+            match field {
+                NativeBitfieldField::Bits {
+                    name,
+                    width,
+                    enum_type,
+                } => {
+                    let width = *width as usize;
+                    let numeric = if width > 8
+                        && width % 8 == 0
+                        && !self.network_order
+                        && bit_index % 8 == 0
+                    {
+                        let end = bit_index / 8 + width / 8;
+                        if end > bytes.len() {
+                            return Err(format!(
+                                "bitfield '{}.from_bytes' expected at least {} byte(s), got {}",
+                                self.name,
+                                end,
+                                bytes.len()
+                            ));
+                        }
+                        let mut numeric = 0_u64;
+                        for (shift, byte) in bytes[bit_index / 8..end].iter().enumerate() {
+                            numeric |= u64::from(*byte) << (shift * 8);
+                        }
+                        bit_index += width;
+                        numeric
+                    } else {
+                        let mut numeric = 0_u64;
+                        for _ in 0..width {
+                            if bit_index / 8 >= bytes.len() {
+                                return Err(format!(
+                                    "bitfield '{}.from_bytes' expected {} bit(s), got {} byte(s)",
+                                    self.name,
+                                    bit_index + width,
+                                    bytes.len()
+                                ));
+                            }
+                            let bit = (bytes[bit_index / 8] >> (7 - bit_index % 8)) & 1;
+                            numeric = (numeric << 1) | u64::from(bit);
+                            bit_index += 1;
+                        }
+                        numeric
+                    };
+                    if let Some((enum_name, discriminants)) = enum_type {
+                        let variant = discriminants
+                            .iter()
+                            .position(|candidate| *candidate >= 0 && *candidate as u64 == numeric);
+                        let Some(variant) = variant else {
+                            return Err(format!(
+                                "bitfield '{}' field '{}': enum '{}' has no variant for value {}",
+                                self.name, name, enum_name, numeric
+                            ));
+                        };
+                        fields.push(DecodedBitfieldField::Enum(variant as u32));
+                    } else {
+                        fields.push(DecodedBitfieldField::Plain(numeric));
+                    }
+                }
+                NativeBitfieldField::Payload { name } => {
+                    if bit_index % 8 != 0 {
+                        return Err(format!(
+                            "bitfield '{}' payload field '{}' must begin on a byte boundary",
+                            self.name, name
+                        ));
+                    }
+                    fields.push(DecodedBitfieldField::Payload(
+                        bytes[bit_index / 8..].to_vec(),
+                    ));
+                    bit_index = bytes.len() * 8;
+                }
+            }
+        }
+        let consumed = bit_index.div_ceil(8);
+        if consumed != bytes.len() {
+            return Err(format!(
+                "bitfield '{}.from_bytes' expected {} byte(s), got {}",
+                self.name,
+                consumed,
+                bytes.len()
+            ));
+        }
+        Ok(fields)
+    }
+}
+#[derive(Clone, Copy)]
+struct NativeActorIdentity {
+    instance: NativeHandle,
+    ordinal: u64,
+}
+
+#[derive(Default)]
+pub(super) struct NativeValues {
+    #[cfg(all(test, jett_resource_native_test_archive))]
+    pub(in crate::native_abi) test_observations: resource::test_observations::Recorder,
+    #[cfg(test)]
+    allocation_budget: Option<usize>,
+    strings: HashMap<NativeHandle, NativeString>,
+    bytes: HashMap<NativeHandle, Vec<u8>>,
+    bytes_pending: HashMap<NativeHandle, u64>,
+    sums: HashMap<NativeHandle, NativeSum>,
+    lists: HashMap<NativeHandle, NativeList>,
+    sets: HashMap<NativeHandle, NativeSet>,
+    maps: HashMap<NativeHandle, NativeMap>,
+    structs: HashMap<NativeHandle, NativeStruct>,
+    equalities: HashMap<NativeHandle, debug_equal::EqualityCursor>,
+    actors: HashMap<NativeHandle, NativeActorIdentity>,
+    actor_graph_imports: HashMap<NativeHandle, actor_graph_import::Import>,
+    checked_graph_hooks: HashMap<NativeHandle, checked_graph_hooks::CheckedGraphHook>,
+    checked_graph_hooks_created: u64,
+    checked_graph_hooks_destroyed: u64,
+    capability_tasks: HashMap<NativeHandle, (u64, u64)>,
+    opaque_capabilities: HashMap<&'static str, u64>,
+    next_actor_ordinal: u64,
+    builders: HashMap<NativeHandle, NativeBuilderInfo>,
+    structs_created: u64,
+    structs_destroyed: u64,
+    lists_created: u64,
+    lists_destroyed: u64,
+    sets_created: u64,
+    sets_destroyed: u64,
+    maps_created: u64,
+    maps_destroyed: u64,
+    sums_created: u64,
+    sums_destroyed: u64,
+    bytes_created: u64,
+    bytes_destroyed: u64,
+    resource_ordinary_channels: ordinary_attempts::ResourceOrdinaryChannels,
+    failure: Option<Failure>,
+    dynamic_failure_message: Option<Vec<u8>>,
+    // Diagnostic bytes only; this metadata retains no owned Jett values.
+    property_case_context: Option<Vec<u8>>,
+    pub(super) cleanup_failed: bool,
+    stdout: Option<u64>,
+    clock: Option<u64>,
+    clock_script: Option<std::collections::VecDeque<clock::ClockTestSample>>,
+    random: Option<u64>,
+    random_provider: Option<RandomProvider>,
+    environment: Option<u64>,
+    environment_snapshot: Option<LaunchEnvironmentSnapshot>,
+    graphics: Option<u64>,
+    graphics_script: Option<std::collections::VecDeque<graphics::TestEvent>>,
+    graphics_session: Option<u64>,
+}
+impl NativeValues {
+    // These capability families currently have no interpreter I/O provider.
+    // Their checked values still support moves, views, calls, and task wrapping.
+    fn grant_opaque_capability(&mut self, kind: &'static str) -> LeafResult<u64> {
+        if let Some(&authority) = self.opaque_capabilities.get(kind) {
+            return Ok(authority);
+        }
+        let authority = next_identity()?;
+        self.opaque_capabilities.insert(kind, authority);
+        Ok(authority)
+    }
+
+    fn capability_authority(&self, value: u64) -> LeafResult<(u64, u64)> {
+        let (authority, depth) = self
+            .capability_tasks
+            .get(&value)
+            .copied()
+            .unwrap_or((value, 0));
+        if [
+            self.stdout,
+            self.clock,
+            self.random,
+            self.environment,
+            self.graphics,
+        ]
+        .into_iter()
+        .flatten()
+        .chain(self.opaque_capabilities.values().copied())
+        .any(|token| token == authority)
+        {
+            Ok((authority, depth))
+        } else {
+            Err(INVALID_CAPABILITY)
+        }
+    }
+
+    fn run_capability(&mut self, value: u64) -> LeafResult<u64> {
+        let (authority, depth) = self.capability_authority(value)?;
+        let depth = depth.checked_add(1).ok_or(EXHAUSTED)?;
+        let task = next_identity()?;
+        self.capability_tasks.insert(task, (authority, depth));
+        self.capability_tasks.remove(&value);
+        Ok(task)
+    }
+
+    fn join_capability(&mut self, value: u64) -> LeafResult<u64> {
+        let (authority, depth) = self.capability_authority(value)?;
+        if depth == 0 && self.environment != Some(authority) && self.graphics != Some(authority) {
+            return self.parsed_sum(Err("task was cancelled".to_owned()));
+        }
+        let joined = if depth <= 1 {
+            authority
+        } else {
+            next_identity()?
+        };
+        let result = self.parsed_sum(Ok(joined))?;
+        if depth > 1 {
+            self.capability_tasks.insert(joined, (authority, depth - 1));
+        }
+        self.capability_tasks.remove(&value);
+        Ok(result)
+    }
+
+    fn debug_capability(&self, value: u64, name: &str) -> LeafResult<String> {
+        let (authority, depth) = self.capability_authority(value)?;
+        let inner = if self.environment == Some(authority) || self.graphics == Some(authority) {
+            format!("<{name} capability>")
+        } else {
+            "nothing".to_owned()
+        };
+        format_pending_value(&inner, depth)
+    }
+
+    fn validate_scripted_consumption(&mut self) -> LeafResult<u32> {
+        let remaining = [
+            (
+                "Random",
+                self.random_provider
+                    .as_ref()
+                    .and_then(RandomProvider::scripted_samples_remaining),
+            ),
+            (
+                "Clock",
+                self.clock_script.as_ref().map(|samples| samples.len()),
+            ),
+            (
+                "Graphics",
+                self.graphics_script.as_ref().map(|events| events.len()),
+            ),
+        ]
+        .into_iter()
+        .find_map(|(capability, remaining)| {
+            remaining
+                .filter(|count| *count != 0)
+                .map(|count| (capability, count))
+        });
+        let Some((capability, remaining)) = remaining else {
+            return Ok(0);
+        };
+        let suffix = if remaining == 1 { "sample" } else { "samples" };
+        self.set_dynamic_failure_message(
+            format!("{capability}: test provider has {remaining} unconsumed {suffix}").into_bytes(),
+        );
+        Err((
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            b"test provider has unconsumed samples",
+        ))
+    }
+    #[cfg(test)]
+    fn allocation_checkpoint(&mut self) -> LeafResult<()> {
+        if let Some(budget) = &mut self.allocation_budget {
+            *budget = budget.checked_sub(1).ok_or(EXHAUSTED)?;
+        }
+        Ok(())
+    }
+    pub(super) fn is_empty(&self) -> bool {
+        self.structs.is_empty()
+            && self.equalities.is_empty()
+            && self.actors.is_empty()
+            && self.actor_graph_imports.is_empty()
+            && self.checked_graph_hooks.is_empty()
+            && self.checked_graph_hooks_created == self.checked_graph_hooks_destroyed
+            && self.builders.is_empty()
+            && self.structs_created == self.structs_destroyed
+            && self.strings.is_empty()
+            && self.bytes.is_empty()
+            && self.bytes_pending.is_empty()
+            && self.bytes_created == self.bytes_destroyed
+            && self.sums.is_empty()
+            && self.sums_created == self.sums_destroyed
+            && self.lists.is_empty()
+            && self.lists_created == self.lists_destroyed
+            && self.sets.is_empty()
+            && self.sets_created == self.sets_destroyed
+            && self.maps.is_empty()
+            && self.maps_created == self.maps_destroyed
+            && self.graphics_session.is_none()
+    }
+    fn insert(&mut self, text: String) -> LeafResult<u64> {
+        self.insert_pending(text, 0)
+    }
+    fn insert_pending(&mut self, text: String, pending_depth: u64) -> LeafResult<u64> {
+        #[cfg(test)]
+        self.allocation_checkpoint()?;
+        let id = next_identity()?;
+        self.strings.insert(
+            id,
+            NativeString {
+                text,
+                references: 1,
+                pending_depth,
+            },
+        );
+        Ok(id)
+    }
+    fn run_string(&mut self, id: u64) -> LeafResult<u64> {
+        let value = self.strings.get(&id).ok_or(INVALID_HANDLE)?;
+        let depth = value.pending_depth.checked_add(1).ok_or(EXHAUSTED)?;
+        self.insert_pending(value.text.clone(), depth)
+    }
+    fn join_string(&mut self, id: u64) -> LeafResult<u64> {
+        let value = self.strings.get(&id).ok_or(INVALID_HANDLE)?;
+        self.insert_pending(value.text.clone(), value.pending_depth.saturating_sub(1))
+    }
+    fn equal_string(&mut self, left: u64, right: u64, not_equal: bool) -> LeafResult<u32> {
+        let left_value = self.strings.get(&left).ok_or(INVALID_HANDLE)?;
+        let right_value = self.strings.get(&right).ok_or(INVALID_HANDLE)?;
+        if left_value.pending_depth != 0 || right_value.pending_depth != 0 {
+            let left = self.format_string(left)?;
+            let right = self.format_string(right)?;
+            let operation = if not_equal { "NotEq" } else { "Eq" };
+            self.set_dynamic_failure_message(
+                format!("unsupported binary operation: {left} {operation} {right}").into_bytes(),
+            );
+            return Err(UNSUPPORTED_STRING_COMPARISON);
+        }
+        let equal = self.same_string_value(left, right)?;
+        Ok(u32::from(if not_equal { !equal } else { equal }))
+    }
+    fn check_enum_comparison(
+        &mut self,
+        left: u64,
+        right: u64,
+        not_equal: u32,
+        layout: &[u8],
+    ) -> LeafResult<u32> {
+        if not_equal > 1 {
+            return Err(INVALID_STRUCT);
+        }
+        let left_depth = self.structs.get(&left).ok_or(INVALID_STRUCT)?.pending_depth;
+        let right_depth = self
+            .structs
+            .get(&right)
+            .ok_or(INVALID_STRUCT)?
+            .pending_depth;
+        if left_depth == 0 && right_depth == 0 {
+            return Ok(0);
+        }
+        let layout = NativeDebugLayout::parse(layout).map_err(|_| INVALID_STRUCT)?;
+        if !matches!(
+            layout.nodes.get(layout.root),
+            Some(NativeDebugNode::Enum(..))
+        ) {
+            return Err(INVALID_STRUCT);
+        }
+        let left = layout.format_value(self, left, layout.root)?;
+        let right = layout.format_value(self, right, layout.root)?;
+        let operation = if not_equal == 0 { "Eq" } else { "NotEq" };
+        self.set_dynamic_failure_message(
+            format!("unsupported binary operation: {left} {operation} {right}").into_bytes(),
+        );
+        Err(UNSUPPORTED_ENUM_COMPARISON)
+    }
+    fn same_string_value(&self, left: u64, right: u64) -> LeafResult<bool> {
+        let left = self.strings.get(&left).ok_or(INVALID_HANDLE)?;
+        let right = self.strings.get(&right).ok_or(INVALID_HANDLE)?;
+        Ok(left.pending_depth == right.pending_depth && left.text == right.text)
+    }
+    fn format_string(&self, id: u64) -> LeafResult<String> {
+        let value = self.strings.get(&id).ok_or(INVALID_HANDLE)?;
+        format_pending_value(&value.text, value.pending_depth)
+    }
+    fn check_display_result(&mut self, id: u64) -> LeafResult<u32> {
+        let value = self.strings.get(&id).ok_or(INVALID_HANDLE)?;
+        if value.pending_depth == 0 {
+            return Ok(0);
+        }
+        let value = self.format_string(id)?;
+        self.set_dynamic_failure_message(
+            format!("Displayable.display returned {value} instead of string").into_bytes(),
+        );
+        Err(INVALID_DISPLAY_RESULT)
+    }
+    fn display_string(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self.strings.get(&id).ok_or(INVALID_HANDLE)?.pending_depth;
+        if depth == 0 {
+            self.retain(id)
+        } else {
+            let text = self.format_string(id)?;
+            self.insert(text)
+        }
+    }
+    fn debug_value(&self, bits: u64, kind: u32) -> LeafResult<String> {
+        if kind == DEBUG_NOTHING_KIND {
+            return format_nothing(bits);
+        }
+        if kind == DEBUG_BYTES_KIND {
+            let mut text = "bytes(".to_owned();
+            for (index, byte) in self.bytes(bits)?.iter().enumerate() {
+                if index != 0 {
+                    text.push_str(", ");
+                }
+                text.push_str(&byte.to_string());
+            }
+            text.push(')');
+            return format_pending_value(&text, self.bytes_depth(bits)?);
+        }
+        let kind = NativeSortKind::from_raw(kind).map_err(|_| INVALID_TRACE_LABEL)?;
+        Ok(match kind {
+            NativeSortKind::Int8 => (bits as u8 as i8).to_string(),
+            NativeSortKind::Int16 => (bits as u16 as i16).to_string(),
+            NativeSortKind::Int32 => (bits as u32 as i32).to_string(),
+            NativeSortKind::Int64 => (bits as i64).to_string(),
+            NativeSortKind::Uint8 => (bits as u8).to_string(),
+            NativeSortKind::Uint16 => (bits as u16).to_string(),
+            NativeSortKind::Uint32 => (bits as u32).to_string(),
+            NativeSortKind::Uint64 => bits.to_string(),
+            NativeSortKind::Float32 => f64::from(f32::from_bits(bits as u32)).to_string(),
+            NativeSortKind::Float64 => f64::from_bits(bits).to_string(),
+            NativeSortKind::Bool => match bits {
+                0 => "false".to_owned(),
+                1 => "true".to_owned(),
+                _ => return Err(INVALID_TRACE_LABEL),
+            },
+            NativeSortKind::String => self.format_string(bits)?,
+        })
+    }
+    fn function_debug_label(&self, id: u64) -> LeafResult<&str> {
+        let descriptor = self.structs.get(&id).ok_or(INVALID_FUNCTION)?;
+        let field_count =
+            usize::try_from(NATIVE_FUNCTION_FIELD_COUNT).map_err(|_| INVALID_FUNCTION)?;
+        if descriptor.fields.len() != field_count {
+            return Err(INVALID_FUNCTION);
+        }
+        let code = self
+            .struct_field(id, NATIVE_FUNCTION_CODE_FIELD)
+            .map_err(|_| INVALID_FUNCTION)?;
+        let environment = self
+            .struct_field(id, NATIVE_FUNCTION_ENVIRONMENT_FIELD)
+            .map_err(|_| INVALID_FUNCTION)?;
+        let label = self
+            .struct_field(id, NATIVE_FUNCTION_LABEL_FIELD)
+            .map_err(|_| INVALID_FUNCTION)?;
+        if code.owned
+            || code.bits == 0
+            || environment.owned != (environment.bits != 0)
+            || (environment.bits != 0 && !self.structs.contains_key(&environment.bits))
+            || !label.owned
+        {
+            return Err(INVALID_FUNCTION);
+        }
+        let text = self.text(label.bits).map_err(|_| INVALID_FUNCTION)?;
+        if !text.starts_with("function(")
+            || !text.ends_with(')')
+            || text.chars().any(char::is_control)
+        {
+            return Err(INVALID_FUNCTION);
+        }
+        Ok(text)
+    }
+    fn check_function_callable(&mut self, id: u64) -> LeafResult<u32> {
+        let label = self.function_debug_label(id)?.to_owned();
+        let depth = self.structs.get(&id).ok_or(INVALID_FUNCTION)?.pending_depth;
+        if depth == 0 {
+            return Ok(0);
+        }
+        let pending = format_pending_value(&label, depth)?;
+        self.set_dynamic_failure_message(
+            format!("expected function value, got {pending}").into_bytes(),
+        );
+        Err(PENDING_FUNCTION_CALL)
+    }
+    fn debug_append(&mut self, builder: u64, label: &str, bits: u64, kind: u32) -> LeafResult<u32> {
+        let value = self.debug_value(bits, kind)?;
+        let text = &mut self.strings.get_mut(&builder).ok_or(INVALID_HANDLE)?.text;
+        text.push_str(label);
+        text.push_str(&value);
+        Ok(0)
+    }
+    fn debug_append_pending_scalar(
+        &mut self,
+        builder: u64,
+        label: &str,
+        bits: u64,
+        kind: u32,
+        depth: u64,
+    ) -> LeafResult<u32> {
+        let value = self.debug_value(bits, kind)?;
+        let value = format_pending_value(&value, depth)?;
+        let text = &mut self.strings.get_mut(&builder).ok_or(INVALID_HANDLE)?.text;
+        text.push_str(label);
+        text.push_str(&value);
+        Ok(0)
+    }
+    fn debug_append_aggregate(
+        &mut self,
+        builder: u64,
+        label: &str,
+        bits: u64,
+        layout: &[u8],
+    ) -> LeafResult<u32> {
+        let layout = NativeDebugLayout::parse(layout)?;
+        let value = layout.format_value(self, bits, layout.root)?;
+        let text = &mut self.strings.get_mut(&builder).ok_or(INVALID_HANDLE)?.text;
+        text.push_str(label);
+        text.push_str(&value);
+        Ok(0)
+    }
+    /// Observe the selected ordinary payload without acquiring ownership.
+    /// Its exact type and stable backing belong to the checked MIR projection.
+    fn sum_payload_borrow(&self, value: u64, tag: u32) -> LeafResult<u64> {
+        let sum = self.sums.get(&value).ok_or(INVALID_SUM)?;
+        if tag > SUM_SUCCESS || sum.tag != tag || sum.pending_depth != 0 {
+            return Err(INVALID_SUM);
+        }
+        Ok(sum.bits)
+    }
+    fn sum_handle_tag(&mut self, value: u64, layout: &[u8]) -> LeafResult<u32> {
+        let sum = self.sums.get(&value).ok_or(INVALID_SUM)?;
+        let tag = sum.tag;
+        let pending = sum.pending_depth != 0;
+        if !pending {
+            return Ok(tag);
+        }
+        let layout = NativeDebugLayout::parse(layout)?;
+        let value = layout.format_value(self, value, layout.root)?;
+        self.set_dynamic_failure_message(
+            format!("handle block requires a result or optional value, got {value}").into_bytes(),
+        );
+        Err((
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            b"cannot handle a pending sum",
+        ))
+    }
+    fn debug_emit(&mut self, builder: u64) -> LeafResult<u32> {
+        let mut stderr = io::stderr().lock();
+        write_all_bytes(&mut stderr, self.text(builder)?.as_bytes())
+            .and_then(|_| write_all_bytes(&mut stderr, b"\n"))
+            .and_then(|_| stderr.flush())
+            .map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDERR_WRITE_MESSAGE))?;
+        self.release(builder)
+    }
+    fn insert_bytes(&mut self, bytes: Vec<u8>) -> LeafResult<u64> {
+        #[cfg(test)]
+        self.allocation_checkpoint()?;
+        let id = next_identity()?;
+        self.bytes.insert(id, bytes);
+        self.bytes_created += 1;
+        Ok(id)
+    }
+    fn bytes(&self, id: u64) -> LeafResult<&[u8]> {
+        self.bytes.get(&id).map(Vec::as_slice).ok_or(INVALID_BYTES)
+    }
+    fn bytes_depth(&self, id: u64) -> LeafResult<u64> {
+        self.bytes(id)?;
+        Ok(self.bytes_pending.get(&id).copied().unwrap_or(0))
+    }
+    fn copy_bytes_with_depth(&mut self, id: u64, depth: u64) -> LeafResult<u64> {
+        let data = self.bytes(id)?.to_vec();
+        let copy = self.insert_bytes(data)?;
+        if depth != 0 {
+            self.bytes_pending.insert(copy, depth);
+        }
+        Ok(copy)
+    }
+    fn clone_bytes(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self.bytes_depth(id)?;
+        self.copy_bytes_with_depth(id, depth)
+    }
+    fn run_bytes(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self.bytes_depth(id)?.checked_add(1).ok_or(EXHAUSTED)?;
+        self.copy_bytes_with_depth(id, depth)
+    }
+    fn join_bytes(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self.bytes_depth(id)?.saturating_sub(1);
+        self.copy_bytes_with_depth(id, depth)
+    }
+    fn same_bytes_value(&self, left: u64, right: u64) -> LeafResult<bool> {
+        Ok(self.bytes_depth(left)? == self.bytes_depth(right)?
+            && self.bytes(left)? == self.bytes(right)?)
+    }
+    fn write_bitfield_bits(
+        &mut self,
+        id: u64,
+        numeric: u64,
+        width: u32,
+        network_order: u32,
+        bit_offset: u64,
+    ) -> LeafResult<u32> {
+        if !(1..=64).contains(&width)
+            || network_order > 1
+            || (width < 64 && numeric >= (1_u64 << width))
+        {
+            return Err(INVALID_STRUCT);
+        }
+        let offset = usize::try_from(bit_offset).map_err(|_| EXHAUSTED)?;
+        let end = offset.checked_add(width as usize).ok_or(EXHAUSTED)?;
+        let byte_count = end.checked_add(7).ok_or(EXHAUSTED)? / 8;
+        let bytes = self.bytes.get_mut(&id).ok_or(INVALID_BYTES)?;
+        if byte_count > bytes.len() {
+            bytes
+                .try_reserve_exact(byte_count - bytes.len())
+                .map_err(|_| EXHAUSTED)?;
+            bytes.resize(byte_count, 0);
+        }
+        let little_endian_bytes =
+            width > 8 && width % 8 == 0 && network_order == 0 && offset % 8 == 0;
+        for bit in 0..width as usize {
+            let shift = if little_endian_bytes {
+                (bit / 8) * 8 + (7 - bit % 8)
+            } else {
+                width as usize - 1 - bit
+            };
+            if (numeric >> shift) & 1 != 0 {
+                let position = offset + bit;
+                bytes[position / 8] |= 1 << (7 - position % 8);
+            }
+        }
+        Ok(0)
+    }
+    fn extend_bitfield_payload(&mut self, id: u64, payload: u64) -> LeafResult<u32> {
+        let source = self.lists.get(&payload).ok_or(INVALID_LIST)?;
+        if source.owned
+            || source
+                .elements
+                .iter()
+                .any(|element| element.is_none_or(|value| value > u8::MAX as u64))
+        {
+            return Err(INVALID_LIST);
+        }
+        let bytes = self.bytes.get_mut(&id).ok_or(INVALID_BYTES)?;
+        bytes
+            .try_reserve_exact(source.elements.len())
+            .map_err(|_| EXHAUSTED)?;
+        for element in &source.elements {
+            bytes.push(element.expect("validated payload element") as u8);
+        }
+        Ok(0)
+    }
+    fn check_bitfield_payload_pending(&mut self, payload: u64, prefix: &[u8]) -> LeafResult<u32> {
+        let source = self.lists.get(&payload).ok_or(INVALID_LIST)?;
+        if source.owned {
+            return Err(INVALID_LIST);
+        }
+        let message = if source.pending_depth != 0 {
+            let mut values = Vec::new();
+            values
+                .try_reserve_exact(source.elements.len())
+                .map_err(|_| EXHAUSTED)?;
+            for (index, element) in source.elements.iter().enumerate() {
+                let element = element.ok_or(INVALID_LIST)?;
+                let depth = source
+                    .element_pending_depths
+                    .get(&index)
+                    .copied()
+                    .unwrap_or(0);
+                values.push(format_pending_value(&element.to_string(), depth)?);
+            }
+            let list = format!("list({})", values.join(", "));
+            let value = format_pending_value(&list, source.pending_depth)?;
+            Some(format!(
+                "payload expects list[uint8] or bytes, found {value}"
+            ))
+        } else {
+            let pending = source
+                .elements
+                .iter()
+                .enumerate()
+                .find_map(|(index, element)| {
+                    let depth = source
+                        .element_pending_depths
+                        .get(&index)
+                        .copied()
+                        .unwrap_or(0);
+                    (depth != 0).then_some((element, depth))
+                });
+            if let Some((element, depth)) = pending {
+                let element = element.ok_or(INVALID_LIST)?;
+                let value = format_pending_value(&element.to_string(), depth)?;
+                Some(format!("payload expects list[uint8], found {value}"))
+            } else {
+                None
+            }
+        };
+        if let Some(message) = message {
+            let mut full = prefix.to_vec();
+            full.extend_from_slice(message.as_bytes());
+            self.set_dynamic_failure_message(full);
+            return Err(INVALID_PENDING_HANDLE_CHECK);
+        }
+        Ok(0)
+    }
+    fn decode_bitfield(&mut self, input: u64, descriptor: &[u8]) -> LeafResult<u64> {
+        let layout = NativeBitfieldLayout::parse(descriptor)?;
+        let decoded = layout.decode(self.bytes(input)?);
+        match decoded {
+            Err(message) => {
+                let text = self.insert(message)?;
+                match self.sum(SUM_FAILURE, text, true) {
+                    Ok(result) => Ok(result),
+                    Err(error) => {
+                        self.drop_value(text)?;
+                        Err(error)
+                    }
+                }
+            }
+            Ok(fields) => {
+                let record = self.new_struct(fields.len() as u64)?;
+                let materialize = (|| -> LeafResult<()> {
+                    for (index, field) in fields.into_iter().enumerate() {
+                        let value = match field {
+                            DecodedBitfieldField::Plain(bits) => NativeField {
+                                bits,
+                                owned: false,
+                                pending_depth: 0,
+                            },
+                            DecodedBitfieldField::Enum(variant) => {
+                                let nested = self.new_struct(1)?;
+                                self.structs.get_mut(&nested).ok_or(INVALID_STRUCT)?.fields[0] =
+                                    Some(NativeField {
+                                        bits: u64::from(variant),
+                                        owned: false,
+                                        pending_depth: 0,
+                                    });
+                                NativeField {
+                                    bits: nested,
+                                    owned: true,
+                                    pending_depth: 0,
+                                }
+                            }
+                            DecodedBitfieldField::Payload(bytes) => {
+                                let mut elements = Vec::new();
+                                elements
+                                    .try_reserve_exact(bytes.len())
+                                    .map_err(|_| EXHAUSTED)?;
+                                elements
+                                    .extend(bytes.into_iter().map(|byte| Some(u64::from(byte))));
+                                let list = self.new_list(false)?;
+                                self.lists.get_mut(&list).ok_or(INVALID_LIST)?.elements = elements;
+                                NativeField {
+                                    bits: list,
+                                    owned: true,
+                                    pending_depth: 0,
+                                }
+                            }
+                        };
+                        self.structs.get_mut(&record).ok_or(INVALID_STRUCT)?.fields[index] =
+                            Some(value);
+                    }
+                    Ok(())
+                })();
+                if let Err(error) = materialize {
+                    self.drop_value(record)?;
+                    return Err(error);
+                }
+                match self.sum(SUM_SUCCESS, record, true) {
+                    Ok(result) => Ok(result),
+                    Err(error) => {
+                        self.drop_value(record)?;
+                        Err(error)
+                    }
+                }
+            }
+        }
+    }
+    fn sum(&mut self, tag: u32, bits: u64, owned: bool) -> LeafResult<u64> {
+        #[cfg(test)]
+        self.allocation_checkpoint()?;
+        if tag > SUM_SUCCESS {
+            return Err(INVALID_SUM);
+        }
+        let id = next_identity()?;
+        self.sums.insert(
+            id,
+            NativeSum {
+                tag,
+                bits,
+                owned,
+                pending_depth: 0,
+                payload_pending_depth: 0,
+            },
+        );
+        self.sums_created += 1;
+        Ok(id)
+    }
+    fn parsed_sum(&mut self, parsed: Result<u64, String>) -> LeafResult<u64> {
+        match parsed {
+            Ok(bits) => self.sum(SUM_SUCCESS, bits, false),
+            Err(error) => {
+                let payload = self.insert(error)?;
+                match self.sum(SUM_FAILURE, payload, true) {
+                    Ok(value) => Ok(value),
+                    Err(error) => {
+                        self.drop_value(payload)?;
+                        Err(error)
+                    }
+                }
+            }
+        }
+    }
+    fn join_nothing(&mut self, depth: u64) -> LeafResult<u64> {
+        self.parsed_sum(
+            depth
+                .checked_sub(1)
+                .ok_or_else(|| "task was cancelled".to_owned()),
+        )
+    }
+    fn equal_nothing(&mut self, left: u64, right: u64, not_equal: u32) -> LeafResult<u32> {
+        if not_equal > 1 {
+            return Err(INVALID_NOTHING_COMPARISON);
+        }
+        if left == 0 && right == 0 {
+            return Ok(u32::from(not_equal == 0));
+        }
+        let left = format_nothing(left)?;
+        let right = format_nothing(right)?;
+        let operation = if not_equal == 0 { "Eq" } else { "NotEq" };
+        self.set_dynamic_failure_message(
+            format!("unsupported binary operation: {left} {operation} {right}").into_bytes(),
+        );
+        Err(UNSUPPORTED_NOTHING_COMPARISON)
+    }
+    fn check_pending_scalar_binary(
+        &mut self,
+        left_bits: u64,
+        left_kind: u32,
+        left_depth: u64,
+        right_bits: u64,
+        right_kind: u32,
+        right_depth: u64,
+        operation: u32,
+    ) -> LeafResult<u32> {
+        let operation = NativePendingBinaryOp::from_raw(operation)?;
+        if left_depth == 0 && right_depth == 0 {
+            return Ok(0);
+        }
+        let left = format_pending_value(&self.debug_value(left_bits, left_kind)?, left_depth)?;
+        let right = format_pending_value(&self.debug_value(right_bits, right_kind)?, right_depth)?;
+        self.set_dynamic_failure_message(
+            format!(
+                "unsupported binary operation: {left} {} {right}",
+                operation.label()
+            )
+            .into_bytes(),
+        );
+        Err(UNSUPPORTED_SCALAR_BINARY)
+    }
+    fn check_pending_bool_condition(
+        &mut self,
+        bits: u64,
+        depth: u64,
+        context: u32,
+    ) -> LeafResult<u32> {
+        if bits > 1 {
+            return Err(INVALID_TRACE_LABEL);
+        }
+        if depth == 0 {
+            return Ok(0);
+        }
+        let value = format_pending_value(if bits == 0 { "false" } else { "true" }, depth)?;
+        let message = match context {
+            0 => format!("expected boolean, got {value}"),
+            1 => "assert condition must be a boolean".to_owned(),
+            2 => format!("breakpoint condition must be bool, got {value}"),
+            _ => return Err(INVALID_TRACE_LABEL),
+        };
+        self.set_dynamic_failure_message(message.into_bytes());
+        Err(PENDING_BOOL_CONDITION)
+    }
+    fn byte_result(&mut self, decoded: Result<Vec<u8>, String>) -> LeafResult<u64> {
+        let (tag, payload) = match decoded {
+            Ok(bytes) => (SUM_SUCCESS, self.insert_bytes(bytes)?),
+            Err(error) => (SUM_FAILURE, self.insert(error)?),
+        };
+        match self.sum(tag, payload, true) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                self.drop_value(payload)?;
+                Err(error)
+            }
+        }
+    }
+    fn string_result(&mut self, decoded: Result<String, String>) -> LeafResult<u64> {
+        let (tag, payload) = match decoded {
+            Ok(text) => (SUM_SUCCESS, self.insert(text)?),
+            Err(error) => (SUM_FAILURE, self.insert(error)?),
+        };
+        match self.sum(tag, payload, true) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                self.drop_value(payload)?;
+                Err(error)
+            }
+        }
+    }
+    fn owned_sum(&mut self, tag: u32, payload: u64) -> LeafResult<u64> {
+        match self.sum(tag, payload, true) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                self.drop_value(payload)?;
+                Err(error)
+            }
+        }
+    }
+    fn push_owned_list_element(&mut self, id: u64, element: u64) -> LeafResult<()> {
+        let result = self
+            .lists
+            .get_mut(&id)
+            .ok_or(INVALID_LIST)
+            .and_then(|list| {
+                if !list.owned {
+                    return Err(INVALID_LIST);
+                }
+                list.elements.try_reserve(1).map_err(|_| EXHAUSTED)?;
+                list.elements.push(Some(element));
+                Ok(())
+            });
+        if result.is_err() {
+            self.drop_value(element)?;
+        }
+        result
+    }
+    fn csv_rows(&mut self, rows: Vec<Vec<String>>) -> LeafResult<u64> {
+        let outer = self.new_list(true)?;
+        for row in rows {
+            let result = self
+                .string_list(row)
+                .and_then(|inner| self.push_owned_list_element(outer, inner));
+            if let Err(error) = result {
+                self.drop_value(outer)?;
+                return Err(error);
+            }
+        }
+        Ok(outer)
+    }
+    fn csv_string_pairs(&mut self, entries: Vec<(String, String)>) -> LeafResult<u64> {
+        let map = self.new_map(1, 1)?;
+        for (key, value) in entries {
+            let pair = (|| {
+                let key = self.insert(key)?;
+                let value = match self.insert(value) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.drop_value(key)?;
+                        return Err(error);
+                    }
+                };
+                if let Err(error) = self.map_append_literal(map, key, value) {
+                    self.drop_value(key)?;
+                    self.drop_value(value)?;
+                    return Err(error);
+                }
+                Ok(())
+            })();
+            if let Err(error) = pair {
+                self.drop_value(map)?;
+                return Err(error);
+            }
+        }
+        Ok(map)
+    }
+    fn csv_header_rows(&mut self, rows: Vec<Vec<(String, String)>>) -> LeafResult<u64> {
+        let outer = self.new_list(true)?;
+        for entries in rows {
+            let result = self
+                .csv_string_pairs(entries)
+                .and_then(|map| self.push_owned_list_element(outer, map));
+            if let Err(error) = result {
+                self.drop_value(outer)?;
+                return Err(error);
+            }
+        }
+        Ok(outer)
+    }
+    fn csv_records(&mut self, rows: u64) -> LeafResult<Vec<Vec<String>>> {
+        let outer = self.lists.get(&rows).ok_or(INVALID_LIST)?;
+        if !outer.owned {
+            return Err(INVALID_LIST);
+        }
+        let mut records = Vec::new();
+        records
+            .try_reserve_exact(outer.elements.len())
+            .map_err(|_| EXHAUSTED)?;
+        for row in &outer.elements {
+            let inner = self
+                .lists
+                .get(&row.ok_or(INVALID_LIST)?)
+                .ok_or(INVALID_LIST)?;
+            if !inner.owned {
+                return Err(INVALID_LIST);
+            }
+            if inner.pending_depth != 0 {
+                self.set_dynamic_failure_message(
+                    b"csv.__stringify expects list[list[string]]".to_vec(),
+                );
+                return Err(INVALID_PENDING_HANDLE_CHECK);
+            }
+            let mut fields = Vec::new();
+            fields
+                .try_reserve_exact(inner.elements.len())
+                .map_err(|_| EXHAUSTED)?;
+            for field in &inner.elements {
+                let field = self
+                    .strings
+                    .get(&field.ok_or(INVALID_LIST)?)
+                    .ok_or(INVALID_HANDLE)?;
+                fields.push(format_pending_value(&field.text, field.pending_depth)?);
+            }
+            records.push(fields);
+        }
+        Ok(records)
+    }
+    fn new_list(&mut self, owned: bool) -> LeafResult<u64> {
+        #[cfg(test)]
+        self.allocation_checkpoint()?;
+        let id = next_identity()?;
+        self.lists.insert(
+            id,
+            NativeList {
+                elements: Vec::new(),
+                element_pending_depths: HashMap::new(),
+                owned,
+                pending_depth: 0,
+            },
+        );
+        self.lists_created += 1;
+        Ok(id)
+    }
+    fn list_index_failure(
+        &mut self,
+        operation: &'static str,
+        index: i64,
+        fallback: Failure,
+    ) -> LeafResult<u64> {
+        self.set_dynamic_failure_message(
+            format!("{operation}: index {index} out of bounds").into_bytes(),
+        );
+        Err(fallback)
+    }
+    fn check_list_arguments(
+        &self,
+        value: u64,
+        kind: u32,
+        first_depth: u64,
+        second_depth: u64,
+    ) -> LeafResult<u32> {
+        let message: &'static [u8] = match kind {
+            0 => b"list.__length expects a list argument",
+            1 => b"list.__append expects a list as first argument",
+            2 => b"list.__get_clone expects a list and an int64 index",
+            3 => b"list.__insert_at expects a list, an int64 index, and a value",
+            4 => b"list.__remove_at expects a list and an int64 index",
+            5 => b"list.__sort expects a list argument",
+            6 => b"list.__sort_by_index expects a list of lists and an int64 index",
+            7 => b"list.__is_sorted expects a list argument",
+            8 => b"list.__swap expects a list and two int64 indices",
+            _ => return Err(INVALID_LIST),
+        };
+        let list = self.lists.get(&value).ok_or(INVALID_LIST)?;
+        if list.pending_depth != 0 || first_depth != 0 || second_depth != 0 {
+            return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, message));
+        }
+        Ok(0)
+    }
+    fn check_index_count_arguments(
+        &self,
+        value: u64,
+        kind: u32,
+        first_depth: u64,
+        second_depth: u64,
+        third_depth: u64,
+    ) -> LeafResult<u32> {
+        let (receiver_depth, message): (u64, &'static [u8]) = match kind {
+            0 => (0, b"range expects int64 arguments"),
+            1 => (
+                self.bytes_depth(value)?,
+                b"bytes.__get expects a bytes value and an int64 index",
+            ),
+            2 => (
+                self.bytes_depth(value)?,
+                b"bytes.__slice expects a bytes value and two int64 indices",
+            ),
+            3 => (
+                self.strings
+                    .get(&value)
+                    .ok_or(INVALID_HANDLE)?
+                    .pending_depth,
+                b"string.__slice expects a string and two int64 indices",
+            ),
+            4 => (
+                self.strings
+                    .get(&value)
+                    .ok_or(INVALID_HANDLE)?
+                    .pending_depth,
+                b"string.__repeat expects a string and an int64",
+            ),
+            _ => return Err(INVALID_LIST),
+        };
+        if receiver_depth != 0 || first_depth != 0 || second_depth != 0 || third_depth != 0 {
+            return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, message));
+        }
+        Ok(0)
+    }
+    fn reject_pending_scalars(
+        &mut self,
+        first_depth: u64,
+        second_depth: u64,
+        third_depth: u64,
+        message: &[u8],
+    ) -> LeafResult<u32> {
+        if first_depth == 0 && second_depth == 0 && third_depth == 0 {
+            return Ok(0);
+        }
+        self.set_dynamic_failure_message(message.to_vec());
+        Err((
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            b"pending scalar intrinsic operand",
+        ))
+    }
+    fn reject_pending_handle(&mut self, handle: u64, kind: u32, message: &[u8]) -> LeafResult<u32> {
+        let depth = match kind {
+            0 => {
+                self.strings
+                    .get(&handle)
+                    .ok_or(INVALID_HANDLE)?
+                    .pending_depth
+            }
+            1 => self.bytes_depth(handle)?,
+            2 => self.lists.get(&handle).ok_or(INVALID_LIST)?.pending_depth,
+            3 => self.capability_authority(handle)?.1,
+            4 => {
+                self.structs
+                    .get(&handle)
+                    .ok_or(INVALID_STRUCT)?
+                    .pending_depth
+            }
+            5 => self.sets.get(&handle).ok_or(INVALID_SET)?.pending_depth,
+            6 => self.maps.get(&handle).ok_or(INVALID_MAP)?.pending_depth,
+            7 => self.sums.get(&handle).ok_or(INVALID_SUM)?.pending_depth,
+            _ => return Err(INVALID_PENDING_HANDLE_CHECK),
+        };
+        if depth == 0 {
+            return Ok(0);
+        }
+        self.set_dynamic_failure_message(message.to_vec());
+        Err((
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            b"pending handle intrinsic operand",
+        ))
+    }
+    fn new_set(&mut self, strings: u32) -> LeafResult<u64> {
+        if strings > 1 {
+            return Err(INVALID_SET);
+        }
+        #[cfg(test)]
+        self.allocation_checkpoint()?;
+        let id = next_identity()?;
+        self.sets.insert(
+            id,
+            NativeSet {
+                elements: Vec::new(),
+                element_pending_depths: HashMap::new(),
+                strings: strings != 0,
+                pending_depth: 0,
+            },
+        );
+        self.sets_created += 1;
+        Ok(id)
+    }
+    fn new_map(&mut self, key_strings: u32, value_owned: u32) -> LeafResult<u64> {
+        if key_strings > 1 || value_owned > 1 {
+            return Err(INVALID_MAP);
+        }
+        #[cfg(test)]
+        self.allocation_checkpoint()?;
+        let id = next_identity()?;
+        self.maps.insert(
+            id,
+            NativeMap {
+                entries: Vec::new(),
+                key_strings: key_strings != 0,
+                value_owned: value_owned != 0,
+                pending_depth: 0,
+            },
+        );
+        self.maps_created += 1;
+        Ok(id)
+    }
+    fn map_position(&self, id: u64, key: u64) -> LeafResult<Option<usize>> {
+        self.map_position_depth(id, key, 0)
+    }
+    fn require_plain_map(&self, id: u64, error: Failure) -> LeafResult<()> {
+        let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
+        if map.pending_depth != 0 {
+            return Err(error);
+        }
+        Ok(())
+    }
+    fn map_position_depth(&self, id: u64, key: u64, depth: u64) -> LeafResult<Option<usize>> {
+        let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
+        if map.key_strings {
+            if depth != 0 {
+                return Err(INVALID_MAP);
+            }
+            for (index, entry) in map.entries.iter().enumerate() {
+                if let Some(entry) = entry {
+                    if !entry.key_taken && self.same_string_value(entry.key, key)? {
+                        return Ok(Some(index));
+                    }
+                }
+            }
+            Ok(None)
+        } else {
+            Ok(map.entries.iter().position(|entry| {
+                entry.is_some_and(|entry| {
+                    !entry.key_taken && entry.key == key && entry.key_pending_depth == depth
+                })
+            }))
+        }
+    }
+    fn map_insert(&mut self, id: u64, key: u64, value: u64) -> LeafResult<u64> {
+        self.map_insert_depth(id, key, 0, value, 0)
+    }
+    fn map_insert_depth(
+        &mut self,
+        id: u64,
+        key: u64,
+        key_depth: u64,
+        value: u64,
+        value_depth: u64,
+    ) -> LeafResult<u64> {
+        self.require_plain_map(id, PENDING_MAP_INSERT)?;
+        let position = self.map_position_depth(id, key, key_depth)?;
+        let map = self.maps.get_mut(&id).ok_or(INVALID_MAP)?;
+        let key_strings = map.key_strings;
+        let value_owned = map.value_owned;
+        if position.is_none() {
+            map.entries.try_reserve(1).map_err(|_| EXHAUSTED)?;
+            map.entries.push(Some(NativeMapEntry {
+                key,
+                value,
+                key_pending_depth: key_depth,
+                value_pending_depth: value_depth,
+                key_taken: false,
+            }));
+        } else {
+            let old = map.entries[position.ok_or(INVALID_MAP)?]
+                .as_mut()
+                .ok_or(INVALID_MAP)?;
+            let old_value = std::mem::replace(&mut old.value, value);
+            old.value_pending_depth = value_depth;
+            if key_strings {
+                self.drop_value(key)?;
+            }
+            if value_owned {
+                self.drop_value(old_value)?;
+            }
+        }
+        Ok(id)
+    }
+    fn map_append_literal(&mut self, id: u64, key: u64, value: u64) -> LeafResult<u64> {
+        self.map_append_literal_depth(id, key, 0, value, 0)
+    }
+    fn map_append_literal_depth(
+        &mut self,
+        id: u64,
+        key: u64,
+        key_depth: u64,
+        value: u64,
+        value_depth: u64,
+    ) -> LeafResult<u64> {
+        let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
+        if map.key_strings {
+            self.text(key)?;
+            if key_depth != 0 {
+                return Err(INVALID_MAP);
+            }
+        }
+        let map = self.maps.get_mut(&id).ok_or(INVALID_MAP)?;
+        map.entries.try_reserve(1).map_err(|_| EXHAUSTED)?;
+        map.entries.push(Some(NativeMapEntry {
+            key,
+            value,
+            key_pending_depth: key_depth,
+            value_pending_depth: value_depth,
+            key_taken: false,
+        }));
+        Ok(id)
+    }
+    fn map_remove(&mut self, id: u64, key: u64) -> LeafResult<u64> {
+        self.map_remove_depth(id, key, 0)
+    }
+    fn map_remove_depth(&mut self, id: u64, key: u64, depth: u64) -> LeafResult<u64> {
+        self.require_plain_map(id, PENDING_MAP_REMOVE)?;
+        while let Some(index) = self.map_position_depth(id, key, depth)? {
+            let map = self.maps.get_mut(&id).ok_or(INVALID_MAP)?;
+            let key_strings = map.key_strings;
+            let value_owned = map.value_owned;
+            let entry = map.entries.remove(index).ok_or(INVALID_MAP)?;
+            if key_strings {
+                self.drop_value(entry.key)?;
+            }
+            if value_owned {
+                self.drop_value(entry.value)?;
+            }
+        }
+        Ok(id)
+    }
+    fn map_get(&mut self, id: u64, key: u64) -> LeafResult<u64> {
+        self.map_get_depth(id, key, 0)
+    }
+    fn map_get_depth(&mut self, id: u64, key: u64, depth: u64) -> LeafResult<u64> {
+        self.require_plain_map(id, PENDING_MAP_GET)?;
+        let Some(index) = self.map_position_depth(id, key, depth)? else {
+            return self.sum(SUM_FAILURE, 0, false);
+        };
+        let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
+        let value_owned = map.value_owned;
+        let entry = map.entries[index].ok_or(INVALID_MAP)?;
+        let bits = entry.value;
+        let value_depth = entry.value_pending_depth;
+        let bits = if value_owned {
+            self.clone_value(bits)?
+        } else {
+            bits
+        };
+        match self.sum(SUM_SUCCESS, bits, value_owned) {
+            Ok(result) => {
+                self.sums
+                    .get_mut(&result)
+                    .ok_or(INVALID_SUM)?
+                    .payload_pending_depth = value_depth;
+                Ok(result)
+            }
+            Err(error) => {
+                if value_owned {
+                    self.drop_value(bits)?;
+                }
+                Err(error)
+            }
+        }
+    }
+    fn map_element(&mut self, id: u64, index: i64, key: bool, consume: bool) -> LeafResult<u64> {
+        let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
+        let index = usize::try_from(index).map_err(|_| INVALID_MAP)?;
+        let entry = map
+            .entries
+            .get(index)
+            .copied()
+            .flatten()
+            .ok_or(INVALID_MAP)?;
+        if entry.key_taken != (!key && consume) {
+            return Err(INVALID_MAP);
+        }
+        let (bits, owned) = if key {
+            (entry.key, map.key_strings)
+        } else {
+            (entry.value, map.value_owned)
+        };
+        if !consume {
+            return if owned {
+                self.clone_value(bits)
+            } else {
+                Ok(bits)
+            };
+        }
+        let map = self.maps.get_mut(&id).ok_or(INVALID_MAP)?;
+        let slot = map.entries.get_mut(index).ok_or(INVALID_MAP)?;
+        if key {
+            slot.as_mut().ok_or(INVALID_MAP)?.key_taken = true;
+        } else {
+            *slot = None;
+        }
+        Ok(bits)
+    }
+    fn map_element_depth(&self, id: u64, index: i64, key: u32) -> LeafResult<u64> {
+        let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
+        let index = usize::try_from(index).map_err(|_| INVALID_MAP)?;
+        let entry = map
+            .entries
+            .get(index)
+            .copied()
+            .flatten()
+            .ok_or(INVALID_MAP)?;
+        match key {
+            0 => Ok(entry.value_pending_depth),
+            1 if !entry.key_taken => Ok(entry.key_pending_depth),
+            _ => Err(INVALID_MAP),
+        }
+    }
+    fn clone_map(&mut self, id: u64) -> LeafResult<u64> {
+        let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
+        let (entries, key_strings, value_owned, pending_depth) = (
+            map.entries.clone(),
+            map.key_strings,
+            map.value_owned,
+            map.pending_depth,
+        );
+        let output = self.new_map(u32::from(key_strings), u32::from(value_owned))?;
+        if let Err(error) = self
+            .maps
+            .get_mut(&output)
+            .ok_or(INVALID_MAP)?
+            .entries
+            .try_reserve_exact(entries.len())
+            .map_err(|_| EXHAUSTED)
+        {
+            self.drop_value(output)?;
+            return Err(error);
+        }
+        for entry in entries {
+            let Some(entry) = entry else {
+                self.maps
+                    .get_mut(&output)
+                    .ok_or(INVALID_MAP)?
+                    .entries
+                    .push(None);
+                continue;
+            };
+            if entry.key_taken {
+                self.drop_value(output)?;
+                return Err(INVALID_MAP);
+            }
+            let key = if key_strings {
+                match self.clone_value(entry.key) {
+                    Ok(key) => key,
+                    Err(error) => {
+                        self.drop_value(output)?;
+                        return Err(error);
+                    }
+                }
+            } else {
+                entry.key
+            };
+            let value = if value_owned {
+                match self.clone_value(entry.value) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        if key_strings {
+                            self.drop_value(key)?;
+                        }
+                        self.drop_value(output)?;
+                        return Err(error);
+                    }
+                }
+            } else {
+                entry.value
+            };
+            self.maps
+                .get_mut(&output)
+                .ok_or(INVALID_MAP)?
+                .entries
+                .push(Some(NativeMapEntry {
+                    key,
+                    value,
+                    key_pending_depth: entry.key_pending_depth,
+                    value_pending_depth: entry.value_pending_depth,
+                    key_taken: false,
+                }));
+        }
+        self.maps.get_mut(&output).ok_or(INVALID_MAP)?.pending_depth = pending_depth;
+        Ok(output)
+    }
+    fn run_map(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self
+            .maps
+            .get(&id)
+            .ok_or(INVALID_MAP)?
+            .pending_depth
+            .checked_add(1)
+            .ok_or(EXHAUSTED)?;
+        let pending = self.clone_map(id)?;
+        self.maps
+            .get_mut(&pending)
+            .ok_or(INVALID_MAP)?
+            .pending_depth = depth;
+        Ok(pending)
+    }
+    fn join_map(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self
+            .maps
+            .get(&id)
+            .ok_or(INVALID_MAP)?
+            .pending_depth
+            .saturating_sub(1);
+        let joined = self.clone_map(id)?;
+        self.maps.get_mut(&joined).ok_or(INVALID_MAP)?.pending_depth = depth;
+        Ok(joined)
+    }
+    fn map_from_lists(
+        &mut self,
+        keys: u64,
+        values: u64,
+        key_strings: u32,
+        value_owned: u32,
+    ) -> LeafResult<u64> {
+        if key_strings > 1 || value_owned > 1 {
+            return Err(INVALID_MAP);
+        }
+        let key_list = self.lists.get(&keys).ok_or(INVALID_LIST)?;
+        let value_list = self.lists.get(&values).ok_or(INVALID_LIST)?;
+        if key_list.owned != (key_strings != 0) || value_list.owned != (value_owned != 0) {
+            return Err(INVALID_MAP);
+        }
+        if key_list.pending_depth != 0 || value_list.pending_depth != 0 {
+            return Err(PENDING_MAP_FROM_LISTS);
+        }
+        let (key_elements, value_elements, key_depths, value_depths) = (
+            key_list.elements.clone(),
+            value_list.elements.clone(),
+            key_list.element_pending_depths.clone(),
+            value_list.element_pending_depths.clone(),
+        );
+        let output = self.new_map(key_strings, value_owned)?;
+        for (index, (key, value)) in key_elements.into_iter().zip(value_elements).enumerate() {
+            let Some(key) = key else {
+                self.drop_value(output)?;
+                return Err(INVALID_LIST);
+            };
+            let Some(value) = value else {
+                self.drop_value(output)?;
+                return Err(INVALID_LIST);
+            };
+            let key = if key_strings != 0 {
+                match self.clone_value(key) {
+                    Ok(key) => key,
+                    Err(error) => {
+                        self.drop_value(output)?;
+                        return Err(error);
+                    }
+                }
+            } else {
+                key
+            };
+            let value = if value_owned != 0 {
+                match self.clone_value(value) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        if key_strings != 0 {
+                            self.drop_value(key)?;
+                        }
+                        self.drop_value(output)?;
+                        return Err(error);
+                    }
+                }
+            } else {
+                value
+            };
+            let key_depth = key_depths.get(&index).copied().unwrap_or(0);
+            let value_depth = value_depths.get(&index).copied().unwrap_or(0);
+            if let Err(error) = self.map_insert_depth(output, key, key_depth, value, value_depth) {
+                if key_strings != 0 {
+                    self.drop_value(key)?;
+                }
+                if value_owned != 0 {
+                    self.drop_value(value)?;
+                }
+                self.drop_value(output)?;
+                return Err(error);
+            }
+        }
+        self.drop_value(keys)?;
+        self.drop_value(values)?;
+        Ok(output)
+    }
+    fn set_position(&self, id: u64, key: u64) -> LeafResult<Option<usize>> {
+        self.set_position_depth(id, key, 0)
+    }
+    fn require_plain_set(&self, id: u64, error: Failure) -> LeafResult<()> {
+        let set = self.sets.get(&id).ok_or(INVALID_SET)?;
+        if set.pending_depth != 0 {
+            return Err(error);
+        }
+        Ok(())
+    }
+    fn check_iterable(&self, value: u64, raw_kind: u32) -> LeafResult<u32> {
+        let depth = match NativeSequenceKind::from_raw(raw_kind)? {
+            NativeSequenceKind::List => self.lists.get(&value).ok_or(INVALID_LIST)?.pending_depth,
+            NativeSequenceKind::String => {
+                self.strings
+                    .get(&value)
+                    .ok_or(INVALID_HANDLE)?
+                    .pending_depth
+            }
+            NativeSequenceKind::Map => self.maps.get(&value).ok_or(INVALID_MAP)?.pending_depth,
+            NativeSequenceKind::Set => self.sets.get(&value).ok_or(INVALID_SET)?.pending_depth,
+        };
+        if depth != 0 {
+            return Err(PENDING_ITERABLE);
+        }
+        Ok(0)
+    }
+    fn set_position_depth(&self, id: u64, key: u64, depth: u64) -> LeafResult<Option<usize>> {
+        let set = self.sets.get(&id).ok_or(INVALID_SET)?;
+        if set.strings {
+            if depth != 0 {
+                return Err(INVALID_SET);
+            }
+            for (index, &element) in set.elements.iter().enumerate() {
+                if let Some(element) = element {
+                    if self.same_string_value(element, key)? {
+                        return Ok(Some(index));
+                    }
+                }
+            }
+            Ok(None)
+        } else {
+            Ok(set
+                .elements
+                .iter()
+                .enumerate()
+                .position(|(index, element)| {
+                    *element == Some(key)
+                        && set.element_pending_depths.get(&index).copied().unwrap_or(0) == depth
+                }))
+        }
+    }
+    fn set_add(&mut self, id: u64, key: u64) -> LeafResult<u64> {
+        self.set_add_depth(id, key, 0)
+    }
+    fn set_add_depth(&mut self, id: u64, key: u64, depth: u64) -> LeafResult<u64> {
+        self.require_plain_set(id, PENDING_SET_ADD)?;
+        let duplicate = self.set_position_depth(id, key, depth)?.is_some();
+        if duplicate {
+            if self.sets.get(&id).ok_or(INVALID_SET)?.strings {
+                self.drop_value(key)?;
+            }
+            return Ok(id);
+        }
+        let set = self.sets.get_mut(&id).ok_or(INVALID_SET)?;
+        set.elements.try_reserve(1).map_err(|_| EXHAUSTED)?;
+        if depth != 0 {
+            set.element_pending_depths
+                .try_reserve(1)
+                .map_err(|_| EXHAUSTED)?;
+            set.element_pending_depths.insert(set.elements.len(), depth);
+        }
+        set.elements.push(Some(key));
+        Ok(id)
+    }
+    fn set_remove(&mut self, id: u64, key: u64) -> LeafResult<u64> {
+        self.set_remove_depth(id, key, 0)
+    }
+    fn set_remove_depth(&mut self, id: u64, key: u64, depth: u64) -> LeafResult<u64> {
+        self.require_plain_set(id, PENDING_SET_REMOVE)?;
+        if let Some(index) = self.set_position_depth(id, key, depth)? {
+            let set = self.sets.get_mut(&id).ok_or(INVALID_SET)?;
+            let old = set.elements.remove(index);
+            set.element_pending_depths.remove(&index);
+            let mut moved = set
+                .element_pending_depths
+                .keys()
+                .copied()
+                .filter(|position| *position > index)
+                .collect::<Vec<_>>();
+            moved.sort_unstable();
+            for position in moved {
+                if let Some(depth) = set.element_pending_depths.remove(&position) {
+                    set.element_pending_depths.insert(position - 1, depth);
+                }
+            }
+            if set.strings {
+                self.drop_value(old.ok_or(INVALID_SET)?)?;
+            }
+        }
+        Ok(id)
+    }
+    fn clone_set(&mut self, id: u64) -> LeafResult<u64> {
+        let set = self.sets.get(&id).ok_or(INVALID_SET)?;
+        let (elements, element_pending_depths, strings, pending_depth) = (
+            set.elements.clone(),
+            set.element_pending_depths.clone(),
+            set.strings,
+            set.pending_depth,
+        );
+        let output = self.new_set(u32::from(strings))?;
+        if let Err(error) = self
+            .sets
+            .get_mut(&output)
+            .ok_or(INVALID_SET)?
+            .elements
+            .try_reserve_exact(elements.len())
+            .map_err(|_| EXHAUSTED)
+        {
+            self.drop_value(output)?;
+            return Err(error);
+        }
+        for element in elements {
+            let value = if strings {
+                match element.map(|element| self.clone_value(element)).transpose() {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.drop_value(output)?;
+                        return Err(error);
+                    }
+                }
+            } else {
+                element
+            };
+            self.sets
+                .get_mut(&output)
+                .ok_or(INVALID_SET)?
+                .elements
+                .push(value);
+        }
+        let copy = self.sets.get_mut(&output).ok_or(INVALID_SET)?;
+        copy.element_pending_depths = element_pending_depths;
+        copy.pending_depth = pending_depth;
+        Ok(output)
+    }
+    fn run_set(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self
+            .sets
+            .get(&id)
+            .ok_or(INVALID_SET)?
+            .pending_depth
+            .checked_add(1)
+            .ok_or(EXHAUSTED)?;
+        let pending = self.clone_set(id)?;
+        self.sets
+            .get_mut(&pending)
+            .ok_or(INVALID_SET)?
+            .pending_depth = depth;
+        Ok(pending)
+    }
+    fn join_set(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self
+            .sets
+            .get(&id)
+            .ok_or(INVALID_SET)?
+            .pending_depth
+            .saturating_sub(1);
+        let joined = self.clone_set(id)?;
+        self.sets.get_mut(&joined).ok_or(INVALID_SET)?.pending_depth = depth;
+        Ok(joined)
+    }
+    fn insert_list(&mut self, value: u64, index: i64, bits: u64, depth: u64) -> LeafResult<u64> {
+        let invalid = (
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            b"list.__insert_at: index out of bounds".as_slice(),
+        );
+        let position = match usize::try_from(index) {
+            Ok(position) => position,
+            Err(_) => return self.list_index_failure("list.__insert_at", index, invalid),
+        };
+        let length = self.lists.get(&value).ok_or(INVALID_LIST)?.elements.len();
+        if position > length {
+            return self.list_index_failure("list.__insert_at", index, invalid);
+        }
+        let list = self.lists.get_mut(&value).ok_or(INVALID_LIST)?;
+        if depth != 0 && list.owned {
+            return Err(INVALID_LIST);
+        }
+        list.elements.try_reserve(1).map_err(|_| EXHAUSTED)?;
+        if depth != 0 {
+            list.element_pending_depths
+                .try_reserve(1)
+                .map_err(|_| EXHAUSTED)?;
+        }
+        let mut moved = list
+            .element_pending_depths
+            .keys()
+            .copied()
+            .filter(|key| *key >= position)
+            .collect::<Vec<_>>();
+        moved.sort_unstable_by(|left, right| right.cmp(left));
+        for key in moved {
+            if let Some(existing_depth) = list.element_pending_depths.remove(&key) {
+                list.element_pending_depths.insert(key + 1, existing_depth);
+            }
+        }
+        if depth != 0 {
+            list.element_pending_depths.insert(position, depth);
+        }
+        list.elements.insert(position, Some(bits));
+        Ok(value)
+    }
+    fn sort_list(&mut self, id: u64, raw_kind: u32) -> LeafResult<u64> {
+        let kind = NativeSortKind::from_raw(raw_kind)?;
+        let list = self.lists.get_mut(&id).ok_or(INVALID_LIST)?;
+        if list.owned != (kind == NativeSortKind::String)
+            || list.elements.iter().any(|element| {
+                element.is_none_or(|bits| {
+                    !kind.valid_bits(bits)
+                        || (kind == NativeSortKind::String && !self.strings.contains_key(&bits))
+                })
+            })
+        {
+            return Err(INVALID_LIST);
+        }
+        let mut sorted = Vec::new();
+        sorted
+            .try_reserve_exact(list.elements.len())
+            .map_err(|_| EXHAUSTED)?;
+        for (index, element) in list.elements.iter().enumerate() {
+            let bits = element.ok_or(INVALID_LIST)?;
+            let depth = list
+                .element_pending_depths
+                .get(&index)
+                .copied()
+                .unwrap_or(0);
+            sorted.push((bits, depth));
+        }
+        sorted.sort_by(|(left, left_depth), (right, right_depth)| {
+            if *left_depth != 0 || *right_depth != 0 {
+                CompareOrdering::Equal
+            } else if kind == NativeSortKind::String {
+                let left = &self.strings[left];
+                let right = &self.strings[right];
+                if left.pending_depth != 0 || right.pending_depth != 0 {
+                    CompareOrdering::Equal
+                } else {
+                    left.text.cmp(&right.text)
+                }
+            } else {
+                kind.compare(*left, *right)
+            }
+        });
+        list.element_pending_depths.clear();
+        for (index, (bits, depth)) in sorted.into_iter().enumerate() {
+            list.elements[index] = Some(bits);
+            if depth != 0 {
+                list.element_pending_depths.insert(index, depth);
+            }
+        }
+        Ok(id)
+    }
+
+    fn list_is_sorted(&self, id: u64, raw_kind: u32) -> LeafResult<bool> {
+        let kind = NativeSortKind::from_comparison_raw(raw_kind)?;
+        let list = self.lists.get(&id).ok_or(INVALID_LIST)?;
+        let Some(kind) = kind else {
+            return Ok(true);
+        };
+        if list.owned != (kind == NativeSortKind::String) {
+            return Err(INVALID_LIST);
+        }
+        let mut previous = None;
+        for (index, element) in list.elements.iter().enumerate() {
+            let bits = element.ok_or(INVALID_LIST)?;
+            if !kind.valid_bits(bits)
+                || (kind == NativeSortKind::String && !self.strings.contains_key(&bits))
+            {
+                return Err(INVALID_LIST);
+            }
+            let depth = list
+                .element_pending_depths
+                .get(&index)
+                .copied()
+                .unwrap_or(0);
+            if let Some((left, left_depth)) = previous {
+                let ordered = if depth != 0 || left_depth != 0 {
+                    true
+                } else if kind == NativeSortKind::String {
+                    let left = &self.strings[&left];
+                    let right = &self.strings[&bits];
+                    left.pending_depth != 0 || right.pending_depth != 0 || left.text <= right.text
+                } else {
+                    match kind {
+                        NativeSortKind::Float32 => {
+                            f32::from_bits(left as u32) <= f32::from_bits(bits as u32)
+                        }
+                        NativeSortKind::Float64 => f64::from_bits(left) <= f64::from_bits(bits),
+                        _ => kind.compare(left, bits) != CompareOrdering::Greater,
+                    }
+                };
+                if !ordered {
+                    return Ok(false);
+                }
+            }
+            previous = Some((bits, depth));
+        }
+        Ok(true)
+    }
+
+    fn sort_list_by_index(&mut self, id: u64, index: i64, raw_kind: u32) -> LeafResult<u64> {
+        let kind = NativeSortKind::from_comparison_raw(raw_kind)?;
+        let outer = self.lists.get(&id).ok_or(INVALID_LIST)?;
+        if !outer.owned {
+            return Err(INVALID_LIST);
+        }
+        let mut keyed = Vec::new();
+        keyed
+            .try_reserve_exact(outer.elements.len())
+            .map_err(|_| EXHAUSTED)?;
+        let index = usize::try_from(index).ok();
+        for element in &outer.elements {
+            let row_id = element.ok_or(INVALID_LIST)?;
+            let row = self.lists.get(&row_id).ok_or(INVALID_LIST)?;
+            if let Some(kind) = kind
+                && row.owned != (kind == NativeSortKind::String)
+            {
+                return Err(INVALID_LIST);
+            }
+            if row.pending_depth != 0
+                || index
+                    .and_then(|index| row.element_pending_depths.get(&index))
+                    .is_some_and(|depth| *depth != 0)
+            {
+                keyed.push((row_id, None));
+                continue;
+            }
+            let key = index.and_then(|index| row.elements.get(index)).copied();
+            let key = match key {
+                Some(Some(bits)) => {
+                    if let Some(kind) = kind
+                        && (!kind.valid_bits(bits)
+                            || (kind == NativeSortKind::String
+                                && !self.strings.contains_key(&bits)))
+                    {
+                        return Err(INVALID_LIST);
+                    }
+                    Some(bits)
+                }
+                Some(None) => return Err(INVALID_LIST),
+                None => None,
+            };
+            let pending = kind == Some(NativeSortKind::String)
+                && key.is_some_and(|bits| self.strings[&bits].pending_depth != 0);
+            let key = if pending { None } else { key };
+            keyed.push((row_id, key));
+        }
+        if let Some(kind) = kind {
+            keyed.sort_by(|(_, left), (_, right)| match (left, right) {
+                (Some(left), Some(right)) if kind == NativeSortKind::String => {
+                    self.strings[left].text.cmp(&self.strings[right].text)
+                }
+                (Some(left), Some(right)) => kind.compare(*left, *right),
+                _ => CompareOrdering::Equal,
+            });
+        }
+        let outer = self.lists.get_mut(&id).ok_or(INVALID_LIST)?;
+        for (slot, (row_id, _)) in outer.elements.iter_mut().zip(keyed) {
+            *slot = Some(row_id);
+        }
+        Ok(id)
+    }
+
+    fn sum_primitive_list(&self, id: u64, raw_kind: u32) -> LeafResult<u64> {
+        let kind = NativeSortKind::from_raw(raw_kind)?;
+        if matches!(kind, NativeSortKind::Bool | NativeSortKind::String) {
+            return Err(INVALID_LIST);
+        }
+        let list = self.lists.get(&id).ok_or(INVALID_LIST)?;
+        if list.owned {
+            return Err(INVALID_LIST);
+        }
+        if list.pending_depth != 0 {
+            return Err((
+                JettRuntimeStatusV1::INVALID_ARGUMENT,
+                b"list.__sum: argument must be a list",
+            ));
+        }
+        if list.element_pending_depths.contains_key(&0) {
+            return Err((
+                JettRuntimeStatusV1::INVALID_ARGUMENT,
+                b"list.__sum: list elements must be int64 or float64",
+            ));
+        }
+        if !list.element_pending_depths.is_empty() {
+            return Err((
+                JettRuntimeStatusV1::INVALID_ARGUMENT,
+                b"list.__sum: mixed types",
+            ));
+        }
+        let mut total = 0_u64;
+        for element in &list.elements {
+            let bits = element.ok_or(INVALID_LIST)?;
+            if !kind.valid_bits(bits) {
+                return Err(INVALID_LIST);
+            }
+            total = match kind {
+                NativeSortKind::Int8 | NativeSortKind::Uint8 => {
+                    u64::from((total as u8).wrapping_add(bits as u8))
+                }
+                NativeSortKind::Int16 | NativeSortKind::Uint16 => {
+                    u64::from((total as u16).wrapping_add(bits as u16))
+                }
+                NativeSortKind::Int32 | NativeSortKind::Uint32 => {
+                    u64::from((total as u32).wrapping_add(bits as u32))
+                }
+                NativeSortKind::Int64 | NativeSortKind::Uint64 => total.wrapping_add(bits),
+                NativeSortKind::Float32 => u64::from(
+                    (f32::from_bits(total as u32) + f32::from_bits(bits as u32)).to_bits(),
+                ),
+                NativeSortKind::Float64 => (f64::from_bits(total) + f64::from_bits(bits)).to_bits(),
+                NativeSortKind::Bool | NativeSortKind::String => {
+                    unreachable!("numeric kind checked above")
+                }
+            };
+        }
+        Ok(total)
+    }
+
+    fn math_numbers(
+        &self,
+        id: u64,
+        raw_kind: u32,
+        empty: Failure,
+        invalid_element: Failure,
+        invalid_list: Failure,
+    ) -> LeafResult<Vec<f64>> {
+        let kind = NativeSortKind::from_raw(raw_kind)?;
+        if matches!(kind, NativeSortKind::Bool | NativeSortKind::String) {
+            return Err(INVALID_LIST);
+        }
+        let list = self.lists.get(&id).ok_or(INVALID_LIST)?;
+        if list.owned {
+            return Err(INVALID_LIST);
+        }
+        if list.pending_depth != 0 {
+            return Err(invalid_list);
+        }
+        if list.elements.is_empty() {
+            return Err(empty);
+        }
+        if !list.element_pending_depths.is_empty() {
+            return Err(invalid_element);
+        }
+        list.elements
+            .iter()
+            .map(|value| {
+                let bits = (*value).ok_or(INVALID_LIST)?;
+                if !kind.valid_bits(bits) {
+                    return Err(INVALID_LIST);
+                }
+                Ok(match kind {
+                    NativeSortKind::Int8 => f64::from(bits as u8 as i8),
+                    NativeSortKind::Int16 => f64::from(bits as u16 as i16),
+                    NativeSortKind::Int32 => f64::from(bits as u32 as i32),
+                    NativeSortKind::Int64 => (bits as i64) as f64,
+                    NativeSortKind::Uint8
+                    | NativeSortKind::Uint16
+                    | NativeSortKind::Uint32
+                    | NativeSortKind::Uint64 => bits as f64,
+                    NativeSortKind::Float32 => f64::from(f32::from_bits(bits as u32)),
+                    NativeSortKind::Float64 => f64::from_bits(bits),
+                    NativeSortKind::Bool | NativeSortKind::String => {
+                        unreachable!("numeric kind checked above")
+                    }
+                })
+            })
+            .collect()
+    }
+    fn string_list(&mut self, parts: Vec<String>) -> LeafResult<u64> {
+        let mut elements = Vec::new();
+        elements
+            .try_reserve_exact(parts.len())
+            .map_err(|_| EXHAUSTED)?;
+        let id = self.new_list(true)?;
+        for part in parts {
+            match self.insert(part) {
+                Ok(value) => elements.push(Some(value)),
+                Err(error) => {
+                    self.lists.get_mut(&id).ok_or(INVALID_LIST)?.elements = elements;
+                    self.drop_value(id)?;
+                    return Err(error);
+                }
+            }
+        }
+        self.lists.get_mut(&id).ok_or(INVALID_LIST)?.elements = elements;
+        Ok(id)
+    }
+    fn join_strings(&mut self, value: u64, separator: u64) -> LeafResult<u64> {
+        let list = self.lists.get(&value).ok_or(INVALID_LIST)?;
+        if !list.owned {
+            return Err(INVALID_LIST);
+        }
+        for element in &list.elements {
+            let string = self
+                .strings
+                .get(&element.ok_or(INVALID_LIST)?)
+                .ok_or(INVALID_HANDLE)?;
+            if string.pending_depth != 0 {
+                let value = format_pending_value(&string.text, string.pending_depth)?;
+                self.set_dynamic_failure_message(
+                    format!("string.__join requires a list of strings, found {value}").into_bytes(),
+                );
+                return Err(INVALID_PENDING_HANDLE_CHECK);
+            }
+        }
+        let separator = self.text(separator)?;
+        let mut parts = Vec::new();
+        parts
+            .try_reserve_exact(list.elements.len())
+            .map_err(|_| EXHAUSTED)?;
+        let mut length = separator
+            .len()
+            .checked_mul(list.elements.len().saturating_sub(1))
+            .ok_or(EXHAUSTED)?;
+        for element in &list.elements {
+            let text = self.text(element.ok_or(INVALID_LIST)?)?;
+            length = length.checked_add(text.len()).ok_or(EXHAUSTED)?;
+            parts.push(text);
+        }
+        let mut output = String::new();
+        output.try_reserve_exact(length).map_err(|_| EXHAUSTED)?;
+        for (index, part) in parts.into_iter().enumerate() {
+            if index != 0 {
+                output.push_str(separator);
+            }
+            output.push_str(part);
+        }
+        self.insert(output)
+    }
+    fn range(&mut self, start: i64, end: i64, step: i64) -> LeafResult<u64> {
+        if step == 0 {
+            return Err((
+                JettRuntimeStatusV1::INVALID_ARGUMENT,
+                b"range step cannot be zero",
+            ));
+        }
+        let too_large = (
+            JettRuntimeStatusV1::RESOURCE_EXHAUSTED,
+            b"range: requested output is too large" as &'static [u8],
+        );
+        let distance = if step > 0 && start < end {
+            (i128::from(end) - i128::from(start)) as u128
+        } else if step < 0 && start > end {
+            (i128::from(start) - i128::from(end)) as u128
+        } else {
+            0
+        };
+        let count = distance.div_ceil(i128::from(step).unsigned_abs());
+        let capacity = usize::try_from(count).map_err(|_| too_large)?;
+        let mut elements = Vec::new();
+        elements
+            .try_reserve_exact(capacity)
+            .map_err(|_| too_large)?;
+        let mut value = start;
+        while (step > 0 && value < end) || (step < 0 && value > end) {
+            elements.push(Some(value as u64));
+            let Some(next) = value.checked_add(step) else {
+                break;
+            };
+            value = next;
+        }
+        let id = self.new_list(false)?;
+        self.lists.get_mut(&id).ok_or(INVALID_LIST)?.elements = elements;
+        Ok(id)
+    }
+    fn clone_list(&mut self, id: u64) -> LeafResult<u64> {
+        let list = self.lists.get(&id).ok_or(INVALID_LIST)?;
+        let (elements, element_pending_depths, owned, pending_depth) = (
+            list.elements.clone(),
+            list.element_pending_depths.clone(),
+            list.owned,
+            list.pending_depth,
+        );
+        let mut output = Vec::new();
+        output
+            .try_reserve_exact(elements.len())
+            .map_err(|_| EXHAUSTED)?;
+        for bits in elements {
+            let Some(bits) = bits else {
+                output.push(None);
+                continue;
+            };
+            if owned {
+                match self.clone_value(bits) {
+                    Ok(value) => output.push(Some(value)),
+                    Err(error) => {
+                        for v in output.into_iter().flatten() {
+                            self.drop_value(v)?;
+                        }
+                        return Err(error);
+                    }
+                }
+            } else {
+                output.push(Some(bits));
+            }
+        }
+        let id = match self.new_list(owned) {
+            Ok(id) => id,
+            Err(error) => {
+                if owned {
+                    for v in output.into_iter().flatten() {
+                        self.drop_value(v)?;
+                    }
+                }
+                return Err(error);
+            }
+        };
+        let list = self.lists.get_mut(&id).ok_or(INVALID_LIST)?;
+        list.elements = output;
+        list.element_pending_depths = element_pending_depths;
+        list.pending_depth = pending_depth;
+        Ok(id)
+    }
+    fn run_list(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self
+            .lists
+            .get(&id)
+            .ok_or(INVALID_LIST)?
+            .pending_depth
+            .checked_add(1)
+            .ok_or(EXHAUSTED)?;
+        let pending = self.clone_list(id)?;
+        self.lists
+            .get_mut(&pending)
+            .ok_or(INVALID_LIST)?
+            .pending_depth = depth;
+        Ok(pending)
+    }
+    fn join_list(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self
+            .lists
+            .get(&id)
+            .ok_or(INVALID_LIST)?
+            .pending_depth
+            .saturating_sub(1);
+        let joined = self.clone_list(id)?;
+        self.lists
+            .get_mut(&joined)
+            .ok_or(INVALID_LIST)?
+            .pending_depth = depth;
+        Ok(joined)
+    }
+    // Interface boxes store task depth on the box, so running and joining an
+    // erased value behave exactly like running and joining its concrete value.
+    fn owned_pending_depth(&self, value: u64) -> LeafResult<u64> {
+        if let Some(value) = self.checked_graph_hooks.get(&value) {
+            return Ok(value.pending_depth);
+        }
+        if let Some(value) = self.strings.get(&value) {
+            return Ok(value.pending_depth);
+        }
+        if let Some(value) = self.structs.get(&value) {
+            return Ok(value.pending_depth);
+        }
+        if let Some(value) = self.lists.get(&value) {
+            return Ok(value.pending_depth);
+        }
+        if let Some(value) = self.sets.get(&value) {
+            return Ok(value.pending_depth);
+        }
+        if let Some(value) = self.maps.get(&value) {
+            return Ok(value.pending_depth);
+        }
+        if let Some(value) = self.sums.get(&value) {
+            return Ok(value.pending_depth);
+        }
+        self.bytes_depth(value)
+    }
+
+    fn clone_with_pending_depth(&mut self, value: u64, depth: u64) -> LeafResult<u64> {
+        if self.checked_graph_hooks.contains_key(&value) {
+            return self.clone_checked_graph_hook(value, Some(depth));
+        }
+        // Strings share storage when cloned. Changing their metadata would also
+        // change the original binding, so make a separate string here.
+        if let Some(value) = self.strings.get(&value) {
+            return self.insert_pending(value.text.clone(), depth);
+        }
+        let cloned = self.clone_value(value)?;
+        if let Some(value) = self.structs.get_mut(&cloned) {
+            value.pending_depth = depth;
+        } else if let Some(value) = self.lists.get_mut(&cloned) {
+            value.pending_depth = depth;
+        } else if let Some(value) = self.sets.get_mut(&cloned) {
+            value.pending_depth = depth;
+        } else if let Some(value) = self.maps.get_mut(&cloned) {
+            value.pending_depth = depth;
+        } else if let Some(value) = self.sums.get_mut(&cloned) {
+            value.pending_depth = depth;
+        } else if self.bytes.contains_key(&cloned) {
+            if depth == 0 {
+                self.bytes_pending.remove(&cloned);
+            } else {
+                self.bytes_pending.insert(cloned, depth);
+            }
+        } else {
+            self.drop_value(cloned)?;
+            return Err(INVALID_HANDLE);
+        }
+        Ok(cloned)
+    }
+
+    fn function_adapter(&mut self, source: u64, code: u64) -> LeafResult<u64> {
+        if code == 0 {
+            return Err(INVALID_FUNCTION);
+        }
+        self.function_debug_label(source)?;
+        let depth = self.owned_pending_depth(source)?;
+        let label = self.struct_field(source, NATIVE_FUNCTION_LABEL_FIELD)?.bits;
+        let output = self.new_struct(NATIVE_FUNCTION_FIELD_COUNT)?;
+        let result = (|| {
+            self.structs
+                .get_mut(&output)
+                .ok_or(INVALID_FUNCTION)?
+                .fields[NATIVE_FUNCTION_CODE_FIELD as usize] = Some(NativeField {
+                bits: code,
+                owned: false,
+                pending_depth: 0,
+            });
+            // One captured function and its scalar-depth slot use the same
+            // environment layout as ordinary extracted closures.
+            let environment = self.new_struct(2)?;
+            self.structs
+                .get_mut(&output)
+                .ok_or(INVALID_FUNCTION)?
+                .fields[NATIVE_FUNCTION_ENVIRONMENT_FIELD as usize] = Some(NativeField {
+                bits: environment,
+                owned: true,
+                pending_depth: 0,
+            });
+            let captured = self.clone_with_pending_depth(source, 0)?;
+            self.structs
+                .get_mut(&environment)
+                .ok_or(INVALID_FUNCTION)?
+                .fields = vec![
+                Some(NativeField {
+                    bits: captured,
+                    owned: true,
+                    pending_depth: 0,
+                }),
+                Some(NativeField {
+                    bits: 0,
+                    owned: false,
+                    pending_depth: 0,
+                }),
+            ];
+            let label = self.clone_value(label)?;
+            let descriptor = self.structs.get_mut(&output).ok_or(INVALID_FUNCTION)?;
+            descriptor.fields[NATIVE_FUNCTION_LABEL_FIELD as usize] = Some(NativeField {
+                bits: label,
+                owned: true,
+                pending_depth: 0,
+            });
+            descriptor.pending_depth = depth;
+            Ok(output)
+        })();
+        if result.is_err() {
+            let _ = self.drop_value(output);
+        }
+        result
+    }
+
+    fn interface_box(
+        &mut self,
+        concrete: u64,
+        bits: u64,
+        owned: bool,
+        depth: u64,
+        layout: &[u8],
+    ) -> LeafResult<u64> {
+        NativeDebugLayout::parse(layout)?;
+        let depth = if owned {
+            depth
+                .checked_add(self.owned_pending_depth(bits)?)
+                .ok_or(EXHAUSTED)?
+        } else {
+            depth
+        };
+        let value = self.new_struct(3)?;
+        self.structs
+            .get_mut(&value)
+            .ok_or(INVALID_STRUCT)?
+            .pending_depth = depth;
+        let result = (|| {
+            self.structs.get_mut(&value).ok_or(INVALID_STRUCT)?.fields[0] = Some(NativeField {
+                bits: concrete,
+                owned: false,
+                pending_depth: 0,
+            });
+            let bits = if owned {
+                self.clone_with_pending_depth(bits, 0)?
+            } else {
+                bits
+            };
+            self.structs.get_mut(&value).ok_or(INVALID_STRUCT)?.fields[1] = Some(NativeField {
+                bits,
+                owned,
+                pending_depth: 0,
+            });
+            let layout = self.insert_bytes(layout.to_vec())?;
+            self.structs.get_mut(&value).ok_or(INVALID_STRUCT)?.fields[2] = Some(NativeField {
+                bits: layout,
+                owned: true,
+                pending_depth: 0,
+            });
+            Ok(value)
+        })();
+        if result.is_err() {
+            let _ = self.drop_value(value);
+        }
+        result
+    }
+
+    fn new_struct(&mut self, count: u64) -> LeafResult<u64> {
+        #[cfg(test)]
+        self.allocation_checkpoint()?;
+        let count = usize::try_from(count).map_err(|_| EXHAUSTED)?;
+        let mut fields = Vec::new();
+        fields.try_reserve_exact(count).map_err(|_| EXHAUSTED)?;
+        fields.resize(count, None);
+        let id = next_identity()?;
+        self.structs.insert(
+            id,
+            NativeStruct {
+                fields,
+                pending_depth: 0,
+            },
+        );
+        self.structs_created += 1;
+        Ok(id)
+    }
+    fn register_actor(&mut self, id: u64) -> LeafResult<u64> {
+        let Some(record) = self.structs.get(&id) else {
+            return Err(INVALID_ACTOR);
+        };
+        if record.fields.iter().any(Option::is_none)
+            || record.pending_depth != 0
+            || self.actors.contains_key(&id)
+        {
+            return Err(INVALID_ACTOR);
+        }
+        let next = self.next_actor_ordinal.checked_add(1).ok_or(EXHAUSTED)?;
+        self.actors.insert(
+            id,
+            NativeActorIdentity {
+                instance: id,
+                ordinal: self.next_actor_ordinal,
+            },
+        );
+        self.next_actor_ordinal = next;
+        Ok(id)
+    }
+    fn actor_identity_parts(&self, id: u64) -> LeafResult<(NativeActorIdentity, u64)> {
+        let identity = *self.actors.get(&id).ok_or(INVALID_ACTOR)?;
+        let record = self.structs.get(&id).ok_or(INVALID_ACTOR)?;
+        let base_identity = self.actors.get(&identity.instance).ok_or(INVALID_ACTOR)?;
+        let base = self.structs.get(&identity.instance).ok_or(INVALID_ACTOR)?;
+        if base_identity.instance != identity.instance
+            || base_identity.ordinal != identity.ordinal
+            || base.pending_depth != 0
+            || base.fields.iter().any(Option::is_none)
+            || (id != identity.instance && (!record.fields.is_empty() || record.pending_depth == 0))
+        {
+            return Err(INVALID_ACTOR);
+        }
+        Ok((identity, record.pending_depth))
+    }
+    fn same_actor_identity(&self, left: u64, right: u64) -> LeafResult<bool> {
+        // Exact nominal actor types come from validated MIR/layout. IDs must
+        // still be registered in this context even when their bits are equal.
+        let (left_identity, left_depth) = self.actor_identity_parts(left)?;
+        let (right_identity, right_depth) = self.actor_identity_parts(right)?;
+        Ok(left_identity.instance == right_identity.instance && left_depth == right_depth)
+    }
+    fn equal_actor_identity(&mut self, left: u64, right: u64, not_equal: u32) -> LeafResult<u32> {
+        if not_equal > 1 {
+            return Err(INVALID_ACTOR);
+        }
+        let (left_identity, left_depth) = self.actor_identity_parts(left)?;
+        let (right_identity, right_depth) = self.actor_identity_parts(right)?;
+        if left_depth != 0 || right_depth != 0 {
+            let left =
+                format_pending_value(&format!("actor#{}", left_identity.ordinal), left_depth)?;
+            let right =
+                format_pending_value(&format!("actor#{}", right_identity.ordinal), right_depth)?;
+            let operation = if not_equal == 0 { "Eq" } else { "NotEq" };
+            self.set_dynamic_failure_message(
+                format!("unsupported binary operation: {left} {operation} {right}").into_bytes(),
+            );
+            return Err(UNSUPPORTED_ACTOR_COMPARISON);
+        }
+        Ok(u32::from(
+            (left_identity.instance == right_identity.instance) != (not_equal != 0),
+        ))
+    }
+    fn actor_pending_alias(
+        &mut self,
+        identity: NativeActorIdentity,
+        depth: u64,
+    ) -> LeafResult<u64> {
+        if depth == 0 {
+            return Ok(identity.instance);
+        }
+        self.actors.try_reserve(1).map_err(|_| EXHAUSTED)?;
+        let alias = self.new_struct(0)?;
+        self.structs
+            .get_mut(&alias)
+            .ok_or(INVALID_ACTOR)?
+            .pending_depth = depth;
+        self.actors.insert(alias, identity);
+        Ok(alias)
+    }
+    fn run_actor(&mut self, id: u64) -> LeafResult<u64> {
+        let (identity, depth) = self.actor_identity_parts(id)?;
+        self.actor_pending_alias(identity, depth.checked_add(1).ok_or(EXHAUSTED)?)
+    }
+    fn join_actor(&mut self, id: u64) -> LeafResult<u64> {
+        let (identity, depth) = self.actor_identity_parts(id)?;
+        self.actor_pending_alias(identity, depth.saturating_sub(1))
+    }
+    fn check_actor_message(&mut self, id: u64) -> LeafResult<u32> {
+        let (identity, depth) = self.actor_identity_parts(id)?;
+        let ordinal = identity.ordinal;
+        if depth == 0 {
+            return Ok(0);
+        }
+        let actor = format_pending_value(&format!("actor#{ordinal}"), depth)?;
+        self.set_dynamic_failure_message(
+            format!("send/ask: expected actor value, got {actor}").into_bytes(),
+        );
+        Err(PENDING_ACTOR_MESSAGE)
+    }
+    fn replace_actor_field(
+        &mut self,
+        id: u64,
+        index: u64,
+        bits: u64,
+        owned: bool,
+    ) -> LeafResult<u32> {
+        self.replace_actor_field_depth(id, index, bits, 0, owned)
+    }
+    // Publication transfers the incoming slot only after all checks succeed.
+    // The caller clears that slot before separately retiring the displaced value.
+    // This physical swap supplies no Source mutation or Resource authority.
+    fn replace_actor_field_occupied(
+        &mut self,
+        id: u64,
+        index: u64,
+        replacement: NativeField,
+    ) -> LeafResult<NativeField> {
+        let (identity, depth) = self.actor_identity_parts(id)?;
+        if identity.instance != id
+            || depth != 0
+            || self.builders.contains_key(&id)
+            || self.checked_graph_hooks.contains_key(&id)
+            || self.actor_graph_imports.contains_key(&id)
+        {
+            return Err(INVALID_ACTOR);
+        }
+        let index = usize::try_from(index).map_err(|_| INVALID_ACTOR)?;
+        let record = self.structs.get(&id).ok_or(INVALID_ACTOR)?;
+        let displaced = record
+            .fields
+            .get(index)
+            .copied()
+            .flatten()
+            .ok_or(INVALID_ACTOR)?;
+        if displaced.owned != replacement.owned {
+            return Err(INVALID_ACTOR);
+        }
+        for field in record
+            .fields
+            .iter()
+            .flatten()
+            .chain(std::iter::once(&replacement))
+        {
+            if field.owned {
+                if field.pending_depth != 0
+                    || field.bits == id
+                    || self.actors.contains_key(&field.bits)
+                {
+                    return Err(INVALID_ACTOR);
+                }
+                self.owned_pending_depth(field.bits)
+                    .map_err(|_| INVALID_ACTOR)?;
+            }
+        }
+        // The displaced edge remains owned until its caller-held value is
+        // retired. Only explicitly retained strings may share a direct edge.
+        if replacement.owned {
+            let existing_edges = record
+                .fields
+                .iter()
+                .flatten()
+                .filter(|field| field.owned && field.bits == replacement.bits)
+                .count();
+            if let Some(string) = self.strings.get(&replacement.bits) {
+                let required = u64::try_from(existing_edges)
+                    .ok()
+                    .and_then(|edges| edges.checked_add(1))
+                    .ok_or(INVALID_ACTOR)?;
+                if string.references < required {
+                    return Err(INVALID_ACTOR);
+                }
+            } else if existing_edges != 0 {
+                return Err(INVALID_ACTOR);
+            }
+        }
+        let current = self
+            .structs
+            .get_mut(&id)
+            .and_then(|record| record.fields.get_mut(index))
+            .and_then(Option::as_mut)
+            .ok_or(INVALID_ACTOR)?;
+        Ok(std::mem::replace(current, replacement))
+    }
+    fn replace_actor_field_depth(
+        &mut self,
+        id: u64,
+        index: u64,
+        bits: u64,
+        pending_depth: u64,
+        owned: bool,
+    ) -> LeafResult<u32> {
+        if owned && pending_depth != 0 {
+            return Err(INVALID_ACTOR);
+        }
+        if !self.actors.contains_key(&id) {
+            return Err(INVALID_ACTOR);
+        }
+        let slot = self
+            .structs
+            .get_mut(&id)
+            .and_then(|record| {
+                usize::try_from(index)
+                    .ok()
+                    .and_then(|i| record.fields.get_mut(i))
+            })
+            .ok_or(INVALID_ACTOR)?;
+        let old = slot
+            .replace(NativeField {
+                bits,
+                owned,
+                pending_depth,
+            })
+            .ok_or(INVALID_ACTOR)?;
+        if old.owned {
+            self.drop_value(old.bits)?;
+        }
+        Ok(0)
+    }
+    pub(super) fn release_actors(&mut self) -> LeafResult<()> {
+        let mut first_failure = self.abort_unfinished_actor_graphs().err();
+        for (id, _) in std::mem::take(&mut self.actors) {
+            if let Err(error) = self.drop_value(id) {
+                first_failure.get_or_insert(error);
+            }
+        }
+        first_failure.map_or(Ok(()), Err)
+    }
+
+    fn graphics_validate_scene(&mut self, width: i64, height: i64, value: u64) -> LeafResult<u64> {
+        let scene = self.graphics_scene(value)?;
+        self.parsed_sum(graphics::render_scene(width, height, &scene).map(|_| 0))
+    }
+
+    fn graphics_validate_config(&mut self, value: u64) -> LeafResult<u64> {
+        let config = self.graphics_config(value)?;
+        self.parsed_sum(graphics::validate_config(&config).map(|_| 0))
+    }
+
+    fn graphics_open(&mut self, authority: u64, value: u64) -> LeafResult<u64> {
+        if self.graphics != Some(authority) {
+            return Err(INVALID_GRAPHICS);
+        }
+        if self.graphics_session.is_some() || GRAPHICS_SESSION.with(|slot| slot.borrow().is_some())
+        {
+            return self.parsed_sum(Err(
+                "graphics.run: nested sessions are unsupported".to_owned()
+            ));
+        }
+        let config = self.graphics_config(value)?;
+        if let Err(message) = graphics::validate_config(&config) {
+            return self.parsed_sum(Err(message));
+        }
+        let session = if self.graphics_script.is_some() {
+            NativeGraphicsSession::Scripted {
+                width: config.width,
+                height: config.height,
+            }
+        } else {
+            match graphics::Session::new(config) {
+                Ok(session) => NativeGraphicsSession::Window(session),
+                Err(message) => return self.parsed_sum(Err(message)),
+            }
+        };
+        let identity = next_identity()?;
+        GRAPHICS_SESSION.with(|slot| {
+            *slot.borrow_mut() = Some(ActiveGraphicsSession { identity, session });
+        });
+        self.graphics_session = Some(identity);
+        match self.sum(SUM_SUCCESS, identity, false) {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                GRAPHICS_SESSION.with(|slot| {
+                    slot.borrow_mut().take();
+                });
+                self.graphics_session = None;
+                Err(error)
+            }
+        }
+    }
+
+    fn graphics_present(&mut self, identity: u64, value: u64) -> LeafResult<u64> {
+        if self.graphics_session != Some(identity) {
+            return Err(INVALID_GRAPHICS);
+        }
+        let scene = self.graphics_scene(value)?;
+        let outcome = GRAPHICS_SESSION.with(|slot| {
+            let mut active = slot.borrow_mut();
+            let active = active.as_mut().ok_or(INVALID_GRAPHICS)?;
+            if active.identity != identity {
+                return Err(INVALID_GRAPHICS);
+            }
+            Ok(match &mut active.session {
+                NativeGraphicsSession::Window(session) => session.present(&scene),
+                NativeGraphicsSession::Scripted { width, height } => {
+                    graphics::render_scene(*width, *height, &scene).map(|_| ())
+                }
+            })
+        })?;
+        self.parsed_sum(outcome.map(|_| 0))
+    }
+
+    fn graphics_next_key(&mut self, identity: u64) -> LeafResult<u64> {
+        if self.graphics_session != Some(identity) {
+            return Err(INVALID_GRAPHICS);
+        }
+        let outcome = GRAPHICS_SESSION.with(|slot| {
+            let mut active = slot.borrow_mut();
+            let active = active.as_mut().ok_or(INVALID_GRAPHICS)?;
+            if active.identity != identity {
+                return Err(INVALID_GRAPHICS);
+            }
+            Ok(match &mut active.session {
+                NativeGraphicsSession::Window(session) => session.next_key(),
+                NativeGraphicsSession::Scripted { .. } => match self
+                    .graphics_script
+                    .as_mut()
+                    .ok_or(INVALID_GRAPHICS)?
+                    .pop_front()
+                {
+                    Some(graphics::TestEvent::Key(key)) => Ok(Some(key)),
+                    Some(graphics::TestEvent::Close) => Ok(None),
+                    Some(graphics::TestEvent::HostError(message)) => Err(message),
+                    None => Err("Graphics: test provider exhausted".to_owned()),
+                },
+            })
+        })?;
+        match outcome {
+            Ok(Some(key)) => {
+                let optional = self.sum(SUM_SUCCESS, key.variant_index(), false)?;
+                self.owned_sum(SUM_SUCCESS, optional)
+            }
+            Ok(None) => {
+                let optional = self.sum(SUM_FAILURE, 0, false)?;
+                self.owned_sum(SUM_SUCCESS, optional)
+            }
+            Err(message) => self.parsed_sum(Err(message)),
+        }
+    }
+
+    fn graphics_close(&mut self, identity: u64) -> LeafResult<u32> {
+        if self.graphics_session != Some(identity) {
+            return Err(INVALID_GRAPHICS);
+        }
+        GRAPHICS_SESSION.with(|slot| {
+            let mut active = slot.borrow_mut();
+            if active
+                .as_ref()
+                .is_none_or(|active| active.identity != identity)
+            {
+                return Err(INVALID_GRAPHICS);
+            }
+            active.take();
+            Ok(())
+        })?;
+        self.graphics_session = None;
+        Ok(0)
+    }
+
+    pub(super) fn release_graphics_session(&mut self) -> LeafResult<()> {
+        if let Some(identity) = self.graphics_session {
+            self.graphics_close(identity)?;
+        }
+        Ok(())
+    }
+    fn new_builder(&mut self, layout: &[u8]) -> LeafResult<u64> {
+        let mut cursor = BitfieldLayoutCursor {
+            bytes: layout,
+            position: 0,
+        };
+        let version: [u8; 3] = cursor
+            .take(3)
+            .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?
+            .try_into()
+            .expect("three bytes");
+        if &version == b"JC\x05" {
+            let owner = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            let kind = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            if cursor.position != layout.len() {
+                return Err(INVALID_CONSTRUCTION_LAYOUT);
+            }
+            let id = self.new_struct(0)?;
+            self.builders.insert(
+                id,
+                NativeBuilderInfo {
+                    metadata_owner: owner.clone(),
+                    owner,
+                    unsupported_kind: Some(kind),
+                    variant: None,
+                    state: None,
+                    target_state: None,
+                    field_offset: 0,
+                    field_names: Vec::new(),
+                    field_type_names: Vec::new(),
+                    field_types: Vec::new(),
+                    field_debug_layouts: Vec::new(),
+                    put_order: Vec::new(),
+                    validation: Vec::new(),
+                },
+            );
+            return Ok(id);
+        }
+        if !matches!(
+            &version,
+            b"JC\x02" | b"JC\x03" | b"JC\x06" | b"JC\x07" | b"JC\x0a"
+        ) {
+            return Err(INVALID_CONSTRUCTION_LAYOUT);
+        }
+        let owner = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+        let metadata_owner = if &version == b"JC\x0a" {
+            cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?
+        } else {
+            owner.clone()
+        };
+        let count = usize::try_from(cursor.u32().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?)
+            .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+        if count > layout.len() {
+            return Err(INVALID_CONSTRUCTION_LAYOUT);
+        }
+        let mut field_names = Vec::new();
+        let mut field_type_names = Vec::new();
+        let mut field_types = Vec::new();
+        field_names
+            .try_reserve_exact(count)
+            .map_err(|_| EXHAUSTED)?;
+        field_types
+            .try_reserve_exact(count)
+            .map_err(|_| EXHAUSTED)?;
+        field_type_names
+            .try_reserve_exact(count)
+            .map_err(|_| EXHAUSTED)?;
+        for _ in 0..count {
+            field_names.push(cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?);
+            field_type_names.push(cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?);
+            field_types.push(cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?);
+        }
+        let mut validation = Vec::new();
+        validation.try_reserve_exact(count).map_err(|_| EXHAUSTED)?;
+        if matches!(&version, b"JC\x03" | b"JC\x07") {
+            for _ in 0..count {
+                let kind = cursor.byte().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                let rule = match kind {
+                    0 => BuilderFieldValidation::None,
+                    1 | 2 | 3 => {
+                        let width = cursor.u32().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                        if width > 64 {
+                            return Err(INVALID_CONSTRUCTION_LAYOUT);
+                        }
+                        match kind {
+                            1 => BuilderFieldValidation::SignedBits(width),
+                            2 => BuilderFieldValidation::UnsignedBits(width),
+                            _ => {
+                                let name =
+                                    cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                                let variants = usize::try_from(
+                                    cursor.u32().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?,
+                                )
+                                .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                                if variants > layout.len() {
+                                    return Err(INVALID_CONSTRUCTION_LAYOUT);
+                                }
+                                let mut values = Vec::new();
+                                values.try_reserve_exact(variants).map_err(|_| EXHAUSTED)?;
+                                for _ in 0..variants {
+                                    values.push((
+                                        cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?,
+                                        cursor.i64().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?,
+                                    ));
+                                }
+                                BuilderFieldValidation::EnumBits(width, name, values)
+                            }
+                        }
+                    }
+                    _ => return Err(INVALID_CONSTRUCTION_LAYOUT),
+                };
+                validation.push(rule);
+            }
+        } else {
+            validation.resize(count, BuilderFieldValidation::None);
+        }
+        let mut field_debug_layouts = Vec::new();
+        field_debug_layouts
+            .try_reserve_exact(count)
+            .map_err(|_| EXHAUSTED)?;
+        if matches!(&version, b"JC\x06" | b"JC\x07" | b"JC\x0a") {
+            for _ in 0..count {
+                let length =
+                    usize::try_from(cursor.u32().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?)
+                        .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                let bytes = cursor
+                    .take(length)
+                    .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                if !bytes.is_empty() {
+                    NativeDebugLayout::parse(bytes).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                }
+                field_debug_layouts.push(bytes.to_vec());
+            }
+        } else {
+            field_debug_layouts.resize_with(count, Vec::new);
+        }
+        if cursor.position != layout.len() {
+            return Err(INVALID_CONSTRUCTION_LAYOUT);
+        }
+        let id = self.new_struct(count as u64)?;
+        self.builders.insert(
+            id,
+            NativeBuilderInfo {
+                metadata_owner,
+                owner,
+                unsupported_kind: None,
+                variant: None,
+                state: None,
+                target_state: None,
+                field_offset: 0,
+                field_names,
+                field_type_names,
+                field_types,
+                field_debug_layouts,
+                put_order: Vec::new(),
+                validation,
+            },
+        );
+        Ok(id)
+    }
+    fn builder_start_failure(&mut self, message: String) -> LeafResult<u64> {
+        let error = self.insert(message)?;
+        match self.sum(SUM_FAILURE, error, true) {
+            Ok(result) => Ok(result),
+            Err(failure) => {
+                self.drop_value(error)?;
+                Err(failure)
+            }
+        }
+    }
+    fn new_member_builder(
+        &mut self,
+        layout: &[u8],
+        metadata: u64,
+        metadata_debug_layout: &[u8],
+        machine: bool,
+    ) -> LeafResult<u64> {
+        let mut cursor = BitfieldLayoutCursor {
+            bytes: layout,
+            position: 0,
+        };
+        let version = cursor.take(3).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+        let rich_debug = version == if machine { b"JC\x09" } else { b"JC\x08" };
+        if !rich_debug && version != if machine { b"JC\x05" } else { b"JC\x04" } {
+            return Err(INVALID_CONSTRUCTION_LAYOUT);
+        }
+        let owner = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+        let expected_metadata_owner = if machine {
+            cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?
+        } else {
+            owner.clone()
+        };
+        let target_state = if machine {
+            let target = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            (!target.is_empty()).then_some(target)
+        } else {
+            None
+        };
+        let count = usize::try_from(cursor.u32().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?)
+            .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+        if count > layout.len() {
+            return Err(INVALID_CONSTRUCTION_LAYOUT);
+        }
+        if self
+            .structs
+            .get(&metadata)
+            .ok_or(INVALID_CONSTRUCTION)?
+            .pending_depth
+            != 0
+        {
+            let debug = NativeDebugLayout::parse(metadata_debug_layout)
+                .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            let value = debug
+                .format_value(self, metadata, debug.root)
+                .map_err(|_| INVALID_CONSTRUCTION)?;
+            let (caller, kind) = if machine {
+                ("type.construct_machine_start", "TypeMachineState")
+            } else {
+                ("type.construct_variant_start", "TypeVariant")
+            };
+            return self
+                .builder_start_failure(format!("{caller}: argument must be {kind}, got {value}"));
+        }
+        let index = usize::try_from(self.struct_field(metadata, 0)?.bits)
+            .map_err(|_| INVALID_CONSTRUCTION)?;
+        let metadata_owner = self.text(self.struct_field(metadata, 1)?.bits)?.to_owned();
+        let metadata_name = self.text(self.struct_field(metadata, 2)?.bits)?.to_owned();
+        let metadata_discriminant = if machine {
+            0
+        } else {
+            self.struct_field(metadata, 3)?.bits as i64
+        };
+        let field_list = self
+            .struct_field(metadata, if machine { 4 } else { 5 })?
+            .bits;
+        if metadata_owner != expected_metadata_owner {
+            return self.builder_start_failure(if machine {
+                format!("type.construct_machine_start: state metadata belongs to machine '{metadata_owner}', expected '{expected_metadata_owner}'")
+            } else {
+                format!("type.construct_variant_start: variant metadata belongs to '{metadata_owner}', expected '{expected_metadata_owner}'")
+            });
+        }
+        let mut selected = None;
+        for variant_index in 0..count {
+            let name = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            let discriminant = if machine {
+                0
+            } else {
+                cursor.i64().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?
+            };
+            let field_count =
+                usize::try_from(cursor.u32().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?)
+                    .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            if field_count > layout.len() {
+                return Err(INVALID_CONSTRUCTION_LAYOUT);
+            }
+            let mut names = Vec::new();
+            let mut type_names = Vec::new();
+            let mut types = Vec::new();
+            let mut debug_layouts = Vec::new();
+            for _ in 0..field_count {
+                let field_name = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                let type_name = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                let canonical_type = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                let debug_layout = if rich_debug {
+                    let length =
+                        usize::try_from(cursor.u32().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?)
+                            .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                    let bytes = cursor
+                        .take(length)
+                        .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                    if !bytes.is_empty() {
+                        NativeDebugLayout::parse(bytes).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                    }
+                    bytes.to_vec()
+                } else {
+                    Vec::new()
+                };
+                if variant_index == index {
+                    names.push(field_name);
+                    type_names.push(type_name);
+                    types.push(canonical_type);
+                    debug_layouts.push(debug_layout);
+                }
+            }
+            if variant_index == index {
+                selected = Some((name, discriminant, names, type_names, types, debug_layouts));
+            }
+        }
+        if cursor.position != layout.len() {
+            return Err(INVALID_CONSTRUCTION_LAYOUT);
+        }
+        let Some((
+            name,
+            discriminant,
+            field_names,
+            field_type_names,
+            field_types,
+            field_debug_layouts,
+        )) = selected
+        else {
+            return self.builder_start_failure(if machine {
+                format!("type.construct_machine_start: machine '{expected_metadata_owner}' has no state at index {index}")
+            } else {
+                format!("type.construct_variant_start: enum '{owner}' has no variant at index {index}")
+            });
+        };
+        if name != metadata_name {
+            return self.builder_start_failure(if machine {
+                format!("type.construct_machine_start: state metadata '{metadata_name}' does not match state '{name}' on '{expected_metadata_owner}'")
+            } else {
+                format!("type.construct_variant_start: variant metadata '{metadata_name}' does not match variant '{name}' on '{owner}'")
+            });
+        }
+        if !machine && discriminant != metadata_discriminant {
+            return self.builder_start_failure(format!(
+                "type.construct_variant_start: variant '{owner}.{name}' has discriminant {discriminant}, metadata reports {metadata_discriminant}"
+            ));
+        }
+        let metadata_fields = &self
+            .lists
+            .get(&field_list)
+            .ok_or(INVALID_CONSTRUCTION)?
+            .elements;
+        if metadata_fields.len() != field_names.len() {
+            return self.builder_start_failure(if machine {
+                format!("type.construct_machine_start: state '{expected_metadata_owner}.{name}' expects {} payload field(s), metadata reports {}", field_names.len(), metadata_fields.len())
+            } else {
+                format!("type.construct_variant_start: variant '{owner}.{name}' expects {} payload field(s), metadata reports {}", field_names.len(), metadata_fields.len())
+            });
+        }
+        for (position, field) in metadata_fields.iter().enumerate() {
+            let (field_index, field_owner, member, field_name, type_name) =
+                self.builder_field_metadata(field.ok_or(INVALID_CONSTRUCTION)?)?;
+            if field_owner != expected_metadata_owner || member.as_deref() != Some(name.as_str()) {
+                let actual = member.map_or(field_owner.clone(), |member| {
+                    format!("{field_owner}.{member}")
+                });
+                return self.builder_start_failure(if machine {
+                    format!("type.construct_machine_start: field metadata belongs to '{actual}', expected '{expected_metadata_owner}.{name}'")
+                } else {
+                    format!("type.construct_variant_start: field metadata belongs to '{actual}', expected '{expected_metadata_owner}.{name}'")
+                });
+            }
+            if field_index != position
+                || field_name != field_names[position]
+                || type_name != field_type_names[position]
+            {
+                return self.builder_start_failure(if machine {
+                    format!("type.construct_machine_start: payload field metadata at index {position} does not match state '{expected_metadata_owner}.{name}'")
+                } else {
+                    format!("type.construct_variant_start: payload field metadata at index {position} does not match variant '{owner}.{name}'")
+                });
+            }
+        }
+        let builder = self.new_struct((field_names.len() + 1) as u64)?;
+        self.structs
+            .get_mut(&builder)
+            .ok_or(INVALID_CONSTRUCTION)?
+            .fields[0] = Some(NativeField {
+            bits: index as u64,
+            owned: false,
+            pending_depth: 0,
+        });
+        self.builders.insert(
+            builder,
+            NativeBuilderInfo {
+                owner,
+                metadata_owner: expected_metadata_owner,
+                unsupported_kind: None,
+                variant: (!machine).then(|| name.clone()),
+                state: machine.then_some(name),
+                target_state,
+                field_offset: 1,
+                validation: vec![BuilderFieldValidation::None; field_names.len()],
+                field_names,
+                field_type_names,
+                field_types,
+                field_debug_layouts,
+                put_order: Vec::new(),
+            },
+        );
+        match self.sum(SUM_SUCCESS, builder, true) {
+            Ok(result) => Ok(result),
+            Err(failure) => {
+                self.drop_value(builder)?;
+                Err(failure)
+            }
+        }
+    }
+    fn builder_field_metadata(
+        &self,
+        field: u64,
+    ) -> LeafResult<(usize, String, Option<String>, String, String)> {
+        let index =
+            usize::try_from(self.struct_field(field, 0)?.bits).map_err(|_| INVALID_CONSTRUCTION)?;
+        let owner = self.text(self.struct_field(field, 1)?.bits)?.to_owned();
+        let member = self
+            .sums
+            .get(&self.struct_field(field, 2)?.bits)
+            .ok_or(INVALID_CONSTRUCTION)?;
+        let member = if member.tag == SUM_SUCCESS {
+            Some(self.text(member.bits)?.to_owned())
+        } else if member.tag == SUM_FAILURE {
+            None
+        } else {
+            return Err(INVALID_CONSTRUCTION);
+        };
+        let name = self.text(self.struct_field(field, 3)?.bits)?.to_owned();
+        let field_type = self.text(self.struct_field(field, 4)?.bits)?.to_owned();
+        Ok((index, owner, member, name, field_type))
+    }
+    fn builder_failure(
+        &mut self,
+        message: String,
+        builder: u64,
+        bits: u64,
+        owned: bool,
+    ) -> LeafResult<u64> {
+        let error = self.insert(message)?;
+        let result = match self.sum(SUM_FAILURE, error, true) {
+            Ok(result) => result,
+            Err(failure) => {
+                self.drop_value(error)?;
+                return Err(failure);
+            }
+        };
+        self.drop_value(builder)?;
+        if owned {
+            self.drop_value(bits)?;
+        }
+        Ok(result)
+    }
+    fn reject_pending_builder(&mut self, builder: u64, operation: &str) -> LeafResult<()> {
+        let depth = self
+            .structs
+            .get(&builder)
+            .ok_or(INVALID_CONSTRUCTION)?
+            .pending_depth;
+        if depth == 0 {
+            return Ok(());
+        }
+        let layout = NativeDebugLayout {
+            root: 0,
+            nodes: vec![NativeDebugNode::TypeConstruction],
+        };
+        let value = layout.format_value(self, builder, 0)?;
+        self.set_dynamic_failure_message(
+            format!("type.{operation}: first argument must be TypeConstruction, got {value}")
+                .into_bytes(),
+        );
+        Err(INVALID_CONSTRUCTION)
+    }
+    fn builder_put(
+        &mut self,
+        builder: u64,
+        field: u64,
+        bits: u64,
+        owned: bool,
+        expected_owner: &str,
+        provided_type: &str,
+        canonical_type: &str,
+        metadata_layout: &[u8],
+    ) -> LeafResult<u64> {
+        self.builder_put_depth(
+            builder,
+            field,
+            bits,
+            0,
+            owned,
+            expected_owner,
+            provided_type,
+            canonical_type,
+            metadata_layout,
+        )
+    }
+    fn builder_put_depth(
+        &mut self,
+        builder: u64,
+        field: u64,
+        bits: u64,
+        pending_depth: u64,
+        owned: bool,
+        expected_owner: &str,
+        provided_type: &str,
+        canonical_type: &str,
+        metadata_layout: &[u8],
+    ) -> LeafResult<u64> {
+        self.reject_pending_builder(builder, "construct_put")?;
+        let info = self
+            .builders
+            .get(&builder)
+            .cloned()
+            .ok_or(INVALID_CONSTRUCTION)?;
+        if info.owner == expected_owner && info.unsupported_kind.is_some() {
+            return self.builder_failure(
+                format!("type.construct_put supports only structs, bitfields, enums, and machines, got '{expected_owner}'"),
+                builder,
+                bits,
+                owned,
+            );
+        }
+        if let Some(message) =
+            self.pending_type_field_message(field, metadata_layout, "type.construct_put")?
+        {
+            return self.builder_failure(message, builder, bits, owned);
+        }
+        let (index, actual_owner, member, name, metadata_type) =
+            self.builder_field_metadata(field)?;
+        let expected_member = info.variant.as_ref().or(info.state.as_ref());
+        let expected_label = expected_member.map_or_else(
+            || info.metadata_owner.clone(),
+            |member| format!("{}.{member}", info.metadata_owner),
+        );
+        let slot = index.saturating_add(info.field_offset);
+        let error = if info.owner != expected_owner {
+            Some(format!(
+                "type.construct_put: builder for '{}' cannot construct '{}'",
+                info.owner, expected_owner
+            ))
+        } else if actual_owner != info.metadata_owner
+            || member.as_deref() != expected_member.map(String::as_str)
+        {
+            let actual_label = member.as_ref().map_or(actual_owner.clone(), |member| {
+                format!("{actual_owner}.{member}")
+            });
+            Some(format!(
+                "type.construct_put: field metadata belongs to '{actual_label}', expected '{expected_label}'"
+            ))
+        } else if index >= info.field_names.len() {
+            Some(if info.variant.is_some() {
+                format!(
+                    "type.construct_put: variant '{expected_label}' has no payload field at index {index}"
+                )
+            } else if info.state.is_some() {
+                format!(
+                    "type.construct_put: state '{expected_label}' has no payload field at index {index}"
+                )
+            } else {
+                format!("type.construct_put: type '{expected_owner}' has no field at index {index}")
+            })
+        } else if info.field_names[index] != name {
+            Some(if info.variant.is_some() {
+                format!(
+                    "type.construct_put: field metadata '{name}' does not match payload field '{}' on variant '{expected_label}'",
+                    info.field_names[index]
+                )
+            } else if info.state.is_some() {
+                format!(
+                    "type.construct_put: field metadata '{name}' does not match payload field '{}' on state '{expected_label}'",
+                    info.field_names[index]
+                )
+            } else {
+                format!(
+                    "type.construct_put: field metadata '{name}' does not match field '{}' on '{expected_owner}'",
+                    info.field_names[index]
+                )
+            })
+        } else if info.field_type_names[index] != metadata_type
+            && info.field_types[index] != metadata_type
+        {
+            Some(format!(
+                "type.construct_put: field metadata for '{name}' has type '{metadata_type}', but '{expected_owner}' reports '{}'",
+                info.field_type_names[index]
+            ))
+        } else if info.field_types[index] != canonical_type {
+            Some(format!(
+                "type.construct_put: field '{name}' has type '{}', provided as '{provided_type}'",
+                info.field_type_names[index]
+            ))
+        } else if self
+            .structs
+            .get(&builder)
+            .and_then(|record| record.fields.get(slot))
+            .and_then(|slot| slot.as_ref())
+            .is_some()
+        {
+            Some(format!(
+                "type.construct_put: field '{name}' was provided more than once"
+            ))
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            return self.builder_failure(error, builder, bits, owned);
+        }
+        self.builders
+            .get_mut(&builder)
+            .ok_or(INVALID_CONSTRUCTION)?
+            .put_order
+            .try_reserve(1)
+            .map_err(|_| EXHAUSTED)?;
+        let result = self.sum(SUM_SUCCESS, builder, true)?;
+        self.structs
+            .get_mut(&builder)
+            .ok_or(INVALID_CONSTRUCTION)?
+            .fields[slot] = Some(NativeField {
+            bits,
+            owned,
+            pending_depth,
+        });
+        self.builders
+            .get_mut(&builder)
+            .ok_or(INVALID_CONSTRUCTION)?
+            .put_order
+            .push(index);
+        Ok(result)
+    }
+    fn builder_finish(&mut self, builder: u64, expected_owner: &str) -> LeafResult<u64> {
+        self.reject_pending_builder(builder, "construct_finish")?;
+        let info = self
+            .builders
+            .get(&builder)
+            .cloned()
+            .ok_or(INVALID_CONSTRUCTION)?;
+        if info.owner != expected_owner {
+            return self.builder_failure(
+                format!(
+                    "type.construct_finish: builder for '{}' cannot construct '{}'",
+                    info.owner, expected_owner
+                ),
+                builder,
+                0,
+                false,
+            );
+        }
+        if info.unsupported_kind.is_some() {
+            return self.builder_failure(
+                format!("type.construct_finish supports only structs, bitfields, enums, and machines, got '{expected_owner}'"),
+                builder,
+                0,
+                false,
+            );
+        }
+        if let (Some(state), Some(target)) = (&info.state, &info.target_state)
+            && state != target
+        {
+            return self.builder_failure(
+                format!(
+                    "type.construct_finish: machine target '{} at {target}' cannot finish state '{state}'",
+                    info.metadata_owner
+                ),
+                builder,
+                0,
+                false,
+            );
+        }
+        let record = self.structs.get(&builder).ok_or(INVALID_CONSTRUCTION)?;
+        if let Some((slot, _)) = record
+            .fields
+            .iter()
+            .enumerate()
+            .skip(info.field_offset)
+            .find(|(_, field)| field.is_none())
+        {
+            let index = slot - info.field_offset;
+            return self.builder_failure(
+                if let Some(variant) = &info.variant {
+                    format!("type.construct_finish: variant '{expected_owner}.{variant}' is missing required payload field '{}'", info.field_names[index])
+                } else if let Some(state) = &info.state {
+                    format!("type.construct_finish: state '{}.{state}' is missing required payload field '{}'", info.metadata_owner, info.field_names[index])
+                } else {
+                    format!("type.construct_finish: '{expected_owner}' is missing required field '{}'", info.field_names[index])
+                },
+                builder,
+                0,
+                false,
+            );
+        }
+        for (index, rule) in info.validation.iter().enumerate() {
+            let field = self.struct_field(builder, (index + info.field_offset) as u64)?;
+            let bits = field.bits;
+            let field_name = &info.field_names[index];
+            let bitfield_name = &info.owner;
+            let message = if field.pending_depth != 0 {
+                match rule {
+                    BuilderFieldValidation::SignedBits(_)
+                    | BuilderFieldValidation::UnsignedBits(_) => {
+                        Some(format!("field '{field_name}' expects int64 or uint64"))
+                    }
+                    BuilderFieldValidation::EnumBits(_, enum_name, _) => {
+                        Some(format!("field '{field_name}' expects enum '{enum_name}'"))
+                    }
+                    BuilderFieldValidation::None => None,
+                }
+            } else {
+                match rule {
+                    BuilderFieldValidation::None => None,
+                    BuilderFieldValidation::SignedBits(width) => {
+                        let value = bits as i64;
+                        let max = if *width == 64 {
+                            u64::MAX
+                        } else {
+                            (1_u64 << width) - 1
+                        };
+                        (value < 0 || bits > max).then(|| format!(
+                        "bitfield '{bitfield_name}' field '{field_name}' is {width} bit(s) wide and cannot hold '{value}'"
+                    ))
+                    }
+                    BuilderFieldValidation::UnsignedBits(width) => {
+                        let max = if *width == 64 {
+                            u64::MAX
+                        } else {
+                            (1_u64 << width) - 1
+                        };
+                        (bits > max).then(|| format!(
+                        "bitfield '{bitfield_name}' field '{field_name}' is {width} bit(s) wide and cannot hold '{bits}'"
+                    ))
+                    }
+                    BuilderFieldValidation::EnumBits(width, enum_name, variants) => {
+                        let tag = usize::try_from(self.struct_field(bits, 0)?.bits)
+                            .map_err(|_| INVALID_CONSTRUCTION)?;
+                        let (variant_name, discriminant) =
+                            variants.get(tag).ok_or(INVALID_CONSTRUCTION)?;
+                        if *discriminant < 0 {
+                            Some(format!(
+                                "enum '{enum_name}.{variant_name}' has negative discriminant {discriminant}"
+                            ))
+                        } else {
+                            let max = if *width == 64 {
+                                u64::MAX
+                            } else {
+                                (1_u64 << width) - 1
+                            };
+                            ((*discriminant as u64) > max).then(|| format!(
+                            "bitfield '{bitfield_name}' field '{field_name}' is {width} bit(s) wide and cannot hold enum variant '{enum_name}.{variant_name}'"
+                        ))
+                        }
+                    }
+                }
+            };
+            if let Some(message) = message {
+                return self.builder_failure(message, builder, 0, false);
+            }
+        }
+        let result = self.sum(SUM_SUCCESS, builder, true)?;
+        self.builders.remove(&builder);
+        Ok(result)
+    }
+    fn struct_field(&self, id: u64, index: u64) -> LeafResult<NativeField> {
+        self.structs
+            .get(&id)
+            .and_then(|s| usize::try_from(index).ok().and_then(|i| s.fields.get(i)))
+            .copied()
+            .flatten()
+            .ok_or(INVALID_STRUCT)
+    }
+    fn check_struct_pending_access(
+        &mut self,
+        value: u64,
+        layout: &[u8],
+        message: &str,
+        render: bool,
+    ) -> LeafResult<u32> {
+        if self
+            .structs
+            .get(&value)
+            .ok_or(INVALID_STRUCT)?
+            .pending_depth
+            == 0
+        {
+            return Ok(0);
+        }
+        let message = if render {
+            // An unavailable layout must not make ready access unsupported or
+            // disclose an opaque payload while reporting pending access.
+            let actual = if layout.is_empty() {
+                "[redacted]".to_owned()
+            } else {
+                let layout = NativeDebugLayout::parse(layout).map_err(|_| INVALID_STRUCT)?;
+                layout
+                    .format_value(self, value, layout.root)
+                    .map_err(|_| INVALID_STRUCT)?
+            };
+            format!("{message}{actual}")
+        } else {
+            message.to_owned()
+        };
+        self.set_dynamic_failure_message(message.into_bytes());
+        Err(INVALID_STRUCT)
+    }
+    fn enum_equal(&self, left: u64, right: u64, layout: &[u8]) -> LeafResult<u32> {
+        let mut cursor = BitfieldLayoutCursor {
+            bytes: layout,
+            position: 0,
+        };
+        if cursor.take(3).map_err(|_| INVALID_STRUCT)? != b"JE\x01" {
+            return Err(INVALID_STRUCT);
+        }
+        let count = usize::try_from(cursor.u32().map_err(|_| INVALID_STRUCT)?)
+            .map_err(|_| INVALID_STRUCT)?;
+        if count > layout.len() {
+            return Err(INVALID_STRUCT);
+        }
+        let left_tag =
+            usize::try_from(self.struct_field(left, 0)?.bits).map_err(|_| INVALID_STRUCT)?;
+        let right_tag =
+            usize::try_from(self.struct_field(right, 0)?.bits).map_err(|_| INVALID_STRUCT)?;
+        if left_tag >= count || right_tag >= count {
+            return Err(INVALID_STRUCT);
+        }
+        let mut equal = left_tag == right_tag;
+        for variant in 0..count {
+            let fields = usize::try_from(cursor.u32().map_err(|_| INVALID_STRUCT)?)
+                .map_err(|_| INVALID_STRUCT)?;
+            let kinds = cursor.take(fields).map_err(|_| INVALID_STRUCT)?;
+            if variant != left_tag || !equal {
+                continue;
+            }
+            for (index, kind) in kinds.iter().enumerate() {
+                let slot = u64::try_from(index + 1).map_err(|_| INVALID_STRUCT)?;
+                let left_value = self.struct_field(left, slot)?.bits;
+                let right_value = self.struct_field(right, slot)?.bits;
+                let same = match kind {
+                    b'i' => left_value == right_value,
+                    b'f' => f32::from_bits(left_value as u32) == f32::from_bits(right_value as u32),
+                    b'd' => f64::from_bits(left_value) == f64::from_bits(right_value),
+                    b's' => self.same_string_value(left_value, right_value)?,
+                    _ => return Err(INVALID_STRUCT),
+                };
+                if !same {
+                    equal = false;
+                }
+            }
+        }
+        if cursor.position != layout.len() {
+            return Err(INVALID_STRUCT);
+        }
+        Ok(u32::from(equal))
+    }
+    fn aggregate_enum_equal(&self, left: u64, right: u64, layout: &[u8]) -> LeafResult<u32> {
+        let layout = NativeDebugLayout::parse(layout).map_err(|_| INVALID_STRUCT)?;
+        if !matches!(
+            layout.nodes.get(layout.root),
+            Some(NativeDebugNode::Enum(..))
+        ) {
+            return Err(INVALID_STRUCT);
+        }
+        Ok(u32::from(layout.equal_value(
+            self,
+            left,
+            right,
+            layout.root,
+        )?))
+    }
+    fn checked_type_arg_index(
+        &mut self,
+        index: i64,
+        count: u64,
+        depth: u64,
+        type_name: &str,
+    ) -> LeafResult<u64> {
+        let message = if depth != 0 {
+            let index = format_pending_value(&index.to_string(), depth)?;
+            format!("type.arg expects a non-negative int64 index, got {index}")
+        } else if index < 0 {
+            format!("type.arg expects a non-negative int64 index, got {index}")
+        } else if index as u64 >= count {
+            format!("type.arg index {index} is out of range for type '{type_name}'")
+        } else {
+            return Ok(index as u64);
+        };
+        self.set_dynamic_failure_message(message.into_bytes());
+        Err(INVALID_TYPE_ARG_INDEX)
+    }
+    fn reflected_field_owner_label(&self, field: u64, mismatch: Failure) -> LeafResult<String> {
+        let owner = self.text(self.struct_field(field, 1)?.bits)?;
+        let member = self
+            .sums
+            .get(&self.struct_field(field, 2)?.bits)
+            .ok_or(mismatch)?;
+        if member.tag == SUM_SUCCESS {
+            Ok(format!("{owner}.{}", self.text(member.bits)?))
+        } else {
+            Ok(owner.to_owned())
+        }
+    }
+    fn check_reflected_field_owner(
+        &mut self,
+        actual: u64,
+        expected_owner: &str,
+        expected_member: Option<&str>,
+        metadata_layout: &[u8],
+        mismatch: Failure,
+        caller: &str,
+    ) -> LeafResult<u32> {
+        if let Some(message) = self
+            .pending_type_field_message(actual, metadata_layout, caller)
+            .map_err(|_| mismatch)?
+        {
+            self.set_dynamic_failure_message(message.into_bytes());
+            return Err(mismatch);
+        }
+        let actual_owner = self.text(self.struct_field(actual, 1)?.bits)?;
+        let actual_member = self
+            .sums
+            .get(&self.struct_field(actual, 2)?.bits)
+            .ok_or(mismatch)?;
+        let actual_member_name = if actual_member.tag == SUM_SUCCESS {
+            Some(self.text(actual_member.bits)?)
+        } else {
+            None
+        };
+        let member_matches = actual_member_name == expected_member;
+        if actual_owner == expected_owner && member_matches {
+            return Ok(0);
+        }
+        let actual_label = self.reflected_field_owner_label(actual, mismatch)?;
+        let expected_label = expected_member.map_or_else(
+            || expected_owner.to_owned(),
+            |member| format!("{expected_owner}.{member}"),
+        );
+        self.set_dynamic_failure_message(
+            format!(
+                "{caller}: field metadata belongs to '{actual_label}', expected '{expected_label}'"
+            )
+            .into_bytes(),
+        );
+        Err(mismatch)
+    }
+    fn pending_type_field_message(
+        &self,
+        actual: u64,
+        metadata_layout: &[u8],
+        caller: &str,
+    ) -> LeafResult<Option<String>> {
+        if self
+            .structs
+            .get(&actual)
+            .ok_or(INVALID_STRUCT)?
+            .pending_depth
+            == 0
+        {
+            return Ok(None);
+        }
+        let layout = NativeDebugLayout::parse(metadata_layout)?;
+        let value = layout.format_value(self, actual, layout.root)?;
+        Ok(Some(format!(
+            "{caller}: second argument must be TypeField, got {value}"
+        )))
+    }
+    fn check_reflected_owner_pending(
+        &mut self,
+        value: u64,
+        owner_name: &str,
+        debug_layout: &[u8],
+        kind: u32,
+    ) -> LeafResult<u32> {
+        if self
+            .structs
+            .get(&value)
+            .ok_or(INVALID_REFLECTED_OWNER)?
+            .pending_depth
+            == 0
+        {
+            return Ok(0);
+        }
+        let layout = NativeDebugLayout::parse(debug_layout).map_err(|_| INVALID_REFLECTED_OWNER)?;
+        let actual = layout
+            .format_value(self, value, layout.root)
+            .map_err(|_| INVALID_REFLECTED_OWNER)?;
+        let (caller, expected) = match kind {
+            0 => ("type.variant_value", "enum"),
+            1 => ("type.machine_state_value", "machine"),
+            2 => ("type.field_value", "struct"),
+            3 => ("type.variant_field_value", "enum"),
+            4 => ("type.machine_field_value", "machine"),
+            _ => return Err(INVALID_REFLECTED_OWNER),
+        };
+        self.set_dynamic_failure_message(
+            format!("{caller}: expected {expected} value for '{owner_name}', got {actual}")
+                .into_bytes(),
+        );
+        Err(INVALID_REFLECTED_OWNER)
+    }
+    fn reflected_field_index(
+        &mut self,
+        actual: u64,
+        expected: u64,
+        mismatch: Failure,
+        caller: &str,
+    ) -> LeafResult<u64> {
+        if expected == 0 {
+            return Err(mismatch);
+        }
+        let owner_type_matches = self.text(self.struct_field(actual, 1)?.bits)?
+            == self.text(self.struct_field(expected, 1)?.bits)?;
+        let actual_member = self
+            .sums
+            .get(&self.struct_field(actual, 2)?.bits)
+            .ok_or(mismatch)?;
+        let expected_member = self
+            .sums
+            .get(&self.struct_field(expected, 2)?.bits)
+            .ok_or(mismatch)?;
+        let owner_member_matches = actual_member.tag == expected_member.tag
+            && (actual_member.tag != SUM_SUCCESS
+                || self.text(actual_member.bits)? == self.text(expected_member.bits)?);
+        if !owner_type_matches || !owner_member_matches {
+            let actual_owner = self.reflected_field_owner_label(actual, mismatch)?;
+            let expected_owner = self.reflected_field_owner_label(expected, mismatch)?;
+            self.set_dynamic_failure_message(
+                format!(
+                    "{caller}: field metadata belongs to '{actual_owner}', expected '{expected_owner}'"
+                )
+                .into_bytes(),
+            );
+            return Err(mismatch);
+        }
+        let index = self.struct_field(actual, 0)?.bits;
+        if index != self.struct_field(expected, 0)?.bits {
+            return Err(mismatch);
+        }
+        for position in [3, 4] {
+            let actual_text = self.text(self.struct_field(actual, position)?.bits)?;
+            let expected_text = self.text(self.struct_field(expected, position)?.bits)?;
+            if actual_text != expected_text {
+                return Err(mismatch);
+            }
+        }
+        Ok(index)
+    }
+    fn reflected_checked_field_index(
+        &mut self,
+        actual: u64,
+        expected: u64,
+        compatible: u64,
+        requested_type: &str,
+        mismatch: Failure,
+        caller: &str,
+    ) -> LeafResult<u64> {
+        let index = self.reflected_field_index(actual, expected, mismatch, caller)?;
+        if compatible == 0 {
+            let name = self.text(self.struct_field(expected, 3)?.bits)?;
+            let field_type = self.text(self.struct_field(expected, 4)?.bits)?;
+            self.set_dynamic_failure_message(
+                format!(
+                    "{caller}: field '{name}' has type '{field_type}', requested '{requested_type}'"
+                )
+                .into_bytes(),
+            );
+            return Err(mismatch);
+        }
+        Ok(index)
+    }
+    fn type_info_identity(&self, value: u64, preserve_aliases: bool) -> LeafResult<String> {
+        enum Frame {
+            Enter(Option<u64>),
+            Leave(u64),
+        }
+        let mut work = vec![Frame::Enter(Some(value))];
+        let mut active = std::collections::HashSet::new();
+        let mut identity = String::new();
+        while let Some(frame) = work.pop() {
+            let value = match frame {
+                Frame::Leave(value) => {
+                    active.remove(&value);
+                    continue;
+                }
+                Frame::Enter(value) => value.ok_or(INVALID_TYPE_INFO)?,
+            };
+            if !active.insert(value) {
+                return Err(INVALID_TYPE_INFO);
+            }
+            work.push(Frame::Leave(value));
+            let type_name = self.text(self.struct_field(value, 0)?.bits)?;
+            let kind = self.text(self.struct_field(value, 1)?.bits)?;
+            let secret = self.struct_field(value, 4)?.bits;
+            if secret > 1 {
+                return Err(INVALID_TYPE_INFO);
+            }
+            let arguments = self
+                .lists
+                .get(&self.struct_field(value, 5)?.bits)
+                .ok_or(INVALID_TYPE_INFO)?;
+            if !preserve_aliases && kind == "alias" {
+                let [Some(base)] = arguments.elements.as_slice() else {
+                    return Err(INVALID_TYPE_INFO);
+                };
+                work.push(Frame::Enter(Some(*base)));
+                continue;
+            }
+            let name = match kind {
+                "list" | "set" | "map" | "optional" | "result" | "secret" | "function" => "",
+                "struct" if !arguments.elements.is_empty() => type_name
+                    .split_once('[')
+                    .map_or(type_name, |(base, _)| base),
+                _ => type_name,
+            };
+            let prefix = format!(
+                "{}:{}{}:{}{}:{}",
+                kind.len(),
+                kind,
+                name.len(),
+                name,
+                secret,
+                arguments.elements.len()
+            );
+            identity.try_reserve(prefix.len()).map_err(|_| EXHAUSTED)?;
+            identity.push_str(&prefix);
+            for argument in arguments.elements.iter().rev() {
+                work.push(Frame::Enter(*argument));
+            }
+        }
+        Ok(identity)
+    }
+    // This operation grants no Source mutation or Resource custody authority.
+    // The checked backend fixes nominal identity and ordinal. Every fallible
+    // registry/occupancy check precedes the single nonallocating occupied swap.
+    fn replace_struct_field(
+        &mut self,
+        id: u64,
+        index: u64,
+        replacement: NativeField,
+    ) -> LeafResult<NativeField> {
+        if self.actors.contains_key(&id)
+            || self.builders.contains_key(&id)
+            || self.checked_graph_hooks.contains_key(&id)
+            || self.actor_graph_imports.contains_key(&id)
+        {
+            return Err(INVALID_STRUCT);
+        }
+        let index = usize::try_from(index).map_err(|_| INVALID_STRUCT)?;
+        let record = self.structs.get(&id).ok_or(INVALID_STRUCT)?;
+        if record.pending_depth != 0 || record.fields.iter().any(Option::is_none) {
+            return Err(INVALID_STRUCT);
+        }
+        let displaced = record
+            .fields
+            .get(index)
+            .copied()
+            .flatten()
+            .ok_or(INVALID_STRUCT)?;
+        if displaced.owned != replacement.owned
+            || (replacement.owned && replacement.pending_depth != 0)
+        {
+            return Err(INVALID_STRUCT);
+        }
+        // Owned fields must still name live ordinary registry values. Actor
+        // identities are never ordinary owning handles; graph hooks remain
+        // opaque owning children and are retired by their existing Drop path.
+        for field in record
+            .fields
+            .iter()
+            .flatten()
+            .chain(std::iter::once(&replacement))
+        {
+            if field.owned {
+                if field.bits == id || self.actors.contains_key(&field.bits) {
+                    return Err(INVALID_STRUCT);
+                }
+                self.owned_pending_depth(field.bits)?;
+            }
+        }
+        // A live registry handle is not a second unique owner. The old slot
+        // remains owned until its returned value is retired, and siblings keep
+        // their ownership throughout. Only immutable strings share an ID after
+        // an explicit retain; function copies have distinct cloned descriptors.
+        // This checks direct edges, not whole-heap ownership or custody.
+        if replacement.owned {
+            let existing_edges = record
+                .fields
+                .iter()
+                .flatten()
+                .filter(|field| field.owned && field.bits == replacement.bits)
+                .count();
+            if let Some(string) = self.strings.get(&replacement.bits) {
+                let required = u64::try_from(existing_edges)
+                    .ok()
+                    .and_then(|edges| edges.checked_add(1))
+                    .ok_or(INVALID_STRUCT)?;
+                if string.references < required {
+                    return Err(INVALID_STRUCT);
+                }
+            } else if existing_edges != 0 {
+                return Err(INVALID_STRUCT);
+            }
+        }
+        let slot = self
+            .structs
+            .get_mut(&id)
+            .and_then(|record| record.fields.get_mut(index))
+            .ok_or(INVALID_STRUCT)?;
+        let Some(current) = slot.as_mut() else {
+            return Err(INVALID_STRUCT);
+        };
+        Ok(std::mem::replace(current, replacement))
+    }
+
+    fn take_struct_field(&mut self, id: u64, index: u64) -> LeafResult<NativeField> {
+        self.structs
+            .get_mut(&id)
+            .and_then(|s| {
+                usize::try_from(index)
+                    .ok()
+                    .and_then(|i| s.fields.get_mut(i))
+            })
+            .and_then(Option::take)
+            .ok_or(INVALID_STRUCT)
+    }
+    fn clone_struct(&mut self, id: u64) -> LeafResult<u64> {
+        // Function value copies may carry protected metadata without a struct ABI.
+        if self.checked_graph_hooks.contains_key(&id) {
+            return self.clone_checked_graph_hook(id, None);
+        }
+        let source = self.structs.get(&id).ok_or(INVALID_STRUCT)?;
+        let (fields, pending_depth) = (source.fields.clone(), source.pending_depth);
+        let builder = self.builders.get(&id).cloned();
+        let output = self.new_struct(fields.len() as u64)?;
+        for (index, field) in fields.into_iter().enumerate() {
+            let Some(mut field) = field else {
+                continue;
+            };
+            if field.owned {
+                match self.clone_value(field.bits) {
+                    Ok(bits) => field.bits = bits,
+                    Err(error) => {
+                        self.drop_value(output)?;
+                        return Err(error);
+                    }
+                }
+            }
+            self.structs.get_mut(&output).ok_or(INVALID_STRUCT)?.fields[index] = Some(field);
+        }
+        if let Some(builder) = builder {
+            self.builders.insert(output, builder);
+        }
+        self.structs
+            .get_mut(&output)
+            .ok_or(INVALID_STRUCT)?
+            .pending_depth = pending_depth;
+        Ok(output)
+    }
+    fn run_record(&mut self, id: u64) -> LeafResult<u64> {
+        if let Some(value) = self.checked_graph_hooks.get(&id) {
+            let depth = value.pending_depth.checked_add(1).ok_or(EXHAUSTED)?;
+            return self.clone_checked_graph_hook(id, Some(depth));
+        }
+        let depth = self
+            .structs
+            .get(&id)
+            .ok_or(INVALID_STRUCT)?
+            .pending_depth
+            .checked_add(1)
+            .ok_or(EXHAUSTED)?;
+        let pending = self.clone_struct(id)?;
+        self.structs
+            .get_mut(&pending)
+            .ok_or(INVALID_STRUCT)?
+            .pending_depth = depth;
+        Ok(pending)
+    }
+    fn join_record(&mut self, id: u64) -> LeafResult<u64> {
+        if let Some(value) = self.checked_graph_hooks.get(&id) {
+            let depth = value.pending_depth.saturating_sub(1);
+            return self.clone_checked_graph_hook(id, Some(depth));
+        }
+        let depth = self
+            .structs
+            .get(&id)
+            .ok_or(INVALID_STRUCT)?
+            .pending_depth
+            .saturating_sub(1);
+        let joined = self.clone_struct(id)?;
+        self.structs
+            .get_mut(&joined)
+            .ok_or(INVALID_STRUCT)?
+            .pending_depth = depth;
+        Ok(joined)
+    }
+    fn run_sum(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self
+            .sums
+            .get(&id)
+            .ok_or(INVALID_SUM)?
+            .pending_depth
+            .checked_add(1)
+            .ok_or(EXHAUSTED)?;
+        let pending = self.clone_value(id)?;
+        self.sums
+            .get_mut(&pending)
+            .ok_or(INVALID_SUM)?
+            .pending_depth = depth;
+        Ok(pending)
+    }
+    fn join_sum(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self
+            .sums
+            .get(&id)
+            .ok_or(INVALID_SUM)?
+            .pending_depth
+            .saturating_sub(1);
+        let joined = self.clone_value(id)?;
+        self.sums.get_mut(&joined).ok_or(INVALID_SUM)?.pending_depth = depth;
+        Ok(joined)
+    }
+    fn clone_value(&mut self, id: u64) -> LeafResult<u64> {
+        if self.checked_graph_hooks.contains_key(&id) {
+            return self.clone_checked_graph_hook(id, None);
+        }
+        if self.structs.contains_key(&id) {
+            return self.clone_struct(id);
+        }
+        if self.lists.contains_key(&id) {
+            return self.clone_list(id);
+        }
+        if self.sets.contains_key(&id) {
+            return self.clone_set(id);
+        }
+        if self.maps.contains_key(&id) {
+            return self.clone_map(id);
+        }
+        if let Some(sum) = self.sums.get(&id) {
+            let (tag, bits, owned, pending_depth, payload_pending_depth) = (
+                sum.tag,
+                sum.bits,
+                sum.owned,
+                sum.pending_depth,
+                sum.payload_pending_depth,
+            );
+            let bits = if owned { self.clone_value(bits)? } else { bits };
+            return match self.sum(tag, bits, owned) {
+                Ok(id) => {
+                    let copy = self.sums.get_mut(&id).ok_or(INVALID_SUM)?;
+                    copy.pending_depth = pending_depth;
+                    copy.payload_pending_depth = payload_pending_depth;
+                    Ok(id)
+                }
+                Err(error) => {
+                    if owned {
+                        self.drop_value(bits)?;
+                    }
+                    Err(error)
+                }
+            };
+        }
+        if self.bytes.contains_key(&id) {
+            return self.clone_bytes(id);
+        }
+        self.retain(id)
+    }
+    fn drop_value(&mut self, id: u64) -> LeafResult<u32> {
+        if self.checked_graph_hooks.remove(&id).is_some() {
+            self.checked_graph_hooks_destroyed += 1;
+            return Ok(0);
+        }
+        if let Some(cursor) = self.equalities.remove(&id) {
+            return self.equality_drop(cursor);
+        }
+        if self.actors.contains_key(&id) {
+            return Err(INVALID_ACTOR);
+        }
+        if let Some(value) = self.structs.remove(&id) {
+            self.builders.remove(&id);
+            self.structs_destroyed += 1;
+            for field in value.fields.into_iter().flatten() {
+                if field.owned {
+                    self.drop_value(field.bits)?;
+                }
+            }
+            return Ok(0);
+        }
+        if let Some(list) = self.lists.remove(&id) {
+            self.lists_destroyed += 1;
+            if list.owned {
+                for value in list.elements.into_iter().flatten() {
+                    self.drop_value(value)?;
+                }
+            }
+            return Ok(0);
+        }
+        if let Some(set) = self.sets.remove(&id) {
+            self.sets_destroyed += 1;
+            if set.strings {
+                for value in set.elements.into_iter().flatten() {
+                    self.drop_value(value)?;
+                }
+            }
+            return Ok(0);
+        }
+        if let Some(map) = self.maps.remove(&id) {
+            self.maps_destroyed += 1;
+            for entry in map.entries.into_iter().flatten() {
+                if map.key_strings && !entry.key_taken {
+                    self.drop_value(entry.key)?;
+                }
+                if map.value_owned {
+                    self.drop_value(entry.value)?;
+                }
+            }
+            return Ok(0);
+        }
+        if let Some(sum) = self.sums.remove(&id) {
+            self.sums_destroyed += 1;
+            if sum.owned {
+                self.drop_value(sum.bits)?;
+            }
+            return Ok(0);
+        }
+        if self.bytes.remove(&id).is_some() {
+            self.bytes_pending.remove(&id);
+            self.bytes_destroyed += 1;
+            return Ok(0);
+        }
+        self.release(id)
+    }
+    fn text(&self, id: u64) -> LeafResult<&str> {
+        self.strings
+            .get(&id)
+            .map(|s| s.text.as_str())
+            .ok_or(INVALID_HANDLE)
+    }
+    fn retain(&mut self, id: u64) -> LeafResult<u64> {
+        let value = self.strings.get_mut(&id).ok_or(INVALID_HANDLE)?;
+        value.references = value.references.checked_add(1).ok_or(EXHAUSTED)?;
+        Ok(id)
+    }
+    fn release(&mut self, id: u64) -> LeafResult<u32> {
+        if id == 0 {
+            return Ok(0);
+        }
+        let value = self.strings.get_mut(&id).ok_or(INVALID_HANDLE)?;
+        value.references -= 1;
+        if value.references == 0 {
+            self.strings.remove(&id);
+        }
+        Ok(0)
+    }
+}
+fn native_split<'a>(haystack: &'a str, delimiter: &str) -> Vec<&'a str> {
+    if delimiter.is_empty() {
+        let graphemes = native_graphemes(haystack);
+        let mut parts = Vec::with_capacity(graphemes.len() + 2);
+        parts.push("");
+        parts.extend(graphemes);
+        parts.push("");
+        return parts;
+    }
+
+    let mut parts = Vec::new();
+    let mut part_start = 0;
+    native_scan_grapheme_matches(haystack, delimiter, |start, end, _| {
+        parts.push(&haystack[part_start..start]);
+        part_start = end;
+        true
+    });
+    parts.push(&haystack[part_start..]);
+    parts
+}
+
+fn native_replace(haystack: &str, needle: &str, replacement: &str) -> LeafResult<String> {
+    let parts = native_split(haystack, needle);
+    let separators = parts.len().saturating_sub(1);
+    let mut length = replacement.len().checked_mul(separators).ok_or(EXHAUSTED)?;
+    for part in &parts {
+        length = length.checked_add(part.len()).ok_or(EXHAUSTED)?;
+    }
+    let mut output = String::new();
+    output.try_reserve_exact(length).map_err(|_| EXHAUSTED)?;
+    for (index, part) in parts.into_iter().enumerate() {
+        if index != 0 {
+            output.push_str(replacement);
+        }
+        output.push_str(part);
+    }
+    Ok(output)
+}
+
+fn native_change_first(value: &str, case: impl Fn(char) -> String) -> String {
+    let Some(first) = value.graphemes(true).next() else {
+        return String::new();
+    };
+    let mut chars = first.chars();
+    let changed = chars.next().map(case).unwrap_or_default();
+    format!("{changed}{}{}", chars.as_str(), &value[first.len()..])
+}
+
+fn native_slugify(value: &str) -> String {
+    value
+        .to_lowercase()
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// Visit non-overlapping matches whose start and end are grapheme boundaries.
+/// Returning false stops after the current match, as index_of requires.
+fn native_scan_grapheme_matches(
+    haystack: &str,
+    needle: &str,
+    mut visit: impl FnMut(usize, usize, usize) -> bool,
+) {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return;
+    }
+    let boundaries = native_grapheme_boundaries(haystack);
+    let needle = needle.as_bytes();
+    let mut prefix = vec![0; needle.len()];
+    for index in 1..needle.len() {
+        let mut matched = prefix[index - 1];
+        while matched > 0 && needle[index] != needle[matched] {
+            matched = prefix[matched - 1];
+        }
+        if needle[index] == needle[matched] {
+            matched += 1;
+        }
+        prefix[index] = matched;
+    }
+
+    let mut matched = 0;
+    let mut start_boundary = 0;
+    let mut end_boundary = 0;
+    // KMP avoids comparing a long near-match again at every grapheme boundary.
+    // Both boundary cursors move only forward, so the entire scan is linear.
+    for (index, &byte) in haystack.as_bytes().iter().enumerate() {
+        while matched > 0 && byte != needle[matched] {
+            matched = prefix[matched - 1];
+        }
+        if byte == needle[matched] {
+            matched += 1;
+        }
+        if matched != needle.len() {
+            continue;
+        }
+
+        let end = index + 1;
+        let start = end - needle.len();
+        while boundaries[start_boundary] < start {
+            start_boundary += 1;
+        }
+        while boundaries[end_boundary] < end {
+            end_boundary += 1;
+        }
+        if boundaries[start_boundary] == start && boundaries[end_boundary] == end {
+            if !visit(start, end, start_boundary) {
+                return;
+            }
+            matched = 0;
+        } else {
+            // A rejected byte match can overlap a later valid grapheme match.
+            matched = prefix[matched - 1];
+        }
+    }
+}
+
+fn native_grapheme_boundaries(s: &str) -> Vec<usize> {
+    let mut boundaries = vec![0];
+    let mut offset = 0;
+    for cluster in native_graphemes(s) {
+        offset += cluster.len();
+        boundaries.push(offset);
+    }
+    boundaries
+}
+
+fn native_graphemes(s: &str) -> Vec<&str> {
+    UnicodeSegmentation::graphemes(s, true).collect()
+}
+
+fn native_lines(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        if matches!(bytes[index], 13 | 10) {
+            parts.push(text[start..index].to_owned());
+            if bytes[index] == 13 && bytes.get(index + 1) == Some(&10) {
+                index += 1;
+            }
+            index += 1;
+            start = index;
+        } else {
+            index += 1;
+        }
+    }
+    if start < bytes.len() {
+        parts.push(text[start..].to_owned());
+    }
+    parts
+}
+fn next_identity() -> LeafResult<u64> {
+    reserve_native_identities(1)?.take()
+}
+
+// Resource machinery samples the ordinary channel; it never takes or resets it.
+pub(super) struct ResourceOrdinaryFailure<'a> {
+    pub(super) status: JettRuntimeStatusV1,
+    pub(super) message: &'a [u8],
+    pub(super) prefix: Option<&'a [u8]>,
+}
+
+pub(super) struct ReservedNativeIdentities {
+    next: u64,
+    end: u64,
+}
+
+pub(super) fn reserve_native_identities(count: u64) -> LeafResult<ReservedNativeIdentities> {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    if count == 0 {
+        return Err(EXHAUSTED);
+    }
+    let next = NEXT
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            if next == 0 {
+                None
+            } else {
+                next.checked_add(count)
+            }
+        })
+        .map_err(|_| EXHAUSTED)?;
+    Ok(ReservedNativeIdentities {
+        next,
+        end: next + count,
+    })
+}
+
+impl ReservedNativeIdentities {
+    pub(super) fn take(&mut self) -> LeafResult<u64> {
+        if self.next == 0 || self.next >= self.end {
+            return Err(EXHAUSTED);
+        }
+        let value = self.next;
+        self.next += 1;
+        Ok(value)
+    }
+}
+
+// A staged record cannot be created from an independently supplied Network bit.
+pub(super) struct PreparedResourceNetwork {
+    authority: u64,
+}
+
+impl NativeValues {
+    pub(super) fn resource_failure(&self) -> Option<ResourceOrdinaryFailure<'_>> {
+        self.current_failure()
+            .map(|(status, message)| ResourceOrdinaryFailure {
+                status,
+                message: self.current_dynamic_failure_message().unwrap_or(message),
+                prefix: self.current_property_case_context(),
+            })
+    }
+
+    pub(super) fn prepare_resource_network(
+        &mut self,
+        identities: &mut ReservedNativeIdentities,
+    ) -> LeafResult<PreparedResourceNetwork> {
+        if self.opaque_capabilities.contains_key("Network") {
+            return Err(INVALID_HANDLE);
+        }
+        self.opaque_capabilities
+            .try_reserve(1)
+            .map_err(|_| EXHAUSTED)?;
+        Ok(PreparedResourceNetwork {
+            authority: identities.take()?,
+        })
+    }
+
+    pub(super) fn commit_resource_network(&mut self, prepared: PreparedResourceNetwork) -> u64 {
+        let authority = prepared.authority;
+        // The caller holds the same state mutex from preparation through publication.
+        self.opaque_capabilities.insert("Network", authority);
+        authority
+    }
+
+    /// Check ordinary carriers at the exact installed schema. This cannot recover
+    /// Resource tokens: occupied shapes are refused and the Resource table is separate.
+    pub(super) fn validate_resource_ordinary(
+        &self,
+        value: u64,
+        layout: &crate::resource_custody::RegisteredNativeLayout,
+        shape: u32,
+    ) -> LeafResult<()> {
+        use crate::resource_custody::NativeShape;
+        let mut shape = shape;
+        let mut value = value;
+        loop {
+            match layout.shapes().get(shape as usize).ok_or(INVALID_HANDLE)? {
+                NativeShape::Integer { .. } | NativeShape::Float { .. } => return Ok(()),
+                NativeShape::Bool if value <= 1 => return Ok(()),
+                NativeShape::Nothing if value == 0 => return Ok(()),
+                NativeShape::String
+                    if self
+                        .strings
+                        .get(&value)
+                        .is_some_and(|s| s.references > 0 && s.pending_depth == 0) =>
+                {
+                    return Ok(());
+                }
+                NativeShape::Network if self.validates_resource_network(value) => return Ok(()),
+                NativeShape::HookDescriptor { .. } => return Err(INVALID_HANDLE),
+                NativeShape::Optional { child } => {
+                    let sum = self.sums.get(&value).ok_or(INVALID_HANDLE)?;
+                    if sum.pending_depth != 0 || sum.payload_pending_depth != 0 || sum.tag > 1 {
+                        return Err(INVALID_HANDLE);
+                    }
+                    if sum.tag == 0 {
+                        return if !sum.owned && sum.bits == 0 {
+                            Ok(())
+                        } else {
+                            Err(INVALID_HANDLE)
+                        };
+                    }
+                    let payload = layout.shapes().get(*child as usize).ok_or(INVALID_HANDLE)?;
+                    let owned = matches!(
+                        payload,
+                        NativeShape::String
+                            | NativeShape::Optional { .. }
+                            | NativeShape::Result { .. }
+                    );
+                    if sum.owned != owned {
+                        return Err(INVALID_HANDLE);
+                    }
+                    shape = *child;
+                    value = sum.bits;
+                }
+                NativeShape::Result { ok, fail } => {
+                    let sum = self.sums.get(&value).ok_or(INVALID_HANDLE)?;
+                    if sum.pending_depth != 0 || sum.payload_pending_depth != 0 || sum.tag > 1 {
+                        return Err(INVALID_HANDLE);
+                    }
+                    shape = if sum.tag == SUM_SUCCESS { *ok } else { *fail };
+                    let payload = layout.shapes().get(shape as usize).ok_or(INVALID_HANDLE)?;
+                    let owned = matches!(
+                        payload,
+                        NativeShape::String
+                            | NativeShape::Optional { .. }
+                            | NativeShape::Result { .. }
+                    );
+                    if sum.owned != owned {
+                        return Err(INVALID_HANDLE);
+                    }
+                    value = sum.bits;
+                }
+                _ => return Err(INVALID_HANDLE),
+            }
+        }
+    }
+
+    /// Copy only the exact ordinary String failure arm; never clone Resource data.
+    pub(super) fn clone_resource_string_companion(
+        &mut self,
+        layout: &crate::resource_custody::RegisteredNativeLayout,
+        shape: u32,
+        value: u64,
+    ) -> LeafResult<u64> {
+        if !matches!(
+            layout.shapes().get(shape as usize),
+            Some(crate::resource_custody::NativeShape::String)
+        ) {
+            return Err(INVALID_HANDLE);
+        }
+        self.validate_resource_ordinary(value, layout, shape)?;
+        self.clone_value(value)
+    }
+
+    /// Ordinary carrier children transport pending data without inspecting it.
+    /// Scalar depth is stored separately; strings retain their handle's depth.
+    pub(super) fn validate_resource_carrier_companion(
+        &self,
+        value: u64,
+        layout: &crate::resource_custody::RegisteredNativeLayout,
+        shape: u32,
+        scalar_depth: u64,
+    ) -> LeafResult<()> {
+        use crate::resource_custody::NativeShape;
+        match layout.shapes().get(shape as usize).ok_or(INVALID_HANDLE)? {
+            NativeShape::Integer { bits, .. } if *bits < 64 && value >> *bits != 0 => {
+                Err(INVALID_HANDLE)
+            }
+            NativeShape::Float { bits: 32 } if value >> 32 != 0 => Err(INVALID_HANDLE),
+            NativeShape::Integer { .. }
+            | NativeShape::Float { .. }
+            | NativeShape::Bool
+            | NativeShape::Nothing => self.validate_resource_ordinary(value, layout, shape),
+            NativeShape::String if scalar_depth == 0 => {
+                let string = self.strings.get(&value).ok_or(INVALID_HANDLE)?;
+                if string.references == 0 {
+                    return Err(INVALID_HANDLE);
+                }
+                Ok(())
+            }
+            _ if scalar_depth == 0 => self.validate_resource_ordinary(value, layout, shape),
+            _ => Err(INVALID_HANDLE),
+        }
+    }
+
+    pub(super) fn clone_resource_carrier_string_companion(
+        &mut self,
+        layout: &crate::resource_custody::RegisteredNativeLayout,
+        shape: u32,
+        value: u64,
+    ) -> LeafResult<u64> {
+        if !matches!(
+            layout.shapes().get(shape as usize),
+            Some(crate::resource_custody::NativeShape::String)
+        ) {
+            return Err(INVALID_HANDLE);
+        }
+        self.validate_resource_carrier_companion(value, layout, shape, 0)?;
+        self.clone_value(value)
+    }
+
+    pub(super) fn drop_resource_carrier_companion(
+        &mut self,
+        layout: &crate::resource_custody::RegisteredNativeLayout,
+        shape: u32,
+        value: u64,
+        scalar_depth: u64,
+    ) -> LeafResult<()> {
+        self.validate_resource_carrier_companion(value, layout, shape, scalar_depth)?;
+        if matches!(
+            layout.shapes().get(shape as usize),
+            Some(crate::resource_custody::NativeShape::String)
+        ) {
+            self.drop_value(value).map(|_| ())
+        } else {
+            self.drop_resource_typed_companion(layout, shape, value)
+        }
+    }
+
+    pub(super) fn drop_resource_typed_companion(
+        &mut self,
+        layout: &crate::resource_custody::RegisteredNativeLayout,
+        shape: u32,
+        value: u64,
+    ) -> LeafResult<()> {
+        use crate::resource_custody::NativeShape;
+        self.validate_resource_ordinary(value, layout, shape)?;
+        match layout.shapes().get(shape as usize).ok_or(INVALID_HANDLE)? {
+            NativeShape::String | NativeShape::Optional { .. } | NativeShape::Result { .. } => {
+                self.drop_value(value).map(|_| ())
+            }
+            NativeShape::Integer { .. }
+            | NativeShape::Float { .. }
+            | NativeShape::Bool
+            | NativeShape::Nothing
+            | NativeShape::Network => Ok(()),
+            _ => Err(INVALID_HANDLE),
+        }
+    }
+
+    pub(super) fn validates_resource_network(&self, authority: u64) -> bool {
+        authority != 0 && self.opaque_capabilities.get("Network") == Some(&authority)
+    }
+
+    pub(super) fn prepare_resource_ordinary_output(
+        &mut self,
+    ) -> LeafResult<ReservedNativeIdentities> {
+        #[cfg(test)]
+        self.allocation_checkpoint()?;
+        self.strings.try_reserve(1).map_err(|_| EXHAUSTED)?;
+        self.sums.try_reserve(1).map_err(|_| EXHAUSTED)?;
+        self.sums_created.checked_add(1).ok_or(EXHAUSTED)?;
+        reserve_native_identities(2)
+    }
+
+    pub(super) fn publish_resource_error(
+        &mut self,
+        text: String,
+        identities: &mut ReservedNativeIdentities,
+    ) -> LeafResult<u64> {
+        let id = identities.take()?;
+        self.strings.insert(
+            id,
+            NativeString {
+                text,
+                references: 1,
+                pending_depth: 0,
+            },
+        );
+        Ok(id)
+    }
+
+    pub(super) fn publish_resource_borrow_result(
+        &mut self,
+        result: Result<i64, String>,
+        identities: &mut ReservedNativeIdentities,
+    ) -> LeafResult<u64> {
+        let (tag, bits, owned) = match result {
+            Ok(value) => (SUM_SUCCESS, value as u64, false),
+            Err(text) => (
+                SUM_FAILURE,
+                self.publish_resource_error(text, identities)?,
+                true,
+            ),
+        };
+        let id = identities.take()?;
+        self.sums.insert(
+            id,
+            NativeSum {
+                tag,
+                bits,
+                owned,
+                pending_depth: 0,
+                payload_pending_depth: 0,
+            },
+        );
+        self.sums_created += 1;
+        Ok(id)
+    }
+
+    pub(super) fn drop_resource_ordinary_companion(&mut self, handle: u64) -> LeafResult<()> {
+        self.drop_value(handle).map(|_| ())
+    }
+}
+
+// Hold the existing context lease through the operation. Cleanup is permitted
+// after failure; normal operations cannot run once the first failure is set.
+trait FailureDefault {
+    fn failure_default() -> Self;
+}
+impl FailureDefault for u64 {
+    fn failure_default() -> Self {
+        0
+    }
+}
+impl FailureDefault for u32 {
+    fn failure_default() -> Self {
+        JettRuntimeStatusV1::INVALID_CONTEXT.code()
+    }
+}
+impl FailureDefault for i64 {
+    fn failure_default() -> Self {
+        0
+    }
+}
+impl FailureDefault for f64 {
+    fn failure_default() -> Self {
+        0.0
+    }
+}
+fn leaf<T: FailureDefault>(
+    context: *const JettRuntimeContextV1,
+    cleanup: bool,
+    operation: impl FnOnce(&mut NativeValues) -> LeafResult<T>,
+) -> T {
+    let Ok(key) = context_key(context) else {
+        return T::failure_default();
+    };
+    let Ok(lease) = acquire_context(key) else {
+        return T::failure_default();
+    };
+    let mut state = lock_unpoisoned(&lease.entry.state);
+    let Some(state) = state.as_mut() else {
+        return T::failure_default();
+    };
+    if state.values.operation_failure().is_some() && !cleanup {
+        return T::failure_default();
+    }
+    match catch_unwind(AssertUnwindSafe(|| operation(&mut state.values))) {
+        Ok(Ok(value)) => value,
+        outcome => {
+            let error = match outcome {
+                Ok(Err(error)) => error,
+                Err(payload) => {
+                    discard_panic_payload(payload);
+                    (JettRuntimeStatusV1::PANIC, PANIC_MESSAGE)
+                }
+                Ok(Ok(_)) => unreachable!(),
+            };
+            state.values.cleanup_failed |= cleanup;
+            state.values.record_ordinary_failure(error);
+            // Native status failure ends an unfinished compiler graph factory.
+            // Roll back while this same context state mutex is still held;
+            // callers may capture the first error and continue the context.
+            if let Err(abort_error) = state.values.abort_unfinished_actor_graphs() {
+                state.values.cleanup_failed = true;
+                state.values.record_ordinary_failure(abort_error);
+            }
+            T::failure_default()
+        }
+    }
+}
+
+/// Configure an opt-in deterministic Clock provider before native program entry.
+/// An empty script selects an exhausted provider rather than the wall clock.
+///
+/// # Safety
+/// `data` must point to `length` readable bytes when `length` is nonzero.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_clock_configure_scripted(
+    context: *const JettRuntimeContextV1,
+    data: *const u8,
+    length: u64,
+) -> u32 {
+    leaf(context, false, |s| {
+        let invalid = (
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            clock::INVALID_SCRIPT.as_bytes(),
+        );
+        if s.clock.is_some() || s.clock_script.is_some() {
+            return Err(invalid);
+        }
+        let length = usize::try_from(length).map_err(|_| invalid)?;
+        if length > isize::MAX as usize || (length != 0 && data.is_null()) {
+            return Err(invalid);
+        }
+        let bytes = if length == 0 {
+            &[][..]
+        } else {
+            // SAFETY: the caller supplies a readable slice for this call.
+            unsafe { std::slice::from_raw_parts(data, length) }
+        };
+        let script = std::str::from_utf8(bytes).map_err(|_| invalid)?;
+        s.clock_script = Some(clock::decode_test_script(script).map_err(|_| invalid)?);
+        Ok(0)
+    })
+}
+
+/// Configure a deterministic Random provider before the capability is granted.
+///
+/// # Safety
+/// `data` must point to `length` readable bytes when `length` is nonzero.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_random_configure_scripted(
+    context: *const JettRuntimeContextV1,
+    data: *const u8,
+    length: u64,
+) -> u32 {
+    leaf(context, false, |s| {
+        let invalid = (
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            random::INVALID_SCRIPT.as_bytes(),
+        );
+        if s.random.is_some() || s.random_provider.is_some() {
+            return Err(invalid);
+        }
+        let length = usize::try_from(length).map_err(|_| invalid)?;
+        if length > isize::MAX as usize || (length != 0 && data.is_null()) {
+            return Err(invalid);
+        }
+        let bytes = if length == 0 {
+            &[][..]
+        } else {
+            // SAFETY: the caller supplies a readable slice for this call.
+            unsafe { std::slice::from_raw_parts(data, length) }
+        };
+        let script = std::str::from_utf8(bytes).map_err(|_| invalid)?;
+        s.random_provider = Some(RandomProvider::scripted(
+            random::decode_test_script(script).map_err(|_| invalid)?,
+        ));
+        Ok(0)
+    })
+}
+
+/// Configure an isolated Environment launch snapshot before program entry.
+///
+/// # Safety
+/// `data` must point to `length` readable bytes when `length` is nonzero.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_environment_configure_snapshot(
+    context: *const JettRuntimeContextV1,
+    data: *const u8,
+    length: u64,
+) -> u32 {
+    leaf(context, false, |s| {
+        let invalid = (
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            environment::INVALID_SNAPSHOT.as_bytes(),
+        );
+        if s.environment.is_some() || s.environment_snapshot.is_some() {
+            return Err(invalid);
+        }
+        let length = usize::try_from(length).map_err(|_| invalid)?;
+        if length > isize::MAX as usize || (length != 0 && data.is_null()) {
+            return Err(invalid);
+        }
+        let bytes = if length == 0 {
+            &[][..]
+        } else {
+            // SAFETY: the caller supplies a readable slice for this call.
+            unsafe { std::slice::from_raw_parts(data, length) }
+        };
+        let script = std::str::from_utf8(bytes).map_err(|_| invalid)?;
+        let snapshot = environment::decode_test_snapshot(script).map_err(|_| invalid)?;
+        s.environment_snapshot = Some(
+            LaunchEnvironmentSnapshot::injected(snapshot)
+                .map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?,
+        );
+        Ok(0)
+    })
+}
+
+/// Configure deterministic Graphics events before program entry. No window is
+/// opened until the compiled graphics session requests one.
+///
+/// # Safety
+/// `data` must point to `length` readable bytes when `length` is nonzero.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_graphics_configure_scripted(
+    context: *const JettRuntimeContextV1,
+    data: *const u8,
+    length: u64,
+) -> u32 {
+    leaf(context, false, |s| {
+        let invalid = (
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            graphics::INVALID_TEST_SCRIPT.as_bytes(),
+        );
+        if s.graphics.is_some() || s.graphics_script.is_some() {
+            return Err(invalid);
+        }
+        let length = usize::try_from(length).map_err(|_| invalid)?;
+        if length > isize::MAX as usize || (length != 0 && data.is_null()) {
+            return Err(invalid);
+        }
+        let bytes = if length == 0 {
+            &[][..]
+        } else {
+            // SAFETY: the caller supplies a readable slice for this call.
+            unsafe { std::slice::from_raw_parts(data, length) }
+        };
+        let script = std::str::from_utf8(bytes).map_err(|_| invalid)?;
+        s.graphics_script = Some(graphics::decode_test_script(script).map_err(|_| invalid)?);
+        Ok(0)
+    })
+}
+
+/// Complete a successful native entry by rejecting unconsumed deterministic
+/// provider samples. An entry that already failed must skip this check so its
+/// original runtime error remains the terminal failure.
+///
+/// # Safety
+/// `context` must identify a live, stationary runtime context.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_validate_scripted_consumption(
+    context: *const JettRuntimeContextV1,
+) -> u32 {
+    leaf(context, false, NativeValues::validate_scripted_consumption)
+}
+
+/// Scalar signature schema consumed by Cranelift, never inferred from names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AbiScalar {
+    Pointer,
+    I32,
+    I64,
+    F64,
+}
+macro_rules! leaves {
+    ($( $variant:ident, $name:ident, $cleanup:literal, ($($arg:ident: $rust:ty => $abi:ident),*), $ret:ty => $retabi:ident, $body:expr; )*) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum NativeLeaf { $( $variant, )* }
+        impl NativeLeaf {
+            pub fn symbol(self) -> &'static str { match self { $( Self::$variant => stringify!($name), )* } }
+            pub fn parameters(self) -> &'static [AbiScalar] { match self { $( Self::$variant => &[AbiScalar::Pointer, $( AbiScalar::$abi, )*], )* } }
+            pub fn result(self) -> AbiScalar { match self { $( Self::$variant => AbiScalar::$retabi, )* } }
+        }
+        $(
+            /// Typed leaf operation; result ownership follows its operation contract.
+            /// # Safety
+            /// Context must be readable, stationary and live for the call.
+            /// Pointer/length inputs must describe one readable allocation.
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn $name(context: *const JettRuntimeContextV1, $( $arg: $rust ),*) -> $ret {
+                leaf(context, $cleanup, $body)
+            }
+        )*
+    }
+}
+leaves! {
+    BuilderNew, jett_rt_v1_builder_new, false, (layout_pointer: u64 => I64, layout_length: u64 => I64), u64 => I64,
+        |s| { if layout_pointer == 0 { return Err(INVALID_CONSTRUCTION_LAYOUT); }
+            let length = usize::try_from(layout_length).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            if length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION_LAYOUT); }
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
+            s.new_builder(layout) };
+    BuilderVariantNew, jett_rt_v1_builder_variant_new, false, (layout_pointer: u64 => I64, layout_length: u64 => I64, metadata: u64 => I64, debug_pointer: u64 => I64, debug_length: u64 => I64), u64 => I64,
+        |s| { if layout_pointer == 0 || debug_pointer == 0 { return Err(INVALID_CONSTRUCTION_LAYOUT); }
+            let length = usize::try_from(layout_length).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            let debug_length = usize::try_from(debug_length).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            if length > isize::MAX as usize || debug_length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION_LAYOUT); }
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
+            let debug = unsafe { std::slice::from_raw_parts(debug_pointer as *const u8, debug_length) };
+            s.new_member_builder(layout, metadata, debug, false) };
+    BuilderMachineNew, jett_rt_v1_builder_machine_new, false, (layout_pointer: u64 => I64, layout_length: u64 => I64, metadata: u64 => I64, debug_pointer: u64 => I64, debug_length: u64 => I64), u64 => I64,
+        |s| { if layout_pointer == 0 || debug_pointer == 0 { return Err(INVALID_CONSTRUCTION_LAYOUT); }
+            let length = usize::try_from(layout_length).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            let debug_length = usize::try_from(debug_length).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            if length > isize::MAX as usize || debug_length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION_LAYOUT); }
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
+            let debug = unsafe { std::slice::from_raw_parts(debug_pointer as *const u8, debug_length) };
+            s.new_member_builder(layout, metadata, debug, true) };
+    BuilderPut, jett_rt_v1_builder_put, false, (builder: u64 => I64, field: u64 => I64, bits: u64 => I64, owned: u32 => I32, owner_pointer: u64 => I64, owner_length: u64 => I64, type_pointer: u64 => I64, type_length: u64 => I64, canonical_pointer: u64 => I64, canonical_length: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u64 => I64,
+        |s| { if owned > 1 || owner_pointer == 0 || type_pointer == 0 || canonical_pointer == 0 || layout_pointer == 0 { return Err(INVALID_CONSTRUCTION); }
+            let owner_length = usize::try_from(owner_length).map_err(|_| INVALID_CONSTRUCTION)?;
+            let type_length = usize::try_from(type_length).map_err(|_| INVALID_CONSTRUCTION)?;
+            let canonical_length = usize::try_from(canonical_length).map_err(|_| INVALID_CONSTRUCTION)?;
+            let layout_length = usize::try_from(layout_length).map_err(|_| INVALID_CONSTRUCTION)?;
+            if owner_length > isize::MAX as usize || type_length > isize::MAX as usize || canonical_length > isize::MAX as usize || layout_length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION); }
+            let owner = unsafe { std::slice::from_raw_parts(owner_pointer as *const u8, owner_length) };
+            let provided_type = unsafe { std::slice::from_raw_parts(type_pointer as *const u8, type_length) };
+            let canonical_type = unsafe { std::slice::from_raw_parts(canonical_pointer as *const u8, canonical_length) };
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, layout_length) };
+            let owner = std::str::from_utf8(owner).map_err(|_| INVALID_CONSTRUCTION)?;
+            let provided_type = std::str::from_utf8(provided_type).map_err(|_| INVALID_CONSTRUCTION)?;
+            let canonical_type = std::str::from_utf8(canonical_type).map_err(|_| INVALID_CONSTRUCTION)?;
+            s.builder_put(builder, field, bits, owned != 0, owner, provided_type, canonical_type, layout) };
+    BuilderPutScalarTask, jett_rt_v1_builder_put_scalar_task, false, (builder: u64 => I64, field: u64 => I64, bits: u64 => I64, depth: u64 => I64, owned: u32 => I32, owner_pointer: u64 => I64, owner_length: u64 => I64, type_pointer: u64 => I64, type_length: u64 => I64, canonical_pointer: u64 => I64, canonical_length: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u64 => I64,
+        |s| { if owned > 1 || owner_pointer == 0 || type_pointer == 0 || canonical_pointer == 0 || layout_pointer == 0 { return Err(INVALID_CONSTRUCTION); }
+            let owner_length = usize::try_from(owner_length).map_err(|_| INVALID_CONSTRUCTION)?;
+            let type_length = usize::try_from(type_length).map_err(|_| INVALID_CONSTRUCTION)?;
+            let canonical_length = usize::try_from(canonical_length).map_err(|_| INVALID_CONSTRUCTION)?;
+            let layout_length = usize::try_from(layout_length).map_err(|_| INVALID_CONSTRUCTION)?;
+            if owner_length > isize::MAX as usize || type_length > isize::MAX as usize || canonical_length > isize::MAX as usize || layout_length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION); }
+            let owner = unsafe { std::slice::from_raw_parts(owner_pointer as *const u8, owner_length) };
+            let provided_type = unsafe { std::slice::from_raw_parts(type_pointer as *const u8, type_length) };
+            let canonical_type = unsafe { std::slice::from_raw_parts(canonical_pointer as *const u8, canonical_length) };
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, layout_length) };
+            let owner = std::str::from_utf8(owner).map_err(|_| INVALID_CONSTRUCTION)?;
+            let provided_type = std::str::from_utf8(provided_type).map_err(|_| INVALID_CONSTRUCTION)?;
+            let canonical_type = std::str::from_utf8(canonical_type).map_err(|_| INVALID_CONSTRUCTION)?;
+            s.builder_put_depth(builder, field, bits, depth, owned != 0, owner, provided_type, canonical_type, layout) };
+    BuilderFinish, jett_rt_v1_builder_finish, false, (builder: u64 => I64, owner_pointer: u64 => I64, owner_length: u64 => I64), u64 => I64,
+        |s| { if owner_pointer == 0 { return Err(INVALID_CONSTRUCTION); }
+            let owner_length = usize::try_from(owner_length).map_err(|_| INVALID_CONSTRUCTION)?;
+            if owner_length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION); }
+            let owner = unsafe { std::slice::from_raw_parts(owner_pointer as *const u8, owner_length) };
+            let owner = std::str::from_utf8(owner).map_err(|_| INVALID_CONSTRUCTION)?;
+            s.builder_finish(builder, owner) };
+    FunctionAdapter, jett_rt_v1_function_adapter, false, (source: u64 => I64, code: u64 => I64), u64 => I64,
+        |s| s.function_adapter(source, code);
+    InterfaceValidate, jett_rt_v1_interface_validate, false, (value: u64 => I64, layout: *const u8 => Pointer, length: u64 => I64), u32 => I32,
+        |s| { let length = usize::try_from(length).map_err(|_| INVALID_STRUCT)?;
+            if length > isize::MAX as usize || layout.is_null() { return Err(INVALID_STRUCT); }
+            let bytes = unsafe { std::slice::from_raw_parts(layout, length) };
+            let conversion = interface_conversion::NativeInterfaceConversion::parse(bytes)?;
+            conversion.validate_owners(s, NativeField { bits: value, owned: true, pending_depth: 0 })?;
+            Ok(0) };
+    InterfaceConvert, jett_rt_v1_interface_convert, false, (value: u64 => I64, layout: *const u8 => Pointer, length: u64 => I64), u64 => I64,
+        |s| { let length = usize::try_from(length).map_err(|_| INVALID_STRUCT)?;
+            if length > isize::MAX as usize || layout.is_null() { return Err(INVALID_STRUCT); }
+            let bytes = unsafe { std::slice::from_raw_parts(layout, length) };
+            let conversion = interface_conversion::NativeInterfaceConversion::parse(bytes)?;
+            let field = conversion.convert(s, NativeField { bits: value, owned: true, pending_depth: 0 })?;
+            if !field.owned { return Err(INVALID_STRUCT); }
+            Ok(field.bits) };
+    InterfaceBox, jett_rt_v1_interface_box, false, (concrete: u64 => I64, bits: u64 => I64, owned: u32 => I32, depth: u64 => I64, layout: *const u8 => Pointer, length: u64 => I64), u64 => I64,
+        |s| { let length = usize::try_from(length).map_err(|_| INVALID_STRUCT)?;
+            if owned > 1 || length > isize::MAX as usize || (length != 0 && layout.is_null()) { return Err(INVALID_STRUCT); }
+            let layout = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(layout, length) } };
+            s.interface_box(concrete, bits, owned != 0, depth, layout) };
+    InterfaceType, jett_rt_v1_interface_type, false, (value: u64 => I64), u64 => I64,
+        |s| { let record = s.structs.get(&value).ok_or(INVALID_STRUCT)?;
+            if record.pending_depth != 0 || s.struct_field(value, 1)?.pending_depth != 0 { return Ok(u64::MAX); }
+            Ok(s.struct_field(value, 0)?.bits) };
+    InterfaceUnbox, jett_rt_v1_interface_unbox, false, (value: u64 => I64, concrete: u64 => I64), u64 => I64,
+        |s| { if s.struct_field(value, 0)?.bits != concrete { return Err(INVALID_STRUCT); }
+            let field = s.struct_field(value, 1)?;
+            let depth = s.structs.get(&value).ok_or(INVALID_STRUCT)?.pending_depth;
+            if field.owned { s.clone_with_pending_depth(field.bits, depth) } else { Ok(field.bits) } };
+    InterfacePendingDepth, jett_rt_v1_interface_pending_depth, false, (value: u64 => I64), u64 => I64,
+        |s| s.structs.get(&value).map(|v| v.pending_depth).ok_or(INVALID_STRUCT);
+    RuntimeFailMessage, jett_rt_v1_runtime_fail_message, false, (message: u64 => I64), u32 => I32,
+        |s| { s.set_dynamic_failure_message(s.text(message)?.as_bytes().to_vec());
+            Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"native runtime failure")) };
+    StructNew, jett_rt_v1_struct_new, false, (count: u64 => I64), u64 => I64,
+        |s| s.new_struct(count);
+    StructInit, jett_rt_v1_struct_init, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, owned: u32 => I32), u32 => I32,
+        |s| { if owned > 1 { return Err(INVALID_STRUCT); }
+            let slot = s.structs.get_mut(&value).and_then(|v| usize::try_from(index).ok().and_then(|i| v.fields.get_mut(i))).ok_or(INVALID_STRUCT)?;
+            if slot.is_some() { return Err(INVALID_STRUCT); }
+            *slot = Some(NativeField { bits, owned: owned != 0, pending_depth: 0 }); Ok(0) };
+    StructInitScalarTask, jett_rt_v1_struct_init_scalar_task, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, depth: u64 => I64), u32 => I32,
+        |s| { let slot = s.structs.get_mut(&value).and_then(|v| usize::try_from(index).ok().and_then(|i| v.fields.get_mut(i))).ok_or(INVALID_STRUCT)?;
+            if slot.is_some() { return Err(INVALID_STRUCT); }
+            *slot = Some(NativeField { bits, owned: false, pending_depth: depth }); Ok(0) };
+    StructPendingAccessCheck, jett_rt_v1_struct_pending_access_check, false, (value: u64 => I64, layout: *const u8 => Pointer, layout_length: u64 => I64, message: *const u8 => Pointer, message_length: u64 => I64, render: u32 => I32), u32 => I32,
+        |s| { let layout_length = usize::try_from(layout_length).map_err(|_| INVALID_STRUCT)?;
+            let message_length = usize::try_from(message_length).map_err(|_| INVALID_STRUCT)?;
+            if render > 1 || layout_length > isize::MAX as usize || message_length > isize::MAX as usize
+                || (layout_length != 0 && layout.is_null()) || (message_length != 0 && message.is_null()) { return Err(INVALID_STRUCT); }
+            let layout = if layout_length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(layout, layout_length) } };
+            let message = if message_length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(message, message_length) } };
+            let message = std::str::from_utf8(message).map_err(|_| INVALID_STRUCT)?;
+            s.check_struct_pending_access(value, layout, message, render != 0) };
+    StructField, jett_rt_v1_struct_field, false, (value: u64 => I64, index: u64 => I64), u64 => I64,
+        |s| Ok(s.struct_field(value, index)?.bits);
+    StructFieldPendingDepth, jett_rt_v1_struct_field_pending_depth, false, (value: u64 => I64, index: u64 => I64), u64 => I64,
+        |s| Ok(s.struct_field(value, index)?.pending_depth);
+    ActorRegister, jett_rt_v1_actor_register, false, (value: u64 => I64), u64 => I64,
+        |s| s.register_actor(value);
+    ActorGraphBegin, jett_rt_v1_actor_graph_begin, false, (), u64 => I64,
+        |s| s.begin_actor_graph();
+    ActorGraphReserveBase, jett_rt_v1_actor_graph_reserve_base, false, (ticket: u64 => I64, field_count: u64 => I64), u64 => I64,
+        |s| s.reserve_actor_graph_base(ticket, field_count);
+    ActorGraphReservePending, jett_rt_v1_actor_graph_reserve_pending, false, (ticket: u64 => I64, base: u64 => I64, depth: u64 => I64), u64 => I64,
+        |s| s.reserve_actor_graph_pending(ticket, base, depth);
+    ActorGraphFill, jett_rt_v1_actor_graph_fill, false, (ticket: u64 => I64, base: u64 => I64, index: u64 => I64, bits: u64 => I64, owned: u32 => I32, depth: u64 => I64, layout: *const u8 => Pointer, layout_length: u64 => I64), u32 => I32,
+        |s| { let length = usize::try_from(layout_length).map_err(|_| actor_graph_import::INVALID_IMPORT)?;
+            if owned > 1 || length > isize::MAX as usize || layout.is_null() { return Err(actor_graph_import::INVALID_IMPORT); }
+            let bytes = unsafe { std::slice::from_raw_parts(layout, length) };
+            s.fill_actor_graph(ticket, base, index, NativeField { bits, owned: owned != 0, pending_depth: depth }, bytes) };
+    ActorGraphCommit, jett_rt_v1_actor_graph_commit, false, (ticket: u64 => I64), u32 => I32,
+        |s| s.commit_actor_graph(ticket);
+    ActorGraphRootFill, jett_rt_v1_actor_graph_root_fill, false, (ticket: u64 => I64, bits: u64 => I64, owned: u32 => I32, depth: u64 => I64, layout: *const u8 => Pointer, layout_length: u64 => I64), u32 => I32,
+        |s| { let length = usize::try_from(layout_length).map_err(|_| actor_graph_import::INVALID_IMPORT)?;
+            if owned > 1 || length > isize::MAX as usize || layout.is_null() { return Err(actor_graph_import::INVALID_IMPORT); }
+            let bytes = unsafe { std::slice::from_raw_parts(layout, length) };
+            s.fill_actor_graph_root(ticket, NativeField { bits, owned: owned != 0, pending_depth: depth }, bytes) };
+    ActorGraphAbort, jett_rt_v1_actor_graph_abort, true, (ticket: u64 => I64), u32 => I32,
+        |s| s.abort_actor_graph(ticket);
+    ActorIdentityEqual, jett_rt_v1_actor_identity_equal, false, (left: u64 => I64, right: u64 => I64, not_equal: u32 => I32), u32 => I32,
+        |s| s.equal_actor_identity(left, right, not_equal);
+    ActorRun, jett_rt_v1_actor_run, false, (value: u64 => I64), u64 => I64,
+        |s| s.run_actor(value);
+    ActorTaskJoin, jett_rt_v1_actor_task_join, false, (value: u64 => I64), u64 => I64,
+        |s| s.join_actor(value);
+    CapabilityRun, jett_rt_v1_capability_run, false, (value: u64 => I64), u64 => I64,
+        |s| s.run_capability(value);
+    CapabilityTaskJoin, jett_rt_v1_capability_task_join, false, (value: u64 => I64), u64 => I64,
+        |s| s.join_capability(value);
+    ActorMessageCheck, jett_rt_v1_actor_message_check, false, (value: u64 => I64), u32 => I32,
+        |s| s.check_actor_message(value);
+    ActorReplace, jett_rt_v1_actor_replace, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, owned: u32 => I32), u32 => I32,
+        |s| { if owned > 1 { return Err(INVALID_ACTOR); }
+            s.replace_actor_field(value, index, bits, owned != 0) };
+    ActorReplaceOccupied, jett_rt_v1_actor_replace_occupied, false, (actor: u64 => I64, index: u64 => I64, bits: u64 => I64, owned: u32 => I32, depth: u64 => I64), u64 => I64,
+        |s| { if owned > 1 { return Err(INVALID_ACTOR); }
+            Ok(s.replace_actor_field_occupied(actor, index, NativeField { bits, owned: owned != 0, pending_depth: depth })?.bits) };
+    ActorReplaceScalarTask, jett_rt_v1_actor_replace_scalar_task, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, depth: u64 => I64), u32 => I32,
+        |s| s.replace_actor_field_depth(value, index, bits, depth, false);
+    ReflectedFieldIndex, jett_rt_v1_reflected_field_index, false, (actual: u64 => I64, expected: u64 => I64), u64 => I64,
+        |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_FIELD, "type.field_value");
+    ReflectedVariantFieldIndex, jett_rt_v1_reflected_variant_field_index, false, (actual: u64 => I64, expected: u64 => I64), u64 => I64,
+        |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_VARIANT_FIELD, "type.variant_field_value");
+    ReflectedMachineFieldIndex, jett_rt_v1_reflected_machine_field_index, false, (actual: u64 => I64, expected: u64 => I64), u64 => I64,
+        |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_MACHINE_FIELD, "type.machine_field_value");
+    ReflectedCheckedFieldIndex, jett_rt_v1_reflected_checked_field_index, false, (actual: u64 => I64, expected: u64 => I64, compatible: u64 => I64, requested_type: *const u8 => Pointer, requested_length: u64 => I64, kind: u32 => I32), u64 => I64,
+        |s| { let length = usize::try_from(requested_length).map_err(|_| INVALID_REFLECTED_FIELD)?;
+            if length > isize::MAX as usize || (length != 0 && requested_type.is_null()) { return Err(INVALID_REFLECTED_FIELD); }
+            let bytes = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(requested_type, length) } };
+            let requested = std::str::from_utf8(bytes).map_err(|_| INVALID_REFLECTED_FIELD)?;
+            let (mismatch, caller) = match kind {
+                0 => (INVALID_REFLECTED_FIELD, "type.field_value"),
+                1 => (INVALID_REFLECTED_VARIANT_FIELD, "type.variant_field_value"),
+                2 => (INVALID_REFLECTED_MACHINE_FIELD, "type.machine_field_value"),
+                _ => return Err(INVALID_REFLECTED_FIELD),
+            };
+            s.reflected_checked_field_index(actual, expected, compatible, requested, mismatch, caller) };
+    ReflectedFieldOwnerCheck, jett_rt_v1_reflected_field_owner_check, false, (actual: u64 => I64, owner: *const u8 => Pointer, owner_length: u64 => I64, member: *const u8 => Pointer, member_length: u64 => I64, has_member: u32 => I32, kind: u32 => I32, layout: *const u8 => Pointer, layout_length: u64 => I64), u32 => I32,
+        |s| { let owner_length = usize::try_from(owner_length).map_err(|_| INVALID_REFLECTED_FIELD)?;
+            let member_length = usize::try_from(member_length).map_err(|_| INVALID_REFLECTED_FIELD)?;
+            if owner_length > isize::MAX as usize || (owner_length != 0 && owner.is_null())
+                || member_length > isize::MAX as usize || (member_length != 0 && member.is_null())
+                || has_member > 1 { return Err(INVALID_REFLECTED_FIELD); }
+            let layout_length = usize::try_from(layout_length).map_err(|_| INVALID_REFLECTED_FIELD)?;
+            if layout_length > isize::MAX as usize || (layout_length != 0 && layout.is_null()) { return Err(INVALID_REFLECTED_FIELD); }
+            let owner = if owner_length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(owner, owner_length) } };
+            let member = if member_length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(member, member_length) } };
+            let layout = if layout_length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(layout, layout_length) } };
+            let owner = std::str::from_utf8(owner).map_err(|_| INVALID_REFLECTED_FIELD)?;
+            let member = std::str::from_utf8(member).map_err(|_| INVALID_REFLECTED_FIELD)?;
+            let (mismatch, caller) = match kind {
+                0 => (INVALID_REFLECTED_FIELD, "type.field_value"),
+                1 => (INVALID_REFLECTED_VARIANT_FIELD, "type.variant_field_value"),
+                2 => (INVALID_REFLECTED_MACHINE_FIELD, "type.machine_field_value"),
+                _ => return Err(INVALID_REFLECTED_FIELD),
+            };
+            s.check_reflected_field_owner(actual, owner, (has_member != 0).then_some(member), layout, mismatch, caller) };
+    ReflectedOwnerPendingCheck, jett_rt_v1_reflected_owner_pending_check, false, (value: u64 => I64, owner: *const u8 => Pointer, owner_length: u64 => I64, layout: *const u8 => Pointer, layout_length: u64 => I64, kind: u32 => I32), u32 => I32,
+        |s| { let owner_length = usize::try_from(owner_length).map_err(|_| INVALID_REFLECTED_OWNER)?;
+            let layout_length = usize::try_from(layout_length).map_err(|_| INVALID_REFLECTED_OWNER)?;
+            if owner_length > isize::MAX as usize || (owner_length != 0 && owner.is_null())
+                || layout_length > isize::MAX as usize || (layout_length != 0 && layout.is_null()) { return Err(INVALID_REFLECTED_OWNER); }
+            let owner = if owner_length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(owner, owner_length) } };
+            let layout = if layout_length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(layout, layout_length) } };
+            let owner = std::str::from_utf8(owner).map_err(|_| INVALID_REFLECTED_OWNER)?;
+            s.check_reflected_owner_pending(value, owner, layout, kind) };
+    ReflectedFieldMetadataPendingCheck, jett_rt_v1_reflected_field_metadata_pending_check, false, (metadata: u64 => I64, layout: *const u8 => Pointer, layout_length: u64 => I64, kind: u32 => I32), u32 => I32,
+        |s| { let (caller, mismatch) = match kind {
+                1 => ("type.variant_field_value", INVALID_REFLECTED_VARIANT_FIELD),
+                2 => ("type.machine_field_value", INVALID_REFLECTED_MACHINE_FIELD),
+                _ => return Err(INVALID_REFLECTED_FIELD),
+            };
+            let length = usize::try_from(layout_length).map_err(|_| mismatch)?;
+            if length > isize::MAX as usize || (length != 0 && layout.is_null()) { return Err(mismatch); }
+            let layout = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(layout, length) } };
+            if let Some(message) = s.pending_type_field_message(metadata, layout, caller).map_err(|_| mismatch)? {
+                s.set_dynamic_failure_message(message.into_bytes());
+                Err(mismatch)
+            } else {
+                Ok(0)
+            } };
+    TypeInfoMatches, jett_rt_v1_type_info_matches, false, (actual: u64 => I64, expected: *const u8 => Pointer, length: u64 => I64), u32 => I32,
+        |s| { let length = usize::try_from(length).map_err(|_| INVALID_TYPE_INFO)?;
+            if length > isize::MAX as usize || (length != 0 && expected.is_null()) { return Err(INVALID_TYPE_INFO); }
+            let expected = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(expected, length) } };
+            Ok(u32::from(s.type_info_identity(actual, false)?.as_bytes() == expected)) };
+    TypeInfoReflectionMatches, jett_rt_v1_type_info_reflection_matches, false, (actual: u64 => I64, expected: *const u8 => Pointer, length: u64 => I64), u32 => I32,
+        |s| { let length = usize::try_from(length).map_err(|_| INVALID_TYPE_INFO)?;
+            if length > isize::MAX as usize || (length != 0 && expected.is_null()) { return Err(INVALID_TYPE_INFO); }
+            let expected = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(expected, length) } };
+            Ok(u32::from(s.type_info_identity(actual, true)?.as_bytes() == expected)) };
+    TypeArgIndex, jett_rt_v1_type_arg_index, false, (index: i64 => I64, count: u64 => I64), u64 => I64,
+        |_s| { let index = u64::try_from(index).map_err(|_| INVALID_TYPE_ARG_INDEX)?;
+            if index >= count { return Err(INVALID_TYPE_ARG_INDEX); }
+            Ok(index) };
+    TypeArgCheckedIndex, jett_rt_v1_type_arg_checked_index, false, (index: i64 => I64, count: u64 => I64, depth: u64 => I64, type_name: *const u8 => Pointer, type_name_length: u64 => I64), u64 => I64,
+        |s| { let length = usize::try_from(type_name_length).map_err(|_| INVALID_TYPE_ARG_INDEX)?;
+            if length > isize::MAX as usize || (length != 0 && type_name.is_null()) { return Err(INVALID_TYPE_ARG_INDEX); }
+            let bytes = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(type_name, length) } };
+            let name = std::str::from_utf8(bytes).map_err(|_| INVALID_TYPE_ARG_INDEX)?;
+            s.checked_type_arg_index(index, count, depth, name) };
+    MachineExpectState, jett_rt_v1_machine_expect_state, false, (value: u64 => I64, state: u64 => I64), u32 => I32,
+        |s| { if s.struct_field(value, 0)?.bits == state { Ok(0) }
+            else { Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"machine state does not match narrowed type")) } };
+    StructReplaceOccupied, jett_rt_v1_struct_replace_occupied, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, owned: u32 => I32, depth: u64 => I64), u64 => I64,
+        |s| { if owned > 1 { return Err(INVALID_STRUCT); }
+            Ok(s.replace_struct_field(value, index, NativeField { bits, owned: owned != 0, pending_depth: depth })?.bits) };
+    StructTake, jett_rt_v1_struct_take, false, (value: u64 => I64, index: u64 => I64), u64 => I64,
+        |s| Ok(s.take_struct_field(value, index)?.bits);
+    StructClone, jett_rt_v1_struct_clone, false, (value: u64 => I64), u64 => I64,
+        |s| s.clone_struct(value);
+    RecordRun, jett_rt_v1_record_run, false, (value: u64 => I64), u64 => I64,
+        |s| s.run_record(value);
+    RecordTaskJoin, jett_rt_v1_record_task_join, false, (value: u64 => I64), u64 => I64,
+        |s| s.join_record(value);
+    FunctionCallableCheck, jett_rt_v1_function_callable_check, false, (value: u64 => I64), u32 => I32,
+        |s| s.check_function_callable(value);
+    StringChars, jett_rt_v1_string_chars, false, (value: u64 => I64), u64 => I64,
+        |s| { let parts = s.text(value)?.graphemes(true).map(str::to_owned).collect(); s.string_list(parts) };
+    StringScalarCount, jett_rt_v1_string_scalar_count, false, (value: u64 => I64), i64 => I64,
+        |s| Ok(s.text(value)?.chars().count() as i64);
+    StringScalarAt, jett_rt_v1_string_scalar_at, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let index = usize::try_from(index).map_err(|_| INVALID_STRING_SCALAR_INDEX)?;
+            let scalar = s.text(value)?.chars().nth(index).ok_or(INVALID_STRING_SCALAR_INDEX)?;
+            s.insert(scalar.to_string()) };
+    StringWords, jett_rt_v1_string_words, false, (value: u64 => I64), u64 => I64,
+        |s| { let parts = s.text(value)?.split_whitespace().map(str::to_owned).collect(); s.string_list(parts) };
+    StringLines, jett_rt_v1_string_lines, false, (value: u64 => I64), u64 => I64,
+        |s| { let parts = native_lines(s.text(value)?); s.string_list(parts) };
+    SequenceCheckIterable, jett_rt_v1_sequence_check_iterable, false, (value: u64 => I64, kind: u32 => I32), u32 => I32,
+        |s| s.check_iterable(value, kind);
+    StringSplit, jett_rt_v1_string_split, false, (value: u64 => I64, delimiter: u64 => I64), u64 => I64,
+        |s| { let parts = native_split(s.text(value)?, s.text(delimiter)?).into_iter().map(str::to_owned).collect(); s.string_list(parts) };
+    StringJoin, jett_rt_v1_string_join, false, (value: u64 => I64, separator: u64 => I64), u64 => I64,
+        |s| s.join_strings(value, separator);
+    Range, jett_rt_v1_range_int64, false, (start: i64 => I64, end: i64 => I64, step: i64 => I64), u64 => I64,
+        |s| s.range(start, end, step);
+    CheckIndexCountArguments, jett_rt_v1_check_index_count_arguments, false, (value: u64 => I64, kind: u32 => I32, first_depth: u64 => I64, second_depth: u64 => I64, third_depth: u64 => I64), u32 => I32,
+        |s| s.check_index_count_arguments(value, kind, first_depth, second_depth, third_depth);
+    RejectPendingScalars, jett_rt_v1_reject_pending_scalars, false, (first_depth: u64 => I64, second_depth: u64 => I64, third_depth: u64 => I64, message_pointer: u64 => I64, message_length: u64 => I64), u32 => I32,
+        |s| { if message_pointer == 0 { return Err(INVALID_PENDING_SCALAR_CHECK); }
+            let length = usize::try_from(message_length).map_err(|_| INVALID_PENDING_SCALAR_CHECK)?;
+            if length > isize::MAX as usize { return Err(INVALID_PENDING_SCALAR_CHECK); }
+            let message = unsafe { std::slice::from_raw_parts(message_pointer as *const u8, length) };
+            s.reject_pending_scalars(first_depth, second_depth, third_depth, message) };
+    RejectPendingHandle, jett_rt_v1_reject_pending_handle, false, (handle: u64 => I64, kind: u32 => I32, message_pointer: u64 => I64, message_length: u64 => I64), u32 => I32,
+        |s| { if message_pointer == 0 { return Err(INVALID_PENDING_HANDLE_CHECK); }
+            let length = usize::try_from(message_length).map_err(|_| INVALID_PENDING_HANDLE_CHECK)?;
+            if length > isize::MAX as usize { return Err(INVALID_PENDING_HANDLE_CHECK); }
+            let message = unsafe { std::slice::from_raw_parts(message_pointer as *const u8, length) };
+            s.reject_pending_handle(handle, kind, message) };
+    DisplayResultCheck, jett_rt_v1_display_result_check, false, (value: u64 => I64), u32 => I32,
+        |s| s.check_display_result(value);
+    ListElementTake, jett_rt_v1_list_element_take, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
+            let index = usize::try_from(index).map_err(|_| INVALID_LIST)?;
+            let bits = list.elements.get_mut(index).and_then(Option::take).ok_or(INVALID_LIST)?;
+            list.element_pending_depths.remove(&index);
+            Ok(bits) };
+
+    ListElementPendingDepth, jett_rt_v1_list_element_pending_depth, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let list = s.lists.get(&value).ok_or(INVALID_LIST)?;
+            let index = usize::try_from(index).map_err(|_| INVALID_LIST)?;
+            list.elements.get(index).copied().flatten().ok_or(INVALID_LIST)?;
+            Ok(list.element_pending_depths.get(&index).copied().unwrap_or(0)) };
+
+    ListElementClone, jett_rt_v1_list_element_clone, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let list = s.lists.get(&value).ok_or(INVALID_LIST)?;
+            let bits = usize::try_from(index).ok().and_then(|i| list.elements.get(i)).copied().flatten().ok_or(INVALID_LIST)?;
+            if list.owned { s.clone_value(bits) } else { Ok(bits) } };
+
+    ListSumInt, jett_rt_v1_list_sum_int64, false, (value: u64 => I64), i64 => I64,
+        |s| s.sum_primitive_list(value, NativeSortKind::Int64 as u32).map(|bits| bits as i64);
+
+    ListSumPrimitive, jett_rt_v1_list_sum_primitive, false, (value: u64 => I64, kind: u32 => I32), u64 => I64,
+        |s| s.sum_primitive_list(value, kind);
+
+    MathAverage, jett_rt_v1_math_average, false, (value: u64 => I64, kind: u32 => I32), f64 => F64,
+        |s| { let numbers = s.math_numbers(value, kind, (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.average: list is empty"), (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.average expects a list of numeric values"), (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.__average expects a list of numbers"))?;
+            Ok(math::float_average(&numbers)) };
+    MathMedian, jett_rt_v1_math_median, false, (value: u64 => I64, kind: u32 => I32), f64 => F64,
+        |s| { let mut numbers = s.math_numbers(value, kind, (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.median: list is empty"), (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.median expects a list of numeric values"), (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.__median expects a list of numbers"))?;
+            numbers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(CompareOrdering::Equal));
+            let middle = numbers.len() / 2;
+            Ok(if numbers.len() % 2 == 0 { math::float_midpoint(numbers[middle - 1], numbers[middle]) } else { numbers[middle] }) };
+
+    ListNew, jett_rt_v1_list_new, false, (owned: u32 => I32), u64 => I64,
+        |s| { if owned > 1 { return Err(INVALID_LIST); } s.new_list(owned != 0) };
+    ListCheckArguments, jett_rt_v1_list_check_arguments, false, (value: u64 => I64, kind: u32 => I32, first_depth: u64 => I64, second_depth: u64 => I64), u32 => I32,
+        |s| s.check_list_arguments(value, kind, first_depth, second_depth);
+    ListInsertAt, jett_rt_v1_list_insert_at, false, (value: u64 => I64, index: i64 => I64, bits: u64 => I64), u64 => I64,
+        |s| s.insert_list(value, index, bits, 0);
+    ListInsertAtScalarTask, jett_rt_v1_list_insert_at_scalar_task, false, (value: u64 => I64, index: i64 => I64, bits: u64 => I64, depth: u64 => I64), u64 => I64,
+        |s| s.insert_list(value, index, bits, depth);
+    ListRemoveAt, jett_rt_v1_list_remove_at, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let invalid = (JettRuntimeStatusV1::INVALID_ARGUMENT, b"list.__remove_at: index out of bounds".as_slice());
+            let position = match usize::try_from(index) {
+                Ok(position) => position,
+                Err(_) => return s.list_index_failure("list.__remove_at", index, invalid),
+            };
+            let list = s.lists.get(&value).ok_or(INVALID_LIST)?;
+            let Some(bits) = list.elements.get(position).copied().flatten() else {
+                return s.list_index_failure("list.__remove_at", index, invalid);
+            };
+            if list.owned { s.drop_value(bits)?; }
+            let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
+            list.elements.remove(position);
+            list.element_pending_depths.remove(&position);
+            let mut moved = list.element_pending_depths.keys().copied().filter(|key| *key > position).collect::<Vec<_>>();
+            moved.sort_unstable();
+            for key in moved { if let Some(depth) = list.element_pending_depths.remove(&key) {
+                list.element_pending_depths.insert(key - 1, depth); } }
+            Ok(value) };
+    ListSort, jett_rt_v1_list_sort, false, (value: u64 => I64, kind: u32 => I32), u64 => I64,
+        |s| s.sort_list(value, kind);
+    ListSortByIndex, jett_rt_v1_list_sort_by_index, false, (value: u64 => I64, index: i64 => I64, kind: u32 => I32), u64 => I64,
+        |s| s.sort_list_by_index(value, index, kind);
+    ListIsSorted, jett_rt_v1_list_is_sorted, false, (value: u64 => I64, kind: u32 => I32), u32 => I32,
+        |s| s.list_is_sorted(value, kind).map(u32::from);
+    ListSwap, jett_rt_v1_list_swap, false, (value: u64 => I64, first: i64 => I64, second: i64 => I64), u64 => I64,
+        |s| { let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
+            let invalid = (JettRuntimeStatusV1::INVALID_ARGUMENT, b"list.__swap: index out of bounds".as_slice());
+            let first = usize::try_from(first).map_err(|_| invalid)?;
+            let second = usize::try_from(second).map_err(|_| invalid)?;
+            if first >= list.elements.len() || second >= list.elements.len() { return Err(invalid); }
+            list.elements.swap(first, second);
+            let first_depth = list.element_pending_depths.remove(&first);
+            let second_depth = list.element_pending_depths.remove(&second);
+            if let Some(depth) = first_depth { list.element_pending_depths.insert(second, depth); }
+            if let Some(depth) = second_depth { list.element_pending_depths.insert(first, depth); }
+            Ok(value) };
+    SetNew, jett_rt_v1_set_new, false, (strings: u32 => I32), u64 => I64,
+        |s| s.new_set(strings);
+    SetAdd, jett_rt_v1_set_add, false, (value: u64 => I64, key: u64 => I64), u64 => I64,
+        |s| s.set_add(value, key);
+    SetAddScalarTask, jett_rt_v1_set_add_scalar_task, false, (value: u64 => I64, key: u64 => I64, depth: u64 => I64), u64 => I64,
+        |s| s.set_add_depth(value, key, depth);
+    SetRemove, jett_rt_v1_set_remove, false, (value: u64 => I64, key: u64 => I64), u64 => I64,
+        |s| s.set_remove(value, key);
+    SetRemoveScalarTask, jett_rt_v1_set_remove_scalar_task, false, (value: u64 => I64, key: u64 => I64, depth: u64 => I64), u64 => I64,
+        |s| s.set_remove_depth(value, key, depth);
+    SetContains, jett_rt_v1_set_contains, false, (value: u64 => I64, key: u64 => I64), u32 => I32,
+        |s| { s.require_plain_set(value, PENDING_SET_CONTAINS)?;
+            Ok(u32::from(s.set_position(value, key)?.is_some())) };
+    SetContainsScalarTask, jett_rt_v1_set_contains_scalar_task, false, (value: u64 => I64, key: u64 => I64, depth: u64 => I64), u32 => I32,
+        |s| { s.require_plain_set(value, PENDING_SET_CONTAINS)?;
+            Ok(u32::from(s.set_position_depth(value, key, depth)?.is_some())) };
+    SetLength, jett_rt_v1_set_length, false, (value: u64 => I64), i64 => I64,
+        |s| { s.require_plain_set(value, PENDING_SET_LENGTH)?;
+            Ok(s.sets.get(&value).ok_or(INVALID_SET)?.elements.len() as i64) };
+    SetClone, jett_rt_v1_set_clone, false, (value: u64 => I64), u64 => I64,
+        |s| s.clone_set(value);
+    SetRun, jett_rt_v1_set_run, false, (value: u64 => I64), u64 => I64,
+        |s| s.run_set(value);
+    SetTaskJoin, jett_rt_v1_set_task_join, false, (value: u64 => I64), u64 => I64,
+        |s| s.join_set(value);
+    SetElementTake, jett_rt_v1_set_element_take, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let set = s.sets.get_mut(&value).ok_or(INVALID_SET)?;
+            let index = usize::try_from(index).map_err(|_| INVALID_SET)?;
+            let bits = set.elements.get_mut(index).and_then(Option::take).ok_or(INVALID_SET)?;
+            set.element_pending_depths.remove(&index);
+            Ok(bits) };
+    SetElementPendingDepth, jett_rt_v1_set_element_pending_depth, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let set = s.sets.get(&value).ok_or(INVALID_SET)?;
+            let index = usize::try_from(index).map_err(|_| INVALID_SET)?;
+            set.elements.get(index).copied().flatten().ok_or(INVALID_SET)?;
+            Ok(set.element_pending_depths.get(&index).copied().unwrap_or(0)) };
+    SetElementClone, jett_rt_v1_set_element_clone, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let set = s.sets.get(&value).ok_or(INVALID_SET)?;
+            let element = set.elements.get(usize::try_from(index).map_err(|_| INVALID_SET)?)
+                .copied().flatten().ok_or(INVALID_SET)?;
+            if set.strings { s.retain(element) } else { Ok(element) } };
+    MapNew, jett_rt_v1_map_new, false, (key_strings: u32 => I32, value_owned: u32 => I32), u64 => I64,
+        |s| s.new_map(key_strings, value_owned);
+    MapInsert, jett_rt_v1_map_insert, false, (map: u64 => I64, key: u64 => I64, value: u64 => I64), u64 => I64,
+        |s| s.map_insert(map, key, value);
+    MapInsertScalarTasks, jett_rt_v1_map_insert_scalar_tasks, false, (map: u64 => I64, key: u64 => I64, key_depth: u64 => I64, value: u64 => I64, value_depth: u64 => I64), u64 => I64,
+        |s| s.map_insert_depth(map, key, key_depth, value, value_depth);
+    MapAppendLiteral, jett_rt_v1_map_append_literal, false, (map: u64 => I64, key: u64 => I64, value: u64 => I64), u64 => I64,
+        |s| s.map_append_literal(map, key, value);
+    MapAppendLiteralScalarTasks, jett_rt_v1_map_append_literal_scalar_tasks, false, (map: u64 => I64, key: u64 => I64, key_depth: u64 => I64, value: u64 => I64, value_depth: u64 => I64), u64 => I64,
+        |s| s.map_append_literal_depth(map, key, key_depth, value, value_depth);
+    MapRemove, jett_rt_v1_map_remove, false, (map: u64 => I64, key: u64 => I64), u64 => I64,
+        |s| s.map_remove(map, key);
+    MapRemoveScalarTask, jett_rt_v1_map_remove_scalar_task, false, (map: u64 => I64, key: u64 => I64, depth: u64 => I64), u64 => I64,
+        |s| s.map_remove_depth(map, key, depth);
+    MapHas, jett_rt_v1_map_has, false, (map: u64 => I64, key: u64 => I64), u32 => I32,
+        |s| { s.require_plain_map(map, PENDING_MAP_HAS)?;
+            Ok(u32::from(s.map_position(map, key)?.is_some())) };
+    MapHasScalarTask, jett_rt_v1_map_has_scalar_task, false, (map: u64 => I64, key: u64 => I64, depth: u64 => I64), u32 => I32,
+        |s| { s.require_plain_map(map, PENDING_MAP_HAS)?;
+            Ok(u32::from(s.map_position_depth(map, key, depth)?.is_some())) };
+    MapLength, jett_rt_v1_map_length, false, (map: u64 => I64), i64 => I64,
+        |s| { s.require_plain_map(map, PENDING_MAP_LENGTH)?;
+            Ok(s.maps.get(&map).ok_or(INVALID_MAP)?.entries.len() as i64) };
+    MapGet, jett_rt_v1_map_get, false, (map: u64 => I64, key: u64 => I64), u64 => I64,
+        |s| s.map_get(map, key);
+    MapGetScalarTask, jett_rt_v1_map_get_scalar_task, false, (map: u64 => I64, key: u64 => I64, depth: u64 => I64), u64 => I64,
+        |s| s.map_get_depth(map, key, depth);
+    MapClone, jett_rt_v1_map_clone, false, (map: u64 => I64), u64 => I64,
+        |s| s.clone_map(map);
+    MapRun, jett_rt_v1_map_run, false, (map: u64 => I64), u64 => I64,
+        |s| s.run_map(map);
+    MapTaskJoin, jett_rt_v1_map_task_join, false, (map: u64 => I64), u64 => I64,
+        |s| s.join_map(map);
+    MapFromLists, jett_rt_v1_map_from_lists, false, (keys: u64 => I64, values: u64 => I64, key_strings: u32 => I32, value_owned: u32 => I32), u64 => I64,
+        |s| s.map_from_lists(keys, values, key_strings, value_owned);
+    MapKeyTake, jett_rt_v1_map_key_take, false, (map: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| s.map_element(map, index, true, true);
+    MapKeyClone, jett_rt_v1_map_key_clone, false, (map: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| s.map_element(map, index, true, false);
+    MapValueTake, jett_rt_v1_map_value_take, false, (map: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| s.map_element(map, index, false, true);
+    MapValueClone, jett_rt_v1_map_value_clone, false, (map: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| s.map_element(map, index, false, false);
+    MapElementPendingDepth, jett_rt_v1_map_element_pending_depth, false, (map: u64 => I64, index: i64 => I64, key: u32 => I32), u64 => I64,
+        |s| s.map_element_depth(map, index, key);
+    ListLength, jett_rt_v1_list_length, false, (value: u64 => I64), i64 => I64,
+        |s| Ok(s.lists.get(&value).ok_or(INVALID_LIST)?.elements.len() as i64);
+    ListAppend, jett_rt_v1_list_append, false, (value: u64 => I64, bits: u64 => I64), u64 => I64,
+        |s| { let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
+            list.elements.try_reserve(1).map_err(|_| EXHAUSTED)?;
+            list.elements.push(Some(bits)); Ok(value) };
+    ListAppendScalarTask, jett_rt_v1_list_append_scalar_task, false, (value: u64 => I64, bits: u64 => I64, depth: u64 => I64), u64 => I64,
+        |s| { let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
+            if list.owned { return Err(INVALID_LIST); }
+            list.elements.try_reserve(1).map_err(|_| EXHAUSTED)?;
+            if depth != 0 { list.element_pending_depths.try_reserve(1).map_err(|_| EXHAUSTED)?;
+                list.element_pending_depths.insert(list.elements.len(), depth); }
+            list.elements.push(Some(bits)); Ok(value) };
+    ListGet, jett_rt_v1_list_get_clone, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let list = s.lists.get(&value).ok_or(INVALID_LIST)?;
+            let owned = list.owned;
+            let index = usize::try_from(index).ok();
+            let found = index.and_then(|i| list.elements.get(i)).copied().flatten();
+            let depth = index.and_then(|i| list.element_pending_depths.get(&i)).copied().unwrap_or(0);
+            let Some(bits) = found else { return s.sum(SUM_FAILURE, 0, false); };
+            let bits = if owned { s.clone_value(bits)? } else { bits };
+            match s.sum(SUM_SUCCESS, bits, owned) { Ok(v) => {
+                s.sums.get_mut(&v).ok_or(INVALID_SUM)?.payload_pending_depth = depth;
+                Ok(v) }, Err(e) => { if owned { s.drop_value(bits)?; } Err(e) } } };
+    ListClone, jett_rt_v1_list_clone, false, (value: u64 => I64), u64 => I64,
+        |s| s.clone_list(value);
+    ListRun, jett_rt_v1_list_run, false, (value: u64 => I64), u64 => I64,
+        |s| s.run_list(value);
+    ListTaskJoin, jett_rt_v1_list_task_join, false, (value: u64 => I64), u64 => I64,
+        |s| s.join_list(value);
+
+    ParseInt, jett_rt_v1_parse_int, false, (value: u64 => I64), u64 => I64,
+        |s| { let text = s.text(value)?; let parsed = text.parse::<i64>().map(|v| v as u64).map_err(|_| format!("int64.from_string: cannot parse '{text}' as int64")); s.parsed_sum(parsed) };
+    ParseUint, jett_rt_v1_parse_uint, false, (value: u64 => I64), u64 => I64,
+        |s| { let text = s.text(value)?; let parsed = text.parse::<u64>().map_err(|_| format!("uint64.from_string: cannot parse '{text}' as uint64")); s.parsed_sum(parsed) };
+    ParseFloat, jett_rt_v1_parse_float, false, (value: u64 => I64), u64 => I64,
+        |s| { let text = s.text(value)?; let parsed = text.parse::<f64>().map(f64::to_bits).map_err(|_| format!("float64.from_string: cannot parse '{text}' as float64")); s.parsed_sum(parsed) };
+    FloatFromInt, jett_rt_v1_float64_from_int64, false, (value: i64 => I64), u64 => I64,
+        |s| { let converted = value as f64;
+            let parsed = if converted as i128 == i128::from(value) { Ok(converted.to_bits()) }
+                else { Err("float64.from_int64: value is not exactly representable as float64".into()) };
+            s.parsed_sum(parsed) };
+    IntFromFloat, jett_rt_v1_int64_from_float64, false, (value: f64 => F64), u64 => I64,
+        |s| { let parsed = if value.is_finite() && value.fract() == 0.0
+                && value >= i64::MIN as f64 && value < 9_223_372_036_854_775_808.0 {
+                Ok((value as i64) as u64)
+            } else { Err("int64.from_float64: value is not exactly representable as int64".into()) };
+            s.parsed_sum(parsed) };
+
+    SumNew, jett_rt_v1_sum_new, false, (tag: u32 => I32, bits: u64 => I64, owned: u32 => I32), u64 => I64,
+        |s| { if owned > 1 { return Err(INVALID_SUM); } s.sum(tag, bits, owned != 0) };
+    SumNewScalarTask, jett_rt_v1_sum_new_scalar_task, false, (tag: u32 => I32, bits: u64 => I64, depth: u64 => I64), u64 => I64,
+        |s| { let id = s.sum(tag, bits, false)?;
+            s.sums.get_mut(&id).ok_or(INVALID_SUM)?.payload_pending_depth = depth;
+            Ok(id) };
+    SumTag, jett_rt_v1_sum_tag, false, (value: u64 => I64), u32 => I32,
+        |s| s.sums.get(&value).map(|v| v.tag).ok_or(INVALID_SUM);
+    SumHandleTag, jett_rt_v1_sum_handle_tag, false, (value: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u32 => I32,
+        |s| { if layout_pointer == 0 { return Err(INVALID_SUM); }
+            let length = usize::try_from(layout_length).map_err(|_| INVALID_SUM)?;
+            if length > isize::MAX as usize { return Err(INVALID_SUM); }
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
+            s.sum_handle_tag(value, layout) };
+    SumPayloadPendingDepth, jett_rt_v1_sum_payload_pending_depth, false, (value: u64 => I64), u64 => I64,
+        |s| s.sums.get(&value).map(|v| v.payload_pending_depth).ok_or(INVALID_SUM);
+    // The selected payload remains borrowed from the unchanged owning sum.
+    SumPayloadBorrow, jett_rt_v1_sum_payload_borrow, false, (value: u64 => I64, tag: u32 => I32), u64 => I64,
+        |s| s.sum_payload_borrow(value, tag);
+    SumTake, jett_rt_v1_sum_take, false, (value: u64 => I64, tag: u32 => I32), u64 => I64,
+        |s| { if s.sums.get(&value).is_none_or(|v| v.tag != tag) { return Err(INVALID_SUM); }
+            let sum = s.sums.remove(&value).ok_or(INVALID_SUM)?;
+            s.sums_destroyed += 1; Ok(sum.bits) };
+    SumClone, jett_rt_v1_sum_clone, false, (value: u64 => I64), u64 => I64,
+        |s| { if !s.sums.contains_key(&value) { return Err(INVALID_SUM); } s.clone_value(value) };
+    SumRun, jett_rt_v1_sum_run, false, (value: u64 => I64), u64 => I64,
+        |s| s.run_sum(value);
+    SumTaskJoin, jett_rt_v1_sum_task_join, false, (value: u64 => I64), u64 => I64,
+        |s| s.join_sum(value);
+    BytesGet, jett_rt_v1_bytes_get, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let found = usize::try_from(index).ok().and_then(|i| s.bytes(value).ok()?.get(i)).copied();
+            s.bytes(value)?;
+            s.sum(u32::from(found.is_some()), found.unwrap_or(0) as u64, false) };
+    BytesToString, jett_rt_v1_bytes_to_string, false, (value: u64 => I64), u64 => I64,
+        |s| { let decoded = String::from_utf8(s.bytes(value)?.to_vec());
+            let (tag, text) = match decoded { Ok(text) => (SUM_SUCCESS, text), Err(e) => (SUM_FAILURE, format!("invalid UTF-8: {e}")) };
+            let payload = s.insert(text)?;
+            match s.sum(tag, payload, true) { Ok(v) => Ok(v), Err(e) => { s.drop_value(payload)?; Err(e) } } };
+    BytesFromHex, jett_rt_v1_bytes_from_hex, false, (value: u64 => I64), u64 => I64,
+        |s| { let raw = s.text(value)?; let raw = raw.strip_prefix("0x").unwrap_or(raw);
+            let decoded = if raw.len() % 2 != 0 { Err("bytes.from_hex: expected even-length hex string") }
+                else if !raw.bytes().all(|b| b.is_ascii_hexdigit()) { Err("bytes.from_hex: expected hex string") }
+                else { (0..raw.len()).step_by(2).map(|i| u8::from_str_radix(&raw[i..i+2], 16).map_err(|_| "bytes.from_hex: expected hex string")).collect::<Result<Vec<_>, _>>() };
+            let (tag, payload) = match decoded { Ok(data) => (SUM_SUCCESS, s.insert_bytes(data)?), Err(error) => (SUM_FAILURE, s.insert(error.to_owned())?) };
+            match s.sum(tag, payload, true) { Ok(v) => Ok(v), Err(e) => { s.drop_value(payload)?; Err(e) } } };
+
+    EncodingBase64Encode, jett_rt_v1_encoding_base64_encode, false, (value: u64 => I64), u64 => I64,
+        |s| { let encoded = encoding::base64_encode(s.bytes(value)?); s.insert(encoded) };
+    EncodingBase64Decode, jett_rt_v1_encoding_base64_decode, false, (value: u64 => I64), u64 => I64,
+        |s| { let decoded = encoding::base64_decode(s.text(value)?).map_err(str::to_owned); s.byte_result(decoded) };
+    EncodingHexDecode, jett_rt_v1_encoding_hex_decode, false, (value: u64 => I64), u64 => I64,
+        |s| { let decoded = encoding::encoding_hex_decode(s.text(value)?).map_err(str::to_owned); s.byte_result(decoded) };
+    EncodingUrlEncode, jett_rt_v1_encoding_url_encode, false, (value: u64 => I64), u64 => I64,
+        |s| { let encoded = encoding::percent_encode(s.text(value)?, false); s.insert(encoded) };
+    EncodingUrlDecode, jett_rt_v1_encoding_url_decode, false, (value: u64 => I64), u64 => I64,
+        |s| { let decoded = encoding::percent_decode(s.text(value)?, false).map_err(str::to_owned); s.string_result(decoded) };
+    EncodingFormEncode, jett_rt_v1_encoding_form_encode, false, (value: u64 => I64), u64 => I64,
+        |s| { let encoded = encoding::percent_encode(s.text(value)?, true); s.insert(encoded) };
+    EncodingFormDecode, jett_rt_v1_encoding_form_decode, false, (value: u64 => I64), u64 => I64,
+        |s| { let decoded = encoding::percent_decode(s.text(value)?, true).map_err(str::to_owned); s.string_result(decoded) };
+
+    CsvParse, jett_rt_v1_csv_parse, false, (value: u64 => I64), u64 => I64,
+        |s| { match csv::parse_csv_records(s.text(value)?) {
+            Ok(rows) => { let payload = s.csv_rows(rows)?; s.owned_sum(SUM_SUCCESS, payload) },
+            Err(error) => { let payload = s.insert(error)?; s.owned_sum(SUM_FAILURE, payload) }
+        } };
+    CsvParseWithHeader, jett_rt_v1_csv_parse_with_header, false, (value: u64 => I64), u64 => I64,
+        |s| { match csv::parse_csv_with_header(s.text(value)?) {
+            Ok(rows) => { let payload = s.csv_header_rows(rows)?; s.owned_sum(SUM_SUCCESS, payload) },
+            Err(error) => { let payload = s.insert(error)?; s.owned_sum(SUM_FAILURE, payload) }
+        } };
+    CsvStringify, jett_rt_v1_csv_stringify, false, (value: u64 => I64), u64 => I64,
+        |s| { let rows = s.csv_records(value)?; s.insert(csv::stringify_csv_records(&rows)) };
+
+    SecretCompareString, jett_rt_v1_secret_compare_string, false, (left: u64 => I64, right: u64 => I64), u32 => I32,
+        |s| { let left = s.text(left)?.as_bytes(); let right = s.text(right)?.as_bytes();
+            Ok(u32::from(left.len() == right.len() && bool::from(left.ct_eq(right)))) };
+    SecretCompareBytes, jett_rt_v1_secret_compare_bytes, false, (left: u64 => I64, right: u64 => I64), u32 => I32,
+        |s| { let left = s.bytes(left)?; let right = s.bytes(right)?;
+            Ok(u32::from(left.len() == right.len() && bool::from(left.ct_eq(right)))) };
+
+    CryptoSha256, jett_rt_v1_crypto_sha256, false, (value: u64 => I64), u64 => I64,
+        |s| { let digest = crypto::sha256_digest(s.bytes(value)?); s.insert_bytes(digest) };
+    CryptoSha512, jett_rt_v1_crypto_sha512, false, (value: u64 => I64), u64 => I64,
+        |s| { let digest = crypto::sha512_digest(s.bytes(value)?); s.insert_bytes(digest) };
+    CryptoMd5, jett_rt_v1_crypto_md5, false, (value: u64 => I64), u64 => I64,
+        |s| { let digest = crypto::md5_digest(s.bytes(value)?); s.insert_bytes(digest) };
+    CryptoHmacSha256, jett_rt_v1_crypto_hmac_sha256, false, (key: u64 => I64, message: u64 => I64), u64 => I64,
+        |s| { let digest = crypto::hmac_sha256_digest(s.bytes(key)?, s.bytes(message)?); s.insert_bytes(digest) };
+
+    DropValue, jett_rt_v1_value_drop, true, (value: u64 => I64), u32 => I32,
+        |s| s.drop_value(value);
+    BytesNew, jett_rt_v1_bytes_new, false, (), u64 => I64,
+        |s| s.insert_bytes(Vec::new());
+    BitfieldWriteBits, jett_rt_v1_bitfield_write_bits, false, (value: u64 => I64, numeric: u64 => I64, width: u32 => I32, network_order: u32 => I32, bit_offset: u64 => I64), u32 => I32,
+        |s| s.write_bitfield_bits(value, numeric, width, network_order, bit_offset);
+    BitfieldExtendPayload, jett_rt_v1_bitfield_extend_payload, false, (value: u64 => I64, payload: u64 => I64), u32 => I32,
+        |s| s.extend_bitfield_payload(value, payload);
+    BitfieldCheckPayloadPending, jett_rt_v1_bitfield_check_payload_pending, false, (payload: u64 => I64, prefix_pointer: u64 => I64, prefix_length: u64 => I64), u32 => I32,
+        |s| { if prefix_pointer == 0 { return Err(INVALID_PENDING_HANDLE_CHECK); }
+            let length = usize::try_from(prefix_length).map_err(|_| INVALID_PENDING_HANDLE_CHECK)?;
+            if length > isize::MAX as usize { return Err(INVALID_PENDING_HANDLE_CHECK); }
+            let prefix = unsafe { std::slice::from_raw_parts(prefix_pointer as *const u8, length) };
+            s.check_bitfield_payload_pending(payload, prefix) };
+    BitfieldDecode, jett_rt_v1_bitfield_decode, false, (value: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u64 => I64,
+        |s| { if layout_pointer == 0 { return Err(INVALID_BITFIELD_LAYOUT); }
+            let length = usize::try_from(layout_length).map_err(|_| INVALID_BITFIELD_LAYOUT)?;
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
+            s.decode_bitfield(value, layout) };
+    BytesClone, jett_rt_v1_bytes_clone, false, (value: u64 => I64), u64 => I64,
+        |s| s.clone_bytes(value);
+    BytesRun, jett_rt_v1_bytes_run, false, (value: u64 => I64), u64 => I64,
+        |s| s.run_bytes(value);
+    BytesTaskJoin, jett_rt_v1_bytes_task_join, false, (value: u64 => I64), u64 => I64,
+        |s| s.join_bytes(value);
+    BytesLength, jett_rt_v1_bytes_length, false, (value: u64 => I64), i64 => I64,
+        |s| Ok(s.bytes(value)?.len() as i64);
+    BytesFromString, jett_rt_v1_bytes_from_string, false, (value: u64 => I64), u64 => I64,
+        |s| { let data = s.text(value)?.as_bytes().to_vec(); s.insert_bytes(data) };
+    BytesSlice, jett_rt_v1_bytes_slice, false, (value: u64 => I64, start: i64 => I64, end: i64 => I64), u64 => I64,
+        |s| { let data = s.bytes(value)?; let len = data.len() as i64;
+            let start = start.clamp(0, len) as usize; let end = end.clamp(0, len) as usize;
+            let result = data[start.min(end)..end].to_vec(); s.insert_bytes(result) };
+    BytesConcat, jett_rt_v1_bytes_concat, false, (first: u64 => I64, second: u64 => I64), u64 => I64,
+        |s| { let a = s.bytes(first)?; let b = s.bytes(second)?;
+            let len = a.len().checked_add(b.len()).ok_or(EXHAUSTED)?;
+            let mut result = Vec::new(); result.try_reserve_exact(len).map_err(|_| EXHAUSTED)?;
+            result.extend_from_slice(a); result.extend_from_slice(b); s.insert_bytes(result) };
+    BytesToHex, jett_rt_v1_bytes_to_hex, false, (value: u64 => I64), u64 => I64,
+        |s| { use std::fmt::Write; let bytes = s.bytes(value)?;
+            let mut text = String::new(); text.try_reserve_exact(bytes.len().checked_mul(2).ok_or(EXHAUSTED)?).map_err(|_| EXHAUSTED)?;
+            for byte in bytes { write!(text, "{byte:02x}").map_err(|_| EXHAUSTED)?; }
+            s.insert(text) };
+
+    Sqrt, jett_rt_v1_math_sqrt, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.sqrt());
+    Floor, jett_rt_v1_math_floor, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.floor());
+    Ceil, jett_rt_v1_math_ceil, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.ceil());
+    Round, jett_rt_v1_math_round, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.round());
+    Log, jett_rt_v1_math_log, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.ln());
+    Log2, jett_rt_v1_math_log2, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.log2());
+    Log10, jett_rt_v1_math_log10, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.log10());
+    Sin, jett_rt_v1_math_sin, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.sin());
+    Cos, jett_rt_v1_math_cos, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.cos());
+    Tan, jett_rt_v1_math_tan, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.tan());
+    FloatAbs, jett_rt_v1_math_floatabs, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.abs());
+    FloatMin, jett_rt_v1_math_floatmin, false, (first: f64 => F64, second: f64 => F64), f64 => F64,
+        |_| Ok(first.min(second));
+    FloatMax, jett_rt_v1_math_floatmax, false, (first: f64 => F64, second: f64 => F64), f64 => F64,
+        |_| Ok(first.max(second));
+    FloatRemainder, jett_rt_v1_float_remainder, false, (first: f64 => F64, second: f64 => F64), f64 => F64,
+        |_| Ok(first % second);
+    Pow, jett_rt_v1_math_pow, false, (first: f64 => F64, second: f64 => F64), f64 => F64,
+        |_| Ok(first.powf(second));
+    Pi, jett_rt_v1_math_pi, false, (), f64 => F64,
+        |_| Ok(std::f64::consts::PI);
+    E, jett_rt_v1_math_e, false, (), f64 => F64,
+        |_| Ok(std::f64::consts::E);
+    IntAbs, jett_rt_v1_math_int_abs, false, (value: i64 => I64), i64 => I64,
+        |_| Ok(value.wrapping_abs());
+    IntMin, jett_rt_v1_math_int_min, false, (first: i64 => I64, second: i64 => I64), i64 => I64,
+        |_| Ok(first.min(second));
+    IntMax, jett_rt_v1_math_int_max, false, (first: i64 => I64, second: i64 => I64), i64 => I64,
+        |_| Ok(first.max(second));
+    Mod, jett_rt_v1_math_mod, false, (first: i64 => I64, second: i64 => I64), i64 => I64,
+        |_| if second == 0 { Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.mod: division by zero")) } else { Ok(first.wrapping_rem(second)) };
+    Gcd, jett_rt_v1_math_gcd, false, (first: i64 => I64, second: i64 => I64), i64 => I64,
+        |_| Ok(unsigned_gcd(first.unsigned_abs(), second.unsigned_abs()) as i64);
+    Lcm, jett_rt_v1_math_lcm, false, (first: i64 => I64, second: i64 => I64), i64 => I64,
+        |_| {
+            let a = first.unsigned_abs(); let b = second.unsigned_abs();
+            if a == 0 || b == 0 { Ok(0) } else { Ok((a / unsigned_gcd(a,b)).wrapping_mul(b) as i64) }
+        };
+    Factorial, jett_rt_v1_math_factorial, false, (value: i64 => I64), i64 => I64,
+        |_| {
+            if value < 0 { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.factorial: argument must be non-negative")); }
+            let mut result = 1_i64;
+            for n in 2..=value { result = result.wrapping_mul(n); if result == 0 { break; } }
+            Ok(result)
+        };
+    Clamp, jett_rt_v1_math_clamp, false, (value: f64 => F64, lower: f64 => F64, upper: f64 => F64), f64 => F64,
+        |_| {
+            if lower.is_nan() || upper.is_nan() { Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.clamp bounds must not be NaN")) }
+            else if lower > upper { Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.clamp requires lower bound <= upper bound")) }
+            else { Ok(value.clamp(lower, upper)) }
+        };
+    Status, jett_rt_v1_value_status, true, (), u32 => I32,
+        |s| Ok(s.current_failure().map_or(0, |e| e.0.code()));
+    FailureTakePrefixedText, jett_rt_v1_failure_take_prefixed_text, true, (prefix: *const u8 => Pointer, length: u64 => I64), u64 => I64,
+        |s| { let length = usize::try_from(length).map_err(|_| INVALID_FAILURE_COPY)?;
+            if length > isize::MAX as usize || (length != 0 && prefix.is_null()) { return Err(INVALID_FAILURE_COPY); }
+            if s.cleanup_failed || !s.can_capture_refinement_failure() { return Err(INVALID_FAILURE_COPY); }
+            let (_, static_message) = s.current_failure().ok_or(INVALID_FAILURE_COPY)?;
+            let prefix = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(prefix, length) } };
+            let message = s.current_dynamic_failure_message().unwrap_or(static_message);
+            let prefix = std::str::from_utf8(prefix).map_err(|_| INVALID_FAILURE_COPY)?;
+            let message = std::str::from_utf8(message).map_err(|_| INVALID_FAILURE_COPY)?;
+            let mut text = String::new();
+            text.try_reserve(prefix.len().checked_add(message.len()).ok_or(EXHAUSTED)?).map_err(|_| EXHAUSTED)?;
+            text.push_str(prefix);
+            text.push_str(message);
+            let value = s.insert(text)?;
+            s.finish_refinement_failure_capture();
+            Ok(value) };
+    RefinementPendingBoolText, jett_rt_v1_refinement_pending_bool_text, true, (bits: u64 => I64, depth: u64 => I64, name: *const u8 => Pointer, length: u64 => I64), u64 => I64,
+        |s| { let length = usize::try_from(length).map_err(|_| INVALID_FAILURE_COPY)?;
+            if length > isize::MAX as usize || (length != 0 && name.is_null()) { return Err(INVALID_FAILURE_COPY); }
+            let name = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(name, length) } };
+            let name = std::str::from_utf8(name).map_err(|_| INVALID_FAILURE_COPY)?;
+            let value = match bits { 0 => "false", 1 => "true", _ => return Err(INVALID_TRACE_LABEL) };
+            let value = format_pending_value(value, depth)?;
+            s.insert(format!("refinement constraint for '{name}' must return bool, got {value}")) };
+    PropertyCaseSet, jett_rt_v1_property_case_set, false, (message: u64 => I64), u32 => I32,
+        |s| { s.set_property_case_context(Some(s.text(message)?.as_bytes().to_vec())); Ok(0) };
+    PropertyCaseClear, jett_rt_v1_property_case_clear, false, (), u32 => I32,
+        |s| { s.set_property_case_context(None); Ok(0) };
+    AssertFail, jett_rt_v1_assert_fail, false, (), u32 => I32,
+        |_s| Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"assertion failed"));
+    AssertFailMessage, jett_rt_v1_assert_fail_message, false, (message: u64 => I64), u32 => I32,
+        |s| { let text = s.text(message)?.as_bytes();
+            let mut owned = Vec::new();
+            owned.try_reserve_exact(text.len()).map_err(|_| EXHAUSTED)?;
+            owned.extend_from_slice(text);
+            s.set_dynamic_failure_message(owned);
+            Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"assertion failed")) };
+    Retain, jett_rt_v1_string_retain, false, (value: u64 => I64), u64 => I64,
+        |s| s.retain(value);
+    Release, jett_rt_v1_string_release, true, (value: u64 => I64), u32 => I32,
+        |s| s.release(value);
+    Literal, jett_rt_v1_string_literal, false, (data: *const u8 => Pointer, length: u64 => I64), u64 => I64,
+        |s| {
+            if length > isize::MAX as u64 { return Err((JettRuntimeStatusV1::LENGTH_OUT_OF_RANGE, STRING_LENGTH_MESSAGE)); }
+            if length != 0 && data.is_null() { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, STRING_NULL_MESSAGE)); }
+            let bytes = if length == 0 { &[] } else { unsafe { slice::from_raw_parts(data, length as usize) } };
+            let text = str::from_utf8(bytes).map_err(|_| (JettRuntimeStatusV1::INVALID_UTF8, STRING_UTF8_MESSAGE))?;
+            s.insert(text.to_owned())
+        };
+    Concat, jett_rt_v1_string_concat, false, (left: u64 => I64, right: u64 => I64), u64 => I64,
+        |s| {
+            let a = s.text(left)?; let b = s.text(right)?;
+            let length = a.len().checked_add(b.len()).ok_or(EXHAUSTED)?;
+            let mut text = String::new(); text.try_reserve_exact(length).map_err(|_| EXHAUSTED)?;
+            text.push_str(a); text.push_str(b); s.insert(text)
+        };
+    CharCount, jett_rt_v1_string_char_count, false, (value: u64 => I64), u64 => I64,
+        |s| Ok(s.text(value)?.graphemes(true).count() as u64);
+    StringIndexOf, jett_rt_v1_string_index_of, false, (value: u64 => I64, needle: u64 => I64), u64 => I64,
+        |s| {
+            let mut index = if s.text(needle)?.is_empty() { Some(0) } else { None };
+            native_scan_grapheme_matches(s.text(value)?, s.text(needle)?, |_, _, offset| {
+                index = Some(offset);
+                false
+            });
+            match index {
+                Some(offset) => s.sum(SUM_SUCCESS, offset as u64, false),
+                None => s.sum(SUM_FAILURE, 0, false),
+            }
+        };
+    StringCount, jett_rt_v1_string_count, false, (value: u64 => I64, needle: u64 => I64), u64 => I64,
+        |s| {
+            let mut count = 0_u64;
+            native_scan_grapheme_matches(s.text(value)?, s.text(needle)?, |_, _, _| {
+                count += 1;
+                true
+            });
+            Ok(count)
+        };
+    StringReplace, jett_rt_v1_string_replace, false, (value: u64 => I64, needle: u64 => I64, replacement: u64 => I64), u64 => I64,
+        |s| { let output = native_replace(s.text(value)?, s.text(needle)?, s.text(replacement)?)?; s.insert(output) };
+    StringSlugify, jett_rt_v1_string_slugify, false, (value: u64 => I64), u64 => I64,
+        |s| { let output = native_slugify(s.text(value)?); s.insert(output) };
+    StringToUpperFirst, jett_rt_v1_string_to_upper_first, false, (value: u64 => I64), u64 => I64,
+        |s| { let output = native_change_first(s.text(value)?, |first| first.to_uppercase().collect()); s.insert(output) };
+    StringToLowerFirst, jett_rt_v1_string_to_lower_first, false, (value: u64 => I64), u64 => I64,
+        |s| { let output = native_change_first(s.text(value)?, |first| first.to_lowercase().collect()); s.insert(output) };
+    Slice, jett_rt_v1_string_slice, false, (value: u64 => I64, start: i64 => I64, end: i64 => I64), u64 => I64,
+        |s| {
+            let parts = s.text(value)?.graphemes(true).collect::<Vec<_>>();
+            let length = parts.len() as i64;
+            let start = start.clamp(0, length) as usize;
+            let end = end.clamp(0, length) as usize;
+            let text = parts[start.min(end)..end].concat();
+            s.insert(text)
+        };
+    Upper, jett_rt_v1_string_upper, false, (value: u64 => I64), u64 => I64,
+        |s| { let text = s.text(value)?.to_uppercase(); s.insert(text) };
+    Lower, jett_rt_v1_string_lower, false, (value: u64 => I64), u64 => I64,
+        |s| { let text = s.text(value)?.to_lowercase(); s.insert(text) };
+    Trim, jett_rt_v1_string_trim, false, (value: u64 => I64), u64 => I64,
+        |s| { let text = s.text(value)?.trim().to_owned(); s.insert(text) };
+    TrimStart, jett_rt_v1_string_trim_start, false, (value: u64 => I64), u64 => I64,
+        |s| { let text = s.text(value)?.trim_start().to_owned(); s.insert(text) };
+    TrimEnd, jett_rt_v1_string_trim_end, false, (value: u64 => I64), u64 => I64,
+        |s| { let text = s.text(value)?.trim_end().to_owned(); s.insert(text) };
+    IsAlpha, jett_rt_v1_string_is_alpha, false, (value: u64 => I64), u32 => I32,
+        |s| { let text = s.text(value)?; Ok(u32::from(!text.is_empty() && text.chars().all(char::is_alphabetic))) };
+    IsNumeric, jett_rt_v1_string_is_numeric, false, (value: u64 => I64), u32 => I32,
+        |s| { let text = s.text(value)?; Ok(u32::from(!text.is_empty() && text.chars().all(|c| c.is_ascii_digit()))) };
+    Repeat, jett_rt_v1_string_repeat, false, (value: u64 => I64, count: i64 => I64), u64 => I64,
+        |s| {
+            let text = s.text(value)?;
+            let count = usize::try_from(count.max(0)).unwrap_or(usize::MAX);
+            if text.is_empty() || count == 0 { return s.insert(String::new()); }
+            let error = (JettRuntimeStatusV1::RESOURCE_EXHAUSTED, b"string.repeat: requested output is too large".as_slice());
+            let length = text.len().checked_mul(count).ok_or(error)?;
+            let mut result = String::new(); result.try_reserve_exact(length).map_err(|_| error)?;
+            for _ in 0..count { result.push_str(text); }
+            s.insert(result)
+        };
+    Equal, jett_rt_v1_string_equal, false, (left: u64 => I64, right: u64 => I64), u32 => I32,
+        |s| s.equal_string(left, right, false);
+    StringNotEqual, jett_rt_v1_string_not_equal, false, (left: u64 => I64, right: u64 => I64), u32 => I32,
+        |s| s.equal_string(left, right, true);
+    StringRun, jett_rt_v1_string_run, false, (value: u64 => I64), u64 => I64,
+        |s| s.run_string(value);
+    StringTaskJoin, jett_rt_v1_string_task_join, false, (value: u64 => I64), u64 => I64,
+        |s| s.join_string(value);
+    StringTaskFormat, jett_rt_v1_string_task_format, false, (value: u64 => I64), u64 => I64,
+        |s| s.display_string(value);
+    ScalarTaskFormat, jett_rt_v1_scalar_task_format, false, (bits: u64 => I64, kind: u32 => I32, depth: u64 => I64), u64 => I64,
+        |s| { let inner = s.debug_value(bits, kind)?; s.insert(format_pending_value(&inner, depth)?) };
+    NothingRun, jett_rt_v1_nothing_run, false, (depth: u64 => I64), u64 => I64,
+        |_s| depth.checked_add(1).ok_or(EXHAUSTED);
+    NothingJoin, jett_rt_v1_nothing_join, false, (depth: u64 => I64), u64 => I64,
+        |s| s.join_nothing(depth);
+    NothingFormat, jett_rt_v1_nothing_format, false, (depth: u64 => I64), u64 => I64,
+        |s| s.insert(format_nothing(depth)?);
+    NothingEqual, jett_rt_v1_nothing_equal, false, (left: u64 => I64, right: u64 => I64, not_equal: u32 => I32), u32 => I32,
+        |s| s.equal_nothing(left, right, not_equal);
+    ScalarPendingUnaryCheck, jett_rt_v1_scalar_pending_unary_check, false, (depth: u64 => I64, negate: u32 => I32), u32 => I32,
+        |_s| { if negate > 1 { return Err(INVALID_TRACE_LABEL); }
+            if depth == 0 { Ok(0) } else if negate == 0 { Err(PENDING_BOOL_NEGATION) }
+            else { Err(PENDING_NUMERIC_NEGATION) } };
+    ScalarPendingBinaryCheck, jett_rt_v1_scalar_pending_binary_check, false, (left_bits: u64 => I64, left_kind: u32 => I32, left_depth: u64 => I64, right_bits: u64 => I64, right_kind: u32 => I32, right_depth: u64 => I64, operation: u32 => I32), u32 => I32,
+        |s| s.check_pending_scalar_binary(left_bits, left_kind, left_depth, right_bits, right_kind, right_depth, operation);
+    ScalarPendingBoolConditionCheck, jett_rt_v1_scalar_pending_bool_condition_check, false, (bits: u64 => I64, depth: u64 => I64, context: u32 => I32), u32 => I32,
+        |s| s.check_pending_bool_condition(bits, depth, context);
+    EnumEqual, jett_rt_v1_enum_equal, false, (left: u64 => I64, right: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u32 => I32,
+        |s| { if layout_pointer == 0 { return Err(INVALID_STRUCT); }
+            let length = usize::try_from(layout_length).map_err(|_| INVALID_STRUCT)?;
+            if length > isize::MAX as usize { return Err(INVALID_STRUCT); }
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
+            s.enum_equal(left, right, layout) };
+    EnumPendingComparisonCheck, jett_rt_v1_enum_pending_comparison_check, false, (left: u64 => I64, right: u64 => I64, not_equal: u32 => I32, layout_pointer: u64 => I64, layout_length: u64 => I64), u32 => I32,
+        |s| { if layout_pointer == 0 { return Err(INVALID_STRUCT); }
+            let length = usize::try_from(layout_length).map_err(|_| INVALID_STRUCT)?;
+            if length > isize::MAX as usize { return Err(INVALID_STRUCT); }
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
+            s.check_enum_comparison(left, right, not_equal, layout) };
+    EnumEqualAggregate, jett_rt_v1_enum_equal_aggregate, false, (left: u64 => I64, right: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u32 => I32,
+        |s| { if layout_pointer == 0 { return Err(INVALID_STRUCT); }
+            let length = usize::try_from(layout_length).map_err(|_| INVALID_STRUCT)?;
+            if length > isize::MAX as usize { return Err(INVALID_STRUCT); }
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
+            s.aggregate_enum_equal(left, right, layout) };
+    EnumEqualityStart, jett_rt_v1_enum_equality_start, false, (left: u64 => I64, right: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u64 => I64,
+        |s| { if layout_pointer == 0 { return Err(INVALID_STRUCT); }
+            let length = usize::try_from(layout_length).map_err(|_| INVALID_STRUCT)?;
+            if length > isize::MAX as usize { return Err(INVALID_STRUCT); }
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
+            s.equality_start(left, right, layout) };
+    EnumEqualityNext, jett_rt_v1_enum_equality_next, false, (cursor: u64 => I64), u32 => I32,
+        |s| s.equality_next(cursor);
+    EnumEqualityArgument, jett_rt_v1_enum_equality_argument, false, (cursor: u64 => I64, argument: u32 => I32), u64 => I64,
+        |s| s.equality_argument(cursor, argument);
+    EnumEqualityAnswer, jett_rt_v1_enum_equality_answer, false, (cursor: u64 => I64, equal: u32 => I32, depth: u64 => I64), u32 => I32,
+        |s| s.equality_answer(cursor, equal, depth);
+    FromInt, jett_rt_v1_string_from_int, false, (value: i64 => I64), u64 => I64,
+        |s| s.insert(value.to_string());
+    FromUint, jett_rt_v1_string_from_uint, false, (value: u64 => I64), u64 => I64,
+        |s| s.insert(value.to_string());
+    FromFloat, jett_rt_v1_string_from_float, false, (value: f64 => F64), u64 => I64,
+        |s| s.insert(value.to_string());
+    FromBool, jett_rt_v1_string_from_bool, false, (value: u32 => I32), u64 => I64,
+        |s| if value > 1 { Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid native bool")) } else { s.insert((value != 0).to_string()) };
+    GrantStdout, jett_rt_v1_grant_stdout, false, (), u64 => I64,
+        |s| { if let Some(token) = s.stdout { return Ok(token); } let token = next_identity()?; s.stdout = Some(token); Ok(token) };
+    GrantStderr, jett_rt_v1_grant_stderr, false, (), u64 => I64,
+        |s| s.grant_opaque_capability("Stderr");
+    GrantStdin, jett_rt_v1_grant_stdin, false, (), u64 => I64,
+        |s| s.grant_opaque_capability("Stdin");
+    GrantFilesystem, jett_rt_v1_grant_filesystem, false, (), u64 => I64,
+        |s| s.grant_opaque_capability("Filesystem");
+    GrantNetwork, jett_rt_v1_grant_network, false, (), u64 => I64,
+        |s| s.grant_opaque_capability("Network");
+    GrantProcess, jett_rt_v1_grant_process, false, (), u64 => I64,
+        |s| s.grant_opaque_capability("Process");
+    GrantLog, jett_rt_v1_grant_log, false, (), u64 => I64,
+        |s| s.grant_opaque_capability("Log");
+    GrantClock, jett_rt_v1_grant_clock, false, (), u64 => I64,
+        |s| { if let Some(token) = s.clock { return Ok(token); } let token = next_identity()?; s.clock = Some(token); Ok(token) };
+    ClockNow, jett_rt_v1_clock_now, false, (authority: u64 => I64), i64 => I64,
+        |s| { if s.clock != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Clock authority")); }
+            if let Some(script) = &mut s.clock_script {
+                let sample = script.front().copied().ok_or((JettRuntimeStatusV1::INVALID_ARGUMENT, b"Clock.now: test clock exhausted".as_slice()))?;
+                match sample {
+                    clock::ClockTestSample::Unavailable => {
+                        script.pop_front();
+                        Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"Clock.now: wall clock unavailable"))
+                    }
+                    clock::ClockTestSample::Wall { unix_seconds, subsecond_nanoseconds } => {
+                        let value = clock::checked_clock_milliseconds(unix_seconds, subsecond_nanoseconds)
+                            .map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?;
+                        script.pop_front();
+                        Ok(value)
+                    }
+                }
+            } else {
+                let (seconds, nanoseconds) = clock::production_wall_clock_sample();
+                clock::checked_clock_milliseconds(seconds, nanoseconds).map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))
+            } };
+    GrantRandom, jett_rt_v1_grant_random, false, (), u64 => I64,
+        |s| { if let Some(token) = s.random { return Ok(token); }
+            if s.random_provider.is_none() {
+                s.random_provider = Some(RandomProvider::production().map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?);
+            }
+            let token = next_identity()?; s.random = Some(token); Ok(token) };
+    RandomBounded, jett_rt_v1_random_bounded, false, (authority: u64 => I64, lower: i64 => I64, upper: i64 => I64), i64 => I64,
+        |s| { if s.random != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Random authority")); }
+            let width = u64::try_from(i128::from(upper) - i128::from(lower))
+                .ok().filter(|width| *width > 0)
+                .ok_or((JettRuntimeStatusV1::INVALID_ARGUMENT, b"random.__bounded received invalid bounds".as_slice()))?;
+            let offset = s.random_provider.as_mut().ok_or((JettRuntimeStatusV1::INVALID_ARGUMENT, random::ENTROPY_UNAVAILABLE.as_bytes()))?
+                .bounded_offset(width).map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?;
+            i64::try_from(i128::from(lower) + i128::from(offset))
+                .map_err(|_| (JettRuntimeStatusV1::INVALID_ARGUMENT, b"random.__bounded received invalid bounds".as_slice())) };
+    RandomUnit53, jett_rt_v1_random_unit53, false, (authority: u64 => I64), f64 => F64,
+        |s| { if s.random != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Random authority")); }
+            let bits = s.random_provider.as_mut().ok_or((JettRuntimeStatusV1::INVALID_ARGUMENT, random::ENTROPY_UNAVAILABLE.as_bytes()))?
+                .unit53().map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?;
+            Ok(bits as f64 / 9_007_199_254_740_992.0) };
+    RandomBool, jett_rt_v1_random_bool, false, (authority: u64 => I64), u32 => I32,
+        |s| { if s.random != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Random authority")); }
+            let value = s.random_provider.as_mut().ok_or((JettRuntimeStatusV1::INVALID_ARGUMENT, random::ENTROPY_UNAVAILABLE.as_bytes()))?
+                .boolean().map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?;
+            Ok(u32::from(value)) };
+    UuidNew, jett_rt_v1_uuid_new, false, (), u64 => I64,
+        |s| { let value = crate::uuid::new_v4()
+            .map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?;
+            s.insert(value) };
+    GrantEnvironment, jett_rt_v1_grant_environment, false, (), u64 => I64,
+        |s| { if let Some(token) = s.environment { return Ok(token); }
+            if s.environment_snapshot.is_none() {
+                s.environment_snapshot = Some(LaunchEnvironmentSnapshot::production()
+                    .map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?);
+            }
+            let token = next_identity()?; s.environment = Some(token); Ok(token) };
+    GrantGraphics, jett_rt_v1_grant_graphics, false, (), u64 => I64,
+        |s| { if let Some(token) = s.graphics { return Ok(token); }
+            let token = next_identity()?; s.graphics = Some(token); Ok(token) };
+    GraphicsValidateConfig, jett_rt_v1_graphics_validate_config, false, (config: u64 => I64), u64 => I64,
+        |s| s.graphics_validate_config(config);
+    GraphicsValidateScene, jett_rt_v1_graphics_validate_scene, false, (width: i64 => I64, height: i64 => I64, scene: u64 => I64), u64 => I64,
+        |s| s.graphics_validate_scene(width, height, scene);
+    GraphicsOpen, jett_rt_v1_graphics_open, false, (authority: u64 => I64, config: u64 => I64), u64 => I64,
+        |s| s.graphics_open(authority, config);
+    GraphicsPresent, jett_rt_v1_graphics_present, false, (session: u64 => I64, scene: u64 => I64), u64 => I64,
+        |s| s.graphics_present(session, scene);
+    GraphicsNextKey, jett_rt_v1_graphics_next_key, false, (session: u64 => I64), u64 => I64,
+        |s| s.graphics_next_key(session);
+    GraphicsClose, jett_rt_v1_graphics_close, true, (session: u64 => I64), u32 => I32,
+        |s| s.graphics_close(session);
+    EnvironmentArgs, jett_rt_v1_environment_args, false, (authority: u64 => I64), u64 => I64,
+        |s| { if s.environment != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Environment authority")); }
+            let arguments = s.environment_snapshot.as_ref().ok_or((JettRuntimeStatusV1::INVALID_ARGUMENT, b"Environment: launch data unavailable".as_slice()))?
+                .arguments().to_vec();
+            s.string_list(arguments) };
+    EnvironmentGet, jett_rt_v1_environment_get, false, (authority: u64 => I64, key: u64 => I64), u64 => I64,
+        |s| { if s.environment != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Environment authority")); }
+            let found = s.environment_snapshot.as_ref().ok_or((JettRuntimeStatusV1::INVALID_ARGUMENT, b"Environment: launch data unavailable".as_slice()))?
+                .get(s.text(key)?);
+            match found {
+                Ok(Some(value)) => { let text = s.insert(value)?;
+                    let optional = s.owned_sum(SUM_SUCCESS, text)?;
+                    s.owned_sum(SUM_SUCCESS, optional) },
+                Ok(None) => { let optional = s.sum(SUM_FAILURE, 0, false)?;
+                    s.owned_sum(SUM_SUCCESS, optional) },
+                Err(message) => { let text = s.insert(message.to_owned())?;
+                    s.owned_sum(SUM_FAILURE, text) },
+            } };
+    Stdout, jett_rt_v1_string_stdout, false, (authority: u64 => I64, value: u64 => I64), u32 => I32,
+        |s| {
+            let (authority, _) = s.capability_authority(authority)
+                .map_err(|_| (JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Stdout authority".as_slice()))?;
+            if s.stdout != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Stdout authority")); }
+            let text = s.format_string(value)?;
+            { let mut stdout = io::stdout().lock(); write_all_bytes(&mut stdout, text.as_bytes()).and_then(|_| stdout.flush()).map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDOUT_WRITE_MESSAGE))?; } Ok(0)
+        };
+    DebugPrint, jett_rt_v1_string_debug_print, false, (value: u64 => I64), u32 => I32,
+        |s| { { let mut stderr = io::stderr().lock(); write_all_bytes(&mut stderr, s.text(value)?.as_bytes()).and_then(|_| stderr.flush()).map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDERR_WRITE_MESSAGE))?; } Ok(0) };
+    DebugAppend, jett_rt_v1_debug_append, false, (builder: u64 => I64, label_pointer: u64 => I64, label_length: u64 => I64, bits: u64 => I64, kind: u32 => I32), u32 => I32,
+        |s| { if label_pointer == 0 { return Err(INVALID_TRACE_LABEL); }
+            let length = usize::try_from(label_length).map_err(|_| INVALID_TRACE_LABEL)?;
+            if length > isize::MAX as usize { return Err(INVALID_TRACE_LABEL); }
+            let label = unsafe { std::slice::from_raw_parts(label_pointer as *const u8, length) };
+            let label = std::str::from_utf8(label).map_err(|_| INVALID_TRACE_LABEL)?;
+            s.debug_append(builder, label, bits, kind) };
+    DebugAppendPendingScalar, jett_rt_v1_debug_append_pending_scalar, false, (builder: u64 => I64, label_pointer: u64 => I64, label_length: u64 => I64, bits: u64 => I64, kind: u32 => I32, depth: u64 => I64), u32 => I32,
+        |s| { if label_pointer == 0 { return Err(INVALID_TRACE_LABEL); }
+            let length = usize::try_from(label_length).map_err(|_| INVALID_TRACE_LABEL)?;
+            if length > isize::MAX as usize { return Err(INVALID_TRACE_LABEL); }
+            let label = unsafe { std::slice::from_raw_parts(label_pointer as *const u8, length) };
+            let label = std::str::from_utf8(label).map_err(|_| INVALID_TRACE_LABEL)?;
+            s.debug_append_pending_scalar(builder, label, bits, kind, depth) };
+    DebugAppendAggregate, jett_rt_v1_debug_append_aggregate, false, (builder: u64 => I64, label_pointer: u64 => I64, label_length: u64 => I64, bits: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u32 => I32,
+        |s| { if label_pointer == 0 || layout_pointer == 0 { return Err(INVALID_TRACE_LABEL); }
+            let label_length = usize::try_from(label_length).map_err(|_| INVALID_TRACE_LABEL)?;
+            let layout_length = usize::try_from(layout_length).map_err(|_| INVALID_TRACE_LABEL)?;
+            if label_length > isize::MAX as usize || layout_length > isize::MAX as usize { return Err(INVALID_TRACE_LABEL); }
+            let label = unsafe { std::slice::from_raw_parts(label_pointer as *const u8, label_length) };
+            let label = std::str::from_utf8(label).map_err(|_| INVALID_TRACE_LABEL)?;
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, layout_length) };
+            s.debug_append_aggregate(builder, label, bits, layout) };
+    DebugEmit, jett_rt_v1_debug_emit, false, (builder: u64 => I64), u32 => I32,
+        |s| s.debug_emit(builder);
+    TraceInt64, jett_rt_v1_trace_int64, false, (prefix_pointer: u64 => I64, prefix_length: u64 => I64, value: i64 => I64), u32 => I32,
+        |_s| { if prefix_pointer == 0 { return Err(INVALID_TRACE_LABEL); }
+            let length = usize::try_from(prefix_length).map_err(|_| INVALID_TRACE_LABEL)?;
+            let prefix = unsafe { std::slice::from_raw_parts(prefix_pointer as *const u8, length) };
+            let mut stderr = io::stderr().lock();
+            write_all_bytes(&mut stderr, prefix)
+                .and_then(|_| write_all_bytes(&mut stderr, value.to_string().as_bytes()))
+                .and_then(|_| write_all_bytes(&mut stderr, b"\n"))
+                .and_then(|_| stderr.flush())
+                .map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDERR_WRITE_MESSAGE))?;
+            Ok(0) };
+    BreakpointEmpty, jett_rt_v1_breakpoint_empty, false, (condition: u32 => I32), u32 => I32,
+        |_s| { if condition != 0 {
+            let mut stderr = io::stderr().lock();
+            write_all_bytes(&mut stderr, b"breakpoint hit\n")
+                .and_then(|_| stderr.flush())
+                .map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDERR_WRITE_MESSAGE))?;
+        } Ok(0) };
+    BreakpointInt64, jett_rt_v1_breakpoint_int64, false, (condition: u32 => I32, prefix_pointer: u64 => I64, prefix_length: u64 => I64, value: i64 => I64), u32 => I32,
+        |_s| { if condition != 0 {
+            if prefix_pointer == 0 { return Err(INVALID_TRACE_LABEL); }
+            let length = usize::try_from(prefix_length).map_err(|_| INVALID_TRACE_LABEL)?;
+            let prefix = unsafe { std::slice::from_raw_parts(prefix_pointer as *const u8, length) };
+            let mut stderr = io::stderr().lock();
+            write_all_bytes(&mut stderr, prefix)
+                .and_then(|_| write_all_bytes(&mut stderr, value.to_string().as_bytes()))
+                .and_then(|_| write_all_bytes(&mut stderr, b"\n"))
+                .and_then(|_| stderr.flush())
+                .map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDERR_WRITE_MESSAGE))?;
+        } Ok(0) };
+}
+
+/// Read the first terminal failure without clearing it. Static message storage
+/// remains valid after context destruction, like all v1 result messages.
+/// # Safety
+/// Same context and result pointer requirements as the lifecycle ABI.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_value_failure(
+    context: *const JettRuntimeContextV1,
+    out: *mut JettRuntimeResultV1,
+) -> JettRuntimeStatusV1 {
+    complete_call(out, || {
+        let key = match context_key(context) {
+            Ok(k) => k,
+            Err(status) => return JettRuntimeResultV1::failure(status, CONTEXT_INVALID_MESSAGE),
+        };
+        let lease = match acquire_context(key) {
+            Ok(l) => l,
+            Err(_) => {
+                return JettRuntimeResultV1::failure(
+                    JettRuntimeStatusV1::INVALID_CONTEXT,
+                    CONTEXT_INVALID_MESSAGE,
+                );
+            }
+        };
+        let state = lock_unpoisoned(&lease.entry.state);
+        match state.as_ref().and_then(|s| s.values.current_failure()) {
+            Some((status, message)) => JettRuntimeResultV1::failure(status, message),
+            None => JettRuntimeResultV1::ok(),
+        }
+    })
+}
+
+/// Copy the current terminal failure message into caller-owned storage.
+/// A null buffer with zero capacity queries the required byte length. Unlike
+/// `jett_rt_v1_value_failure`, this also returns dynamically produced messages
+/// and the active compiler-generated property/trial prefix.
+///
+/// # Safety
+/// `context` must be a live context. `out_result` and `out_length` must be
+/// distinct, aligned, writable records. A non-null `buffer` must be writable
+/// for `capacity` bytes and not overlap either output record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_value_failure_copy(
+    context: *const JettRuntimeContextV1,
+    buffer: *mut u8,
+    capacity: u64,
+    out_length: *mut u64,
+    out_result: *mut JettRuntimeResultV1,
+) -> JettRuntimeStatusV1 {
+    complete_call(out_result, || {
+        if out_length.is_null() || (buffer.is_null() && capacity != 0) {
+            return JettRuntimeResultV1::failure(INVALID_FAILURE_COPY.0, INVALID_FAILURE_COPY.1);
+        }
+        let capacity = match usize::try_from(capacity) {
+            Ok(value) if value <= isize::MAX as usize => value,
+            _ => {
+                return JettRuntimeResultV1::failure(
+                    INVALID_FAILURE_COPY.0,
+                    INVALID_FAILURE_COPY.1,
+                );
+            }
+        };
+        let key = match context_key(context) {
+            Ok(key) => key,
+            Err(status) => return JettRuntimeResultV1::failure(status, CONTEXT_INVALID_MESSAGE),
+        };
+        let lease = match acquire_context(key) {
+            Ok(lease) => lease,
+            Err(_) => {
+                return JettRuntimeResultV1::failure(
+                    JettRuntimeStatusV1::INVALID_CONTEXT,
+                    CONTEXT_INVALID_MESSAGE,
+                );
+            }
+        };
+        let state = lock_unpoisoned(&lease.entry.state);
+        let Some(state) = state.as_ref() else {
+            return JettRuntimeResultV1::failure(
+                JettRuntimeStatusV1::INVALID_CONTEXT,
+                CONTEXT_INVALID_MESSAGE,
+            );
+        };
+        let message = state
+            .values
+            .current_dynamic_failure_message()
+            .or_else(|| state.values.current_failure().map(|(_, message)| message))
+            .unwrap_or_default();
+        let prefix = if state.values.current_failure().is_some() {
+            state
+                .values
+                .current_property_case_context()
+                .unwrap_or_default()
+        } else {
+            &[]
+        };
+        let length = match prefix
+            .len()
+            .checked_add(message.len())
+            .and_then(|n| u64::try_from(n).ok())
+        {
+            Some(length) => length,
+            None => {
+                return JettRuntimeResultV1::failure(
+                    JettRuntimeStatusV1::RESOURCE_EXHAUSTED,
+                    EXHAUSTED.1,
+                );
+            }
+        };
+        // SAFETY: `out_length` is a caller-provided writable u64 by contract.
+        unsafe { ptr::write(out_length, length) };
+        if buffer.is_null() && capacity == 0 {
+            return JettRuntimeResultV1::ok();
+        }
+        if (capacity as u64) < length {
+            return JettRuntimeResultV1::failure(INVALID_FAILURE_COPY.0, INVALID_FAILURE_COPY.1);
+        }
+        if !prefix.is_empty() {
+            // SAFETY: the checked capacity includes both prefix and message.
+            unsafe { ptr::copy_nonoverlapping(prefix.as_ptr(), buffer, prefix.len()) };
+        }
+        if !message.is_empty() {
+            // SAFETY: the caller provides a nonoverlapping writable buffer of
+            // at least `capacity` bytes, checked against the message length.
+            unsafe {
+                ptr::copy_nonoverlapping(message.as_ptr(), buffer.add(prefix.len()), message.len())
+            };
+        }
+        JettRuntimeResultV1::ok()
+    })
+}
+
+fn unsigned_gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem::MaybeUninit;
+
+    include!("values/actor_identity_tests.rs");
+
+    #[test]
+    fn float_remainder_leaf_preserves_ieee_values_without_runtime_failure() {
+        let context = Context::new();
+        for (left, right, expected) in [
+            (5.5, 2.0, 1.5_f64),
+            (-5.5, 2.0, -1.5),
+            (5.5, -2.0, 1.5),
+            (-5.5, -2.0, -1.5),
+            (-0.0, 3.0, -0.0),
+            (1.0, f64::INFINITY, 1.0),
+            (f64::MAX, f64::MIN_POSITIVE, 0.0),
+            (-f64::MAX, f64::MIN_POSITIVE, -0.0),
+            (f64::from_bits(5), f64::from_bits(2), f64::from_bits(1)),
+        ] {
+            let actual = unsafe { jett_rt_v1_float_remainder(context.pointer(), left, right) };
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
+        for (left, right) in [
+            (1.0, 0.0),
+            (f64::INFINITY, 2.0),
+            (f64::NAN, 2.0),
+            (2.0, f64::NAN),
+        ] {
+            assert!(unsafe { jett_rt_v1_float_remainder(context.pointer(), left, right) }.is_nan());
+        }
+        assert_eq!(unsafe { jett_rt_v1_value_status(context.pointer()) }, 0);
+    }
+
+    struct Context(Box<JettRuntimeContextV1>);
+    impl Context {
+        fn new() -> Self {
+            let mut value = Box::new(JettRuntimeContextV1::retired());
+            let mut result = MaybeUninit::uninit();
+            assert_eq!(
+                unsafe { jett_rt_v1_context_create(1, &mut *value, result.as_mut_ptr()) },
+                JettRuntimeStatusV1::OK
+            );
+            Self(value)
+        }
+        fn destroy(self, expected: JettRuntimeStatusV1) {
+            let mut context = std::mem::ManuallyDrop::new(self);
+            let mut result = MaybeUninit::uninit();
+            assert_eq!(
+                unsafe { jett_rt_v1_context_destroy(&mut *context.0, result.as_mut_ptr()) },
+                expected
+            );
+            unsafe {
+                drop(ptr::read(&context.0));
+            }
+        }
+        fn pointer(&self) -> *const JettRuntimeContextV1 {
+            &*self.0
+        }
+        fn text(&self, text: &str) -> u64 {
+            unsafe { jett_rt_v1_string_literal(self.pointer(), text.as_ptr(), text.len() as u64) }
+        }
+        fn count(&self) -> usize {
+            let lease = acquire_context(context_key(self.pointer()).unwrap()).unwrap();
+            lock_unpoisoned(&lease.entry.state)
+                .as_ref()
+                .unwrap()
+                .values
+                .strings
+                .len()
+        }
+    }
+    impl Drop for Context {
+        fn drop(&mut self) {
+            let mut result = MaybeUninit::uninit();
+            assert_eq!(
+                unsafe { jett_rt_v1_context_destroy(&mut *self.0, result.as_mut_ptr()) },
+                JettRuntimeStatusV1::OK
+            );
+        }
+    }
+
+    const DEBUG_PRINT_CHANNEL_PROBE: &str = "JETT_RUNTIME_DEBUG_PRINT_CHANNEL_PROBE";
+
+    fn capture_debug_print_channel_probe(mode: &str) -> std::process::Output {
+        // A child harness isolates the actual process streams from parallel tests.
+        // The exact filter prevents the parent assertions from spawning recursively.
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "native_abi::values::tests::debug_print_channel_probe",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(DEBUG_PRINT_CHANNEL_PROBE, mode)
+            .output()
+            .unwrap()
+    }
+
+    #[test]
+    fn debug_print_uses_diagnostic_stderr_and_preserves_exact_borrowed_bytes() {
+        let output = capture_debug_print_channel_probe("bytes");
+        assert!(output.status.success(), "child probe failed: {output:?}");
+        let expected = concat!(
+            "JETT-DEBUG-PARTIAL \u{03bb}\u{1f642}\0 ",
+            "trace runtime-channel: int64 = 7\n",
+            "breakpoint hit\n",
+            "JETT-DEBUG-LINE [redacted]\r\ninner\n\n",
+            "JETT-DEBUG-TAIL",
+        );
+        assert_eq!(output.stderr, expected.as_bytes());
+        // libtest owns its own stdout banner, so compare the application marker
+        // and reject diagnostic payloads rather than asserting an empty stream.
+        assert!(
+            output
+                .stdout
+                .windows(b"JETT-APPLICATION-ONLY\n".len())
+                .any(|bytes| bytes == b"JETT-APPLICATION-ONLY\n")
+        );
+        for marker in [
+            b"JETT-DEBUG-".as_slice(),
+            b"trace runtime-channel: int64 = ".as_slice(),
+            b"breakpoint hit".as_slice(),
+        ] {
+            assert!(
+                !output
+                    .stdout
+                    .windows(marker.len())
+                    .any(|bytes| bytes == marker)
+            );
+        }
+    }
+
+    #[test]
+    fn debug_print_bad_handle_emits_nothing_and_keeps_first_failure() {
+        let output = capture_debug_print_channel_probe("invalid-handle");
+        assert!(output.status.success(), "child probe failed: {output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        assert!(
+            !output
+                .stdout
+                .windows(b"JETT-DEBUG-SUPPRESSED".len())
+                .any(|bytes| bytes == b"JETT-DEBUG-SUPPRESSED")
+        );
+    }
+
+    fn emit_borrowed_debug_print(context: &Context, text: &str) {
+        let previous_count = context.count();
+        let value = context.text(text);
+        let expected = context.text(text);
+        assert_eq!(context.count(), previous_count + 2);
+        unsafe {
+            assert_eq!(jett_rt_v1_string_debug_print(context.pointer(), value), 0);
+            assert_eq!(jett_rt_v1_value_status(context.pointer()), 0);
+            assert_eq!(
+                jett_rt_v1_string_equal(context.pointer(), value, expected),
+                1
+            );
+            assert_eq!(context.count(), previous_count + 2);
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), value), 0);
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), expected), 0);
+        }
+        assert_eq!(context.count(), previous_count);
+    }
+
+    fn debug_print_bytes_probe() {
+        let context = Context::new();
+        // Emit without granting Stdout or Stderr: this is compiler observation.
+        emit_borrowed_debug_print(&context, "JETT-DEBUG-PARTIAL \u{03bb}\u{1f642}\0 ");
+        let prefix = b"trace runtime-channel: int64 = ";
+        unsafe {
+            assert_eq!(
+                jett_rt_v1_trace_int64(
+                    context.pointer(),
+                    prefix.as_ptr() as u64,
+                    prefix.len() as u64,
+                    7,
+                ),
+                0
+            );
+            assert_eq!(jett_rt_v1_breakpoint_empty(context.pointer(), 0), 0);
+            assert_eq!(jett_rt_v1_breakpoint_empty(context.pointer(), 1), 0);
+        }
+        emit_borrowed_debug_print(&context, "");
+        emit_borrowed_debug_print(&context, "JETT-DEBUG-LINE [redacted]\r\ninner\n\n");
+        emit_borrowed_debug_print(&context, "JETT-DEBUG-TAIL");
+        let application = context.text("JETT-APPLICATION-ONLY\n");
+        unsafe {
+            let authority = jett_rt_v1_grant_stdout(context.pointer());
+            assert_ne!(authority, 0);
+            assert_eq!(
+                jett_rt_v1_string_stdout(context.pointer(), authority, application),
+                0
+            );
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), application), 0);
+            assert_eq!(jett_rt_v1_value_status(context.pointer()), 0);
+        }
+        assert_eq!(context.count(), 0);
+    }
+
+    fn debug_print_invalid_handle_probe() {
+        let context = Context::new();
+        let suppressed = context.text("JETT-DEBUG-SUPPRESSED");
+        unsafe {
+            assert_ne!(jett_rt_v1_string_debug_print(context.pointer(), 0), 0);
+            assert_ne!(
+                jett_rt_v1_string_debug_print(context.pointer(), suppressed),
+                0
+            );
+            let mut failure = MaybeUninit::uninit();
+            assert_eq!(
+                jett_rt_v1_value_failure(context.pointer(), failure.as_mut_ptr()),
+                JettRuntimeStatusV1::INVALID_ARGUMENT
+            );
+            let failure = failure.assume_init();
+            assert_eq!(
+                slice::from_raw_parts(failure.message.data, failure.message.byte_length as usize),
+                b"invalid native string handle"
+            );
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), suppressed), 0);
+        }
+        assert_eq!(context.count(), 0);
+        // A retained entry failure does not make successful cleanup fail.
+        context.destroy(JettRuntimeStatusV1::OK);
+    }
+
+    #[test]
+    fn debug_print_channel_probe() {
+        match std::env::var(DEBUG_PRINT_CHANNEL_PROBE).as_deref() {
+            Ok("bytes") => debug_print_bytes_probe(),
+            Ok("invalid-handle") => debug_print_invalid_handle_probe(),
+            Err(std::env::VarError::NotPresent) => {}
+            mode => panic!("unexpected debug-print channel probe mode: {mode:?}"),
+        }
+    }
+
+    fn function_debug_layout_bytes(nodes: &[Vec<u8>], root: u32) -> Vec<u8> {
+        let mut bytes = b"JD\x01".to_vec();
+        bytes.extend_from_slice(&u32::try_from(nodes.len()).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&root.to_le_bytes());
+        for node in nodes {
+            bytes.extend_from_slice(&u32::try_from(node.len()).unwrap().to_le_bytes());
+            bytes.extend_from_slice(node);
+        }
+        bytes
+    }
+
+    fn identity_test_info(
+        values: &mut NativeValues,
+        name: &str,
+        kind: &str,
+        args: Vec<u64>,
+        handles: &mut Vec<u64>,
+    ) -> u64 {
+        let name = values.insert(name.into()).unwrap();
+        let kind = values.insert(kind.into()).unwrap();
+        let arguments = values.new_list(false).unwrap();
+        values.lists.get_mut(&arguments).unwrap().elements = args.into_iter().map(Some).collect();
+        let info = values.new_struct(6).unwrap();
+        for (index, bits) in [(0, name), (1, kind), (4, 0), (5, arguments)] {
+            values.structs.get_mut(&info).unwrap().fields[index] = Some(NativeField {
+                bits,
+                pending_depth: 0,
+                owned: false,
+            });
+        }
+        handles.extend([name, kind, arguments, info]);
+        info
+    }
+
+    #[test]
+    fn deep_type_info_identity_preserves_aliases_and_shared_children() {
+        let mut values = NativeValues::default();
+        let mut handles = Vec::new();
+        let leaf = identity_test_info(&mut values, "int64", "primitive", vec![], &mut handles);
+        let mut current = leaf;
+        for _ in 0..4096 {
+            current =
+                identity_test_info(&mut values, "Alias", "alias", vec![current], &mut handles);
+        }
+        assert_eq!(
+            values.type_info_identity(current, false),
+            Ok("9:primitive5:int640:0".into())
+        );
+        let preserved = format!("{}9:primitive5:int640:0", "5:alias5:Alias0:1".repeat(4096));
+        assert_eq!(values.type_info_identity(current, true), Ok(preserved));
+        let pair = identity_test_info(
+            &mut values,
+            "unused",
+            "map",
+            vec![current, current],
+            &mut handles,
+        );
+        assert_eq!(
+            values.type_info_identity(pair, false),
+            Ok("3:map0:0:29:primitive5:int640:09:primitive5:int640:0".into())
+        );
+        for handle in handles {
+            values.drop_value(handle).unwrap();
+        }
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn type_info_identity_rejects_cycles_and_malformed_aliases() {
+        let mut values = NativeValues::default();
+        let mut handles = Vec::new();
+        let alias = identity_test_info(&mut values, "Alias", "alias", vec![], &mut handles);
+        assert_eq!(
+            values.type_info_identity(alias, false),
+            Err(INVALID_TYPE_INFO)
+        );
+        let args = values.struct_field(alias, 5).unwrap().bits;
+        values
+            .lists
+            .get_mut(&args)
+            .unwrap()
+            .elements
+            .push(Some(alias));
+        for preserve in [false, true] {
+            assert_eq!(
+                values.type_info_identity(alias, preserve),
+                Err(INVALID_TYPE_INFO)
+            );
+        }
+        values.lists.get_mut(&args).unwrap().elements[0] = None;
+        assert_eq!(
+            values.type_info_identity(alias, true),
+            Err(INVALID_TYPE_INFO)
+        );
+        for handle in handles {
+            values.drop_value(handle).unwrap();
+        }
+        assert!(values.is_empty());
+    }
+
+    fn debug_function_descriptor(values: &mut NativeValues, label: &str, captured: bool) -> u64 {
+        let environment = if captured {
+            let secret = values.insert("private capture".into()).unwrap();
+            let environment = values.new_struct(1).unwrap();
+            values.structs.get_mut(&environment).unwrap().fields[0] = Some(NativeField {
+                bits: secret,
+                owned: true,
+                pending_depth: 0,
+            });
+            environment
+        } else {
+            0
+        };
+        let label = values.insert(label.into()).unwrap();
+        let descriptor = values.new_struct(NATIVE_FUNCTION_FIELD_COUNT).unwrap();
+        values.structs.get_mut(&descriptor).unwrap().fields = vec![
+            Some(NativeField {
+                // Deliberately not a callable address: debug must never invoke it.
+                bits: u64::MAX,
+                owned: false,
+                pending_depth: 0,
+            }),
+            Some(NativeField {
+                bits: environment,
+                owned: captured,
+                pending_depth: 0,
+            }),
+            Some(NativeField {
+                bits: label,
+                owned: true,
+                pending_depth: 0,
+            }),
+        ];
+        descriptor
+    }
+
+    #[test]
+    fn uninhabited_debug_nodes_allow_empty_containers_but_reject_payloads() {
+        let mut values = NativeValues::default();
+        let mut list = vec![NativeDebugTag::List as u8];
+        list.extend_from_slice(&0_u32.to_le_bytes());
+        let mut optional = vec![NativeDebugTag::Optional as u8];
+        optional.extend_from_slice(&0_u32.to_le_bytes());
+        let nodes = [vec![NativeDebugTag::Uninhabited as u8], list, optional];
+        let list_bytes = function_debug_layout_bytes(&nodes, 1);
+        let optional_bytes = function_debug_layout_bytes(&nodes, 2);
+        let list_layout = NativeDebugLayout::parse(&list_bytes).unwrap();
+        let optional_layout = NativeDebugLayout::parse(&optional_bytes).unwrap();
+        let empty_list = values.new_list(false).unwrap();
+        let absent = values.sum(SUM_FAILURE, 0, false).unwrap();
+        let present = values.sum(SUM_SUCCESS, 0, false).unwrap();
+        let text = values.insert("before".to_owned()).unwrap();
+        assert_eq!(
+            list_layout.format_value(&values, empty_list, 1),
+            Ok("list()".into())
+        );
+        assert_eq!(
+            optional_layout.format_value(&values, absent, 2),
+            Ok("none".into())
+        );
+        assert_eq!(
+            optional_layout.format_value(&values, present, 2),
+            Err(INVALID_TRACE_LABEL)
+        );
+        values
+            .lists
+            .get_mut(&empty_list)
+            .unwrap()
+            .elements
+            .push(Some(0));
+        assert_eq!(
+            values.debug_append_aggregate(text, "", empty_list, &list_bytes),
+            Err(INVALID_TRACE_LABEL)
+        );
+        assert_eq!(values.text(text), Ok("before"));
+        for handle in [empty_list, absent, present, text] {
+            values.drop_value(handle).unwrap();
+        }
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn special_debug_tags_are_additive_and_have_no_payload() {
+        for (expected, tag) in [
+            NativeDebugTag::Primitive,
+            NativeDebugTag::Nothing,
+            NativeDebugTag::Bytes,
+            NativeDebugTag::List,
+            NativeDebugTag::Set,
+            NativeDebugTag::Map,
+            NativeDebugTag::Optional,
+            NativeDebugTag::Result,
+            NativeDebugTag::Record,
+            NativeDebugTag::Enum,
+            NativeDebugTag::Machine,
+            NativeDebugTag::Capability,
+            NativeDebugTag::Alias,
+            NativeDebugTag::Function,
+            NativeDebugTag::Actor,
+            NativeDebugTag::TypeConstruction,
+            NativeDebugTag::Redacted,
+            NativeDebugTag::Interface,
+            NativeDebugTag::Uninhabited,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let expected = u8::try_from(expected).unwrap();
+            assert_eq!(tag as u8, expected);
+            assert_eq!(NativeDebugTag::from_raw(expected), Ok(tag));
+        }
+        assert_eq!(NativeDebugTag::from_raw(19), Err(INVALID_TRACE_LABEL));
+        let bytes = function_debug_layout_bytes(&[vec![13]], 0);
+        let layout = NativeDebugLayout::parse(&bytes).unwrap();
+        assert!(matches!(
+            layout.nodes.as_slice(),
+            [NativeDebugNode::Function]
+        ));
+        let malformed = function_debug_layout_bytes(&[vec![13, 0]], 0);
+        assert!(matches!(
+            NativeDebugLayout::parse(&malformed),
+            Err(INVALID_TRACE_LABEL)
+        ));
+        assert_eq!(
+            (
+                NATIVE_FUNCTION_FIELD_COUNT,
+                NATIVE_FUNCTION_CODE_FIELD,
+                NATIVE_FUNCTION_ENVIRONMENT_FIELD,
+                NATIVE_FUNCTION_LABEL_FIELD,
+            ),
+            (3, 0, 1, 2)
+        );
+    }
+
+    #[test]
+    fn redacted_debug_nodes_hide_payloads_and_pending_depth_without_reading_handles() {
+        let mut alias = vec![NativeDebugTag::Alias as u8];
+        alias.extend_from_slice(&0u32.to_le_bytes());
+        let layout = NativeDebugLayout::parse(&function_debug_layout_bytes(
+            &[vec![NativeDebugTag::Redacted as u8], alias],
+            1,
+        ))
+        .unwrap();
+        let mut values = NativeValues::default();
+        let list = values.new_list(false).unwrap();
+        let mut list_layout = layout.clone();
+        list_layout.nodes.push(NativeDebugNode::List(layout.root));
+        list_layout.root = list_layout.nodes.len() - 1;
+        for bits in [0, 4321, u64::MAX] {
+            assert_eq!(
+                layout.format_value(&values, bits, layout.root),
+                Ok("[redacted]".to_owned())
+            );
+            let contents = values.lists.get_mut(&list).unwrap();
+            contents.elements = vec![Some(bits)];
+            contents.element_pending_depths.insert(0, u64::MAX);
+            assert_eq!(
+                list_layout.format_value(&values, list, list_layout.root),
+                Ok("list([redacted])".to_owned())
+            );
+        }
+        assert_eq!(
+            layout.equal_value(&values, 1, 1, layout.root),
+            Err(INVALID_STRUCT)
+        );
+        let public = NativeDebugLayout {
+            root: 1,
+            nodes: vec![
+                NativeDebugNode::Primitive(NativeSortKind::String as u32),
+                NativeDebugNode::List(0),
+            ],
+        };
+        let marker = values.insert("[redacted]".into()).unwrap();
+        let contents = values.lists.get_mut(&list).unwrap();
+        contents.elements = vec![Some(marker)];
+        contents.element_pending_depths.insert(0, 2);
+        assert_eq!(
+            public.format_value(&values, list, public.root),
+            Ok("list(pending(pending([redacted])))".to_owned())
+        );
+        values.drop_value(list).unwrap();
+        values.drop_value(marker).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn function_adapters_preserve_labels_and_pending_depth_without_mutating_source() {
+        let mut values = NativeValues::default();
+        let original = debug_function_descriptor(&mut values, "function(callback)", true);
+        let pending = values.run_record(original).unwrap();
+        let adapted = values.function_adapter(pending, 123).unwrap();
+        let joined = values.join_record(adapted).unwrap();
+        assert_eq!(
+            values.function_debug_label(adapted).unwrap(),
+            "function(callback)"
+        );
+        assert_eq!(values.owned_pending_depth(pending), Ok(1));
+        assert_eq!(values.owned_pending_depth(adapted), Ok(1));
+        assert_eq!(values.owned_pending_depth(joined), Ok(0));
+        let environment = values
+            .struct_field(joined, NATIVE_FUNCTION_ENVIRONMENT_FIELD)
+            .unwrap()
+            .bits;
+        let captured = values.struct_field(environment, 0).unwrap().bits;
+        assert_eq!(values.owned_pending_depth(captured), Ok(0));
+        for handle in [original, pending, adapted, joined] {
+            values.drop_value(handle).unwrap();
+        }
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn function_adapter_allocation_failures_release_partial_environments() {
+        for budget in 0..4 {
+            let mut values = NativeValues::default();
+            let source = debug_function_descriptor(&mut values, "function(callback)", true);
+            values.allocation_budget = Some(budget);
+            assert_eq!(values.function_adapter(source, 123), Err(EXHAUSTED));
+            assert_eq!(
+                values.function_debug_label(source).unwrap(),
+                "function(callback)"
+            );
+            values.drop_value(source).unwrap();
+            assert!(values.is_empty());
+        }
+    }
+
+    #[test]
+    fn interface_boxes_preserve_pending_aliases_and_redaction() {
+        let mut values = NativeValues::default();
+        let source = values.insert_pending("hidden".into(), 2).unwrap();
+        let hidden = function_debug_layout_bytes(&[vec![NativeDebugTag::Redacted as u8]], 0);
+        let boxed = values.interface_box(42, source, true, 0, &hidden).unwrap();
+        let clone = values.clone_struct(boxed).unwrap();
+        let joined = values.join_record(clone).unwrap();
+        assert_eq!(values.owned_pending_depth(source), Ok(2));
+        assert_eq!(values.owned_pending_depth(boxed), Ok(2));
+        assert_eq!(values.owned_pending_depth(joined), Ok(1));
+        let payload = values.struct_field(joined, 1).unwrap();
+        assert_eq!(values.owned_pending_depth(payload.bits), Ok(0));
+        let layout = NativeDebugLayout::parse(&function_debug_layout_bytes(
+            &[vec![NativeDebugTag::Interface as u8]],
+            0,
+        ))
+        .unwrap();
+        assert_eq!(
+            layout.format_value(&values, joined, 0),
+            Ok("[redacted]".into())
+        );
+        for handle in [source, boxed, clone, joined] {
+            values.drop_value(handle).unwrap();
+        }
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn interface_box_allocation_failures_release_partial_payloads() {
+        let layout = function_debug_layout_bytes(&[vec![NativeDebugTag::Redacted as u8]], 0);
+        // Box, cloned string, and layout each have a separate allocation.
+        for budget in 0..3 {
+            let mut values = NativeValues::default();
+            let original = values.insert_pending("secret".into(), 1).unwrap();
+            values.allocation_budget = Some(budget);
+            assert_eq!(
+                values.interface_box(7, original, true, 0, &layout),
+                Err(EXHAUSTED)
+            );
+            assert_eq!(values.strings.len(), 1);
+            assert_eq!(values.owned_pending_depth(original), Ok(1));
+            values.drop_value(original).unwrap();
+            assert!(values.is_empty());
+        }
+    }
+
+    #[test]
+    fn deep_interface_conversion_descriptors_preserve_values_and_cleanup() {
+        use interface_conversion::NativeInterfaceConversion as C;
+        let mut primitive = vec![NativeDebugTag::Primitive as u8];
+        primitive.extend_from_slice(&(NativeSortKind::Int64 as u32).to_le_bytes());
+        let mut conversion = C::Box {
+            concrete: 9,
+            owned: false,
+            nothing: false,
+            layout: function_debug_layout_bytes(&[primitive], 0),
+        };
+        for _ in 0..130 {
+            conversion = C::List(Box::new(conversion));
+        }
+        let encoded = conversion.encode();
+        let parsed = C::parse(&encoded).unwrap();
+        assert_eq!(parsed, conversion);
+        for end in 0..encoded.len() {
+            assert!(C::parse(&encoded[..end]).is_err());
+        }
+        let mut extra = encoded.clone();
+        extra.push(0);
+        assert!(C::parse(&extra).is_err());
+        for budget in [Some(0), Some(64), Some(129), Some(130), Some(131), None] {
+            let mut values = NativeValues::default();
+            let mut source = 7;
+            for depth in 0..130 {
+                let list = values.new_list(depth != 0).unwrap();
+                values
+                    .lists
+                    .get_mut(&list)
+                    .unwrap()
+                    .elements
+                    .push(Some(source));
+                source = list;
+            }
+            values.allocation_budget = budget;
+            let converted = parsed.convert(
+                &mut values,
+                NativeField {
+                    bits: source,
+                    owned: true,
+                    pending_depth: 0,
+                },
+            );
+            if budget.is_some() {
+                assert_eq!(converted.map(|field| field.bits), Err(EXHAUSTED));
+                assert_eq!(values.lists.len(), 130);
+                assert!(values.structs.is_empty());
+                assert!(values.bytes.is_empty());
+            } else {
+                let converted = converted.unwrap();
+                let mut payload = converted.bits;
+                for _ in 0..130 {
+                    payload = values.lists[&payload].elements[0].unwrap();
+                }
+                assert_eq!(values.struct_field(payload, 0).unwrap().bits, 9);
+                assert_eq!(values.struct_field(payload, 1).unwrap().bits, 7);
+                values.drop_value(converted.bits).unwrap();
+            }
+            values.drop_value(source).unwrap();
+            assert!(values.is_empty());
+        }
+    }
+
+    #[test]
+    fn nested_interface_conversion_failures_release_partial_containers() {
+        use interface_conversion::NativeInterfaceConversion as C;
+        let boxed = C::Box {
+            concrete: 9,
+            owned: true,
+            nothing: false,
+            layout: function_debug_layout_bytes(&[vec![NativeDebugTag::Redacted as u8]], 0),
+        };
+        let conversion = C::List(Box::new(boxed.clone()));
+        assert_eq!(C::parse(&conversion.encode()), Ok(conversion.clone()));
+        for budget in 0..7 {
+            let mut values = NativeValues::default();
+            let a = values.insert("first".into()).unwrap();
+            let b = values.insert("second".into()).unwrap();
+            let source = values.new_list(true).unwrap();
+            values.lists.get_mut(&source).unwrap().elements = vec![Some(a), Some(b)];
+            values.allocation_budget = Some(budget);
+            assert_eq!(
+                conversion
+                    .convert(
+                        &mut values,
+                        NativeField {
+                            bits: source,
+                            owned: true,
+                            pending_depth: 0
+                        }
+                    )
+                    .map(|field| field.bits),
+                Err(EXHAUSTED)
+            );
+            assert_eq!(values.strings.len(), 2);
+            assert_eq!(values.lists.len(), 1);
+            assert!(values.structs.is_empty());
+            assert!(values.bytes.is_empty());
+            values.drop_value(source).unwrap();
+            assert!(values.is_empty());
+        }
+        let mapped = C::Map(Box::new(boxed.clone()), true);
+        for budget in [1, 4] {
+            let mut values = NativeValues::default();
+            let source = values.new_map(1, 1).unwrap();
+            for name in ["first", "second"] {
+                let key = values.insert(format!("key-{name}")).unwrap();
+                let value = values.insert(name.into()).unwrap();
+                values
+                    .maps
+                    .get_mut(&source)
+                    .unwrap()
+                    .entries
+                    .push(Some(NativeMapEntry {
+                        key,
+                        value,
+                        key_pending_depth: 0,
+                        value_pending_depth: 0,
+                        key_taken: false,
+                    }));
+            }
+            values.allocation_budget = Some(budget);
+            assert_eq!(
+                mapped
+                    .convert(
+                        &mut values,
+                        NativeField {
+                            bits: source,
+                            owned: true,
+                            pending_depth: 0
+                        }
+                    )
+                    .map(|field| field.bits),
+                Err(EXHAUSTED)
+            );
+            values.drop_value(source).unwrap();
+            assert!(values.is_empty());
+        }
+        let sum_conversion = C::Optional(Box::new(boxed));
+        let mut values = NativeValues::default();
+        let payload = values.insert("payload".into()).unwrap();
+        let source = values.sum(SUM_SUCCESS, payload, true).unwrap();
+        values.allocation_budget = Some(3);
+        assert_eq!(
+            sum_conversion
+                .convert(
+                    &mut values,
+                    NativeField {
+                        bits: source,
+                        owned: true,
+                        pending_depth: 0
+                    }
+                )
+                .map(|field| field.bits),
+            Err(EXHAUSTED)
+        );
+        values.drop_value(source).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn callback_container_conversions_preserve_sources_and_rollback_every_allocation() {
+        use interface_conversion::NativeInterfaceConversion as C;
+        for shape in 0..3 {
+            let mut succeeded = false;
+            for budget in 0..64 {
+                let mut values = NativeValues::default();
+                let original = debug_function_descriptor(&mut values, "function(callback)", true);
+                let source_callback = values.run_record(original).unwrap();
+                values.drop_value(original).unwrap();
+                let callback = C::FunctionAdapter { code: 123 };
+                let (source, conversion) =
+                    match shape {
+                        0 => {
+                            let other = values.clone_value(source_callback).unwrap();
+                            let source = values.new_list(true).unwrap();
+                            values.lists.get_mut(&source).unwrap().elements =
+                                vec![Some(source_callback), Some(other)];
+                            (source, C::List(Box::new(callback)))
+                        }
+                        1 => (
+                            values.sum(SUM_SUCCESS, source_callback, true).unwrap(),
+                            C::Optional(Box::new(callback)),
+                        ),
+                        _ => {
+                            let source = values.new_map(1, 1).unwrap();
+                            let key = values.insert("key".into()).unwrap();
+                            values.maps.get_mut(&source).unwrap().entries.push(Some(
+                                NativeMapEntry {
+                                    key,
+                                    value: source_callback,
+                                    key_pending_depth: 0,
+                                    value_pending_depth: 0,
+                                    key_taken: false,
+                                },
+                            ));
+                            (source, C::Map(Box::new(callback), true))
+                        }
+                    };
+                values.allocation_budget = Some(budget);
+                let result = conversion.convert(
+                    &mut values,
+                    NativeField {
+                        bits: source,
+                        owned: true,
+                        pending_depth: 0,
+                    },
+                );
+                assert_eq!(values.owned_pending_depth(source_callback), Ok(1));
+                assert_eq!(
+                    values.function_debug_label(source_callback).unwrap(),
+                    "function(callback)"
+                );
+                match result {
+                    Ok(output) => {
+                        let adapted = match shape {
+                            0 => values.lists[&output.bits].elements[0].unwrap(),
+                            1 => values.sums[&output.bits].bits,
+                            _ => values.maps[&output.bits].entries[0].as_ref().unwrap().value,
+                        };
+                        assert_eq!(
+                            values
+                                .struct_field(adapted, NATIVE_FUNCTION_CODE_FIELD)
+                                .unwrap()
+                                .bits,
+                            123
+                        );
+                        assert_eq!(values.owned_pending_depth(adapted), Ok(1));
+                        values.drop_value(output.bits).unwrap();
+                        succeeded = true;
+                    }
+                    Err(error) => assert_eq!(error, EXHAUSTED, "shape {shape}, budget {budget}"),
+                }
+                values.drop_value(source).unwrap();
+                assert!(values.is_empty(), "shape {shape}, budget {budget}");
+                if succeeded {
+                    break;
+                }
+            }
+            assert!(succeeded, "shape {shape} never completed");
+        }
+    }
+
+    #[test]
+    fn callback_conversion_descriptors_report_exact_function_relocations() {
+        use interface_conversion::NativeInterfaceConversion as C;
+        let conversion = C::Result(
+            Box::new(C::List(Box::new(C::FunctionAdapter { code: 17 }))),
+            Box::new(C::Optional(Box::new(C::FunctionAdapter { code: 19 }))),
+        );
+        let (bytes, functions) = conversion.encode_with_function_offsets();
+        assert_eq!(
+            functions.iter().map(|(_, code)| *code).collect::<Vec<_>>(),
+            vec![17, 19]
+        );
+        for (offset, code) in functions {
+            assert_eq!(&bytes[offset..offset + 8], &code.to_le_bytes());
+        }
+        assert_eq!(C::parse(&bytes), Ok(conversion));
+        for end in 0..bytes.len() {
+            assert!(C::parse(&bytes[..end]).is_err());
+        }
+        assert!(C::parse(&C::FunctionAdapter { code: 0 }.encode()).is_err());
+    }
+
+    #[test]
+    fn interface_conversion_descriptors_reject_truncated_or_extra_bytes() {
+        use interface_conversion::NativeInterfaceConversion as C;
+        let conversion = C::Result(
+            Box::new(C::List(Box::new(C::Copy { owned: true }))),
+            Box::new(C::Copy { owned: false }),
+        );
+        let bytes = conversion.encode();
+        for end in 0..bytes.len() {
+            assert!(C::parse(&bytes[..end]).is_err());
+        }
+        let mut extra = bytes.clone();
+        extra.push(0);
+        assert!(C::parse(&extra).is_err());
+        assert!(C::parse(&[0, 2]).is_err());
+        assert_eq!(C::parse(&bytes), Ok(conversion));
+    }
+
+    #[test]
+    fn actor_debug_uses_registration_order_without_exposing_state_or_handle() {
+        let mut values = NativeValues::default();
+        let first = values.new_struct(0).unwrap();
+        let second = values.new_struct(0).unwrap();
+        values.register_actor(first).unwrap();
+        values.register_actor(second).unwrap();
+        let layout = NativeDebugLayout::parse(&function_debug_layout_bytes(
+            &[vec![NativeDebugTag::Actor as u8]],
+            0,
+        ))
+        .unwrap();
+        assert_eq!(layout.format_value(&values, first, 0).unwrap(), "actor#0");
+        assert_eq!(layout.format_value(&values, second, 0).unwrap(), "actor#1");
+        assert!(matches!(
+            layout.format_value(&values, u64::MAX, 0),
+            Err(INVALID_ACTOR)
+        ));
+        values.release_actors().unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn capability_tasks_preserve_authority_and_release_consumed_handles() {
+        let mut values = NativeValues::default();
+        let authority = next_identity().unwrap();
+        values.stdout = Some(authority);
+        assert_eq!(
+            values.debug_capability(authority, "Stdout").unwrap(),
+            "nothing"
+        );
+
+        let first = values.run_capability(authority).unwrap();
+        assert_eq!(
+            values.debug_capability(first, "Stdout").unwrap(),
+            "pending(nothing)"
+        );
+        let nested = values.run_capability(first).unwrap();
+        assert!(!values.capability_tasks.contains_key(&first));
+        let outer = values.join_capability(nested).unwrap();
+        let inner = values.sums.get(&outer).unwrap().bits;
+        assert_eq!(
+            values.debug_capability(inner, "Stdout").unwrap(),
+            "pending(nothing)"
+        );
+        values.drop_value(outer).unwrap();
+        let completed = values.join_capability(inner).unwrap();
+        assert_eq!(values.sums.get(&completed).unwrap().bits, authority);
+        values.drop_value(completed).unwrap();
+        assert!(values.capability_tasks.is_empty());
+
+        let cancelled = values.join_capability(authority).unwrap();
+        let failure = values.sums.get(&cancelled).unwrap();
+        assert_eq!(failure.tag, SUM_FAILURE);
+        assert_eq!(values.text(failure.bits).unwrap(), "task was cancelled");
+        values.drop_value(cancelled).unwrap();
+
+        let environment = next_identity().unwrap();
+        values.environment = Some(environment);
+        assert_eq!(
+            values.debug_capability(environment, "Environment").unwrap(),
+            "<Environment capability>"
+        );
+        let resolved = values.join_capability(environment).unwrap();
+        let value = values.sums.get(&resolved).unwrap();
+        assert_eq!(value.tag, SUM_SUCCESS);
+        assert_eq!(value.bits, environment);
+        values.drop_value(resolved).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn opaque_capability_grants_are_nominal_and_context_bound() {
+        let mut values = NativeValues::default();
+        let mut other = NativeValues::default();
+        let mut authorities = std::collections::HashSet::new();
+        for kind in ["Stderr", "Stdin", "Filesystem", "Network", "Process", "Log"] {
+            let authority = values.grant_opaque_capability(kind).unwrap();
+            assert!(authorities.insert(authority));
+            assert_eq!(values.grant_opaque_capability(kind).unwrap(), authority);
+            assert_ne!(other.grant_opaque_capability(kind).unwrap(), authority);
+            assert!(other.capability_authority(authority).is_err());
+            let task = values.run_capability(authority).unwrap();
+            assert_eq!(
+                values.debug_capability(task, kind).unwrap(),
+                "pending(nothing)"
+            );
+            let result = values.join_capability(task).unwrap();
+            assert_eq!(values.sums.get(&result).unwrap().bits, authority);
+            values.drop_value(result).unwrap();
+        }
+        assert!(values.capability_tasks.is_empty());
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn function_debug_formats_labels_without_consuming_or_exposing_captures() {
+        for (label, captured) in [
+            ("function(app.increment)", false),
+            ("function(first, second)", true),
+            ("function()", false),
+        ] {
+            let mut values = NativeValues::default();
+            let descriptor = debug_function_descriptor(&mut values, label, captured);
+            let clone = values.clone_value(descriptor).unwrap();
+            let layout = function_debug_layout_bytes(&[vec![NativeDebugTag::Function as u8]], 0);
+            let builder = values.insert("trace ".into()).unwrap();
+            let strings_before = values.strings.len();
+            assert_eq!(
+                values.debug_append_aggregate(builder, "callback = ", descriptor, &layout),
+                Ok(0)
+            );
+            assert_eq!(
+                values.text(builder),
+                Ok(format!("trace callback = {label}").as_str())
+            );
+            assert_eq!(values.strings.len(), strings_before);
+            assert_eq!(values.function_debug_label(descriptor), Ok(label));
+            values.drop_value(descriptor).unwrap();
+            assert_eq!(values.function_debug_label(clone), Ok(label));
+            values.drop_value(clone).unwrap();
+            values.drop_value(builder).unwrap();
+            assert!(values.is_empty());
+        }
+    }
+
+    #[test]
+    fn function_debug_formats_nested_owned_values_and_rejects_equality() {
+        let mut values = NativeValues::default();
+        let descriptor = debug_function_descriptor(&mut values, "function(value)", true);
+        let optional = values.sum(SUM_SUCCESS, descriptor, true).unwrap();
+        let list = values.new_list(true).unwrap();
+        values.lists.get_mut(&list).unwrap().elements = vec![Some(optional)];
+        let mut optional_node = vec![NativeDebugTag::Optional as u8];
+        optional_node.extend_from_slice(&0_u32.to_le_bytes());
+        let mut list_node = vec![NativeDebugTag::List as u8];
+        list_node.extend_from_slice(&1_u32.to_le_bytes());
+        let bytes = function_debug_layout_bytes(
+            &[
+                vec![NativeDebugTag::Function as u8],
+                optional_node,
+                list_node,
+            ],
+            2,
+        );
+        let layout = NativeDebugLayout::parse(&bytes).unwrap();
+        assert_eq!(
+            layout.format_value(&values, list, layout.root),
+            Ok("list(some(function(value)))".into())
+        );
+        assert_eq!(
+            layout.equal_value(&values, descriptor, descriptor, 0),
+            Err(INVALID_STRUCT)
+        );
+        assert_eq!(
+            layout.equal_value(&values, list, list, layout.root),
+            Err(INVALID_STRUCT)
+        );
+        values.drop_value(list).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn function_debug_rejects_invalid_descriptors_without_consuming_fields() {
+        let mut values = NativeValues::default();
+        let descriptor = debug_function_descriptor(&mut values, "function(value)", true);
+        let original = values.structs[&descriptor].fields.clone();
+        let environment = values
+            .struct_field(descriptor, NATIVE_FUNCTION_ENVIRONMENT_FIELD)
+            .unwrap()
+            .bits;
+        let label = values
+            .struct_field(descriptor, NATIVE_FUNCTION_LABEL_FIELD)
+            .unwrap()
+            .bits;
+        let layout = function_debug_layout_bytes(&[vec![NativeDebugTag::Function as u8]], 0);
+        let builder = values.insert("unchanged".into()).unwrap();
+        let strings_before = values.strings.len();
+        assert_eq!(values.function_debug_label(0), Err(INVALID_FUNCTION));
+        assert_eq!(values.function_debug_label(label), Err(INVALID_FUNCTION));
+        for (slot, replacement) in [
+            (NATIVE_FUNCTION_CODE_FIELD, None),
+            (NATIVE_FUNCTION_ENVIRONMENT_FIELD, None),
+            (NATIVE_FUNCTION_LABEL_FIELD, None),
+            (
+                NATIVE_FUNCTION_CODE_FIELD,
+                Some(NativeField {
+                    bits: 0,
+                    owned: false,
+                    pending_depth: 0,
+                }),
+            ),
+            (
+                NATIVE_FUNCTION_CODE_FIELD,
+                Some(NativeField {
+                    bits: u64::MAX,
+                    owned: true,
+                    pending_depth: 0,
+                }),
+            ),
+            (
+                NATIVE_FUNCTION_ENVIRONMENT_FIELD,
+                Some(NativeField {
+                    bits: 0,
+                    owned: true,
+                    pending_depth: 0,
+                }),
+            ),
+            (
+                NATIVE_FUNCTION_ENVIRONMENT_FIELD,
+                Some(NativeField {
+                    bits: environment,
+                    owned: false,
+                    pending_depth: 0,
+                }),
+            ),
+            (
+                NATIVE_FUNCTION_ENVIRONMENT_FIELD,
+                Some(NativeField {
+                    bits: label,
+                    owned: true,
+                    pending_depth: 0,
+                }),
+            ),
+            (
+                NATIVE_FUNCTION_LABEL_FIELD,
+                Some(NativeField {
+                    bits: label,
+                    owned: false,
+                    pending_depth: 0,
+                }),
+            ),
+            (
+                NATIVE_FUNCTION_LABEL_FIELD,
+                Some(NativeField {
+                    bits: environment,
+                    owned: true,
+                    pending_depth: 0,
+                }),
+            ),
+            (
+                NATIVE_FUNCTION_LABEL_FIELD,
+                Some(NativeField {
+                    bits: 0,
+                    owned: true,
+                    pending_depth: 0,
+                }),
+            ),
+        ] {
+            values.structs.get_mut(&descriptor).unwrap().fields[usize::try_from(slot).unwrap()] =
+                replacement;
+            assert_eq!(
+                values.debug_append_aggregate(builder, "callback = ", descriptor, &layout),
+                Err(INVALID_FUNCTION),
+                "invalid field {slot}"
+            );
+            assert_eq!(values.text(builder), Ok("unchanged"));
+            assert_eq!(values.text(label), Ok("function(value)"));
+            assert_eq!(values.strings.len(), strings_before);
+            values
+                .structs
+                .get_mut(&descriptor)
+                .unwrap()
+                .fields
+                .clone_from(&original);
+        }
+        for count in [2, 4] {
+            values
+                .structs
+                .get_mut(&descriptor)
+                .unwrap()
+                .fields
+                .resize(count, None);
+            assert_eq!(
+                values.function_debug_label(descriptor),
+                Err(INVALID_FUNCTION)
+            );
+            values
+                .structs
+                .get_mut(&descriptor)
+                .unwrap()
+                .fields
+                .clone_from(&original);
+        }
+        values.drop_value(descriptor).unwrap();
+        values.drop_value(builder).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn function_debug_rejects_invalid_label_text_and_preserves_cleanup() {
+        for label in [
+            "",
+            "function",
+            "callback()",
+            "function(first\nsecond)",
+            "function(value)\0",
+        ] {
+            let mut values = NativeValues::default();
+            let descriptor = debug_function_descriptor(&mut values, label, true);
+            assert_eq!(
+                values.function_debug_label(descriptor),
+                Err(INVALID_FUNCTION)
+            );
+            values.drop_value(descriptor).unwrap();
+            assert!(values.is_empty());
+        }
+    }
+
+    #[test]
+    fn function_debug_failure_keeps_owned_values_available_for_terminal_cleanup() {
+        let context = Context::new();
+        let pointer = context.pointer();
+        let (descriptor, builder) = {
+            let lease = acquire_context(context_key(pointer).unwrap()).unwrap();
+            let mut state = lock_unpoisoned(&lease.entry.state);
+            let values = &mut state.as_mut().unwrap().values;
+            (
+                debug_function_descriptor(values, "invalid label", true),
+                values.insert("unchanged".into()).unwrap(),
+            )
+        };
+        let prefix = b"callback = ";
+        let layout = function_debug_layout_bytes(&[vec![NativeDebugTag::Function as u8]], 0);
+        unsafe {
+            assert_ne!(
+                jett_rt_v1_debug_append_aggregate(
+                    pointer,
+                    builder,
+                    prefix.as_ptr() as u64,
+                    u64::try_from(prefix.len()).unwrap(),
+                    descriptor,
+                    layout.as_ptr() as u64,
+                    u64::try_from(layout.len()).unwrap(),
+                ),
+                0
+            );
+            assert_eq!(
+                jett_rt_v1_value_status(pointer),
+                JettRuntimeStatusV1::INVALID_ARGUMENT.code()
+            );
+        }
+        {
+            let lease = acquire_context(context_key(pointer).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!(values.failure, Some(INVALID_FUNCTION));
+            assert_eq!(values.text(builder), Ok("unchanged"));
+            assert_eq!(values.structs.len(), 2);
+            assert_eq!(values.strings.len(), 3);
+        }
+        unsafe {
+            assert_eq!(jett_rt_v1_value_drop(pointer, descriptor), 0);
+            assert_eq!(jett_rt_v1_value_drop(pointer, builder), 0);
+        }
+        let lease = acquire_context(context_key(pointer).unwrap()).unwrap();
+        assert!(
+            lock_unpoisoned(&lease.entry.state)
+                .as_ref()
+                .unwrap()
+                .values
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn nothing_nesting_join_format_and_cleanup() {
+        let context = Context::new();
+        let pointer = context.pointer();
+        unsafe {
+            let once = jett_rt_v1_nothing_run(pointer, 0);
+            let twice = jett_rt_v1_nothing_run(pointer, once);
+            assert_eq!((once, twice), (1, 2));
+            for (depth, expected) in [
+                (0, "nothing"),
+                (once, "pending(nothing)"),
+                (twice, "pending(pending(nothing))"),
+            ] {
+                let formatted = jett_rt_v1_nothing_format(pointer, depth);
+                let lease = acquire_context(context_key(pointer).unwrap()).unwrap();
+                {
+                    let state = lock_unpoisoned(&lease.entry.state);
+                    assert_eq!(state.as_ref().unwrap().values.text(formatted), Ok(expected));
+                }
+                assert_eq!(jett_rt_v1_value_drop(pointer, formatted), 0);
+            }
+            let joined = jett_rt_v1_nothing_join(pointer, twice);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, joined), SUM_SUCCESS);
+            let remaining = jett_rt_v1_sum_take(pointer, joined, SUM_SUCCESS);
+            assert_eq!(remaining, 1);
+            let joined = jett_rt_v1_nothing_join(pointer, remaining);
+            assert_eq!(jett_rt_v1_sum_take(pointer, joined, SUM_SUCCESS), 0);
+            let cancelled = jett_rt_v1_nothing_join(pointer, 0);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, cancelled), SUM_FAILURE);
+            let error = jett_rt_v1_sum_take(pointer, cancelled, SUM_FAILURE);
+            let lease = acquire_context(context_key(pointer).unwrap()).unwrap();
+            {
+                let state = lock_unpoisoned(&lease.entry.state);
+                assert_eq!(
+                    state.as_ref().unwrap().values.text(error),
+                    Ok("task was cancelled")
+                );
+            }
+            assert_eq!(jett_rt_v1_value_drop(pointer, error), 0);
+            assert_eq!(jett_rt_v1_value_status(pointer), 0);
+            assert!(
+                lock_unpoisoned(&lease.entry.state)
+                    .as_ref()
+                    .unwrap()
+                    .values
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn pending_string_depth_survives_aliases_and_join() {
+        let mut values = NativeValues::default();
+        let plain = values.insert("Ada".to_owned()).unwrap();
+        let alias = values.retain(plain).unwrap();
+        let pending = values.run_string(plain).unwrap();
+        let nested = values.run_string(pending).unwrap();
+        assert_eq!(values.format_string(alias).unwrap(), "Ada");
+        assert_eq!(values.format_string(pending).unwrap(), "pending(Ada)");
+        assert_eq!(
+            values.format_string(nested).unwrap(),
+            "pending(pending(Ada))"
+        );
+        let formatted = values.display_string(nested).unwrap();
+        assert_eq!(values.text(formatted), Ok("pending(pending(Ada))"));
+        let joined = values.join_string(nested).unwrap();
+        assert_eq!(values.format_string(joined).unwrap(), "pending(Ada)");
+        let plain_joined = values.join_string(joined).unwrap();
+        assert_eq!(values.format_string(plain_joined).unwrap(), "Ada");
+        for handle in [
+            alias,
+            plain,
+            pending,
+            nested,
+            formatted,
+            joined,
+            plain_joined,
+        ] {
+            values.release(handle).unwrap();
+        }
+        assert!(values.is_empty());
+    }
+
+    fn display_result_string_snapshot(
+        values: &NativeValues,
+    ) -> std::collections::BTreeMap<u64, (String, u64, u64)> {
+        values
+            .strings
+            .iter()
+            .map(|(id, value)| {
+                (
+                    *id,
+                    (value.text.clone(), value.references, value.pending_depth),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn display_result_check_preserves_strings_and_requires_every_pending_layer_to_join() {
+        for text in ["", "shown", "ÃƒÂ©Ã°Å¸Â¦â‚¬", "pending(shown)"] {
+            let mut values = NativeValues::default();
+            let ready = values.insert(text.into()).unwrap();
+            let alias = values.retain(ready).unwrap();
+            let pending = values.run_string(ready).unwrap();
+            let nested = values.run_string(pending).unwrap();
+            let partial = values.join_string(nested).unwrap();
+            let joined = values.join_string(partial).unwrap();
+            let snapshot = display_result_string_snapshot(&values);
+            for (handle, expected) in [
+                (ready, None),
+                (alias, None),
+                (
+                    pending,
+                    Some(format!(
+                        "Displayable.display returned pending({text}) instead of string"
+                    )),
+                ),
+                (
+                    nested,
+                    Some(format!(
+                        "Displayable.display returned pending(pending({text})) instead of string"
+                    )),
+                ),
+                (
+                    partial,
+                    Some(format!(
+                        "Displayable.display returned pending({text}) instead of string"
+                    )),
+                ),
+                (joined, None),
+            ] {
+                values.dynamic_failure_message = None;
+                assert_eq!(
+                    values.check_display_result(handle),
+                    if expected.is_some() {
+                        Err(INVALID_DISPLAY_RESULT)
+                    } else {
+                        Ok(0)
+                    }
+                );
+                assert_eq!(
+                    values.dynamic_failure_message.as_deref(),
+                    expected.as_ref().map(|message| message.as_bytes())
+                );
+                assert_eq!(display_result_string_snapshot(&values), snapshot);
+            }
+            for handle in [ready, alias, pending, nested, partial, joined] {
+                values.release(handle).unwrap();
+            }
+            assert!(values.is_empty());
+        }
+    }
+
+    #[test]
+    fn display_result_check_rejects_invalid_string_handles_without_observing_other_values() {
+        let mut values = NativeValues::default();
+        let ready = values.insert("kept".into()).unwrap();
+        let stale = values.insert("stale".into()).unwrap();
+        values.release(stale).unwrap();
+        let bytes = values.insert_bytes(vec![65]).unwrap();
+        let mut foreign_values = NativeValues::default();
+        let foreign = foreign_values.insert("foreign".into()).unwrap();
+        let snapshot = display_result_string_snapshot(&values);
+        for handle in [0, u64::MAX, stale, bytes, foreign] {
+            assert_eq!(values.check_display_result(handle), Err(INVALID_HANDLE));
+            assert!(values.dynamic_failure_message.is_none());
+            assert_eq!(display_result_string_snapshot(&values), snapshot);
+            assert_eq!(values.bytes(bytes), Ok([65].as_slice()));
+        }
+        values.release(ready).unwrap();
+        values.drop_value(bytes).unwrap();
+        foreign_values.release(foreign).unwrap();
+        assert!(values.is_empty());
+        assert!(foreign_values.is_empty());
+    }
+
+    #[test]
+    fn display_result_check_leaf_has_the_borrowed_status_abi() {
+        assert_eq!(
+            NativeLeaf::DisplayResultCheck.symbol(),
+            "jett_rt_v1_display_result_check"
+        );
+        assert_eq!(
+            NativeLeaf::DisplayResultCheck.parameters(),
+            &[AbiScalar::Pointer, AbiScalar::I64]
+        );
+        assert_eq!(NativeLeaf::DisplayResultCheck.result(), AbiScalar::I32);
+    }
+
+    #[test]
+    fn display_result_check_leaf_preserves_ownership_status_and_first_failure() {
+        for text in ["", "shown", "ÃƒÂ©Ã°Å¸Â¦â‚¬"] {
+            for (selected, rendered) in [
+                (0, None),
+                (1, Some(format!("pending({text})"))),
+                (2, Some(format!("pending(pending({text}))"))),
+                (3, Some(format!("pending({text})"))),
+                (4, None),
+            ] {
+                let context = Context::new();
+                unsafe {
+                    let ready = context.text(text);
+                    let pending = jett_rt_v1_string_run(context.pointer(), ready);
+                    let nested = jett_rt_v1_string_run(context.pointer(), pending);
+                    let partial = jett_rt_v1_string_task_join(context.pointer(), nested);
+                    let joined = jett_rt_v1_string_task_join(context.pointer(), partial);
+                    let handles = [ready, pending, nested, partial, joined];
+                    let selected = handles[selected];
+                    let alias = jett_rt_v1_string_retain(context.pointer(), selected);
+                    assert_eq!(alias, selected);
+                    let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+                    let snapshot = {
+                        let state = lock_unpoisoned(&lease.entry.state);
+                        display_result_string_snapshot(&state.as_ref().unwrap().values)
+                    };
+                    let expected = rendered.map(|rendered| {
+                        format!("Displayable.display returned {rendered} instead of string")
+                    });
+                    assert_eq!(
+                        jett_rt_v1_display_result_check(context.pointer(), selected),
+                        if expected.is_some() {
+                            u32::failure_default()
+                        } else {
+                            0
+                        }
+                    );
+                    assert_eq!(
+                        jett_rt_v1_value_status(context.pointer()),
+                        if expected.is_some() {
+                            JettRuntimeStatusV1::INVALID_ARGUMENT.code()
+                        } else {
+                            0
+                        }
+                    );
+                    {
+                        let state = lock_unpoisoned(&lease.entry.state);
+                        let values = &state.as_ref().unwrap().values;
+                        assert_eq!(display_result_string_snapshot(values), snapshot);
+                        assert_eq!(
+                            values.dynamic_failure_message.as_deref(),
+                            expected.as_ref().map(|message| message.as_bytes())
+                        );
+                        assert!(!values.cleanup_failed);
+                    }
+                    if let Some(expected) = expected {
+                        // Normal leaves cannot replace an existing terminal error.
+                        assert_eq!(
+                            jett_rt_v1_display_result_check(context.pointer(), 0),
+                            u32::failure_default()
+                        );
+                        assert_eq!(
+                            jett_rt_v1_assert_fail(context.pointer()),
+                            u32::failure_default()
+                        );
+                        let mut result = MaybeUninit::uninit();
+                        let mut length = 0;
+                        assert_eq!(
+                            jett_rt_v1_value_failure_copy(
+                                context.pointer(),
+                                ptr::null_mut(),
+                                0,
+                                &mut length,
+                                result.as_mut_ptr()
+                            ),
+                            JettRuntimeStatusV1::OK
+                        );
+                        let mut message = vec![0; usize::try_from(length).unwrap()];
+                        assert_eq!(
+                            jett_rt_v1_value_failure_copy(
+                                context.pointer(),
+                                message.as_mut_ptr(),
+                                length,
+                                &mut length,
+                                result.as_mut_ptr()
+                            ),
+                            JettRuntimeStatusV1::OK
+                        );
+                        assert_eq!(message, expected.as_bytes());
+                    }
+                    for handle in handles.into_iter().chain([alias]) {
+                        assert_eq!(jett_rt_v1_string_release(context.pointer(), handle), 0);
+                    }
+                    {
+                        let state = lock_unpoisoned(&lease.entry.state);
+                        let values = &state.as_ref().unwrap().values;
+                        assert!(values.is_empty());
+                        assert!(!values.cleanup_failed);
+                    }
+                    drop(lease);
+                }
+                context.destroy(JettRuntimeStatusV1::OK);
+            }
+        }
+    }
+
+    #[test]
+    fn display_result_check_leaf_rejects_foreign_stale_and_invalid_handles() {
+        let foreign_context = Context::new();
+        let foreign = foreign_context.text("foreign");
+        for invalid in [0, u64::MAX, foreign] {
+            let context = Context::new();
+            let ready = context.text("kept");
+            unsafe {
+                assert_eq!(
+                    jett_rt_v1_display_result_check(context.pointer(), invalid),
+                    u32::failure_default()
+                );
+                assert_eq!(
+                    jett_rt_v1_value_status(context.pointer()),
+                    JettRuntimeStatusV1::INVALID_ARGUMENT.code()
+                );
+                let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+                {
+                    let state = lock_unpoisoned(&lease.entry.state);
+                    let values = &state.as_ref().unwrap().values;
+                    assert_eq!(values.failure, Some(INVALID_HANDLE));
+                    assert!(values.dynamic_failure_message.is_none());
+                    assert_eq!(values.text(ready), Ok("kept"));
+                    assert_eq!(values.strings[&ready].references, 1);
+                }
+                assert_eq!(jett_rt_v1_string_release(context.pointer(), ready), 0);
+            }
+            context.destroy(JettRuntimeStatusV1::OK);
+        }
+        let context = Context::new();
+        let stale = context.text("stale");
+        unsafe {
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), stale), 0);
+            assert_eq!(
+                jett_rt_v1_display_result_check(context.pointer(), stale),
+                u32::failure_default()
+            );
+            assert_eq!(
+                jett_rt_v1_value_status(context.pointer()),
+                JettRuntimeStatusV1::INVALID_ARGUMENT.code()
+            );
+            assert_eq!(
+                jett_rt_v1_string_release(foreign_context.pointer(), foreign),
+                0
+            );
+            assert_eq!(
+                jett_rt_v1_display_result_check(ptr::null(), 0),
+                u32::failure_default()
+            );
+        }
+        context.destroy(JettRuntimeStatusV1::OK);
+    }
+
+    #[test]
+    fn pending_bytes_depth_survives_clone_and_join() {
+        let mut values = NativeValues::default();
+        let plain = values.insert_bytes(vec![65]).unwrap();
+        let pending = values.run_bytes(plain).unwrap();
+        let nested = values.run_bytes(pending).unwrap();
+        let cloned = values.clone_bytes(nested).unwrap();
+        assert_eq!(values.bytes_depth(plain), Ok(0));
+        assert_eq!(values.bytes_depth(pending), Ok(1));
+        assert_eq!(values.bytes_depth(nested), Ok(2));
+        assert_eq!(values.bytes_depth(cloned), Ok(2));
+        assert!(values.same_bytes_value(nested, cloned).unwrap());
+        assert!(!values.same_bytes_value(plain, pending).unwrap());
+        assert_eq!(
+            values.debug_value(cloned, DEBUG_BYTES_KIND).unwrap(),
+            "pending(pending(bytes(65)))"
+        );
+        let joined = values.join_bytes(cloned).unwrap();
+        assert_eq!(values.bytes_depth(joined), Ok(1));
+        let last = values.join_bytes(joined).unwrap();
+        assert_eq!(values.bytes_depth(last), Ok(0));
+        for handle in [plain, pending, nested, cloned, joined, last] {
+            values.drop_value(handle).unwrap();
+        }
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn nothing_debug_and_aggregate_equality_preserve_pending_depth() {
+        let mut values = NativeValues::default();
+        let layout = NativeDebugLayout {
+            root: 1,
+            nodes: vec![NativeDebugNode::Nothing, NativeDebugNode::List(0)],
+        };
+        for (depth, expected) in [(0, "nothing"), (2, "pending(pending(nothing))")] {
+            assert_eq!(
+                values.debug_value(depth, DEBUG_NOTHING_KIND),
+                Ok(expected.into())
+            );
+            assert_eq!(layout.format_value(&values, depth, 0), Ok(expected.into()));
+        }
+        let left = values.new_list(false).unwrap();
+        let right = values.new_list(false).unwrap();
+        values.lists.get_mut(&left).unwrap().elements = vec![Some(0), Some(2)];
+        values.lists.get_mut(&right).unwrap().elements = vec![Some(0), Some(2)];
+        assert_eq!(
+            layout.format_value(&values, left, layout.root),
+            Ok("list(nothing, pending(pending(nothing)))".into())
+        );
+        assert_eq!(
+            layout.equal_value(&values, left, right, layout.root),
+            Ok(true)
+        );
+        values.lists.get_mut(&right).unwrap().elements[1] = Some(1);
+        assert_eq!(
+            layout.equal_value(&values, left, right, layout.root),
+            Ok(false)
+        );
+        values.drop_value(left).unwrap();
+        values.drop_value(right).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn nothing_equality_matches_interpreter_failure_text() {
+        let plain = Context::new();
+        unsafe {
+            assert_eq!(jett_rt_v1_nothing_equal(plain.pointer(), 0, 0, 0), 1);
+            assert_eq!(jett_rt_v1_nothing_equal(plain.pointer(), 0, 0, 1), 0);
+            assert_eq!(jett_rt_v1_value_status(plain.pointer()), 0);
+        }
+        for (left, right, not_equal, expected) in [
+            (
+                1,
+                0,
+                0,
+                "unsupported binary operation: pending(nothing) Eq nothing",
+            ),
+            (
+                0,
+                2,
+                1,
+                "unsupported binary operation: nothing NotEq pending(pending(nothing))",
+            ),
+            (
+                1,
+                1,
+                0,
+                "unsupported binary operation: pending(nothing) Eq pending(nothing)",
+            ),
+            (
+                2,
+                1,
+                1,
+                "unsupported binary operation: pending(pending(nothing)) NotEq pending(nothing)",
+            ),
+        ] {
+            let context = Context::new();
+            let pointer = context.pointer();
+            unsafe {
+                assert_eq!(
+                    jett_rt_v1_nothing_equal(pointer, left, right, not_equal),
+                    JettRuntimeStatusV1::INVALID_CONTEXT.code()
+                );
+                assert_eq!(
+                    jett_rt_v1_value_status(pointer),
+                    JettRuntimeStatusV1::INVALID_ARGUMENT.code()
+                );
+                let mut message = vec![0; expected.len()];
+                let mut length = 0;
+                let mut result = MaybeUninit::uninit();
+                assert_eq!(
+                    jett_rt_v1_value_failure_copy(
+                        pointer,
+                        message.as_mut_ptr(),
+                        message.len() as u64,
+                        &mut length,
+                        result.as_mut_ptr()
+                    ),
+                    JettRuntimeStatusV1::OK
+                );
+                assert_eq!(length, expected.len() as u64);
+                assert_eq!(message, expected.as_bytes());
+            }
+        }
+    }
+
+    #[test]
+    fn nothing_depth_overflow_and_invalid_comparison_fail_cleanly() {
+        let overflow = Context::new();
+        let formatting = Context::new();
+        let invalid = Context::new();
+        unsafe {
+            assert_eq!(jett_rt_v1_nothing_run(overflow.pointer(), u64::MAX), 0);
+            assert_eq!(
+                jett_rt_v1_value_status(overflow.pointer()),
+                JettRuntimeStatusV1::RESOURCE_EXHAUSTED.code()
+            );
+            assert_eq!(jett_rt_v1_nothing_format(formatting.pointer(), u64::MAX), 0);
+            assert_eq!(
+                jett_rt_v1_value_status(formatting.pointer()),
+                JettRuntimeStatusV1::RESOURCE_EXHAUSTED.code()
+            );
+            assert_eq!(
+                jett_rt_v1_nothing_equal(invalid.pointer(), 0, 0, 2),
+                JettRuntimeStatusV1::INVALID_CONTEXT.code()
+            );
+            assert_eq!(
+                jett_rt_v1_value_status(invalid.pointer()),
+                JettRuntimeStatusV1::INVALID_ARGUMENT.code()
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_join_and_format_roll_back_each_allocation_boundary() {
+        for (depth, allocations) in [(0, 2), (2, 1)] {
+            for budget in 0..=allocations {
+                let mut values = NativeValues::default();
+                values.allocation_budget = Some(budget);
+                match values.join_nothing(depth) {
+                    Ok(sum) => {
+                        assert_eq!(budget, allocations);
+                        values.drop_value(sum).unwrap();
+                    }
+                    Err(error) => assert_eq!(error, EXHAUSTED),
+                }
+                assert!(
+                    values.is_empty(),
+                    "nothing join leaked with budget {budget}"
+                );
+            }
+        }
+        for budget in 0..=1 {
+            let context = Context::new();
+            let pointer = context.pointer();
+            let lease = acquire_context(context_key(pointer).unwrap()).unwrap();
+            lock_unpoisoned(&lease.entry.state)
+                .as_mut()
+                .unwrap()
+                .values
+                .allocation_budget = Some(budget);
+            unsafe {
+                let formatted = jett_rt_v1_nothing_format(pointer, 2);
+                if budget == 0 {
+                    assert_eq!(formatted, 0);
+                    assert_eq!(
+                        jett_rt_v1_value_status(pointer),
+                        JettRuntimeStatusV1::RESOURCE_EXHAUSTED.code()
+                    );
+                } else {
+                    assert_ne!(formatted, 0);
+                    assert_eq!(jett_rt_v1_value_drop(pointer, formatted), 0);
+                }
+            }
+            assert!(
+                lock_unpoisoned(&lease.entry.state)
+                    .as_ref()
+                    .unwrap()
+                    .values
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn graphics_script_configuration_is_context_local_and_precedes_grant() {
+        let scripted = Context::new();
+        let production = Context::new();
+        let script = graphics::encode_test_script(&[
+            graphics::TestEvent::Key(graphics::Key::Right),
+            graphics::TestEvent::Close,
+        ]);
+        unsafe {
+            assert_eq!(
+                jett_rt_v1_graphics_configure_scripted(
+                    scripted.pointer(),
+                    script.as_ptr(),
+                    script.len() as u64,
+                ),
+                0
+            );
+            let scripted_token = jett_rt_v1_grant_graphics(scripted.pointer());
+            assert_ne!(scripted_token, 0);
+            assert_eq!(
+                jett_rt_v1_grant_graphics(scripted.pointer()),
+                scripted_token
+            );
+            assert_ne!(
+                jett_rt_v1_grant_graphics(production.pointer()),
+                scripted_token
+            );
+        }
+        let lease = acquire_context(context_key(scripted.pointer()).unwrap()).unwrap();
+        let state = lock_unpoisoned(&lease.entry.state);
+        assert_eq!(
+            state
+                .as_ref()
+                .unwrap()
+                .values
+                .graphics_script
+                .as_ref()
+                .unwrap()
+                .len(),
+            2
+        );
+        drop(state);
+        drop(lease);
+        scripted.destroy(JettRuntimeStatusV1::OK);
+        production.destroy(JettRuntimeStatusV1::OK);
+    }
+
+    #[test]
+    fn scripted_graphics_session_validates_presents_keys_and_closes() {
+        let context = Context::new();
+        let pointer = context.pointer();
+        let script = graphics::encode_test_script(&[
+            graphics::TestEvent::Key(graphics::Key::Right),
+            graphics::TestEvent::Close,
+        ]);
+        unsafe {
+            assert_eq!(
+                jett_rt_v1_graphics_configure_scripted(
+                    pointer,
+                    script.as_ptr(),
+                    script.len() as u64
+                ),
+                0
+            );
+            let authority = jett_rt_v1_grant_graphics(pointer);
+            let title = context.text("headless");
+            let config = jett_rt_v1_struct_new(pointer, 3);
+            assert_eq!(jett_rt_v1_struct_init(pointer, config, 0, title, 1), 0);
+            assert_eq!(jett_rt_v1_struct_init(pointer, config, 1, 16, 0), 0);
+            assert_eq!(jett_rt_v1_struct_init(pointer, config, 2, 16, 0), 0);
+
+            let color = jett_rt_v1_struct_new(pointer, 3);
+            for field in 0..3 {
+                assert_eq!(jett_rt_v1_struct_init(pointer, color, field, 0, 0), 0);
+            }
+            let rectangles = jett_rt_v1_list_new(pointer, 1);
+            let texts = jett_rt_v1_list_new(pointer, 1);
+            let scene = jett_rt_v1_struct_new(pointer, 3);
+            assert_eq!(jett_rt_v1_struct_init(pointer, scene, 0, color, 1), 0);
+            assert_eq!(jett_rt_v1_struct_init(pointer, scene, 1, rectangles, 1), 0);
+            assert_eq!(jett_rt_v1_struct_init(pointer, scene, 2, texts, 1), 0);
+
+            let validated = jett_rt_v1_graphics_validate_scene(pointer, 16, 16, scene);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, validated), SUM_SUCCESS);
+            assert_eq!(jett_rt_v1_value_drop(pointer, validated), 0);
+            let opened = jett_rt_v1_graphics_open(pointer, authority, config);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, opened), SUM_SUCCESS);
+            let session = jett_rt_v1_sum_take(pointer, opened, SUM_SUCCESS);
+            let presented = jett_rt_v1_graphics_present(pointer, session, scene);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, presented), SUM_SUCCESS);
+            assert_eq!(jett_rt_v1_value_drop(pointer, presented), 0);
+
+            let first = jett_rt_v1_graphics_next_key(pointer, session);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, first), SUM_SUCCESS);
+            let key = jett_rt_v1_sum_take(pointer, first, SUM_SUCCESS);
+            assert_eq!(
+                jett_rt_v1_sum_take(pointer, key, SUM_SUCCESS),
+                graphics::Key::Right.variant_index()
+            );
+            let second = jett_rt_v1_graphics_next_key(pointer, session);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, second), SUM_SUCCESS);
+            let close = jett_rt_v1_sum_take(pointer, second, SUM_SUCCESS);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, close), SUM_FAILURE);
+            assert_eq!(jett_rt_v1_value_drop(pointer, close), 0);
+            assert_eq!(jett_rt_v1_graphics_close(pointer, session), 0);
+            assert_eq!(jett_rt_v1_value_drop(pointer, scene), 0);
+            assert_eq!(jett_rt_v1_value_drop(pointer, config), 0);
+            assert_eq!(jett_rt_v1_value_status(pointer), 0);
+        }
+        context.destroy(JettRuntimeStatusV1::OK);
+    }
+
+    #[test]
+    fn context_destruction_closes_an_unfinished_scripted_graphics_session() {
+        let context = Context::new();
+        let pointer = context.pointer();
+        let script = graphics::encode_test_script(&[graphics::TestEvent::Close]);
+        unsafe {
+            assert_eq!(
+                jett_rt_v1_graphics_configure_scripted(
+                    pointer,
+                    script.as_ptr(),
+                    script.len() as u64
+                ),
+                0
+            );
+            let authority = jett_rt_v1_grant_graphics(pointer);
+            let title = context.text("cleanup");
+            let config = jett_rt_v1_struct_new(pointer, 3);
+            assert_eq!(jett_rt_v1_struct_init(pointer, config, 0, title, 1), 0);
+            assert_eq!(jett_rt_v1_struct_init(pointer, config, 1, 8, 0), 0);
+            assert_eq!(jett_rt_v1_struct_init(pointer, config, 2, 8, 0), 0);
+            let opened = jett_rt_v1_graphics_open(pointer, authority, config);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, opened), SUM_SUCCESS);
+            assert_ne!(jett_rt_v1_sum_take(pointer, opened, SUM_SUCCESS), 0);
+            assert_eq!(jett_rt_v1_value_drop(pointer, config), 0);
+        }
+        assert!(GRAPHICS_SESSION.with(|slot| slot.borrow().is_some()));
+        context.destroy(JettRuntimeStatusV1::OK);
+        assert!(GRAPHICS_SESSION.with(|slot| slot.borrow().is_none()));
+    }
+
+    #[test]
+    fn invalid_graphics_config_is_a_domain_result_without_opening_a_session() {
+        let context = Context::new();
+        let pointer = context.pointer();
+        let script = graphics::encode_test_script(&[graphics::TestEvent::Close]);
+        unsafe {
+            assert_eq!(
+                jett_rt_v1_graphics_configure_scripted(
+                    pointer,
+                    script.as_ptr(),
+                    script.len() as u64
+                ),
+                0
+            );
+            let authority = jett_rt_v1_grant_graphics(pointer);
+            let title = context.text("invalid");
+            let config = jett_rt_v1_struct_new(pointer, 3);
+            assert_eq!(jett_rt_v1_struct_init(pointer, config, 0, title, 1), 0);
+            assert_eq!(jett_rt_v1_struct_init(pointer, config, 1, 0, 0), 0);
+            assert_eq!(jett_rt_v1_struct_init(pointer, config, 2, 8, 0), 0);
+            let outcome = jett_rt_v1_graphics_open(pointer, authority, config);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, outcome), SUM_FAILURE);
+            assert_eq!(jett_rt_v1_value_status(pointer), 0);
+            assert_eq!(jett_rt_v1_value_drop(pointer, outcome), 0);
+            assert_eq!(jett_rt_v1_value_drop(pointer, config), 0);
+        }
+        assert!(GRAPHICS_SESSION.with(|slot| slot.borrow().is_none()));
+        context.destroy(JettRuntimeStatusV1::OK);
+    }
+    #[test]
+    fn strings_release_immediately_and_retain_preserves_aliases() {
+        let context = Context::new();
+        let value = context.text("hÃƒÂ©\0llo");
+        assert_ne!(value, 0);
+        assert_eq!(context.count(), 1);
+        unsafe {
+            assert_eq!(jett_rt_v1_string_retain(context.pointer(), value), value);
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), value), 0);
+            assert_eq!(context.count(), 1);
+            assert_eq!(jett_rt_v1_string_equal(context.pointer(), value, value), 1);
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), value), 0);
+            assert_eq!(context.count(), 0);
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), 0), 0);
+            assert_eq!(jett_rt_v1_value_status(context.pointer()), 0);
+        }
+    }
+    #[test]
+    fn foreign_and_stale_handles_fail_but_cleanup_remains_available() {
+        let first = Context::new();
+        let second = Context::new();
+        let a = first.text("first");
+        let b = second.text("second");
+        unsafe {
+            assert_eq!(jett_rt_v1_string_retain(second.pointer(), a), 0);
+            assert_ne!(jett_rt_v1_value_status(second.pointer()), 0);
+            assert_eq!(
+                jett_rt_v1_string_literal(second.pointer(), b"no".as_ptr(), 2),
+                0
+            );
+            assert_eq!(jett_rt_v1_string_release(second.pointer(), b), 0);
+            assert_eq!(second.count(), 0);
+            assert_eq!(jett_rt_v1_string_release(first.pointer(), a), 0);
+            assert_eq!(jett_rt_v1_string_retain(first.pointer(), a), 0);
+            assert_ne!(jett_rt_v1_value_status(first.pointer()), 0);
+            assert_eq!(first.count(), 0);
+            assert_ne!(jett_rt_v1_value_status(ptr::null()), 0);
+        }
+    }
+    #[test]
+    fn stdout_authority_is_context_bound_and_failure_is_first_wins() {
+        let first = Context::new();
+        let second = Context::new();
+        let empty = second.text("");
+        unsafe {
+            let token = jett_rt_v1_grant_stdout(first.pointer());
+            let other = jett_rt_v1_grant_stdout(second.pointer());
+            assert_ne!(token, other);
+            assert_eq!(jett_rt_v1_string_stdout(second.pointer(), other, empty), 0);
+            jett_rt_v1_string_stdout(second.pointer(), token, empty);
+            jett_rt_v1_string_release(second.pointer(), u64::MAX);
+            let mut failure = MaybeUninit::uninit();
+            assert_ne!(
+                jett_rt_v1_value_failure(second.pointer(), failure.as_mut_ptr()),
+                JettRuntimeStatusV1::OK
+            );
+            let failure = failure.assume_init();
+            assert_eq!(
+                slice::from_raw_parts(failure.message.data, failure.message.byte_length as usize),
+                b"invalid Stdout authority"
+            );
+            assert_eq!(jett_rt_v1_string_release(second.pointer(), empty), 0);
+        }
+        second.destroy(JettRuntimeStatusV1::INVALID_ARGUMENT);
+    }
+    #[test]
+    fn native_assert_failure_preserves_default_message() {
+        let context = Context::new();
+        unsafe {
+            assert_ne!(jett_rt_v1_assert_fail(context.pointer()), 0);
+            let mut failure = MaybeUninit::uninit();
+            assert_eq!(
+                jett_rt_v1_value_failure(context.pointer(), failure.as_mut_ptr()),
+                JettRuntimeStatusV1::INVALID_ARGUMENT
+            );
+            let failure = failure.assume_init();
+            assert_eq!(
+                slice::from_raw_parts(failure.message.data, failure.message.byte_length as usize),
+                b"assertion failed"
+            );
+            let mut length = 0_u64;
+            let mut result = MaybeUninit::uninit();
+            assert_eq!(
+                jett_rt_v1_value_failure_copy(
+                    context.pointer(),
+                    ptr::null_mut(),
+                    0,
+                    &mut length,
+                    result.as_mut_ptr(),
+                ),
+                JettRuntimeStatusV1::OK
+            );
+            assert_eq!(length, b"assertion failed".len() as u64);
+            let mut copied = vec![0; length as usize];
+            assert_eq!(
+                jett_rt_v1_value_failure_copy(
+                    context.pointer(),
+                    copied.as_mut_ptr(),
+                    length,
+                    &mut length,
+                    result.as_mut_ptr(),
+                ),
+                JettRuntimeStatusV1::OK
+            );
+            assert_eq!(copied, b"assertion failed");
+        }
+        context.destroy(JettRuntimeStatusV1::OK);
+    }
+    #[test]
+    fn failed_predicate_text_can_be_captured_and_execution_can_resume() {
+        let context = Context::new();
+        let prefix = b"constraint: ";
+        unsafe {
+            assert_ne!(jett_rt_v1_assert_fail(context.pointer()), 0);
+            let captured = jett_rt_v1_failure_take_prefixed_text(
+                context.pointer(),
+                prefix.as_ptr(),
+                prefix.len() as u64,
+            );
+            assert_ne!(captured, 0);
+            assert_eq!(jett_rt_v1_value_status(context.pointer()), 0);
+            let expected = context.text("constraint: assertion failed");
+            assert_eq!(
+                jett_rt_v1_string_equal(context.pointer(), captured, expected),
+                1
+            );
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), captured), 0);
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), expected), 0);
+            assert_eq!(context.count(), 0);
+        }
+        context.destroy(JettRuntimeStatusV1::OK);
+    }
+    #[test]
+    fn native_property_context_decorates_only_terminal_failure_copies() {
+        for clear in [false, true] {
+            let context = Context::new();
+            let label = context.text("property 'target' trial 4: ");
+            unsafe {
+                assert_eq!(jett_rt_v1_property_case_set(context.pointer(), label), 0);
+                assert_eq!(jett_rt_v1_string_release(context.pointer(), label), 0);
+                // Handled refinement failures retain their original message, and
+                // a successful copy query has no diagnostic merely for being in a trial.
+                assert_ne!(jett_rt_v1_assert_fail(context.pointer()), 0);
+                let captured =
+                    jett_rt_v1_failure_take_prefixed_text(context.pointer(), ptr::null(), 0);
+                let expected = context.text("assertion failed");
+                assert_eq!(
+                    jett_rt_v1_string_equal(context.pointer(), captured, expected),
+                    1
+                );
+                assert_eq!(jett_rt_v1_string_release(context.pointer(), captured), 0);
+                assert_eq!(jett_rt_v1_string_release(context.pointer(), expected), 0);
+                let mut length = 99;
+                let mut result = MaybeUninit::uninit();
+                assert_eq!(
+                    jett_rt_v1_value_failure_copy(
+                        context.pointer(),
+                        ptr::null_mut(),
+                        0,
+                        &mut length,
+                        result.as_mut_ptr()
+                    ),
+                    JettRuntimeStatusV1::OK
+                );
+                assert_eq!(length, 0);
+                if clear {
+                    assert_eq!(jett_rt_v1_property_case_clear(context.pointer()), 0);
+                }
+                let message = context.text("backend Ã°Å¸Â§Âª");
+                assert_ne!(
+                    jett_rt_v1_assert_fail_message(context.pointer(), message),
+                    0
+                );
+                assert_eq!(jett_rt_v1_string_release(context.pointer(), message), 0);
+                let expected = if clear {
+                    "backend Ã°Å¸Â§Âª"
+                } else {
+                    "property 'target' trial 4: backend Ã°Å¸Â§Âª"
+                };
+                for _ in 0..2 {
+                    assert_eq!(
+                        jett_rt_v1_value_failure_copy(
+                            context.pointer(),
+                            ptr::null_mut(),
+                            0,
+                            &mut length,
+                            result.as_mut_ptr()
+                        ),
+                        JettRuntimeStatusV1::OK
+                    );
+                    assert_eq!(length, expected.len() as u64);
+                    let mut short = [0x7f; 2];
+                    assert_eq!(
+                        jett_rt_v1_value_failure_copy(
+                            context.pointer(),
+                            short.as_mut_ptr(),
+                            2,
+                            &mut length,
+                            result.as_mut_ptr()
+                        ),
+                        JettRuntimeStatusV1::INVALID_ARGUMENT
+                    );
+                    assert_eq!(short, [0x7f; 2]);
+                    let mut copied = vec![0; length as usize];
+                    assert_eq!(
+                        jett_rt_v1_value_failure_copy(
+                            context.pointer(),
+                            copied.as_mut_ptr(),
+                            length,
+                            &mut length,
+                            result.as_mut_ptr()
+                        ),
+                        JettRuntimeStatusV1::OK
+                    );
+                    assert_eq!(copied, expected.as_bytes());
+                }
+                assert_eq!(context.count(), 0);
+            }
+            context.destroy(JettRuntimeStatusV1::OK);
+        }
+    }
+    #[test]
+    fn native_assert_failure_copies_dynamic_message_without_changing_v1_static_result() {
+        let context = Context::new();
+        let message = "expected 42, got Ã°Å¸Â§Âª";
+        let handle = context.text(message);
+        unsafe {
+            assert_ne!(jett_rt_v1_assert_fail_message(context.pointer(), handle), 0);
+            let mut failure = MaybeUninit::uninit();
+            assert_eq!(
+                jett_rt_v1_value_failure(context.pointer(), failure.as_mut_ptr()),
+                JettRuntimeStatusV1::INVALID_ARGUMENT
+            );
+            let failure = failure.assume_init();
+            assert_eq!(
+                slice::from_raw_parts(failure.message.data, failure.message.byte_length as usize),
+                b"assertion failed"
+            );
+
+            let mut length = 0_u64;
+            let mut result = MaybeUninit::uninit();
+            assert_eq!(
+                jett_rt_v1_value_failure_copy(
+                    context.pointer(),
+                    ptr::null_mut(),
+                    0,
+                    &mut length,
+                    result.as_mut_ptr(),
+                ),
+                JettRuntimeStatusV1::OK
+            );
+            assert_eq!(length, message.len() as u64);
+            let mut too_small = [0_u8; 2];
+            assert_eq!(
+                jett_rt_v1_value_failure_copy(
+                    context.pointer(),
+                    too_small.as_mut_ptr(),
+                    too_small.len() as u64,
+                    &mut length,
+                    result.as_mut_ptr(),
+                ),
+                JettRuntimeStatusV1::INVALID_ARGUMENT
+            );
+            let mut copied = vec![0; message.len()];
+            assert_eq!(
+                jett_rt_v1_value_failure_copy(
+                    context.pointer(),
+                    copied.as_mut_ptr(),
+                    copied.len() as u64,
+                    &mut length,
+                    result.as_mut_ptr(),
+                ),
+                JettRuntimeStatusV1::OK
+            );
+            assert_eq!(copied, message.as_bytes());
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), handle), 0);
+        }
+        context.destroy(JettRuntimeStatusV1::OK);
+    }
+    #[test]
+    fn clock_authority_is_context_bound_and_samples_wall_time() {
+        let first = Context::new();
+        let second = Context::new();
+        unsafe {
+            let token = jett_rt_v1_grant_clock(first.pointer());
+            let other = jett_rt_v1_grant_clock(second.pointer());
+            assert_ne!(token, other);
+            assert_eq!(token, jett_rt_v1_grant_clock(first.pointer()));
+            let before = clock::production_wall_clock_sample();
+            let now = jett_rt_v1_clock_now(first.pointer(), token);
+            let after = clock::production_wall_clock_sample();
+            let before = clock::checked_clock_milliseconds(before.0, before.1).unwrap();
+            let after = clock::checked_clock_milliseconds(after.0, after.1).unwrap();
+            assert!((before..=after).contains(&now));
+            assert_eq!(jett_rt_v1_value_status(first.pointer()), 0);
+            assert_eq!(jett_rt_v1_clock_now(second.pointer(), token), 0);
+            let lease = acquire_context(context_key(second.pointer()).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            assert_eq!(
+                state.as_ref().unwrap().values.failure,
+                Some((
+                    JettRuntimeStatusV1::INVALID_ARGUMENT,
+                    b"invalid Clock authority".as_slice()
+                ))
+            );
+        }
+    }
+    #[test]
+    fn successful_native_entry_rejects_unconsumed_scripts_in_interpreter_order() {
+        let context = Context::new();
+        unsafe {
+            assert_eq!(
+                jett_rt_v1_validate_scripted_consumption(context.pointer()),
+                0
+            );
+            let random_script = random::encode_test_script(&[
+                random::RandomTestSample::Boolean(true),
+                random::RandomTestSample::Boolean(false),
+            ]);
+            assert_eq!(
+                jett_rt_v1_random_configure_scripted(
+                    context.pointer(),
+                    random_script.as_ptr(),
+                    random_script.len() as u64,
+                ),
+                0
+            );
+            let clock_script = clock::encode_test_script(&[clock::ClockTestSample::Unavailable]);
+            assert_eq!(
+                jett_rt_v1_clock_configure_scripted(
+                    context.pointer(),
+                    clock_script.as_ptr(),
+                    clock_script.len() as u64,
+                ),
+                0
+            );
+            let graphics_script = graphics::encode_test_script(&[graphics::TestEvent::Close]);
+            assert_eq!(
+                jett_rt_v1_graphics_configure_scripted(
+                    context.pointer(),
+                    graphics_script.as_ptr(),
+                    graphics_script.len() as u64,
+                ),
+                0
+            );
+            assert_ne!(
+                jett_rt_v1_validate_scripted_consumption(context.pointer()),
+                0
+            );
+            let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            assert_eq!(
+                state
+                    .as_ref()
+                    .unwrap()
+                    .values
+                    .dynamic_failure_message
+                    .as_deref(),
+                Some(b"Random: test provider has 2 unconsumed samples".as_slice())
+            );
+        }
+    }
+
+    #[test]
+    fn scripted_clock_samples_are_context_bound_and_exhaustion_is_terminal() {
+        let first = Context::new();
+        let second = Context::new();
+        let samples = [
+            clock::ClockTestSample::Wall {
+                unix_seconds: -1,
+                subsecond_nanoseconds: 999_999_999,
+            },
+            clock::ClockTestSample::Wall {
+                unix_seconds: 42,
+                subsecond_nanoseconds: 123_456_789,
+            },
+        ];
+        let script = clock::encode_test_script(&samples);
+        unsafe {
+            assert_eq!(
+                jett_rt_v1_clock_configure_scripted(
+                    first.pointer(),
+                    script.as_ptr(),
+                    script.len() as u64
+                ),
+                0
+            );
+            let token = jett_rt_v1_grant_clock(first.pointer());
+            let foreign = jett_rt_v1_grant_clock(second.pointer());
+            assert_eq!(jett_rt_v1_clock_now(first.pointer(), token), -1);
+            assert_eq!(jett_rt_v1_clock_now(first.pointer(), token), 42_123);
+            assert_eq!(jett_rt_v1_clock_now(first.pointer(), token), 0);
+            assert_ne!(jett_rt_v1_value_status(first.pointer()), 0);
+            let _ = jett_rt_v1_clock_now(second.pointer(), foreign);
+            assert_eq!(jett_rt_v1_value_status(second.pointer()), 0);
+            let lease = acquire_context(context_key(first.pointer()).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            assert_eq!(
+                state.as_ref().unwrap().values.failure,
+                Some((
+                    JettRuntimeStatusV1::INVALID_ARGUMENT,
+                    b"Clock.now: test clock exhausted".as_slice()
+                ))
+            );
+        }
+    }
+    #[test]
+    fn scripted_random_samples_match_scalar_kernels_and_exhaustion() {
+        let context = Context::new();
+        let samples = [
+            random::RandomTestSample::Bounded(u64::MAX - 1),
+            random::RandomTestSample::Unit53((1_u64 << 53) - 1),
+            random::RandomTestSample::Boolean(true),
+        ];
+        let script = random::encode_test_script(&samples);
+        unsafe {
+            assert_eq!(
+                jett_rt_v1_random_configure_scripted(
+                    context.pointer(),
+                    script.as_ptr(),
+                    script.len() as u64,
+                ),
+                0
+            );
+            let token = jett_rt_v1_grant_random(context.pointer());
+            assert_ne!(token, 0);
+            assert_eq!(
+                jett_rt_v1_random_bounded(context.pointer(), token, i64::MIN, i64::MAX),
+                i64::MAX - 1
+            );
+            assert_eq!(
+                jett_rt_v1_random_unit53(context.pointer(), token),
+                0.9999999999999999
+            );
+            assert_eq!(jett_rt_v1_random_bool(context.pointer(), token), 1);
+            assert_eq!(
+                jett_rt_v1_random_bool(context.pointer(), token),
+                JettRuntimeStatusV1::INVALID_CONTEXT.code()
+            );
+            let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            assert_eq!(
+                state.as_ref().unwrap().values.failure,
+                Some((
+                    JettRuntimeStatusV1::INVALID_ARGUMENT,
+                    random::TEST_EXHAUSTED.as_bytes()
+                ))
+            );
+        }
+    }
+    #[test]
+    fn context_destruction_reports_owned_value_leaks() {
+        let mut context = Context::new();
+        context.text("unreleased");
+        let mut result = MaybeUninit::uninit();
+        assert_eq!(
+            unsafe { jett_rt_v1_context_destroy(&mut *context.0, result.as_mut_ptr()) },
+            JettRuntimeStatusV1::INVALID_ARGUMENT
+        );
+        // The context has already retired; drop its storage without a second destroy.
+        let context = std::mem::ManuallyDrop::new(context);
+        unsafe {
+            drop(ptr::read(&context.0));
+        }
+    }
+    #[test]
+    fn panic_becomes_terminal_failure_and_releases_existing_values() {
+        let context = Context::new();
+        let value = context.text("held");
+        let result: u64 = leaf(context.pointer(), false, |_| panic!("injected leaf panic"));
+        assert_eq!(result, 0);
+        unsafe {
+            assert_eq!(
+                jett_rt_v1_value_status(context.pointer()),
+                JettRuntimeStatusV1::PANIC.code()
+            );
+            jett_rt_v1_string_release(context.pointer(), value);
+        }
+        assert_eq!(context.count(), 0);
+    }
+    #[test]
+    fn bytes_have_distinct_storage_and_exact_destruction_counts() {
+        let context = Context::new();
+        let text = context.text("raw");
+        unsafe {
+            let a = jett_rt_v1_bytes_from_string(context.pointer(), text);
+            let b = jett_rt_v1_bytes_clone(context.pointer(), a);
+            assert_ne!(a, b);
+            let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+            {
+                let mut state = lock_unpoisoned(&lease.entry.state);
+                let values = &mut state.as_mut().unwrap().values;
+                values.bytes.get_mut(&a).unwrap()[0] = 255;
+                assert_eq!(values.bytes(a).unwrap(), &[255, 97, 119]);
+                assert_eq!(values.bytes(b).unwrap(), b"raw");
+                assert_eq!((values.bytes_created, values.bytes_destroyed), (2, 0));
+            }
+            jett_rt_v1_value_drop(context.pointer(), a);
+            jett_rt_v1_value_drop(context.pointer(), b);
+            jett_rt_v1_value_drop(context.pointer(), text);
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!((values.bytes_created, values.bytes_destroyed), (2, 2));
+            assert!(values.is_empty());
+        }
+    }
+    #[test]
+    fn bytes_registry_leak_is_not_hidden_by_empty_string_registry() {
+        let mut context = Context::new();
+        unsafe {
+            jett_rt_v1_bytes_new(context.pointer());
+        }
+        assert_eq!(context.count(), 0);
+        let mut result = MaybeUninit::uninit();
+        assert_eq!(
+            unsafe { jett_rt_v1_context_destroy(&mut *context.0, result.as_mut_ptr()) },
+            JettRuntimeStatusV1::INVALID_ARGUMENT
+        );
+        let context = std::mem::ManuallyDrop::new(context);
+        unsafe {
+            drop(ptr::read(&context.0));
+        }
+    }
+    #[test]
+    fn sum_tags_take_only_selected_payload_and_cleanup_nested_owners() {
+        let context = Context::new();
+        unsafe {
+            let data = jett_rt_v1_bytes_new(context.pointer());
+            let inner = jett_rt_v1_sum_new(context.pointer(), SUM_SUCCESS, data, 1);
+            let outer = jett_rt_v1_sum_new(context.pointer(), SUM_SUCCESS, inner, 1);
+            let clone = jett_rt_v1_sum_clone(context.pointer(), outer);
+            assert_ne!(clone, outer);
+            assert_eq!(jett_rt_v1_sum_tag(context.pointer(), outer), SUM_SUCCESS);
+            let taken = jett_rt_v1_sum_take(context.pointer(), outer, SUM_SUCCESS);
+            assert_eq!(taken, inner);
+            jett_rt_v1_value_drop(context.pointer(), taken);
+            // Invalid tag extraction must not consume the still-owned record.
+            assert_eq!(
+                jett_rt_v1_sum_take(context.pointer(), clone, SUM_FAILURE),
+                0
+            );
+            assert_ne!(jett_rt_v1_value_status(context.pointer()), 0);
+            jett_rt_v1_value_drop(context.pointer(), clone);
+            let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!((values.bytes_created, values.bytes_destroyed), (2, 2));
+            assert_eq!((values.sums_created, values.sums_destroyed), (4, 4));
+            assert!(values.is_empty());
+        }
+    }
+    #[test]
+    fn sum_handles_reject_outer_pending_depth_and_preserve_owned_payloads() {
+        let mut values = NativeValues::default();
+        let mut primitive = vec![NativeDebugTag::Primitive as u8];
+        primitive.extend_from_slice(&(NativeSortKind::String as u32).to_le_bytes());
+        let mut optional = vec![NativeDebugTag::Optional as u8];
+        optional.extend_from_slice(&1u32.to_le_bytes());
+        let layout = function_debug_layout_bytes(&[optional, primitive], 0);
+        let text = values.insert("payload".into()).unwrap();
+        let ready = values.sum(SUM_SUCCESS, text, true).unwrap();
+        let pending = values.run_sum(ready).unwrap();
+        let twice = values.run_sum(pending).unwrap();
+        assert_eq!(values.sum_handle_tag(ready, &layout), Ok(SUM_SUCCESS));
+        assert!(values.sum_handle_tag(twice, &layout).is_err());
+        assert_eq!(
+            values.dynamic_failure_message.as_deref(),
+            Some(b"handle block requires a result or optional value, got pending(pending(some(payload)))".as_slice())
+        );
+        assert!(values.sums.contains_key(&twice));
+        let malformed = values.sum_handle_tag(twice, b"invalid");
+        assert!(malformed.is_err());
+        let inner_pending = values.insert("inner".into()).unwrap();
+        values
+            .strings
+            .get_mut(&inner_pending)
+            .unwrap()
+            .pending_depth = 1;
+        let outer_ready = values.sum(SUM_SUCCESS, inner_pending, true).unwrap();
+        assert_eq!(values.sum_handle_tag(outer_ready, &layout), Ok(SUM_SUCCESS));
+        for value in [ready, pending, twice, outer_ready] {
+            values.drop_value(value).unwrap();
+        }
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn sum_registry_leak_is_independent_of_payload_ownership() {
+        let mut context = Context::new();
+        unsafe {
+            jett_rt_v1_sum_new(context.pointer(), SUM_SUCCESS, 42, 0);
+        }
+        assert_eq!(context.count(), 0);
+        let mut result = MaybeUninit::uninit();
+        assert_eq!(
+            unsafe { jett_rt_v1_context_destroy(&mut *context.0, result.as_mut_ptr()) },
+            JettRuntimeStatusV1::INVALID_ARGUMENT
+        );
+        let context = std::mem::ManuallyDrop::new(context);
+        unsafe {
+            drop(ptr::read(&context.0));
+        }
+    }
+
+    #[test]
+    fn struct_pending_access_preserves_ready_and_pending_owned_records() {
+        let mut values = NativeValues::default();
+        let bytes = values.insert_bytes(vec![65]).unwrap();
+        values.bytes_pending.insert(bytes, 2);
+        let ready = values.new_struct(2).unwrap();
+        values.structs.get_mut(&ready).unwrap().fields = vec![
+            Some(NativeField {
+                bits: bytes,
+                owned: true,
+                pending_depth: 0,
+            }),
+            Some(NativeField {
+                bits: 7,
+                owned: false,
+                pending_depth: 3,
+            }),
+        ];
+        let pending = values.run_record(ready).unwrap();
+        let twice = values.run_record(pending).unwrap();
+        assert_eq!(
+            values.check_struct_pending_access(ready, b"invalid", "field access: ", true),
+            Ok(0)
+        );
+        assert_eq!(
+            values.check_struct_pending_access(twice, b"invalid", "transition rejected", false),
+            Err(INVALID_STRUCT)
+        );
+        assert_eq!(
+            values.dynamic_failure_message.as_deref(),
+            Some(b"transition rejected".as_slice())
+        );
+        for (owner, depth) in [(ready, 0), (pending, 1), (twice, 2)] {
+            let record = values.structs.get(&owner).unwrap();
+            assert_eq!(record.pending_depth, depth);
+            assert!(record.fields.iter().all(Option::is_some));
+            let bytes = values.struct_field(owner, 0).unwrap();
+            assert!(bytes.owned);
+            assert_eq!(values.bytes(bytes.bits), Ok([65].as_slice()));
+            assert_eq!(values.bytes_depth(bytes.bits), Ok(2));
+            let scalar = values.struct_field(owner, 1).unwrap();
+            assert_eq!(
+                (scalar.bits, scalar.owned, scalar.pending_depth),
+                (7, false, 3)
+            );
+        }
+        assert_eq!((values.structs_created, values.structs_destroyed), (3, 0));
+        assert_eq!((values.bytes_created, values.bytes_destroyed), (3, 0));
+        for owner in [ready, pending, twice] {
+            values.drop_value(owner).unwrap();
+        }
+        assert_eq!((values.structs_created, values.structs_destroyed), (3, 3));
+        assert_eq!((values.bytes_created, values.bytes_destroyed), (3, 3));
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn struct_pending_access_typed_errors_preserve_depth_and_redaction() {
+        let mut integer = vec![NativeDebugTag::Primitive as u8];
+        integer.extend_from_slice(&(NativeSortKind::Int64 as u32).to_le_bytes());
+        let mut string = vec![NativeDebugTag::Primitive as u8];
+        string.extend_from_slice(&(NativeSortKind::String as u32).to_le_bytes());
+        let mut record = vec![NativeDebugTag::Record as u8];
+        record.extend_from_slice(&5_u32.to_le_bytes());
+        record.extend_from_slice(b"Vault");
+        record.extend_from_slice(&3_u32.to_le_bytes());
+        for (name, node) in [("number", 0_u32), ("hidden", 1), ("label", 2)] {
+            record.extend_from_slice(&u32::try_from(name.len()).unwrap().to_le_bytes());
+            record.extend_from_slice(name.as_bytes());
+            record.extend_from_slice(&node.to_le_bytes());
+        }
+        let layout = function_debug_layout_bytes(
+            &[
+                integer,
+                vec![NativeDebugTag::Redacted as u8],
+                string,
+                record,
+            ],
+            3,
+        );
+        let mut values = NativeValues::default();
+        let label = values.insert("[redacted]".to_owned()).unwrap();
+        values.strings.get_mut(&label).unwrap().pending_depth = 1;
+        let owner = values.new_struct(3).unwrap();
+        let record = values.structs.get_mut(&owner).unwrap();
+        record.pending_depth = 2;
+        record.fields = vec![
+            Some(NativeField {
+                bits: 7,
+                owned: false,
+                pending_depth: 1,
+            }),
+            Some(NativeField {
+                bits: u64::MAX,
+                owned: false,
+                pending_depth: u64::MAX,
+            }),
+            Some(NativeField {
+                bits: label,
+                owned: true,
+                pending_depth: 0,
+            }),
+        ];
+        assert_eq!(
+            values.check_struct_pending_access(
+                owner,
+                &layout,
+                "field access is not supported on ",
+                true,
+            ),
+            Err(INVALID_STRUCT)
+        );
+        assert_eq!(
+            values.dynamic_failure_message.as_deref(),
+            Some(b"field access is not supported on pending(pending(Vault(number: pending(7), hidden: [redacted], label: pending([redacted]))))".as_slice())
+        );
+        assert_eq!(values.struct_field(owner, 1).unwrap().bits, u64::MAX);
+        assert_eq!(values.structs[&owner].pending_depth, 2);
+        assert_eq!(values.strings[&label].pending_depth, 1);
+        values.drop_value(owner).unwrap();
+        assert_eq!((values.structs_created, values.structs_destroyed), (1, 1));
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn struct_pending_access_formats_only_requested_pending_values() {
+        let mut values = NativeValues::default();
+        let owner = values.new_struct(1).unwrap();
+        // Ready access does not inspect even an uninitialized opaque field.
+        assert_eq!(
+            values.check_struct_pending_access(owner, b"invalid", "got ", true),
+            Ok(0)
+        );
+        values.structs.get_mut(&owner).unwrap().pending_depth = 1;
+        assert_eq!(
+            values.check_struct_pending_access(owner, b"invalid", "transition rejected", false),
+            Err(INVALID_STRUCT)
+        );
+        assert_eq!(
+            values.dynamic_failure_message.as_deref(),
+            Some(b"transition rejected".as_slice())
+        );
+        assert_eq!(
+            values.check_struct_pending_access(owner, &[], "got ", true),
+            Err(INVALID_STRUCT)
+        );
+        assert_eq!(
+            values.dynamic_failure_message.as_deref(),
+            Some(b"got [redacted]".as_slice())
+        );
+        values.dynamic_failure_message = None;
+        assert_eq!(
+            values.check_struct_pending_access(owner, b"invalid", "got ", true),
+            Err(INVALID_STRUCT)
+        );
+        assert!(values.dynamic_failure_message.is_none());
+        assert!(values.structs[&owner].fields[0].is_none());
+        assert_eq!(
+            values.check_struct_pending_access(0, &[], "got ", false),
+            Err(INVALID_STRUCT)
+        );
+        values.drop_value(owner).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn struct_pending_access_leaf_validates_abi_without_consuming_owner() {
+        let layout = b"invalid";
+        let message = b"got ";
+        let invalid_utf8 = [0xff];
+        for (layout, layout_length, message, message_length, render) in [
+            (layout.as_ptr(), 7, message.as_ptr(), 4, 2),
+            (ptr::null(), 1, message.as_ptr(), 4, 1),
+            (ptr::null(), 0, ptr::null(), 1, 0),
+            (layout.as_ptr(), u64::MAX, message.as_ptr(), 4, 1),
+            (ptr::null(), 0, message.as_ptr(), u64::MAX, 0),
+            (ptr::null(), 0, invalid_utf8.as_ptr(), 1, 0),
+        ] {
+            let context = Context::new();
+            unsafe {
+                let owner = jett_rt_v1_struct_new(context.pointer(), 1);
+                assert_eq!(
+                    jett_rt_v1_struct_init_scalar_task(context.pointer(), owner, 0, 7, 3),
+                    0
+                );
+                assert_eq!(
+                    jett_rt_v1_struct_pending_access_check(
+                        context.pointer(),
+                        owner,
+                        layout,
+                        layout_length,
+                        message,
+                        message_length,
+                        render,
+                    ),
+                    u32::failure_default()
+                );
+                assert_eq!(
+                    jett_rt_v1_value_status(context.pointer()),
+                    JettRuntimeStatusV1::INVALID_ARGUMENT.code()
+                );
+                let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+                let state = lock_unpoisoned(&lease.entry.state);
+                let values = &state.as_ref().unwrap().values;
+                assert_eq!(values.structs[&owner].pending_depth, 0);
+                let field = values.struct_field(owner, 0).unwrap();
+                assert_eq!(
+                    (field.bits, field.owned, field.pending_depth),
+                    (7, false, 3)
+                );
+                drop(state);
+                jett_rt_v1_value_drop(context.pointer(), owner);
+            }
+        }
+        let context = Context::new();
+        unsafe {
+            let owner = jett_rt_v1_struct_new(context.pointer(), 0);
+            assert_eq!(
+                jett_rt_v1_struct_pending_access_check(
+                    context.pointer(),
+                    owner,
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    0,
+                    1,
+                ),
+                0
+            );
+            assert_eq!(jett_rt_v1_value_status(context.pointer()), 0);
+            jett_rt_v1_value_drop(context.pointer(), owner);
+        }
+    }
+    #[test]
+    fn foreign_and_stale_bytes_cannot_be_used_or_double_dropped() {
+        let first = Context::new();
+        let second = Context::new();
+        unsafe {
+            let value = jett_rt_v1_bytes_new(first.pointer());
+            assert_eq!(jett_rt_v1_bytes_clone(second.pointer(), value), 0);
+            assert_ne!(jett_rt_v1_value_status(second.pointer()), 0);
+            jett_rt_v1_value_drop(first.pointer(), value);
+            assert_eq!(jett_rt_v1_bytes_clone(first.pointer(), value), 0);
+            jett_rt_v1_value_drop(first.pointer(), value);
+            assert_ne!(jett_rt_v1_value_status(first.pointer()), 0);
+        }
+        first.destroy(JettRuntimeStatusV1::INVALID_ARGUMENT);
+    }
+    #[test]
+    fn lists_transfer_and_clone_nested_payloads_with_exact_destruction() {
+        let context = Context::new();
+        unsafe {
+            let payload = jett_rt_v1_bytes_new(context.pointer());
+            let list = jett_rt_v1_list_new(context.pointer(), 1);
+            assert_eq!(
+                jett_rt_v1_list_append(context.pointer(), list, payload),
+                list
+            );
+            let copy = jett_rt_v1_list_clone(context.pointer(), list);
+            let item = jett_rt_v1_list_get_clone(context.pointer(), copy, 0);
+            let taken = jett_rt_v1_sum_take(context.pointer(), item, SUM_SUCCESS);
+            assert_ne!(taken, payload);
+            jett_rt_v1_value_drop(context.pointer(), taken);
+            jett_rt_v1_value_drop(context.pointer(), list);
+            jett_rt_v1_value_drop(context.pointer(), copy);
+            let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!((values.bytes_created, values.bytes_destroyed), (3, 3));
+            assert_eq!((values.lists_created, values.lists_destroyed), (2, 2));
+            assert!(values.is_empty());
+        }
+    }
+    #[test]
+    fn list_insert_remove_transfers_owned_elements_and_rejects_invalid_indices() {
+        let context = Context::new();
+        unsafe {
+            let first = jett_rt_v1_bytes_new(context.pointer());
+            let second = jett_rt_v1_bytes_new(context.pointer());
+            let list = jett_rt_v1_list_new(context.pointer(), 1);
+            assert_eq!(
+                jett_rt_v1_list_insert_at(context.pointer(), list, 0, first),
+                list
+            );
+            assert_eq!(
+                jett_rt_v1_list_insert_at(context.pointer(), list, 1, second),
+                list
+            );
+            assert_eq!(jett_rt_v1_list_remove_at(context.pointer(), list, 0), list);
+            let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!(values.lists[&list].elements, vec![Some(second)]);
+            assert_eq!((values.bytes_created, values.bytes_destroyed), (2, 1));
+            drop(state);
+            jett_rt_v1_value_drop(context.pointer(), list);
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!((values.bytes_created, values.bytes_destroyed), (2, 2));
+            assert!(values.is_empty());
+        }
+
+        for (insert, index, message) in [
+            (true, 2, "list.__insert_at: index 2 out of bounds"),
+            (true, -1, "list.__insert_at: index -1 out of bounds"),
+            (false, -1, "list.__remove_at: index -1 out of bounds"),
+            (false, 1, "list.__remove_at: index 1 out of bounds"),
+        ] {
+            let context = Context::new();
+            unsafe {
+                let list = jett_rt_v1_list_new(context.pointer(), 0);
+                assert_eq!(jett_rt_v1_list_append(context.pointer(), list, 7), list);
+                let result = if insert {
+                    jett_rt_v1_list_insert_at(context.pointer(), list, index, 9)
+                } else {
+                    jett_rt_v1_list_remove_at(context.pointer(), list, index)
+                };
+                assert_eq!(result, 0);
+                let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+                let state = lock_unpoisoned(&lease.entry.state);
+                let values = &state.as_ref().unwrap().values;
+                assert_eq!(values.lists[&list].elements, vec![Some(7)]);
+                assert_eq!(
+                    values.failure.map(|failure| failure.0),
+                    Some(JettRuntimeStatusV1::INVALID_ARGUMENT)
+                );
+                assert_eq!(
+                    values.dynamic_failure_message.as_deref(),
+                    Some(message.as_bytes())
+                );
+                drop(state);
+                jett_rt_v1_value_drop(context.pointer(), list);
+            }
+            context.destroy(JettRuntimeStatusV1::OK);
+        }
+    }
+    #[test]
+    fn list_only_leak_fails_context_destruction() {
+        let context = Context::new();
+        unsafe {
+            jett_rt_v1_list_new(context.pointer(), 0);
+        }
+        context.destroy(JettRuntimeStatusV1::INVALID_ARGUMENT);
+    }
+    #[test]
+    fn primitive_list_sum_wraps_widths_rounds_floats_and_keeps_empty_zero() {
+        let cases = [
+            (NativeSortKind::Int8, [127, 1], 128),
+            (NativeSortKind::Int16, [32767, 1], 32768),
+            (NativeSortKind::Int32, [i32::MAX as u64, 1], 1_u64 << 31),
+            (NativeSortKind::Int64, [i64::MAX as u64, 1], 1_u64 << 63),
+            (NativeSortKind::Uint8, [255, 2], 1),
+            (NativeSortKind::Uint16, [65535, 2], 1),
+            (NativeSortKind::Uint32, [u32::MAX as u64, 2], 1),
+            (NativeSortKind::Uint64, [u64::MAX, 2], 1),
+            (
+                NativeSortKind::Float32,
+                [1.5_f32.to_bits() as u64, 2.25_f32.to_bits() as u64],
+                3.75_f32.to_bits() as u64,
+            ),
+            (
+                NativeSortKind::Float64,
+                [1.5_f64.to_bits(), 2.25_f64.to_bits()],
+                3.75_f64.to_bits(),
+            ),
+        ];
+        for (kind, input, expected) in cases {
+            let mut values = NativeValues::default();
+            let list = values.new_list(false).unwrap();
+            assert_eq!(values.sum_primitive_list(list, kind as u32), Ok(0));
+            values.lists.get_mut(&list).unwrap().elements = input.map(Some).to_vec();
+            assert_eq!(
+                values.sum_primitive_list(list, kind as u32),
+                Ok(expected),
+                "{kind:?}"
+            );
+            assert_eq!(values.lists[&list].elements, input.map(Some));
+            values.drop_value(list).unwrap();
+            assert!(values.is_empty());
+        }
+        for (kind, bits, expected) in [
+            (
+                NativeSortKind::Float32,
+                [
+                    16777216.0_f32.to_bits() as u64,
+                    1.0_f32.to_bits() as u64,
+                    (-16777216.0_f32).to_bits() as u64,
+                ],
+                0,
+            ),
+            (
+                NativeSortKind::Float64,
+                [
+                    16777216.0_f64.to_bits(),
+                    1.0_f64.to_bits(),
+                    (-16777216.0_f64).to_bits(),
+                ],
+                1.0_f64.to_bits(),
+            ),
+        ] {
+            let mut values = NativeValues::default();
+            let list = values.new_list(false).unwrap();
+            values.lists.get_mut(&list).unwrap().elements = bits.map(Some).to_vec();
+            assert_eq!(values.sum_primitive_list(list, kind as u32), Ok(expected));
+            values.drop_value(list).unwrap();
+            assert!(values.is_empty());
+        }
+    }
+
+    #[test]
+    fn primitive_list_sum_rejects_invalid_carriers_without_consuming_owners() {
+        let mut values = NativeValues::default();
+        let list = values.new_list(false).unwrap();
+        for kind in [
+            NativeSortKind::Bool as u32,
+            NativeSortKind::String as u32,
+            u32::MAX,
+        ] {
+            assert_eq!(values.sum_primitive_list(list, kind), Err(INVALID_LIST));
+        }
+        values.lists.get_mut(&list).unwrap().elements = vec![Some(256)];
+        assert_eq!(
+            values.sum_primitive_list(list, NativeSortKind::Int8 as u32),
+            Err(INVALID_LIST)
+        );
+        values.lists.get_mut(&list).unwrap().elements = vec![None];
+        assert_eq!(
+            values.sum_primitive_list(list, NativeSortKind::Uint64 as u32),
+            Err(INVALID_LIST)
+        );
+        values.drop_value(list).unwrap();
+        let owned = values.new_list(true).unwrap();
+        assert_eq!(
+            values.sum_primitive_list(owned, NativeSortKind::Int64 as u32),
+            Err(INVALID_LIST)
+        );
+        values.drop_value(owned).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn primitive_list_sum_preserves_ieee_infinity_and_nan() {
+        for kind in [NativeSortKind::Float32, NativeSortKind::Float64] {
+            let mut values = NativeValues::default();
+            let list = values.new_list(false).unwrap();
+            let (positive, negative) = if kind == NativeSortKind::Float32 {
+                (
+                    u64::from(f32::INFINITY.to_bits()),
+                    u64::from(f32::NEG_INFINITY.to_bits()),
+                )
+            } else {
+                (f64::INFINITY.to_bits(), f64::NEG_INFINITY.to_bits())
+            };
+            values.lists.get_mut(&list).unwrap().elements = vec![Some(positive)];
+            assert_eq!(values.sum_primitive_list(list, kind as u32), Ok(positive));
+            values
+                .lists
+                .get_mut(&list)
+                .unwrap()
+                .elements
+                .push(Some(negative));
+            let nan = values.sum_primitive_list(list, kind as u32).unwrap();
+            assert!(if kind == NativeSortKind::Float32 {
+                f32::from_bits(nan as u32).is_nan()
+            } else {
+                f64::from_bits(nan).is_nan()
+            });
+            values.drop_value(list).unwrap();
+            assert!(values.is_empty());
+        }
+    }
+
+    #[test]
+    fn primitive_list_sum_retains_pending_errors_without_consuming_input() {
+        for (kind, bits) in [
+            (NativeSortKind::Int8, 1),
+            (NativeSortKind::Uint64, 1),
+            (NativeSortKind::Float32, u64::from(1.0_f32.to_bits())),
+            (NativeSortKind::Float64, 1.0_f64.to_bits()),
+        ] {
+            let mut values = NativeValues::default();
+            let list = values.new_list(false).unwrap();
+            values.lists.get_mut(&list).unwrap().elements = vec![Some(bits), Some(bits)];
+            for (index, message) in [
+                (
+                    0,
+                    b"list.__sum: list elements must be int64 or float64".as_slice(),
+                ),
+                (1, b"list.__sum: mixed types".as_slice()),
+            ] {
+                values.lists.get_mut(&list).unwrap().element_pending_depths =
+                    HashMap::from([(index, 1)]);
+                assert_eq!(
+                    values.sum_primitive_list(list, kind as u32),
+                    Err((JettRuntimeStatusV1::INVALID_ARGUMENT, message)),
+                    "{kind:?}"
+                );
+                assert_eq!(values.lists[&list].elements, [Some(bits), Some(bits)]);
+            }
+            values.lists.get_mut(&list).unwrap().pending_depth = 1;
+            assert_eq!(
+                values.sum_primitive_list(list, kind as u32),
+                Err((
+                    JettRuntimeStatusV1::INVALID_ARGUMENT,
+                    b"list.__sum: argument must be a list".as_slice()
+                ))
+            );
+            values.drop_value(list).unwrap();
+            assert!(values.is_empty());
+        }
+    }
+
+    #[test]
+    fn math_aggregates_decode_all_numeric_widths_and_borrow_their_inputs() {
+        let cases = [
+            (NativeSortKind::Int8, [128, 127], [-128.0, 127.0], -0.5),
+            (
+                NativeSortKind::Int16,
+                [32768, 32767],
+                [-32768.0, 32767.0],
+                -0.5,
+            ),
+            (
+                NativeSortKind::Int32,
+                [2147483648, 2147483647],
+                [-2147483648.0, 2147483647.0],
+                -0.5,
+            ),
+            (
+                NativeSortKind::Int64,
+                [1_u64 << 63, (1_u64 << 63) - 1],
+                [-9223372036854775808.0, 9223372036854775808.0],
+                0.0,
+            ),
+            (NativeSortKind::Uint8, [0, 255], [0.0, 255.0], 127.5),
+            (NativeSortKind::Uint16, [0, 65535], [0.0, 65535.0], 32767.5),
+            (
+                NativeSortKind::Uint32,
+                [0, 4294967295],
+                [0.0, 4294967295.0],
+                2147483647.5,
+            ),
+            (
+                NativeSortKind::Uint64,
+                [u64::MAX - 1, u64::MAX],
+                [18446744073709551616.0; 2],
+                18446744073709551616.0,
+            ),
+            (
+                NativeSortKind::Uint64,
+                [(1_u64 << 53) + 1, (1_u64 << 53) + 3],
+                [9007199254740992.0, 9007199254740996.0],
+                9007199254740994.0,
+            ),
+            (
+                NativeSortKind::Float32,
+                [
+                    u64::from((-f32::MAX).to_bits()),
+                    u64::from(f32::MAX.to_bits()),
+                ],
+                [-f64::from(f32::MAX), f64::from(f32::MAX)],
+                0.0,
+            ),
+            (
+                NativeSortKind::Float32,
+                [u64::from(0.1_f32.to_bits()); 2],
+                [f64::from(0.1_f32); 2],
+                f64::from(0.1_f32),
+            ),
+            (
+                NativeSortKind::Float32,
+                [1; 2],
+                [f64::from(f32::from_bits(1)); 2],
+                f64::from(f32::from_bits(1)),
+            ),
+            (
+                NativeSortKind::Float64,
+                [1.5_f64.to_bits(), 2.5_f64.to_bits()],
+                [1.5, 2.5],
+                2.0,
+            ),
+            (
+                NativeSortKind::Float64,
+                [f64::MAX.to_bits(); 2],
+                [f64::MAX; 2],
+                f64::MAX,
+            ),
+        ];
+        for (kind, input, decoded, expected) in cases {
+            let context = Context::new();
+            unsafe {
+                let list = jett_rt_v1_list_new(context.pointer(), 0);
+                for bits in input {
+                    assert_eq!(jett_rt_v1_list_append(context.pointer(), list, bits), list);
+                }
+                let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+                {
+                    let state = lock_unpoisoned(&lease.entry.state);
+                    let values = &state.as_ref().unwrap().values;
+                    assert_eq!(
+                        values.math_numbers(
+                            list,
+                            kind as u32,
+                            INVALID_LIST,
+                            INVALID_LIST,
+                            INVALID_LIST
+                        ),
+                        Ok(decoded.to_vec())
+                    );
+                }
+                assert_eq!(
+                    jett_rt_v1_math_average(context.pointer(), list, kind as u32).to_bits(),
+                    expected.to_bits(),
+                    "average {kind:?}"
+                );
+                assert_eq!(
+                    jett_rt_v1_math_median(context.pointer(), list, kind as u32).to_bits(),
+                    expected.to_bits(),
+                    "median {kind:?}"
+                );
+                assert_eq!(jett_rt_v1_value_status(context.pointer()), 0);
+                {
+                    let state = lock_unpoisoned(&lease.entry.state);
+                    let values = &state.as_ref().unwrap().values;
+                    assert_eq!(values.lists[&list].elements, input.map(Some));
+                    assert_eq!((values.lists_created, values.lists_destroyed), (1, 0));
+                }
+                jett_rt_v1_value_drop(context.pointer(), list);
+                assert!(
+                    lock_unpoisoned(&lease.entry.state)
+                        .as_ref()
+                        .unwrap()
+                        .values
+                        .is_empty()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn math_aggregate_float_carriers_preserve_nan_and_infinity() {
+        for kind in [NativeSortKind::Float32, NativeSortKind::Float64] {
+            for input in [
+                [f64::NAN, 1.0],
+                [f64::INFINITY, f64::INFINITY],
+                [f64::NEG_INFINITY, f64::NEG_INFINITY],
+                [f64::INFINITY, f64::NEG_INFINITY],
+            ] {
+                let context = Context::new();
+                unsafe {
+                    let list = jett_rt_v1_list_new(context.pointer(), 0);
+                    for value in input {
+                        let bits = if kind == NativeSortKind::Float32 {
+                            u64::from((value as f32).to_bits())
+                        } else {
+                            value.to_bits()
+                        };
+                        jett_rt_v1_list_append(context.pointer(), list, bits);
+                    }
+                    for result in [
+                        jett_rt_v1_math_average(context.pointer(), list, kind as u32),
+                        jett_rt_v1_math_median(context.pointer(), list, kind as u32),
+                    ] {
+                        if input[0] == input[1] {
+                            assert_eq!(result, input[0]);
+                        } else {
+                            assert!(result.is_nan());
+                        }
+                    }
+                    assert_eq!(jett_rt_v1_value_status(context.pointer()), 0);
+                    jett_rt_v1_value_drop(context.pointer(), list);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn math_aggregates_reject_malformed_or_nonnumeric_carriers_without_consuming_input() {
+        for (kind, bits) in [
+            (NativeSortKind::Int8, 256),
+            (NativeSortKind::Uint8, 256),
+            (NativeSortKind::Int16, 65536),
+            (NativeSortKind::Uint16, 65536),
+            (NativeSortKind::Int32, u64::from(u32::MAX) + 1),
+            (NativeSortKind::Uint32, u64::from(u32::MAX) + 1),
+            (NativeSortKind::Float32, u64::from(u32::MAX) + 1),
+            (NativeSortKind::Bool, 0),
+            (NativeSortKind::String, 0),
+        ] {
+            let mut values = NativeValues::default();
+            let list = values.new_list(false).unwrap();
+            values
+                .lists
+                .get_mut(&list)
+                .unwrap()
+                .elements
+                .push(Some(bits));
+            assert_eq!(
+                values.math_numbers(list, kind as u32, INVALID_LIST, INVALID_LIST, INVALID_LIST),
+                Err(INVALID_LIST)
+            );
+            assert_eq!(values.lists[&list].elements, [Some(bits)]);
+            assert_eq!(
+                values.math_numbers(list, u32::MAX, INVALID_LIST, INVALID_LIST, INVALID_LIST),
+                Err(INVALID_LIST)
+            );
+            values.drop_value(list).unwrap();
+            assert!(values.is_empty());
+        }
+        let mut values = NativeValues::default();
+        let owned = values.new_list(true).unwrap();
+        let text = values.insert("held".into()).unwrap();
+        values
+            .lists
+            .get_mut(&owned)
+            .unwrap()
+            .elements
+            .push(Some(text));
+        assert_eq!(
+            values.math_numbers(
+                owned,
+                NativeSortKind::Int8 as u32,
+                INVALID_LIST,
+                INVALID_LIST,
+                INVALID_LIST
+            ),
+            Err(INVALID_LIST)
+        );
+        assert_eq!(values.strings[&text].references, 1);
+        values.drop_value(owned).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn empty_numeric_aggregates_report_their_checked_runtime_errors() {
+        for (operation, expected) in [
+            (
+                jett_rt_v1_math_average
+                    as unsafe extern "C" fn(*const JettRuntimeContextV1, u64, u32) -> f64,
+                b"math.average: list is empty".as_slice(),
+            ),
+            (
+                jett_rt_v1_math_median
+                    as unsafe extern "C" fn(*const JettRuntimeContextV1, u64, u32) -> f64,
+                b"math.median: list is empty".as_slice(),
+            ),
+        ] {
+            for raw_kind in 0..10 {
+                let context = Context::new();
+                unsafe {
+                    let list = jett_rt_v1_list_new(context.pointer(), 0);
+                    assert_eq!(operation(context.pointer(), list, raw_kind), 0.0);
+                    let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+                    let state = lock_unpoisoned(&lease.entry.state);
+                    assert_eq!(
+                        state.as_ref().unwrap().values.failure,
+                        Some((JettRuntimeStatusV1::INVALID_ARGUMENT, expected))
+                    );
+                    drop(state);
+                    jett_rt_v1_value_drop(context.pointer(), list);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn math_aggregates_preserve_pending_failure_precedence_and_borrowed_input() {
+        for (operation, element_error, list_error) in [
+            (
+                jett_rt_v1_math_average
+                    as unsafe extern "C" fn(*const JettRuntimeContextV1, u64, u32) -> f64,
+                b"math.average expects a list of numeric values".as_slice(),
+                b"math.__average expects a list of numbers".as_slice(),
+            ),
+            (
+                jett_rt_v1_math_median
+                    as unsafe extern "C" fn(*const JettRuntimeContextV1, u64, u32) -> f64,
+                b"math.median expects a list of numeric values".as_slice(),
+                b"math.__median expects a list of numbers".as_slice(),
+            ),
+        ] {
+            for raw_kind in 0..10 {
+                for outer_pending in [false, true] {
+                    for depth in [1, 2] {
+                        let context = Context::new();
+                        unsafe {
+                            let list = jett_rt_v1_list_new(context.pointer(), 0);
+                            jett_rt_v1_list_append(context.pointer(), list, 1);
+                            let lease =
+                                acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+                            {
+                                let mut state = lock_unpoisoned(&lease.entry.state);
+                                let row =
+                                    state.as_mut().unwrap().values.lists.get_mut(&list).unwrap();
+                                row.element_pending_depths.insert(0, depth);
+                                if outer_pending {
+                                    row.pending_depth = depth;
+                                }
+                            }
+                            assert_eq!(operation(context.pointer(), list, raw_kind), 0.0);
+                            {
+                                let state = lock_unpoisoned(&lease.entry.state);
+                                let values = &state.as_ref().unwrap().values;
+                                assert_eq!(
+                                    values.failure,
+                                    Some((
+                                        JettRuntimeStatusV1::INVALID_ARGUMENT,
+                                        if outer_pending {
+                                            list_error
+                                        } else {
+                                            element_error
+                                        }
+                                    ))
+                                );
+                                assert_eq!(values.lists[&list].elements, [Some(1)]);
+                                assert_eq!(
+                                    values.lists[&list].element_pending_depths.get(&0),
+                                    Some(&depth)
+                                );
+                            }
+                            jett_rt_v1_value_drop(context.pointer(), list);
+                            assert!(
+                                lock_unpoisoned(&lease.entry.state)
+                                    .as_ref()
+                                    .unwrap()
+                                    .values
+                                    .is_empty()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn consuming_list_elements_transfer_identity_and_drop_only_initialized_slots() {
+        let context = Context::new();
+        unsafe {
+            let first = jett_rt_v1_bytes_new(context.pointer());
+            let second = jett_rt_v1_bytes_new(context.pointer());
+            let list = jett_rt_v1_list_new(context.pointer(), 1);
+            jett_rt_v1_list_append(context.pointer(), list, first);
+            jett_rt_v1_list_append(context.pointer(), list, second);
+            assert_eq!(
+                jett_rt_v1_list_element_take(context.pointer(), list, 0),
+                first
+            );
+            // A repeated take fails before changing either remaining owner.
+            assert_eq!(jett_rt_v1_list_element_take(context.pointer(), list, 0), 0);
+            assert_ne!(jett_rt_v1_value_status(context.pointer()), 0);
+            jett_rt_v1_value_drop(context.pointer(), list);
+            jett_rt_v1_value_drop(context.pointer(), first);
+            let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!((values.bytes_created, values.bytes_destroyed), (2, 2));
+            assert_eq!((values.lists_created, values.lists_destroyed), (1, 1));
+            assert!(!values.cleanup_failed);
+            assert!(values.is_empty());
+        }
+    }
+    #[test]
+    fn partial_nested_list_clone_allocation_failure_releases_cloned_prefix() {
+        let context = Context::new();
+        unsafe {
+            let a = jett_rt_v1_bytes_new(context.pointer());
+            let b = jett_rt_v1_bytes_new(context.pointer());
+            let inner = jett_rt_v1_list_new(context.pointer(), 1);
+            jett_rt_v1_list_append(context.pointer(), inner, a);
+            jett_rt_v1_list_append(context.pointer(), inner, b);
+            let outer = jett_rt_v1_list_new(context.pointer(), 1);
+            jett_rt_v1_list_append(context.pointer(), outer, inner);
+            let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+            {
+                let mut state = lock_unpoisoned(&lease.entry.state);
+                // Clone first byte, fail allocation of second byte. The source
+                // lists and both originals must remain owned by the caller.
+                state.as_mut().unwrap().values.allocation_budget = Some(1);
+            }
+            assert_eq!(jett_rt_v1_list_clone(context.pointer(), outer), 0);
+            assert_eq!(
+                jett_rt_v1_value_status(context.pointer()),
+                JettRuntimeStatusV1::RESOURCE_EXHAUSTED.code()
+            );
+            {
+                let state = lock_unpoisoned(&lease.entry.state);
+                let values = &state.as_ref().unwrap().values;
+                assert_eq!((values.bytes_created, values.bytes_destroyed), (3, 1));
+                assert!(values.bytes.contains_key(&a) && values.bytes.contains_key(&b));
+                assert_eq!((values.lists_created, values.lists_destroyed), (2, 0));
+            }
+            jett_rt_v1_value_drop(context.pointer(), outer);
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert!(values.is_empty());
+            assert!(!values.cleanup_failed);
+        }
+    }
+    #[test]
+    fn string_segmentation_allocation_failure_cleans_partial_owned_list() {
+        let context = Context::new();
+        let text = context.text("abc");
+        let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+        {
+            let mut state = lock_unpoisoned(&lease.entry.state);
+            state.as_mut().unwrap().values.allocation_budget = Some(2);
+        }
+        unsafe {
+            assert_eq!(jett_rt_v1_string_chars(context.pointer(), text), 0);
+            assert_eq!(
+                jett_rt_v1_value_status(context.pointer()),
+                JettRuntimeStatusV1::RESOURCE_EXHAUSTED.code()
+            );
+            {
+                let state = lock_unpoisoned(&lease.entry.state);
+                let values = &state.as_ref().unwrap().values;
+                assert_eq!((values.lists_created, values.lists_destroyed), (1, 1));
+                assert_eq!(values.strings.len(), 1);
+                assert_eq!(values.text(text).unwrap(), "abc");
+            }
+            jett_rt_v1_value_drop(context.pointer(), text);
+        }
+    }
+    #[test]
+    fn structs_borrow_fields_and_clone_nested_owners_with_exact_destruction() {
+        let context = Context::new();
+        unsafe {
+            let p = context.pointer();
+            let text = context.text("shared");
+            let bytes = jett_rt_v1_bytes_from_string(p, text);
+            let inner = jett_rt_v1_struct_new(p, 3);
+            assert_eq!(jett_rt_v1_struct_init(p, inner, 2, bytes, 1), 0);
+            assert_eq!(jett_rt_v1_struct_init(p, inner, 0, text, 1), 0);
+            assert_eq!(jett_rt_v1_struct_init(p, inner, 1, u64::MAX, 0), 0);
+            let outer = jett_rt_v1_struct_new(p, 1);
+            jett_rt_v1_struct_init(p, outer, 0, inner, 1);
+            let copy = jett_rt_v1_struct_clone(p, outer);
+            let copied_inner = jett_rt_v1_struct_field(p, copy, 0);
+            assert_ne!(inner, copied_inner);
+            assert_eq!(jett_rt_v1_struct_field(p, inner, 2), bytes);
+            assert_ne!(jett_rt_v1_struct_field(p, copied_inner, 2), bytes);
+            assert_eq!(jett_rt_v1_struct_field(p, copied_inner, 0), text);
+            assert_eq!(jett_rt_v1_struct_field(p, copied_inner, 1), u64::MAX);
+            jett_rt_v1_value_drop(p, outer);
+            assert_ne!(jett_rt_v1_struct_field(p, copied_inner, 2), 0);
+            jett_rt_v1_value_drop(p, copy);
+            let lease = acquire_context(context_key(p).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!((values.structs_created, values.structs_destroyed), (4, 4));
+            assert_eq!((values.bytes_created, values.bytes_destroyed), (2, 2));
+            assert!(values.is_empty());
+        }
+    }
+    #[test]
+    fn actors_replace_owned_state_and_release_it_with_the_context() {
+        let context = Context::new();
+        unsafe {
+            let p = context.pointer();
+            let initial = context.text("initial");
+            let actor = jett_rt_v1_struct_new(p, 1);
+            assert_eq!(jett_rt_v1_struct_init(p, actor, 0, initial, 1), 0);
+            assert_eq!(jett_rt_v1_actor_register(p, actor), actor);
+            let updated = context.text("updated");
+            assert_eq!(jett_rt_v1_actor_replace(p, actor, 0, updated, 1), 0);
+            assert_eq!(jett_rt_v1_struct_field(p, actor, 0), updated);
+            assert_eq!(context.count(), 1, "old actor state must be released");
+            assert_eq!(jett_rt_v1_value_status(p), 0);
+        }
+        context.destroy(JettRuntimeStatusV1::OK);
+    }
+    #[test]
+    fn reflected_field_validation_checks_owner_member_name_and_type() {
+        fn metadata(
+            values: &mut NativeValues,
+            index: u64,
+            owner: &str,
+            member: Option<&str>,
+            name: &str,
+            ty: &str,
+        ) -> u64 {
+            let owner = values.insert(owner.to_owned()).unwrap();
+            let member = match member {
+                Some(member) => {
+                    let text = values.insert(member.to_owned()).unwrap();
+                    values.sum(SUM_SUCCESS, text, true).unwrap()
+                }
+                None => values.sum(SUM_FAILURE, 0, false).unwrap(),
+            };
+            let name = values.insert(name.to_owned()).unwrap();
+            let ty = values.insert(ty.to_owned()).unwrap();
+            let record = values.new_struct(5).unwrap();
+            values.structs.get_mut(&record).unwrap().fields = vec![
+                Some(NativeField {
+                    bits: index,
+                    owned: false,
+                    pending_depth: 0,
+                }),
+                Some(NativeField {
+                    bits: owner,
+                    owned: true,
+                    pending_depth: 0,
+                }),
+                Some(NativeField {
+                    bits: member,
+                    owned: true,
+                    pending_depth: 0,
+                }),
+                Some(NativeField {
+                    bits: name,
+                    owned: true,
+                    pending_depth: 0,
+                }),
+                Some(NativeField {
+                    bits: ty,
+                    owned: true,
+                    pending_depth: 0,
+                }),
+            ];
+            record
+        }
+
+        let mut values = NativeValues::default();
+        let expected = metadata(&mut values, 2, "Shape", Some("circle"), "radius", "float64");
+        let matching = metadata(&mut values, 2, "Shape", Some("circle"), "radius", "float64");
+        let wrong_owner = metadata(&mut values, 2, "Other", Some("circle"), "radius", "float64");
+        let wrong_member = metadata(&mut values, 2, "Shape", Some("square"), "radius", "float64");
+        let wrong_name = metadata(&mut values, 2, "Shape", Some("circle"), "size", "float64");
+        let wrong_type = metadata(&mut values, 2, "Shape", Some("circle"), "radius", "int64");
+        let wrong_index = metadata(&mut values, 1, "Shape", Some("circle"), "radius", "float64");
+        assert_eq!(
+            values.reflected_field_index(
+                matching,
+                expected,
+                INVALID_REFLECTED_VARIANT_FIELD,
+                "type.variant_field_value"
+            ),
+            Ok(2)
+        );
+        for candidate in [
+            wrong_owner,
+            wrong_member,
+            wrong_name,
+            wrong_type,
+            wrong_index,
+        ] {
+            assert_eq!(
+                values.reflected_field_index(
+                    candidate,
+                    expected,
+                    INVALID_REFLECTED_VARIANT_FIELD,
+                    "type.variant_field_value"
+                ),
+                Err(INVALID_REFLECTED_VARIANT_FIELD)
+            );
+        }
+        for record in [
+            expected,
+            matching,
+            wrong_owner,
+            wrong_member,
+            wrong_name,
+            wrong_type,
+            wrong_index,
+        ] {
+            values.drop_value(record).unwrap();
+        }
+        assert!(values.is_empty());
+    }
+    #[test]
+    fn struct_take_transfers_a_field_without_dropping_it_with_the_record() {
+        let context = Context::new();
+        unsafe {
+            let p = context.pointer();
+            let text = context.text("payload");
+            let record = jett_rt_v1_struct_new(p, 2);
+            assert_eq!(jett_rt_v1_struct_init(p, record, 0, 7, 0), 0);
+            assert_eq!(jett_rt_v1_struct_init(p, record, 1, text, 1), 0);
+            assert_eq!(jett_rt_v1_struct_take(p, record, 1), text);
+            jett_rt_v1_value_drop(p, record);
+            let lease = acquire_context(context_key(p).unwrap()).unwrap();
+            {
+                let state = lock_unpoisoned(&lease.entry.state);
+                let values = &state.as_ref().unwrap().values;
+                assert_eq!(values.text(text).unwrap(), "payload");
+                assert_eq!((values.structs_created, values.structs_destroyed), (1, 1));
+            }
+            jett_rt_v1_value_drop(p, text);
+            let state = lock_unpoisoned(&lease.entry.state);
+            assert!(state.as_ref().unwrap().values.is_empty());
+        }
+    }
+    #[test]
+    fn structs_partial_clone_rolls_back_each_allocation_boundary() {
+        for budget in 0..4 {
+            let context = Context::new();
+            unsafe {
+                let p = context.pointer();
+                let outer = jett_rt_v1_struct_new(p, 2);
+                let child = jett_rt_v1_struct_new(p, 1);
+                let a = jett_rt_v1_bytes_new(p);
+                let b = jett_rt_v1_bytes_new(p);
+                jett_rt_v1_struct_init(p, child, 0, a, 1);
+                jett_rt_v1_struct_init(p, outer, 0, child, 1);
+                jett_rt_v1_struct_init(p, outer, 1, b, 1);
+                let lease = acquire_context(context_key(p).unwrap()).unwrap();
+                lock_unpoisoned(&lease.entry.state)
+                    .as_mut()
+                    .unwrap()
+                    .values
+                    .allocation_budget = Some(budget);
+                assert_eq!(jett_rt_v1_struct_clone(p, outer), 0);
+                assert_eq!(
+                    jett_rt_v1_value_status(p),
+                    JettRuntimeStatusV1::RESOURCE_EXHAUSTED.code()
+                );
+                {
+                    let state = lock_unpoisoned(&lease.entry.state);
+                    let values = &state.as_ref().unwrap().values;
+                    assert_eq!(values.structs.len(), 2);
+                    assert_eq!(values.bytes.len(), 2);
+                    assert!(values.bytes.contains_key(&a) && values.bytes.contains_key(&b));
+                }
+                jett_rt_v1_value_drop(p, outer);
+                let state = lock_unpoisoned(&lease.entry.state);
+                assert!(state.as_ref().unwrap().values.is_empty());
+                assert!(!state.as_ref().unwrap().values.cleanup_failed);
+            }
+        }
+    }
+    #[test]
+    fn structs_invalid_projection_and_double_drop_preserve_first_failure() {
+        let context = Context::new();
+        unsafe {
+            let p = context.pointer();
+            let value = jett_rt_v1_struct_new(p, 2);
+            let bytes = jett_rt_v1_bytes_new(p);
+            jett_rt_v1_struct_init(p, value, 0, bytes, 1);
+            assert_eq!(jett_rt_v1_struct_field(p, value, 1), 0);
+            assert_ne!(jett_rt_v1_value_status(p), 0);
+            jett_rt_v1_value_drop(p, value);
+            jett_rt_v1_value_drop(p, value);
+            let lease = acquire_context(context_key(p).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!(values.failure, Some(INVALID_STRUCT));
+            assert!(values.cleanup_failed);
+            assert!(values.is_empty());
+            assert_eq!((values.structs_created, values.structs_destroyed), (1, 1));
+        }
+        context.destroy(JettRuntimeStatusV1::INVALID_ARGUMENT);
+    }
+    #[test]
+    fn structs_empty_record_is_an_owner_and_leak_fails_destruction() {
+        let context = Context::new();
+        unsafe {
+            assert_ne!(jett_rt_v1_struct_new(context.pointer(), 0), 0);
+        }
+        context.destroy(JettRuntimeStatusV1::INVALID_ARGUMENT);
+    }
+    #[test]
+    fn machine_state_guard_fails_before_projecting_a_wrong_payload() {
+        let context = Context::new();
+        unsafe {
+            let pointer = context.pointer();
+            let value = jett_rt_v1_struct_new(pointer, 1);
+            assert_eq!(jett_rt_v1_struct_init(pointer, value, 0, 1, 0), 0);
+            assert_eq!(jett_rt_v1_machine_expect_state(pointer, value, 1), 0);
+            assert_ne!(jett_rt_v1_machine_expect_state(pointer, value, 2), 0);
+            assert_ne!(jett_rt_v1_value_status(pointer), 0);
+            jett_rt_v1_value_drop(pointer, value);
+            let lease = acquire_context(context_key(pointer).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!(
+                values.failure,
+                Some((
+                    JettRuntimeStatusV1::INVALID_ARGUMENT,
+                    b"machine state does not match narrowed type".as_slice()
+                ))
+            );
+            assert!(values.is_empty());
+        }
+        context.destroy(JettRuntimeStatusV1::OK);
+    }
+    #[test]
+    fn bitfield_decode_rolls_back_each_owned_allocation() {
+        fn name(descriptor: &mut Vec<u8>, value: &str) {
+            descriptor.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            descriptor.extend_from_slice(value.as_bytes());
+        }
+        let mut descriptor = b"JB\x01\x01".to_vec();
+        name(&mut descriptor, "app.Packet");
+        descriptor.extend_from_slice(&3_u32.to_le_bytes());
+        descriptor.extend_from_slice(&[0, 8]);
+        name(&mut descriptor, "kind");
+        descriptor.extend_from_slice(&[1, 8]);
+        name(&mut descriptor, "protocol");
+        name(&mut descriptor, "app.Protocol");
+        descriptor.extend_from_slice(&2_u32.to_le_bytes());
+        descriptor.extend_from_slice(&1_i64.to_le_bytes());
+        descriptor.extend_from_slice(&2_i64.to_le_bytes());
+        descriptor.extend_from_slice(&[2, 0]);
+        name(&mut descriptor, "payload");
+
+        for budget in 0..4 {
+            let mut values = NativeValues::default();
+            let input = values.insert_bytes(vec![5, 2, 7, 9]).unwrap();
+            values.allocation_budget = Some(budget);
+            assert_eq!(values.decode_bitfield(input, &descriptor), Err(EXHAUSTED));
+            assert_eq!(values.bytes(input).unwrap(), &[5, 2, 7, 9]);
+            assert_eq!(values.structs_created, values.structs_destroyed);
+            assert_eq!(values.lists_created, values.lists_destroyed);
+            assert_eq!(values.sums_created, values.sums_destroyed);
+            values.drop_value(input).unwrap();
+            assert!(values.is_empty());
+        }
+        for budget in 0..2 {
+            let mut values = NativeValues::default();
+            let input = values.insert_bytes(vec![5]).unwrap();
+            values.allocation_budget = Some(budget);
+            assert_eq!(values.decode_bitfield(input, &descriptor), Err(EXHAUSTED));
+            assert!(values.strings.is_empty());
+            values.drop_value(input).unwrap();
+            assert!(values.is_empty());
+        }
+    }
+    #[test]
+    fn list_comparison_decodes_every_primitive_carrier_and_the_unsupported_sentinel() {
+        for kind in [
+            NativeSortKind::Int8,
+            NativeSortKind::Int16,
+            NativeSortKind::Int32,
+            NativeSortKind::Int64,
+            NativeSortKind::Uint8,
+            NativeSortKind::Uint16,
+            NativeSortKind::Uint32,
+            NativeSortKind::Uint64,
+            NativeSortKind::Float32,
+            NativeSortKind::Float64,
+            NativeSortKind::Bool,
+            NativeSortKind::String,
+        ] {
+            assert_eq!(
+                NativeSortKind::from_comparison_raw(kind as u32),
+                Ok(Some(kind))
+            );
+        }
+        assert_eq!(NativeSortKind::from_comparison_raw(u32::MAX), Ok(None));
+        for invalid in [12, 255, u32::MAX - 1] {
+            assert_eq!(
+                NativeSortKind::from_comparison_raw(invalid),
+                Err(INVALID_LIST)
+            );
+        }
+    }
+    #[test]
+    fn list_sort_orders_all_primitive_widths_and_preserves_string_owners() {
+        let cases = [
+            (NativeSortKind::Int8, [255, 2, 253], [253, 255, 2]),
+            (NativeSortKind::Int16, [65535, 2, 65533], [65533, 65535, 2]),
+            (
+                NativeSortKind::Int32,
+                [u32::MAX as u64, 2, (u32::MAX - 2) as u64],
+                [(u32::MAX - 2) as u64, u32::MAX as u64, 2],
+            ),
+            (
+                NativeSortKind::Int64,
+                [u64::MAX, 2, u64::MAX - 2],
+                [u64::MAX - 2, u64::MAX, 2],
+            ),
+            (NativeSortKind::Uint8, [255, 2, 1], [1, 2, 255]),
+            (NativeSortKind::Uint16, [65535, 2, 1], [1, 2, 65535]),
+            (
+                NativeSortKind::Uint32,
+                [u32::MAX as u64, 2, 1],
+                [1, 2, u32::MAX as u64],
+            ),
+            (NativeSortKind::Uint64, [u64::MAX, 2, 1], [1, 2, u64::MAX]),
+            (
+                NativeSortKind::Float32,
+                [1.5_f32.to_bits() as u64, (-2.25_f32).to_bits() as u64, 0],
+                [(-2.25_f32).to_bits() as u64, 0, 1.5_f32.to_bits() as u64],
+            ),
+            (
+                NativeSortKind::Float64,
+                [1.5_f64.to_bits(), (-2.25_f64).to_bits(), 0],
+                [(-2.25_f64).to_bits(), 0, 1.5_f64.to_bits()],
+            ),
+            (NativeSortKind::Bool, [1, 0, 1], [0, 1, 1]),
+        ];
+        for (kind, input, expected) in cases {
+            let mut values = NativeValues::default();
+            let list = values.new_list(false).unwrap();
+            values.lists.get_mut(&list).unwrap().elements = input.map(Some).to_vec();
+            assert_eq!(values.list_is_sorted(list, kind as u32), Ok(false));
+            assert_eq!(values.sort_list(list, kind as u32), Ok(list));
+            assert_eq!(values.lists[&list].elements, expected.map(Some));
+            assert_eq!(values.list_is_sorted(list, kind as u32), Ok(true));
+
+            let outer = values.new_list(true).unwrap();
+            for bits in input {
+                let row = values.new_list(false).unwrap();
+                values
+                    .lists
+                    .get_mut(&row)
+                    .unwrap()
+                    .elements
+                    .push(Some(bits));
+                values
+                    .lists
+                    .get_mut(&outer)
+                    .unwrap()
+                    .elements
+                    .push(Some(row));
+            }
+            assert_eq!(values.sort_list_by_index(outer, 0, kind as u32), Ok(outer));
+            let ordered_keys = values.lists[&outer]
+                .elements
+                .iter()
+                .map(|row| values.lists[&row.unwrap()].elements[0].unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(ordered_keys, expected);
+            values.drop_value(outer).unwrap();
+            values.drop_value(list).unwrap();
+            assert!(values.is_empty());
+        }
+
+        let mut values = NativeValues::default();
+        let zebra = values.insert("zebra".into()).unwrap();
+        let apple = values.insert("apple".into()).unwrap();
+        let eclair = values.insert("ÃƒÂ©clair".into()).unwrap();
+        let list = values.new_list(true).unwrap();
+        values.lists.get_mut(&list).unwrap().elements =
+            vec![Some(zebra), Some(eclair), Some(apple)];
+        assert_eq!(
+            values.list_is_sorted(list, NativeSortKind::String as u32),
+            Ok(false)
+        );
+        assert_eq!(
+            values.sort_list(list, NativeSortKind::String as u32),
+            Ok(list)
+        );
+        assert_eq!(
+            values.lists[&list].elements,
+            [Some(apple), Some(zebra), Some(eclair)]
+        );
+        assert_eq!(
+            values.list_is_sorted(list, NativeSortKind::String as u32),
+            Ok(true)
+        );
+        values.drop_value(list).unwrap();
+        assert!(values.is_empty());
+    }
+    #[test]
+    fn float_list_sortedness_uses_ieee_comparisons_and_skips_pending_pairs() {
+        let cases: &[(&[f64], bool)] = &[
+            (&[], true),
+            (&[f64::NAN], true),
+            (&[1.0], true),
+            (&[f64::NAN, 1.0], false),
+            (&[1.0, f64::NAN], false),
+            (&[f64::NAN, f64::NAN], false),
+            (&[1.0, 2.0], true),
+            (&[2.0, 1.0], false),
+            (&[-0.0, 0.0], true),
+            (&[0.0, -0.0], true),
+            (&[f64::NEG_INFINITY, 1.0], true),
+            (&[1.0, f64::INFINITY], true),
+            (&[f64::INFINITY, 1.0], false),
+            (&[1.0, f64::NEG_INFINITY], false),
+            (&[f64::INFINITY, f64::INFINITY], true),
+        ];
+        for kind in [NativeSortKind::Float32, NativeSortKind::Float64] {
+            for &(input, expected) in cases {
+                let mut values = NativeValues::default();
+                let bits = input
+                    .iter()
+                    .map(|value| {
+                        if kind == NativeSortKind::Float32 {
+                            u64::from((*value as f32).to_bits())
+                        } else {
+                            value.to_bits()
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let list = values.new_list(false).unwrap();
+                values.lists.get_mut(&list).unwrap().elements =
+                    bits.iter().copied().map(Some).collect();
+                assert_eq!(values.list_is_sorted(list, kind as u32), Ok(expected));
+                if input.len() == 2 {
+                    for index in 0..2 {
+                        for depth in [1, 2] {
+                            values
+                                .lists
+                                .get_mut(&list)
+                                .unwrap()
+                                .element_pending_depths
+                                .insert(index, depth);
+                            assert_eq!(values.list_is_sorted(list, kind as u32), Ok(true));
+                            values
+                                .lists
+                                .get_mut(&list)
+                                .unwrap()
+                                .element_pending_depths
+                                .clear();
+                            assert_eq!(values.list_is_sorted(list, kind as u32), Ok(expected));
+                        }
+                    }
+                    if input.iter().any(|value| value.is_nan()) {
+                        assert_eq!(values.sort_list(list, kind as u32), Ok(list));
+                        assert_eq!(
+                            values.lists[&list].elements,
+                            bits.iter().copied().map(Some).collect::<Vec<_>>()
+                        );
+                        let outer = values.new_list(true).unwrap();
+                        let mut rows = Vec::new();
+                        for bits in &bits {
+                            let row = values.new_list(false).unwrap();
+                            values
+                                .lists
+                                .get_mut(&row)
+                                .unwrap()
+                                .elements
+                                .push(Some(*bits));
+                            values
+                                .lists
+                                .get_mut(&outer)
+                                .unwrap()
+                                .elements
+                                .push(Some(row));
+                            rows.push(Some(row));
+                        }
+                        assert_eq!(values.sort_list_by_index(outer, 0, kind as u32), Ok(outer));
+                        assert_eq!(values.lists[&outer].elements, rows);
+                        values.drop_value(outer).unwrap();
+                    }
+                }
+                values.drop_value(list).unwrap();
+                assert!(values.is_empty());
+            }
+        }
+    }
+    #[test]
+    fn list_sort_preserves_pending_string_order_and_owners_until_joined() {
+        for (left_depth, right_depth) in [(1, 0), (2, 0), (0, 1), (0, 2), (1, 2), (2, 1)] {
+            let mut values = NativeValues::default();
+            let left = values.insert_pending("b".into(), left_depth).unwrap();
+            let right = values.insert_pending("a".into(), right_depth).unwrap();
+            let list = values.new_list(true).unwrap();
+            values.lists.get_mut(&list).unwrap().elements = vec![Some(left), Some(right)];
+
+            assert_eq!(
+                values.list_is_sorted(list, NativeSortKind::String as u32),
+                Ok(true)
+            );
+            assert_eq!(
+                values.sort_list(list, NativeSortKind::String as u32),
+                Ok(list)
+            );
+            assert_eq!(values.lists[&list].elements, [Some(left), Some(right)]);
+            assert_eq!(values.strings.len(), 2);
+            for (handle, depth, text) in [(left, left_depth, "b"), (right, right_depth, "a")] {
+                let string = &values.strings[&handle];
+                assert_eq!(string.pending_depth, depth);
+                assert_eq!(string.references, 1);
+                assert_eq!(string.text, text);
+            }
+
+            let mut ready = [left, right];
+            for (index, depth) in [left_depth, right_depth].into_iter().enumerate() {
+                for remaining in (0..depth).rev() {
+                    let old = ready[index];
+                    let joined = values.join_string(old).unwrap();
+                    values.lists.get_mut(&list).unwrap().elements[index] = Some(joined);
+                    values.release(old).unwrap();
+                    ready[index] = joined;
+                    assert_eq!(values.strings[&joined].pending_depth, remaining);
+                    assert_eq!(values.strings[&joined].references, 1);
+                    assert_eq!(values.strings.len(), 2);
+                }
+            }
+            assert_eq!(
+                values.list_is_sorted(list, NativeSortKind::String as u32),
+                Ok(false)
+            );
+            assert_eq!(
+                values.sort_list(list, NativeSortKind::String as u32),
+                Ok(list)
+            );
+            assert_eq!(
+                values.lists[&list].elements,
+                [Some(ready[1]), Some(ready[0])]
+            );
+            assert_eq!(
+                values.list_is_sorted(list, NativeSortKind::String as u32),
+                Ok(true)
+            );
+            assert_eq!(values.strings.len(), 2);
+            for (handle, text) in [(ready[0], "b"), (ready[1], "a")] {
+                let string = &values.strings[&handle];
+                assert_eq!(string.pending_depth, 0);
+                assert_eq!(string.references, 1);
+                assert_eq!(string.text, text);
+            }
+            values.drop_value(list).unwrap();
+            assert_eq!((values.lists_created, values.lists_destroyed), (1, 1));
+            assert!(values.is_empty());
+        }
+    }
+    #[test]
+    fn indexed_list_sort_preserves_pending_rows_and_keys_until_joined() {
+        for kind in [NativeSortKind::Int64, NativeSortKind::String] {
+            for pending_rows in [false, true] {
+                for depths in [[1, 0], [2, 0], [0, 1], [0, 2], [1, 2], [2, 1]] {
+                    let mut values = NativeValues::default();
+                    let outer = values.new_list(true).unwrap();
+                    let mut rows = [0; 2];
+                    let mut keys = [0; 2];
+                    for (index, depth) in depths.into_iter().enumerate() {
+                        let key_depth = if pending_rows { 0 } else { depth };
+                        let bits = if kind == NativeSortKind::String {
+                            let text = if index == 0 { "b" } else { "a" };
+                            values.insert_pending(text.into(), key_depth).unwrap()
+                        } else if index == 0 {
+                            2
+                        } else {
+                            1
+                        };
+                        let row = values.new_list(kind == NativeSortKind::String).unwrap();
+                        let record = values.lists.get_mut(&row).unwrap();
+                        record.elements.push(Some(bits));
+                        if pending_rows {
+                            record.pending_depth = depth;
+                        } else if kind != NativeSortKind::String && key_depth != 0 {
+                            record.element_pending_depths.insert(0, key_depth);
+                        }
+                        rows[index] = row;
+                        keys[index] = bits;
+                        values
+                            .lists
+                            .get_mut(&outer)
+                            .unwrap()
+                            .elements
+                            .push(Some(row));
+                    }
+                    let live_strings = values.strings.len();
+                    assert_eq!(values.sort_list_by_index(outer, 0, kind as u32), Ok(outer));
+                    assert_eq!(values.lists[&outer].elements, rows.map(Some));
+                    assert_eq!(values.lists.len(), 3);
+                    assert_eq!(values.strings.len(), live_strings);
+                    for (index, row) in rows.into_iter().enumerate() {
+                        let record = &values.lists[&row];
+                        assert_eq!(record.elements, [Some(keys[index])]);
+                        assert_eq!(
+                            record.pending_depth,
+                            if pending_rows { depths[index] } else { 0 }
+                        );
+                        if kind == NativeSortKind::String {
+                            let key = &values.strings[&keys[index]];
+                            assert_eq!(
+                                key.pending_depth,
+                                if pending_rows { 0 } else { depths[index] }
+                            );
+                            assert_eq!(key.references, 1);
+                        } else {
+                            assert_eq!(
+                                record.element_pending_depths.get(&0).copied().unwrap_or(0),
+                                if pending_rows { 0 } else { depths[index] }
+                            );
+                        }
+                    }
+                    for (index, depth) in depths.into_iter().enumerate() {
+                        for remaining in (0..depth).rev() {
+                            if pending_rows {
+                                let old = rows[index];
+                                let joined = values.join_list(old).unwrap();
+                                values.lists.get_mut(&outer).unwrap().elements[index] =
+                                    Some(joined);
+                                values.drop_value(old).unwrap();
+                                rows[index] = joined;
+                                assert_eq!(values.lists[&joined].pending_depth, remaining);
+                            } else if kind == NativeSortKind::String {
+                                let old = keys[index];
+                                let joined = values.join_string(old).unwrap();
+                                values.lists.get_mut(&rows[index]).unwrap().elements[0] =
+                                    Some(joined);
+                                values.release(old).unwrap();
+                                keys[index] = joined;
+                                assert_eq!(values.strings[&joined].pending_depth, remaining);
+                            } else {
+                                // Scalar join computes the remaining depth in generated code.
+                                let row = values.lists.get_mut(&rows[index]).unwrap();
+                                if remaining == 0 {
+                                    row.element_pending_depths.remove(&0);
+                                } else {
+                                    row.element_pending_depths.insert(0, remaining);
+                                }
+                            }
+                        }
+                    }
+                    assert_eq!(values.sort_list_by_index(outer, 0, kind as u32), Ok(outer));
+                    assert_eq!(
+                        values.lists[&outer].elements,
+                        [Some(rows[1]), Some(rows[0])]
+                    );
+                    assert_eq!(values.lists.len(), 3);
+                    assert_eq!(values.strings.len(), live_strings);
+                    values.drop_value(outer).unwrap();
+                    assert!(values.is_empty());
+                }
+            }
+        }
+    }
+    #[test]
+    fn indexed_list_sort_skips_uninitialized_pending_payloads_but_rejects_ready_ones() {
+        for (kind, pending_row) in [
+            (NativeSortKind::Int64, true),
+            (NativeSortKind::String, true),
+            (NativeSortKind::Int64, false),
+        ] {
+            for depth in [1, 2] {
+                let mut values = NativeValues::default();
+                let pending = values.new_list(kind == NativeSortKind::String).unwrap();
+                let row = values.lists.get_mut(&pending).unwrap();
+                row.elements.push(None);
+                if pending_row {
+                    row.pending_depth = depth;
+                } else {
+                    row.element_pending_depths.insert(0, depth);
+                }
+                let ready = values.new_list(kind == NativeSortKind::String).unwrap();
+                let bits = if kind == NativeSortKind::String {
+                    values.insert("a".into()).unwrap()
+                } else {
+                    1
+                };
+                values
+                    .lists
+                    .get_mut(&ready)
+                    .unwrap()
+                    .elements
+                    .push(Some(bits));
+                let outer = values.new_list(true).unwrap();
+                values.lists.get_mut(&outer).unwrap().elements = vec![Some(pending), Some(ready)];
+                assert_eq!(values.sort_list_by_index(outer, 0, kind as u32), Ok(outer));
+                assert_eq!(values.lists[&outer].elements, [Some(pending), Some(ready)]);
+                assert_eq!(values.lists[&pending].elements, [None]);
+
+                let row = values.lists.get_mut(&pending).unwrap();
+                row.pending_depth = 0;
+                row.element_pending_depths.clear();
+                assert_eq!(
+                    values.sort_list_by_index(outer, 0, kind as u32),
+                    Err(INVALID_LIST)
+                );
+                assert_eq!(values.lists[&outer].elements, [Some(pending), Some(ready)]);
+                values.drop_value(outer).unwrap();
+                assert!(values.is_empty());
+            }
+        }
+    }
+    #[test]
+    fn indexed_list_sort_preserves_rows_and_missing_keys() {
+        let mut values = NativeValues::default();
+        let outer = values.new_list(true).unwrap();
+        let mut rows = Vec::new();
+        for text in ["b", "a", "a"] {
+            let key = values.insert(text.into()).unwrap();
+            let row = values.new_list(true).unwrap();
+            values.lists.get_mut(&row).unwrap().elements.push(Some(key));
+            values
+                .lists
+                .get_mut(&outer)
+                .unwrap()
+                .elements
+                .push(Some(row));
+            rows.push(row);
+        }
+        assert_eq!(
+            values.sort_list_by_index(outer, -1, NativeSortKind::String as u32),
+            Ok(outer)
+        );
+        assert_eq!(
+            values.lists[&outer].elements,
+            rows.iter().copied().map(Some).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            values.sort_list_by_index(outer, 0, NativeSortKind::String as u32),
+            Ok(outer)
+        );
+        assert_eq!(
+            values.lists[&outer].elements,
+            [Some(rows[1]), Some(rows[2]), Some(rows[0])]
+        );
+        assert!(
+            values
+                .list_is_sorted(rows[1], NativeSortKind::String as u32)
+                .unwrap()
+        );
+        values.drop_value(outer).unwrap();
+        assert!(values.is_empty());
+
+        let mut values = NativeValues::default();
+        let flags = values.new_list(false).unwrap();
+        values.lists.get_mut(&flags).unwrap().elements = vec![Some(1), Some(0)];
+        assert_eq!(
+            values.list_is_sorted(flags, NativeSortKind::Bool as u32),
+            Ok(false)
+        );
+        assert_eq!(values.list_is_sorted(flags, u32::MAX), Ok(true));
+        values.drop_value(flags).unwrap();
+        assert!(values.is_empty());
+    }
+    #[test]
+    fn set_duplicate_strings_and_clones_release_exactly_one_owner_each() {
+        let mut values = NativeValues::default();
+        let first = values.insert("ada".into()).unwrap();
+        let duplicate = values.insert("ada".into()).unwrap();
+        let set = values.new_set(1).unwrap();
+        assert_eq!(values.set_add(set, first), Ok(set));
+        assert_eq!(values.set_add(set, duplicate), Ok(set));
+        assert_eq!(values.sets[&set].elements, [Some(first)]);
+        assert!(!values.strings.contains_key(&duplicate));
+
+        let copy = values.clone_set(set).unwrap();
+        assert_eq!(values.strings[&first].references, 2);
+        assert_eq!(values.set_remove(set, first), Ok(set));
+        assert!(values.sets[&set].elements.is_empty());
+        assert_eq!(values.strings[&first].references, 1);
+        assert_eq!(values.set_position(copy, first), Ok(Some(0)));
+        values.drop_value(set).unwrap();
+        values.drop_value(copy).unwrap();
+        assert_eq!((values.sets_created, values.sets_destroyed), (2, 2));
+        assert!(values.is_empty());
+    }
+    #[test]
+    fn partial_set_iteration_drops_only_remaining_owned_elements() {
+        let mut values = NativeValues::default();
+        let first = values.insert("first".into()).unwrap();
+        let second = values.insert("second".into()).unwrap();
+        let set = values.new_set(1).unwrap();
+        values.set_add(set, first).unwrap();
+        values.set_add(set, second).unwrap();
+        let borrowed = values.retain(first).unwrap();
+        let taken = values
+            .sets
+            .get_mut(&set)
+            .unwrap()
+            .elements
+            .get_mut(0)
+            .and_then(Option::take)
+            .unwrap();
+        assert_eq!(taken, first);
+        values.drop_value(set).unwrap();
+        assert!(!values.strings.contains_key(&second));
+        assert_eq!(values.strings[&first].references, 2);
+        values.drop_value(taken).unwrap();
+        values.drop_value(borrowed).unwrap();
+        assert!(values.is_empty());
+    }
+    #[test]
+    fn map_literal_duplicates_and_insert_have_distinct_semantics_and_exact_cleanup() {
+        let mut values = NativeValues::default();
+        let map = values.new_map(1, 1).unwrap();
+        let first = values.insert("same".into()).unwrap();
+        let second = values.insert("same".into()).unwrap();
+        let old = values.insert("old".into()).unwrap();
+        let newer = values.insert("new".into()).unwrap();
+        values.map_append_literal(map, first, old).unwrap();
+        values.map_append_literal(map, second, newer).unwrap();
+        assert_eq!(values.maps[&map].entries.len(), 2);
+        assert_eq!(values.map_position(map, first), Ok(Some(0)));
+        let replacement_key = values.insert("same".into()).unwrap();
+        let replacement = values.insert("replacement".into()).unwrap();
+        values
+            .map_insert(map, replacement_key, replacement)
+            .unwrap();
+        assert!(!values.strings.contains_key(&replacement_key));
+        assert!(!values.strings.contains_key(&old));
+        let copy = values.clone_map(map).unwrap();
+        values.map_remove(map, first).unwrap();
+        assert!(values.maps[&map].entries.is_empty());
+        assert_eq!(values.map_position(copy, second), Ok(Some(0)));
+        values.drop_value(map).unwrap();
+        values.drop_value(copy).unwrap();
+        assert_eq!((values.maps_created, values.maps_destroyed), (2, 2));
+        assert!(values.is_empty());
+    }
+    #[test]
+    fn partial_map_iteration_releases_only_remaining_fields() {
+        let mut values = NativeValues::default();
+        let key = values.insert("key".into()).unwrap();
+        let value = values.insert("value".into()).unwrap();
+        let map = values.new_map(1, 1).unwrap();
+        values.map_insert(map, key, value).unwrap();
+        let taken_key = values.map_element(map, 0, true, true).unwrap();
+        values.drop_value(map).unwrap();
+        assert!(!values.strings.contains_key(&value));
+        assert!(values.strings.contains_key(&taken_key));
+        values.drop_value(taken_key).unwrap();
+        assert!(values.is_empty());
+    }
+    #[test]
+    fn csv_nested_values_roll_back_each_allocation_boundary() {
+        for budget in 0..10 {
+            let mut values = NativeValues::default();
+            values.allocation_budget = Some(budget);
+            match values.csv_rows(vec![vec!["a".into(), "b".into()], vec!["c".into()]]) {
+                Ok(rows) => {
+                    values.drop_value(rows).unwrap();
+                }
+                Err(error) => assert_eq!(error, EXHAUSTED),
+            }
+            assert!(values.is_empty(), "CSV rows leaked at budget {budget}");
+        }
+        for budget in 0..12 {
+            let mut values = NativeValues::default();
+            values.allocation_budget = Some(budget);
+            match values.csv_header_rows(vec![vec![
+                ("name".into(), "Ada".into()),
+                ("age".into(), "30".into()),
+            ]]) {
+                Ok(rows) => {
+                    values.drop_value(rows).unwrap();
+                }
+                Err(error) => assert_eq!(error, EXHAUSTED),
+            }
+            assert!(
+                values.is_empty(),
+                "CSV header rows leaked at budget {budget}"
+            );
+        }
+        let mut values = NativeValues::default();
+        let rows = values.csv_rows(vec![vec!["value".into()]]).unwrap();
+        values.allocation_budget = Some(0);
+        assert_eq!(values.owned_sum(SUM_SUCCESS, rows), Err(EXHAUSTED));
+        assert!(values.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod reflected_container_tests;
+
+#[cfg(test)]
+mod resource_companion_tests;
+
+#[cfg(test)]
+mod ordinary_borrowed_sum_tests;

@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    int64 pending = run 7
+    int64 bad = -pending
+    trace bad
+    return nothing

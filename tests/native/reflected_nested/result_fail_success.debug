@@ -1,0 +1,6 @@
+trace marker: string = positive
+trace marker: string = positive
+trace marker: string = positive
+trace record: app.Holder = app.Holder(payload: fail(9))
+trace event: app.Event = app.Event.content(fail(9))
+trace session: app.Session = app.Session@content(fail(9))

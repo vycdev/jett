@@ -1,0 +1,22 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "value:{self}"
+function report(view item: Named, extra: int64) returns string:
+    return "{Named.name(view item)}:{extra}"
+function fallback(view stdout: Stdout) returns int64:
+    Stdout.write(view stdout, "later\n")
+    return 3
+function main(stdout: Stdout) returns nothing:
+    mutable Named member = 7
+    optional[int64] absent = none
+    Stdout.write(view stdout, "before:mutable-value\n")
+    string answer = report(view member, absent handle:
+        default fallback(view stdout)
+    )
+    Stdout.write(view stdout, "{answer}\n")
+    member = 9
+    Stdout.write(view stdout, "owner:{Named.name(view member)}\n")
+    return nothing

@@ -1,0 +1,421 @@
+use std::collections::{HashMap, HashSet};
+
+use jett_runtime::native_abi::values::NativeDebugTag;
+use jett_types::{Type, TypeId, TypeInterner};
+
+use crate::values::list_sort_kind;
+
+pub(super) enum DebugNode {
+    Primitive(u32),
+    Nothing,
+    Bytes,
+    List(u32),
+    Set(u32),
+    Map(u32, u32),
+    Optional(u32),
+    Result(u32, u32),
+    Record(String, Vec<(String, u32)>),
+    Enum(String, Vec<(String, Vec<u32>)>),
+    Machine(String, Vec<(String, Vec<u32>)>),
+    Capability(String),
+    Function,
+    Actor,
+    TypeConstruction,
+    Redacted,
+    Interface,
+    Uninhabited,
+    Alias(u32),
+}
+
+pub(super) struct DebugGraph<'a> {
+    pub(super) types: &'a TypeInterner,
+    pub(super) equality_methods: Option<&'a HashMap<TypeId, jett_hir::FunctionId>>,
+    pub(super) custom: Vec<(u32, jett_hir::FunctionId)>,
+    pub(super) indexes: HashMap<TypeId, u32>,
+    pub(super) nodes: Vec<Option<DebugNode>>,
+}
+
+impl DebugGraph<'_> {
+    pub(super) fn node(&mut self, ty: TypeId) -> Option<u32> {
+        if let Some(&index) = self.indexes.get(&ty) {
+            return Some(index);
+        }
+        let index = u32::try_from(self.nodes.len()).ok()?;
+        self.indexes.insert(ty, index);
+        self.nodes.push(None);
+        let node = if let Some(kind) = list_sort_kind(self.types, ty) {
+            DebugNode::Primitive(kind as u32)
+        } else {
+            match self.types.resolve(ty).clone() {
+                Type::Nothing => DebugNode::Nothing,
+                Type::Bytes => DebugNode::Bytes,
+                Type::List(element) => DebugNode::List(self.node(element)?),
+                Type::Set(element) => DebugNode::Set(self.node(element)?),
+                Type::Map(key, value) => DebugNode::Map(self.node(key)?, self.node(value)?),
+                Type::Optional(element) => DebugNode::Optional(self.node(element)?),
+                Type::Result(ok, error) => DebugNode::Result(self.node(ok)?, self.node(error)?),
+                Type::Struct(id) => {
+                    let definition = self.types.resolve_struct(id).clone();
+                    let mut fields = Vec::with_capacity(definition.fields.len());
+                    if let Some(methods) = self.equality_methods {
+                        self.custom.push((index, *methods.get(&ty)?));
+                    } else {
+                        for (name, ty) in definition.fields {
+                            fields.push((name, self.node(ty)?));
+                        }
+                    }
+                    DebugNode::Record(value_type_name(&definition.name), fields)
+                }
+                Type::Bitfield(id) => {
+                    let definition = self.types.resolve_bitfield(id).clone();
+                    let mut fields = Vec::with_capacity(definition.fields.len());
+                    for field in definition.fields {
+                        fields.push((field.name, self.node(field.ty)?));
+                    }
+                    DebugNode::Record(value_type_name(&definition.name), fields)
+                }
+                Type::Enum(id) => {
+                    let definition = self.types.resolve_enum(id).clone();
+                    let mut variants = Vec::with_capacity(definition.variants.len());
+                    for variant in definition.variants {
+                        let mut fields = Vec::with_capacity(variant.fields.len());
+                        for (_, ty) in variant.fields {
+                            fields.push(self.node(ty)?);
+                        }
+                        variants.push((variant.name, fields));
+                    }
+                    DebugNode::Enum(value_type_name(&definition.name), variants)
+                }
+                Type::Machine(id) | Type::MachineState { machine: id, .. } => {
+                    let definition = self.types.resolve_machine(id).clone();
+                    let mut states = Vec::with_capacity(definition.states.len());
+                    for state in definition.states {
+                        let mut fields = Vec::with_capacity(state.fields.len());
+                        for (_, ty) in state.fields {
+                            fields.push(self.node(ty)?);
+                        }
+                        states.push((state.name, fields));
+                    }
+                    DebugNode::Machine(value_type_name(&definition.name), states)
+                }
+                Type::Capability(_) => DebugNode::Capability(self.types.type_name(ty)),
+                Type::Function { .. } => DebugNode::Function,
+                Type::Actor(_) => DebugNode::Actor,
+                Type::TypeConstruction => DebugNode::TypeConstruction,
+                Type::Refinement { base, .. } => DebugNode::Alias(self.node(base)?),
+                Type::Secret(_) => DebugNode::Redacted,
+                Type::Interface(_) => DebugNode::Interface,
+                Type::Never => DebugNode::Uninhabited,
+                Type::Resource(_) | Type::Error => return None,
+                Type::Int8
+                | Type::Int16
+                | Type::Int32
+                | Type::Int64
+                | Type::Uint8
+                | Type::Uint16
+                | Type::Uint32
+                | Type::Uint64
+                | Type::Float32
+                | Type::Float64
+                | Type::String
+                | Type::Bool => return None,
+            }
+        };
+        self.nodes[index as usize] = Some(node);
+        Some(index)
+    }
+}
+
+// Value displays use the nominal declaration name; the binding label carries
+// the complete instantiated type, including declared aliases.
+fn value_type_name(name: &str) -> String {
+    name.split_once('[')
+        .map_or(name, |(base, _)| base)
+        .to_owned()
+}
+
+fn number(bytes: &mut Vec<u8>, value: usize) -> Option<()> {
+    bytes.extend_from_slice(&u32::try_from(value).ok()?.to_le_bytes());
+    Some(())
+}
+
+fn name(bytes: &mut Vec<u8>, value: &str) -> Option<()> {
+    number(bytes, value.len())?;
+    bytes.extend_from_slice(value.as_bytes());
+    Some(())
+}
+
+pub(super) fn encode_node(bytes: &mut Vec<u8>, node: DebugNode) -> Option<()> {
+    match node {
+        DebugNode::Primitive(kind) => {
+            bytes.push(NativeDebugTag::Primitive as u8);
+            bytes.extend_from_slice(&kind.to_le_bytes());
+        }
+        DebugNode::Nothing => bytes.push(NativeDebugTag::Nothing as u8),
+        DebugNode::Bytes => bytes.push(NativeDebugTag::Bytes as u8),
+        DebugNode::Function => bytes.push(NativeDebugTag::Function as u8),
+        DebugNode::Actor => bytes.push(NativeDebugTag::Actor as u8),
+        DebugNode::TypeConstruction => bytes.push(NativeDebugTag::TypeConstruction as u8),
+        DebugNode::Redacted => bytes.push(NativeDebugTag::Redacted as u8),
+        DebugNode::Interface => bytes.push(NativeDebugTag::Interface as u8),
+        DebugNode::Uninhabited => bytes.push(NativeDebugTag::Uninhabited as u8),
+        DebugNode::List(child) => child_node(bytes, NativeDebugTag::List, child),
+        DebugNode::Set(child) => child_node(bytes, NativeDebugTag::Set, child),
+        DebugNode::Optional(child) => child_node(bytes, NativeDebugTag::Optional, child),
+        DebugNode::Alias(child) => child_node(bytes, NativeDebugTag::Alias, child),
+        DebugNode::Map(key, value) => pair_node(bytes, NativeDebugTag::Map, key, value),
+        DebugNode::Result(ok, error) => pair_node(bytes, NativeDebugTag::Result, ok, error),
+        DebugNode::Record(type_name, fields) => {
+            bytes.push(NativeDebugTag::Record as u8);
+            name(bytes, &type_name)?;
+            number(bytes, fields.len())?;
+            for (field_name, child) in fields {
+                name(bytes, &field_name)?;
+                bytes.extend_from_slice(&child.to_le_bytes());
+            }
+        }
+        DebugNode::Enum(type_name, variants) => {
+            variants_node(bytes, NativeDebugTag::Enum, &type_name, variants)?;
+        }
+        DebugNode::Machine(type_name, variants) => {
+            variants_node(bytes, NativeDebugTag::Machine, &type_name, variants)?;
+        }
+        DebugNode::Capability(type_name) => {
+            bytes.push(NativeDebugTag::Capability as u8);
+            name(bytes, &type_name)?;
+        }
+    }
+    Some(())
+}
+
+pub(crate) fn function_label(function: &jett_mir::Function) -> Result<String, &'static str> {
+    let parameters = function
+        .params
+        .get(function.capture_count..)
+        .ok_or("function debug capture count exceeds its parameter metadata")?;
+    let identity = match &function.debug_kind {
+        jett_hir::FunctionDebugKind::Named(name) => {
+            if name.is_empty() || name.chars().any(char::is_control) {
+                return Err("named function debug identity has invalid source name metadata");
+            }
+            name.clone()
+        }
+        jett_hir::FunctionDebugKind::Inline => {
+            if parameters.iter().any(|parameter| {
+                parameter.name.is_empty() || parameter.name.chars().any(char::is_control)
+            }) {
+                return Err("inline function debug parameter has invalid source name metadata");
+            }
+            parameters
+                .iter()
+                .map(|parameter| parameter.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    };
+    Ok(format!("function({identity})"))
+}
+
+fn child_node(bytes: &mut Vec<u8>, tag: NativeDebugTag, child: u32) {
+    bytes.push(tag as u8);
+    bytes.extend_from_slice(&child.to_le_bytes());
+}
+
+fn pair_node(bytes: &mut Vec<u8>, tag: NativeDebugTag, first: u32, second: u32) {
+    bytes.push(tag as u8);
+    bytes.extend_from_slice(&first.to_le_bytes());
+    bytes.extend_from_slice(&second.to_le_bytes());
+}
+
+fn variants_node(
+    bytes: &mut Vec<u8>,
+    tag: NativeDebugTag,
+    type_name: &str,
+    variants: Vec<(String, Vec<u32>)>,
+) -> Option<()> {
+    bytes.push(tag as u8);
+    name(bytes, type_name)?;
+    number(bytes, variants.len())?;
+    for (variant_name, fields) in variants {
+        name(bytes, &variant_name)?;
+        number(bytes, fields.len())?;
+        for child in fields {
+            bytes.extend_from_slice(&child.to_le_bytes());
+        }
+    }
+    Some(())
+}
+
+pub(crate) fn debug_layout(types: &TypeInterner, ty: TypeId) -> Option<Vec<u8>> {
+    let mut graph = DebugGraph {
+        types,
+        equality_methods: None,
+        custom: Vec::new(),
+        indexes: HashMap::new(),
+        nodes: Vec::new(),
+    };
+    let root = graph.node(ty)?;
+    let mut bytes = b"JD\x01".to_vec();
+    number(&mut bytes, graph.nodes.len())?;
+    bytes.extend_from_slice(&root.to_le_bytes());
+    for node in graph.nodes {
+        let mut encoded = Vec::new();
+        encode_node(&mut encoded, node?)?;
+        number(&mut bytes, encoded.len())?;
+        bytes.extend_from_slice(&encoded);
+    }
+    Some(bytes)
+}
+
+pub(crate) struct EqualityLayout {
+    pub bytes: Vec<u8>,
+    pub custom: Vec<(u32, jett_hir::FunctionId)>,
+}
+
+pub(crate) fn equality_layout(
+    types: &TypeInterner,
+    ty: TypeId,
+    methods: &HashMap<TypeId, jett_hir::FunctionId>,
+) -> Option<EqualityLayout> {
+    // Outer secrecy taints the checked comparison result, not its data layout.
+    // Nested secret payloads still follow the supported graph rules below.
+    let ty = jett_mir::move_values::representation_type(types, ty);
+    fn supported(
+        types: &TypeInterner,
+        ty: TypeId,
+        seen: &mut HashSet<TypeId>,
+        methods: &HashMap<TypeId, jett_hir::FunctionId>,
+    ) -> bool {
+        if !seen.insert(ty) {
+            return true;
+        }
+        match types.resolve(ty) {
+            Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64
+            | Type::Float32
+            | Type::Float64
+            | Type::String
+            | Type::Bool
+            | Type::Bytes
+            | Type::Nothing
+            | Type::Actor(_) => true,
+            Type::List(element) | Type::Set(element) | Type::Optional(element) => {
+                supported(types, *element, seen, methods)
+            }
+            Type::Map(key, value) | Type::Result(key, value) => {
+                supported(types, *key, seen, methods) && supported(types, *value, seen, methods)
+            }
+            Type::Enum(id) => types.resolve_enum(*id).variants.iter().all(|variant| {
+                variant
+                    .fields
+                    .iter()
+                    .all(|(_, field_type)| supported(types, *field_type, seen, methods))
+            }),
+            Type::Machine(id) | Type::MachineState { machine: id, .. } => {
+                types.resolve_machine(*id).states.iter().all(|state| {
+                    state
+                        .fields
+                        .iter()
+                        .all(|(_, field_type)| supported(types, *field_type, seen, methods))
+                })
+            }
+            Type::Bitfield(id) => types
+                .resolve_bitfield(*id)
+                .fields
+                .iter()
+                .all(|field| supported(types, field.ty, seen, methods)),
+            Type::Refinement { base, .. } => supported(types, *base, seen, methods),
+            Type::Struct(_) => methods.contains_key(&ty),
+            // Exact Equatable dispatch must be retained for user structs.
+            Type::Secret(_)
+            | Type::TypeConstruction
+            | Type::Never
+            | Type::Interface(_)
+            | Type::Resource(_)
+            | Type::Capability(_)
+            | Type::Function { .. }
+            | Type::Error => false,
+        }
+    }
+
+    if !supported(types, ty, &mut HashSet::new(), methods) {
+        return None;
+    }
+    let mut graph = DebugGraph {
+        types,
+        indexes: HashMap::new(),
+        nodes: Vec::new(),
+        equality_methods: Some(methods),
+        custom: Vec::new(),
+    };
+    let root = graph.node(ty)?;
+    let mut bytes = b"JD\x01".to_vec();
+    number(&mut bytes, graph.nodes.len())?;
+    bytes.extend_from_slice(&root.to_le_bytes());
+    for node in graph.nodes {
+        let mut encoded = Vec::new();
+        encode_node(&mut encoded, node?)?;
+        number(&mut bytes, encoded.len())?;
+        bytes.extend_from_slice(&encoded);
+    }
+    Some(EqualityLayout {
+        bytes,
+        custom: graph.custom,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn outer_secret_equality_uses_the_value_layout_without_changing_debug_redaction() {
+        let mut types = TypeInterner::new();
+        let list = types.intern(Type::List(TypeInterner::INT64));
+        let secret = types.intern(Type::Secret(list));
+        let methods = HashMap::new();
+        assert_eq!(
+            equality_layout(&types, secret, &methods).unwrap().bytes,
+            equality_layout(&types, list, &methods).unwrap().bytes,
+        );
+        assert_eq!(
+            debug_layout(&types, secret).unwrap().last(),
+            Some(&(NativeDebugTag::Redacted as u8))
+        );
+        let secret_element = types.intern(Type::Secret(TypeInterner::INT64));
+        let nested = types.intern(Type::List(secret_element));
+        assert!(equality_layout(&types, nested, &methods).is_none());
+    }
+
+    #[test]
+    fn function_debug_layout_is_opaque_and_secret_values_are_redacted() {
+        let mut types = TypeInterner::new();
+        let function = types.intern(Type::Function {
+            params: vec![TypeInterner::INT64],
+            view_params: vec![false],
+            return_type: TypeInterner::INT64,
+        });
+        let mut expected = b"JD\x01".to_vec();
+        expected.extend_from_slice(&1u32.to_le_bytes());
+        expected.extend_from_slice(&0u32.to_le_bytes());
+        expected.extend_from_slice(&1u32.to_le_bytes());
+        expected.push(NativeDebugTag::Function as u8);
+        assert_eq!(debug_layout(&types, function), Some(expected));
+        let optional = types.intern(Type::Optional(function));
+        let list = types.intern(Type::List(optional));
+        for ty in [function, optional, list] {
+            assert!(debug_layout(&types, ty).is_some());
+            assert!(equality_layout(&types, ty, &HashMap::new()).is_none());
+        }
+        let secret = types.intern(Type::Secret(function));
+        let layout = debug_layout(&types, secret).unwrap();
+        assert_eq!(layout.last(), Some(&(NativeDebugTag::Redacted as u8)));
+        assert!(equality_layout(&types, secret, &HashMap::new()).is_none());
+    }
+}

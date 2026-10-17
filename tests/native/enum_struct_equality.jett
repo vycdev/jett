@@ -1,0 +1,120 @@
+namespace models
+struct Ignored:
+    value: int64
+export struct User:
+    id: int64
+    ignored: Ignored
+    callback: function(int64) returns int64
+implement Equatable for User:
+    function equals(view self: User, view other: User) returns bool:
+        return self.id == other.id
+function identity(value: int64) returns int64:
+    return value
+export function user(id: int64, ignored: int64) returns User:
+    return User(id: id, ignored: Ignored(value: ignored), callback: identity)
+export struct Box[T]:
+    id: int64
+    ignored: T
+implement Equatable for Box[Ignored]:
+    function equals(view self: Box[Ignored], view other: Box[Ignored]) returns bool:
+        return self.id == other.id
+export function box(id: int64, ignored: int64) returns Box[Ignored]:
+    return Box[Ignored](id: id, ignored: Ignored(value: ignored))
+export type Trusted = User where value.id >= 0
+export machine Session:
+    states:
+        guest
+        active(user: User)
+    transitions:
+        guest to active
+export enum Item:
+    empty
+    user(value: User)
+    users(values: list[User])
+    mapping(values: map[string, optional[User]])
+    maybe(value: optional[User])
+    outcome(value: result[User, User])
+    pair(first: User, second: User)
+    boxed(value: Box[Ignored])
+    trusted(value: Trusted)
+    session(value: Session)
+    nested(value: Item)
+export type Selected = Item where true
+export struct Wrapper:
+    item: Item
+implement Equatable for Wrapper:
+    function equals(view self: Wrapper, view other: Wrapper) returns bool:
+        return self.item == other.item
+export enum Outer:
+    wrapper(value: Wrapper)
+export function compare[T](view left: T, view right: T) returns bool:
+    return left == right
+export function baked() returns bool:
+    return Item.user(user(1, 2)) == Item.user(user(1, 3))
+namespace app
+function basic() returns bool:
+    use models as selected
+    selected.Item left = selected.Item.user(selected.user(1, 2))
+    selected.Item right = selected.Item.user(selected.user(1, 3))
+    return left == right && !(left != right) && selected.compare[selected.Item](view left, view right)
+function collections() returns bool:
+    use models as selected
+    selected.Item left = selected.Item.users(list(selected.user(1, 2), selected.user(3, 4)))
+    selected.Item right = selected.Item.users(list(selected.user(1, 8), selected.user(3, 9)))
+    selected.Item changed = selected.Item.users(list(selected.user(1, 2), selected.user(4, 4)))
+    return left == right && left != changed
+function sums() returns bool:
+    use models as selected
+    selected.Item first = selected.Item.maybe(some(selected.user(1, 2)))
+    selected.Item same = selected.Item.maybe(some(selected.user(1, 3)))
+    selected.Item success = selected.Item.outcome(ok(selected.user(1, 4)))
+    selected.Item matching = selected.Item.outcome(ok(selected.user(1, 5)))
+    selected.Item failure = selected.Item.outcome(fail(selected.user(2, 6)))
+    selected.Item other_failure = selected.Item.outcome(fail(selected.user(2, 7)))
+    return first == same && success == matching && failure == other_failure && success != failure
+function mappings() returns bool:
+    use models as selected
+    selected.Item first = selected.Item.mapping(map("key": some(selected.user(1, 2))))
+    selected.Item same = selected.Item.mapping(map("key": some(selected.user(1, 3))))
+    selected.Item changed = selected.Item.mapping(map("other": some(selected.user(1, 3))))
+    return first == same && first != changed
+function nested() returns bool:
+    use models as selected
+    selected.Outer first = selected.Outer.wrapper(selected.Wrapper(item: selected.Item.nested(selected.Item.user(selected.user(1, 2)))))
+    selected.Outer same = selected.Outer.wrapper(selected.Wrapper(item: selected.Item.nested(selected.Item.user(selected.user(1, 3)))))
+    return first == same
+function deep() returns bool:
+    use models as selected
+    mutable selected.Item first = selected.Item.user(selected.user(1, 2))
+    mutable selected.Item same = selected.Item.user(selected.user(1, 3))
+    mutable int64 depth = 0
+    while depth < 160:
+        first = selected.Item.nested(first)
+        same = selected.Item.nested(same)
+        depth = depth + 1
+    return first == same && !(first != same)
+function pending() returns bool:
+    use models as selected
+    selected.Item first = selected.Item.user(run selected.user(1, 2))
+    selected.Item same = selected.Item.user(run selected.user(1, 3))
+    selected.Item deeper = selected.Item.user(run run selected.user(1, 3))
+    selected.Item plain = selected.Item.user(selected.user(1, 3))
+    return first == same && first != deeper && first != plain
+function wrappers() returns bool:
+    use models as selected
+    selected.Trusted first = selected.user(1, 2) handle error: return false
+    selected.Trusted same = selected.user(1, 3) handle error: return false
+    selected.Selected left = selected.Item.trusted(first) handle error: return false
+    selected.Selected right = selected.Item.trusted(same) handle error: return false
+    return left == right
+function nominal() returns bool:
+    use models as selected
+    selected.Item first = selected.Item.boxed(selected.box(1, 2))
+    selected.Item same = selected.Item.boxed(selected.box(1, 3))
+    selected.Item session = selected.Item.session(selected.Session(active, selected.user(1, 2)))
+    selected.Item matching = selected.Item.session(selected.Session(active, selected.user(1, 3)))
+    return first == same && session == matching
+function main(stdout: Stdout) returns nothing:
+    use models as selected
+    bool baked = comptime selected.baked()
+    Stdout.write(view stdout, "{basic()} {collections()} {sums()} {mappings()} {nested()} {deep()} {pending()} {wrappers()} {nominal()} {baked}\n")

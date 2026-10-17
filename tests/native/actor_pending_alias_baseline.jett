@@ -1,0 +1,13 @@
+namespace app
+actor Counter:
+    mutable int64 count = 1
+    receive read responds int64:
+        respond count
+function main() returns nothing:
+    Counter worker = spawn Counter()
+    Counter pending = run clone worker
+    println(view worker, view pending)
+    Counter ready = join pending handle error:
+        return println(error)
+    println(view worker, view ready)
+    return nothing

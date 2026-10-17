@@ -1,0 +1,49 @@
+namespace app
+actor Holder(seed: int64):
+    mutable int64 count = seed
+    mutable bool enabled = false
+    mutable float64 ratio = 0.0
+    receive update(next_count: int64, next_enabled: bool, next_ratio: float64):
+        count = next_count
+        enabled = next_enabled
+        ratio = next_ratio
+    receive read_count responds int64:
+        respond count
+    receive read_enabled responds bool:
+        respond enabled
+    receive read_ratio responds float64:
+        respond ratio
+function main() returns nothing:
+    int64 initial = 5
+    int64 pending_initial = run initial
+    Holder holder = spawn Holder(seed: pending_initial)
+    int64 initial_count = ask holder.read_count
+    trace initial_count
+    int64 joined_initial = join initial_count handle error:
+        return nothing
+    bool plain_enabled = true
+    bool pending_enabled = run plain_enabled
+    float64 plain_ratio = 1.25
+    float64 pending_ratio = run plain_ratio
+    send holder.update(pending_initial, pending_enabled, pending_ratio)
+    int64 count = ask holder.read_count
+    bool enabled = ask holder.read_enabled
+    float64 ratio = ask holder.read_ratio
+    trace count
+    trace enabled
+    trace ratio
+    int64 joined_count = join count handle error:
+        return nothing
+    bool joined_enabled = join enabled handle error:
+        return nothing
+    float64 joined_ratio = join ratio handle error:
+        return nothing
+    println(joined_initial, joined_count, joined_enabled, joined_ratio)
+    send holder.update(9, false, 2.5)
+    int64 plain_count = ask holder.read_count
+    bool plain_flag = ask holder.read_enabled
+    float64 plain_level = ask holder.read_ratio
+    trace plain_count
+    trace plain_flag
+    trace plain_level
+    return nothing

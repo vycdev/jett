@@ -1,0 +1,67 @@
+namespace app
+struct Narrow:
+    signed: int16
+    unsigned: uint16
+function echo_int8(value: int8) returns int8:
+    return value
+function echo_uint32(value: uint32) returns uint32:
+    return value
+function check_signed() returns nothing:
+    int8 small = -128
+    int8 pending_small = run run echo_int8(small)
+    trace pending_small
+    int8 once = join pending_small handle error:
+        return nothing
+    trace once
+    int8 ready = join once handle error:
+        return nothing
+    int16 base_medium = -32768
+    int32 base_large = -2147483648
+    int16 medium = run base_medium
+    int32 large = run base_large
+    trace medium
+    trace large
+    int16 joined_medium = join medium handle error:
+        return nothing
+    int32 joined_large = join large handle error:
+        return nothing
+    println(ready, joined_medium, joined_large)
+function check_unsigned() returns nothing:
+    uint8 base_small = 255
+    uint16 base_medium = 65535
+    uint32 base_large = 4294967295
+    uint8 small = run base_small
+    uint16 medium = run base_medium
+    uint32 large = run run echo_uint32(base_large)
+    trace small
+    trace medium
+    trace large
+    uint8 joined_small = join small handle error:
+        return nothing
+    uint16 joined_medium = join medium handle error:
+        return nothing
+    uint32 once = join large handle error:
+        return nothing
+    trace once
+    uint32 joined_large = join once handle error:
+        return nothing
+    println(joined_small, joined_medium, joined_large)
+function check_aggregate() returns nothing:
+    int16 base_signed = -123
+    uint16 base_unsigned = 456
+    Narrow value = Narrow(signed: run base_signed, unsigned: run base_unsigned)
+    trace value
+    int16 signed = value.signed
+    uint16 unsigned = value.unsigned
+    trace signed
+    trace unsigned
+    int16 joined_signed = join signed handle error:
+        return nothing
+    uint16 joined_unsigned = join unsigned handle error:
+        return nothing
+    println(joined_signed, joined_unsigned)
+function main() returns nothing:
+    check_signed()
+    check_unsigned()
+    check_aggregate()
+    return nothing

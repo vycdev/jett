@@ -1,0 +1,31 @@
+namespace app
+function main() returns nothing:
+    list[int8] signed = list(-1, 3, -4, 2)
+    list[int8] signed_sorted = list.sort[int8](signed)
+    int8 signed_first = list.first[int8](view signed_sorted) handle:
+        default 0
+    int8 signed_last = list.last[int8](view signed_sorted) handle:
+        default 0
+    println(signed_first, signed_last)
+    list[uint64] unsigned = list(18446744073709551615, 2, 9223372036854775808)
+    list[uint64] unsigned_sorted = list.sort[uint64](unsigned)
+    uint64 unsigned_first = list.first[uint64](view unsigned_sorted) handle:
+        default 0
+    uint64 unsigned_last = list.last[uint64](view unsigned_sorted) handle:
+        default 0
+    println(unsigned_first, unsigned_last)
+    list[float64] decimals = list(1.5, -2.25, 0.0)
+    list[float64] decimals_sorted = list.sort[float64](decimals)
+    float64 decimal_first = list.first[float64](view decimals_sorted) handle:
+        default 0.0
+    println(decimal_first)
+    list[string] words = list("zebra", "apple", "éclair")
+    list[string] words_sorted = list.sort[string](words)
+    string word_first = list.first[string](view words_sorted) handle:
+        default ""
+    println(word_first)
+    list[bool] flags = list(true, false, true)
+    list[bool] flags_sorted = list.sort[bool](flags)
+    bool flag_first = list.first[bool](view flags_sorted) handle:
+        default true
+    println(flag_first)

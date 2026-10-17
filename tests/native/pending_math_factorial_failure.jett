@@ -1,0 +1,5 @@
+namespace app
+function main() returns nothing:
+    int64 value = math.factorial(run 4)
+    trace value
+    return nothing

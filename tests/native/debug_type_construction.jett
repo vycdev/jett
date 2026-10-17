@@ -1,0 +1,97 @@
+namespace app
+struct User:
+    id: string
+    age: int64
+enum Shape:
+    circle(radius: float64)
+    rect(width: float64, height: float64)
+bitfield Header:
+    version: 4 bits
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+    transitions:
+        guest to logged_in
+function build_user() returns string:
+    mutable TypeConstruction builder = type.construct_start[User]()
+    trace builder
+    for field in type.fields[User]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[User, Field](view User(id: "Ada", age: 7), view field)
+            builder = type.construct_put[User, Field](builder, view field, value) handle error:
+                return error
+            trace builder
+    User built = type.construct_finish[User](builder) handle error:
+        return error
+    mutable TypeConstruction reversed = type.construct_start[User]()
+    TypeField age = list.get[TypeField](type.fields[User](), 1) handle:
+        return "missing age"
+    TypeField id = list.get[TypeField](type.fields[User](), 0) handle:
+        return "missing id"
+    reversed = type.construct_put[User, int64](reversed, view age, 9) handle error:
+        return error
+    reversed = type.construct_put[User, string](reversed, view id, "Lin") handle error:
+        return error
+    trace reversed
+    User reordered = type.construct_finish[User](reversed) handle error:
+        return error
+    if reordered.id != "Lin":
+        return "bad reordered user"
+    return "{built.id}:{built.age}"
+function debug_bitfield() returns nothing:
+    mutable TypeConstruction bits = type.construct_start[Header]()
+    TypeField version = list.get[TypeField](type.fields[Header](), 0) handle:
+        return nothing
+    bits = type.construct_put[Header, int64](bits, view version, 4) handle error:
+        return nothing
+    trace bits
+    Header built_bits = type.construct_finish[Header](bits) handle error:
+        return nothing
+    println(built_bits.version)
+    return nothing
+function debug_shape() returns nothing:
+    TypeVariant variant = list.get[TypeVariant](type.variants[Shape](), 1) handle:
+        return nothing
+    mutable TypeConstruction shape = type.construct_variant_start[Shape](view variant) handle error:
+        return nothing
+    trace shape
+    TypeField width_field = list.get[TypeField](variant.fields, 0) handle:
+        return nothing
+    shape = type.construct_put[Shape, float64](shape, view width_field, 3.0) handle error:
+        return nothing
+    trace shape
+    TypeField height_field = list.get[TypeField](variant.fields, 1) handle:
+        return nothing
+    shape = type.construct_put[Shape, float64](shape, view height_field, 4.0) handle error:
+        return nothing
+    Shape built_shape = type.construct_finish[Shape](shape) handle error:
+        return nothing
+    match built_shape:
+        rect(width, height):
+            println("{width}:{height}")
+        circle(radius):
+            return nothing
+    return nothing
+function debug_machine() returns nothing:
+    TypeMachineState state = list.get[TypeMachineState](type.machine_states[Session](), 1) handle:
+        return nothing
+    mutable TypeConstruction session = type.construct_machine_start[Session](view state) handle error:
+        return nothing
+    trace session
+    TypeField user_id = list.get[TypeField](state.fields, 0) handle:
+        return nothing
+    session = type.construct_put[Session, string](session, view user_id, "Ada") handle error:
+        return nothing
+    trace session
+    Session built_session = type.construct_finish[Session](session) handle error:
+        return nothing
+    TypeMachineState active = type.machine_state_value[Session](view built_session)
+    println(active.name)
+    return nothing
+function main() returns nothing:
+    println(build_user())
+    debug_bitfield()
+    debug_shape()
+    debug_machine()
+    return nothing

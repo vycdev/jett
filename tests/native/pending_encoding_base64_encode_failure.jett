@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    bytes data = run bytes.from_string("a")
+    string encoded = encoding.base64_encode(view data)
+    trace encoded
+    return nothing

@@ -1,0 +1,1119 @@
+# Native value ABI and ownership slice
+
+This is an implementation contract, not a full-parity claim.
+
+Sum task joins retain the checked outer type boundary. An exact result remains
+the result of the join; a secret-qualified or nominally refined result becomes
+the payload of an outer result. `SumTaskJoin` clones the sum and removes one
+outer pending layer without changing its inner tag, error type or payload depth.
+The existing `SumNew` operation takes ownership of that joined clone only after
+successful construction of the additional result. No ABI signature or ownership
+slot policy changes.
+An explicit-view Join borrows the input for the clone operation. Its owned
+result can escape the call while the original owner's depth remains unchanged.
+
+Contextually secret struct construction uses an exact nominal inner
+`StructConstruct` followed by the existing qualification coercion. Only checked
+struct constructors qualify; validating constructors retain their exact
+`result[Struct, string]`, predicate chains and validation flag inside the
+qualification boundary. Field conversions, source evaluation order,
+pending depth, and ownership are preserved without a runtime ABI change.
+Predicate errors retain the existing captured, prefixed result failure; field
+evaluation errors remain terminal and bypass result handlers.
+
+Secret qualification around checked bitfield and machine constructors uses the
+existing coercion and value ABI. Inner construction retains the exact bitfield
+or machine-state identity; validating bitfields retain the exact
+`result[Bitfield, string]` output and existing width-validation cleanup. The
+qualification coercion transfers that owned value without changing its result
+tag, pending depth, field evaluation order, or ownership. Strict constructor
+verification remains unchanged.
+
+Direct-secret aggregate field reads use the exact unqualified nominal layout
+and the checker's qualified result TypeId. Ready scalar and owned field paths,
+pending-child depth, and machine-state indexing reuse the existing runtime ABI.
+Owner readiness still uses the original checked receiver's debug graph, so a
+pending secret receiver remains redacted. That separate observation-policy gap
+with raw reference diagnostics is not closed by qualified-field admission.
+
+Secret-wrapped enum constructors retain an unwrapped nominal enum target and a
+separately checked secret expression type. Equality uses the value representation
+for its root layout, while debug observation keeps the redacted root. This also
+preserves exact explicit struct methods in wrapped enum payloads and does not
+permit nested secret payload graphs. Mixed public/secret binary operands retain
+the checker's inner type compatibility and secret result taint. Clone/view
+context conversions may add outer secrecy; neither those conversions nor a
+fabricated binary result may declassify. Runtime leaf signatures are unchanged.
+
+The additive `jett_rt_v1_float_remainder(context, f64, f64) -> f64` leaf implements
+floating `modulo` using the same `%` operation as the interpreter. It allocates
+no owned values, preserves the context's first-error handling, and treats NaN
+results as ordinary floating values. Codegen promotes binary32 operands and
+demotes the result explicitly; both source widths retain the existing pending
+operand checks before entering this leaf.
+
+Aggregate debug printing reuses `DebugAppendAggregate` with an empty label and
+an owned temporary text buffer. Its value input stays borrowed, so printing
+does not transfer a viewed aggregate or builder into the runtime. Debug layout
+tag 18, `Uninhabited`, is additive: empty containers and inactive sum branches
+may refer to it, but formatting or comparing an actual payload through it fails.
+Existing tag numbers remain unchanged. Secret nodes retain conservative
+redaction pending the hidden-secret debug-print policy decision.
+The aggregate formatter uses a work stack rather than recursive calls and a
+fixed depth ceiling. Active-path identities reject cyclic schemas/payloads;
+shared finite subvalues remain valid. Dynamic layouts are cached by descriptor
+bytes during each observation so cycles crossing interface layouts are detected.
+Formatting failure leaves the caller's text buffer unchanged. This changes no
+ABI tag or leaf signature and does not extend the aggregate equality contract.
+
+Immutable UTF-8 strings use nonzero u64 context-associated handles. Zero is an
+uninitialized slot, never a language string. Each owning slot holds one reference.
+Literal creation, concatenation and formatting create one reference; retain
+creates another; release removes it immediately and destroys the last reference.
+Borrowed inputs are valid only for a call. Handles cannot cross contexts and are
+never reused. No interpreter Value, source, AST or HIR enters the runtime.
+Native breakpoint leaves write the interpreter-compatible debug line to stderr
+only when the checked boolean condition is true. HIR supplies the scoped source
+binding snapshot. The backend emits a type graph for aggregate bindings, and
+the runtime formats live list, set, map, sum, struct, bitfield, enum, and machine handles
+recursively without consuming them. The graph uses node indexes so recursive
+nominal types have finite metadata. Remaining special value kinds need separate
+formatting. The leaf does not expose a
+debugger pause or evaluate arbitrary values.
+Stdout authority is a separate context-bound token, supplied only for checked
+Stdout entry parameters and passed explicitly to printing leaf operations.
+Stderr, Stdin, Filesystem, Network, Process, and Log also receive distinct,
+context-bound tokens when declared on the checked entry. Their currently
+implemented value operations (moves, views, direct/indirect calls, debug output,
+and sequential run/join/cancel) follow the interpreter's opaque capability
+behavior. These grants do not implement the pending I/O providers or authorize
+any other capability's leaves. Repeated grants in one context retain identity;
+tokens differ across capability kinds and contexts.
+Clock authority is likewise a distinct context-bound token. The native entry
+grants it only for checked Clock parameters; `Clock.__now` validates the token
+and samples the wall clock through the same pre-epoch flooring and int64
+millisecond-range kernel as the interpreter. The native launcher can opt into
+a per-context scripted provider through `JETT_NATIVE_TEST_CLOCK_SCRIPT_V1` for
+deterministic parity runs. An empty script means an exhausted provider; absent
+configuration keeps the production wall clock. Native Clock reads match the
+interpreter's sample conversion, unavailability, and exhaustion failures.
+Random authority is a separate context-bound token. Its provider is seeded once
+from OS entropy when the native entry grants Random, or configured before entry
+from `JETT_NATIVE_TEST_RANDOM_SCRIPT_V1` for deterministic parity runs. The
+bounded-integer, unit-float, and boolean leaves share their provider logic with
+the interpreter, including rejection sampling and invalid/exhausted script
+failures. Collection algorithms remain in `stdlib/random.jett`.
+`uuid.new` has a separate owned-string leaf matching the interpreter's current
+UUID v4 behavior. Both call a shared formatter after sampling OS entropy; the
+native leaf reports entropy failure through the runtime status and owns the
+resulting string in the current context. The broader UUID generation policy is
+still tracked separately from this implementation slice.
+Environment authority is another context-bound token. The shared runtime
+captures immutable user arguments and environment entries before entering
+`main`; a test-only `JETT_NATIVE_TEST_ENVIRONMENT_SNAPSHOT_V1` channel can
+replace that snapshot without changing the host process. `Environment.__args`
+returns a fresh owned string list. `Environment.__get` returns an owned
+`result[optional[string], string]`, preserving missing, invalid-name, and
+invalid-Unicode outcomes. The two native Environment fixtures pass, while
+platform-raw capture details remain to be audited against the design note.
+
+Generated functions and all source control flow remain Cranelift machine code.
+Copyable string arguments are borrowed by the native call ABI; callee owning
+locals retain them. String expression results are owned. Results transfer one
+reference to the caller. Assignment evaluates its RHS before releasing its old
+slot. Full-expression temporaries have zero-initialized frame slots; all are
+released at expression completion and on terminal failure. MIR liveness and
+initialization analysis defines local cleanup points, including loop backedges
+and early exits. Zero slots permit conditional initialization without releasing
+an uninitialized value. The initial string slice did not establish move-only ownership. Later sections
+describe bytes, sums, lists and user structs; resource ownership remains unproven.
+
+Internal native `nothing` values use an unowned u64 pending depth: zero is plain
+`nothing`, and each sequential `run` adds one. Depth is preserved through native
+parameters, returns, locals, closure captures, aggregate payloads, and explicit
+`comptime` materialization. `NothingRun` checks depth overflow; `NothingJoin`
+returns one owned result handle, unwrapping one level or returning the owned
+error string `task was cancelled` for depth zero. `NothingFormat` returns one
+owned string matching the interpreter's nested `pending(...)` rendering.
+`NothingEqual` matches direct unit equality and reports the interpreter's
+terminal error if either operand is pending; aggregate payload equality compares
+depth instead. Trace and breakpoint formatting preserve the same depth.
+Ordinary unit literals and effect results remain depth zero. The exported
+`jett_aot_v1_entry(context) -> u32` status ABI is unchanged; its internal call to
+`main` discards the unit scalar. These leaves model the current sequential
+interpreter: `cancel` yields plain `nothing` without changing the pending
+operand. They do not establish asynchronous scheduling or cancellation
+checkpoints.
+
+Numeric and boolean values now carry a separate u64 pending depth alongside
+their existing width-correct bits in native locals and Jett function signatures.
+Direct and indirect calls, returns, and ordinary closure captures forward both
+parts. Sequential `run` increments depth with the checked unit-task leaf;
+`join` removes one level and places any remaining depth beside the scalar
+payload in its result handle. Taking a result restores both parts, including
+after cloning the result. Directly primitive-typed trace and breakpoint
+bindings format the nested pending wrappers. Graphics callbacks supply the
+depth component required by the same function ABI. Struct and enum payload
+fields store scalar depth beside their bits; field access and recursive debug
+formatting restore it. Primitive lists use a sparse per-element depth map,
+preserved by cloning, insertion, removal, iteration, and stable sorting.
+`list.get` carries element depth through its result payload. Differential
+fixtures cover these boundaries, including nested pending wrappers. Reflected
+field reads restore pending depth from the validated struct, enum, or machine
+field slot; differential fixtures cover primitive reflected values. Pending
+scalar values in unexamined intrinsic operands need further parity work.
+Scalar string interpolation now formats pending depth together with the value
+bits, including nested pending values and all numeric and boolean widths.
+Primitive JSON serialization uses that formatting for numbers and booleans.
+A checked source helper serializes nonliteral `nothing` after evaluating its
+argument, including pending `nothing`.
+Direct unary and binary operators now reject pending primitive operands with the
+interpreter's error text after evaluating the operands in source order.
+Boolean `and` and `or` still skip an unevaluated right operand when the plain
+left value short-circuits; a pending left value evaluates the right operand
+before reporting the error. `if`/`while` branch conditions, breakpoint
+conditions, and assertion conditions reject pending booleans with their
+respective interpreter diagnostics. Pending primitive operands passed into
+other intrinsics remain to be audited.
+Numeric aggregate kernels inspect both the list's own pending depth and its
+per-element depth map before reading scalar bits. `list.sum` distinguishes a
+pending first element from a later pending element, matching the interpreter's
+two current error paths; `math.average` and `math.median` report their current
+numeric-list errors for pending containers or elements.
+Average and median accept every primitive numeric width and transparent alias.
+Their native decoder validates narrow bits, sign-extends signed integers, and
+widens binary32 to binary64 before the existing shared algorithms, retaining
+the exact `float64` result and empty/pending failure contracts. This does not
+admit nominal refinements or secret element wrappers.
+List intrinsic argument checks reject a pending list container before the
+operation, and reject pending int64 indexes for get, insert, remove, indexed
+sort, and swap with the interpreter's operation-specific errors. Pending scalar
+elements remain valid inputs to append and insert, and retain their depth.
+Native `range` checks all supplied integer operands before generating values.
+`bytes.get`, `bytes.slice`, `string.slice`, and `string.repeat` reject pending
+indexes or counts and pending receivers with their current interpreter errors.
+Math leaves use a shared pending-scalar check with the checked intrinsic name
+and interpreter's type-error wording before operating on numeric payload bits.
+Numeric conversion and `string.from_*` leaves use the same scalar check. A
+pending-handle check protects numeric string parsing and `bytes.from_string`,
+`bytes.from_hex`, `bytes.to_string`, and `bytes.to_hex` before their kernels
+inspect the underlying plain string or byte buffer.
+The same check rejects pending receivers and arguments for string text
+intrinsics and `bytes.length`/`bytes.concat` with interpreter-matching errors.
+`string.join` additionally rejects a plain list containing a pending string
+element, reporting the wrapped element as the interpreter does.
+Encoding and CSV parser hooks reject pending input strings, while base64
+encoding and crypto hooks reject pending byte inputs. CSV stringify rejects a
+pending outer list or row and formats pending fields before quoting them.
+`run` and `join` dispatch through the representation type for secret and
+refinement wrappers, preserving task depth in secret strings and bytes.
+Primitive sets likewise keep a sparse per-element pending-depth map. Add,
+remove, contains, clone, recursive debug formatting, and scalar iteration use
+that depth; string set membership compares both text and the string handle's
+pending depth. Set intrinsics reject a pending set container. Native `for`
+checks the container before fetching length or elements and reports the
+interpreter's shared iterable error for pending lists, strings, maps, and sets.
+Map entries store pending depth beside primitive key and value bits. Literal
+construction, insert/update, lookup result payloads, removal, cloning,
+`from_lists`, recursive debug formatting, and key/value iteration preserve it.
+String map keys compare both text and their handle's pending depth. Public map
+intrinsics reject pending map containers, while `map.from_lists` rejects
+pending input lists with the interpreter's current errors.
+`TypeConstruction` builder fields also store scalar pending depth, so builder
+debug output, cloning, and finished struct, enum, and machine values preserve
+it. Bitfield width validation rejects pending numeric fields with the
+interpreter's current error.
+
+Owned native strings also carry a pending depth in the runtime registry.
+`StringRun` and `StringTaskJoin` create independent handles, so wrapping a
+cloned string does not change its aliases. Trace, aggregate debug output,
+`print`/`println`, and ordinary string interpolation render nested `pending(...)`
+wrappers; direct string equality and inequality report the interpreter's runtime
+error while aggregate equality compares both text and pending depth. Owned bytes
+handles keep the same depth in a sparse runtime registry: `BytesRun` and
+`BytesTaskJoin` create independent byte handles, cloning preserves depth, and
+trace and aggregate equality observe the wrapper. Lists, sets, and maps carry
+pending depth in their native handles. Their task leaves clone the collection,
+preserve nested owned values, and change one depth level; debug output and
+aggregate equality observe the depth. Other runtime operations on pending
+values, along with other value kinds, still need the general pending-task
+representation.
+
+Implicitly selected display methods have an additional `DisplayResultCheck`
+boundary. This borrowed I64-handle-to-I32-status leaf rejects pending results
+with their exact formatted diagnostic and adds no handle or cleanup obligation.
+The returned string keeps its existing owner, and direct method calls retain
+ordinary pending-string behavior.
+
+Native record handles preserve pending depth for structs, enums, bitfields,
+and machines. `RecordRun` and `RecordTaskJoin` deep-clone fields before changing
+the outer depth; tracing preserves nested wrappers and state-qualified machine
+binding labels. Direct enum equality rejects pending operands with the
+interpreter's runtime message, while aggregate payload comparison observes
+pending depth.
+
+Optional and result handles also preserve pending depth. Their task leaves
+clone owned payloads before changing the outer depth, and native debug and
+aggregate equality inspect the wrapper. Joining a pending result returns its
+existing success or failure branch, as in the interpreter's sequential task
+simulation; joining a pending optional returns a result containing the optional.
+MIR snapshots a cloneable linear local before `run`, so the original optional,
+result, list, map, or record remains readable after the pending value is made.
+The task leaf then gives the pending value its own handle and depth; this is
+covered by linked interpreter/native traces of both values.
+
+Function descriptors use owned record handles, so task `run` and `join` retain
+pending depth while cloning captured environments. Debug formatting applies
+that depth to named and captured function labels, including aggregate elements.
+Indirect calls check the descriptor after evaluating arguments and reject a
+still-pending function with the interpreter's runtime error.
+
+`TypeConstruction` builders use the same record-handle pending depth. Task
+`run` and `join` clone their fields and builder metadata; debug formatting
+preserves nested wrappers. `construct_put` and `construct_finish` reject a
+still-pending builder with the interpreter's source-value error before
+performing builder validation or construction.
+MIR also treats a builder as snapshotable: `run` of a local leaves the original
+builder usable, repeated handles can clone an optional builder payload, and a
+view argument remains tied to its pre-handler builder when a later argument
+rebinds the caller's local.
+
+Actor identities also carry pending depth in their registered record. Task
+`run` and `join` change that depth without allocating a second actor identity;
+debug output retains the actor ordinal. `send` and `ask` reject a pending actor
+before evaluating message arguments, matching the interpreter's actor-value
+check.
+
+Actor state records now store primitive pending depth alongside scalar bits.
+Handler entry restores that depth from each state field, and every writeback
+replaces bits and depth together. Differential fixtures cover pending state
+initialization and updates for integer, boolean, and floating-point fields.
+
+Capability task values use separate scalar handles mapped to the granted
+authority token and a pending depth. `run` allocates a new handle and consumes
+an earlier task handle; `join` returns a result containing the authority token
+or a handle with one less pending level. Joining a plain Stdout, Clock, or
+Random value returns the interpreter's current cancellation error, while a
+plain Environment or Graphics value joins successfully. Debug formatting uses
+the interpreter's current `nothing` display for the first three capabilities
+and the named capability display for Environment and Graphics, with pending
+wrappers at each depth. The original granted token remains the authority for
+capability operations after the final join.
+Clock, Random, and Environment intrinsics reject a pending capability before
+using its authority, with their interpreter-specific errors. Environment
+lookup also rejects a pending key before reading the launch snapshot.
+`Stdout.write` follows the interpreter's current behavior: it accepts a
+pending Stdout capability and writes pending string arguments with their
+visible `pending(...)` wrappers.
+`secret.compare` rejects pending string or byte operands before comparing
+their plain buffers; `secret.redact` still returns the fixed redaction text.
+Bitfield byte conversion rejects a pending record or input bytes. Payload
+encoding checks a pending `list[uint8]` or element before copying byte values
+and reports the interpreter's field-specific error.
+
+Native string search shares one linear grapheme-boundary scanner with split.
+`string.index_of` returns an optional int64 handle with a non-owning index
+payload, including index zero for an empty needle. `string.count` returns the
+number of non-overlapping matches and zero for an empty needle. The scanner
+rejects byte matches that begin or end inside a grapheme, matching the
+interpreter's string contract.
+
+The first terminal failure of the current execution lifetime is separate from
+Jett result.fail. Ordinary one-entry contexts keep their legacy session channel.
+Independently authenticated Resource entries retain separate attempt-owned
+status, dynamic message and diagnostic-prefix records. Nested compiled calls
+share the active record; exact completion seals it. A new entry constructor may
+select a fresh record only after predecessor, session-poison and complete
+custody/storage checks, preserving every old observation without resetting it.
+Fallible leaf and compiled calls are followed by a failure edge, which releases
+live temporaries/locals before returning a zero placeholder. Callers must inspect
+failure before using that placeholder. The entry wrapper returns failure status
+and the launcher renders the message before context destruction. Cleanup does
+not overwrite the first failure.
+Context destruction checks that all owning values have been released; it must
+not silently hide compiler leaks by acting as a program-long value arena.
+
+An actor is a runtime-owned state record rather than an ordinary frame owner.
+`ActorRegister` transfers a fully initialized native struct to the context's
+actor registry. `ActorReplace` transfers a new state field and releases the
+previous owned field. Ordinary `DropValue` rejects a registered actor. Context
+destruction releases registered actor records before checking for leaked frame
+owners, including any nested owned state. Checked actor constructors evaluate
+capability arguments and state initializers in source order, then register the
+complete record. `send` and `ask` call the checked handler identity with the
+actor record as their hidden environment. Handlers copy or clone captured
+fields into local owners, write mutable state back through `ActorReplace` on
+return or response, and release their local copies. A discarded `send` response
+is still owned and cleaned up. Linked native/interpreter fixtures cover scalar
+and owned string state, named arguments, duplicate actor names across
+namespaces, and actor responses.
+
+`Graphics` now has a distinct context-bound entry authority token, and native
+function signatures can carry that token through checked `view` parameters.
+The Graphics kernel checks capability pending depth before configuration
+validation, using the existing pending-handle leaf. A forwarded still-pending
+authority reports the reference terminal capability error; every required join
+must complete before a session can use the original token.
+The native ABI now validates checked `graphics.Config` and `graphics.Scene`
+records and exposes open, present, next-key, and close leaves. The session stays
+on its creating thread; context destruction closes an unfinished session before
+checking value ownership. Domain errors return owned Jett result values, while
+terminal callback errors remain separate runtime failures. Native
+`graphics.__run` validates the config and initial scene, opens a session,
+presents each rendered scene, and dispatches checked update and render
+callbacks until close. It tracks the state owner across updates and closes
+the session on handled domain failures; context destruction closes it after
+a terminal callback failure. Named callbacks, including render's `view`
+parameter, now match the interpreter in scripted fixtures. Inline Graphics
+callbacks with `view` parameters extract to checked function values before
+MIR lowering, preserving their borrow mode.
+Primitive Graphics state retains pending depth across the initial callback,
+update returns, and subsequent callbacks. Scripted differential fixtures
+cover nested pending integer, boolean, and floating-point state.
+Graphics decoding rejects pending record owners and fields before payload
+access, including pending strings, Scene list containers, and record elements.
+It follows reference order: Config title/width/height; Scene background, all
+rectangles, then all text. Complete shape decoding precedes domain validation,
+so a later pending field still fails before an earlier ready out-of-range value.
+These are terminal runtime failures, not result failures or implicit joins.
+The emitter reads dimensions only after configuration validation succeeds.
+Existing leaf signatures, callback state metadata, and session cleanup remain
+unchanged.
+For deterministic parity runs, the launcher configures a context-local Graphics
+event queue from `JETT_NATIVE_TEST_GRAPHICS_SCRIPT_V1` before entry. The runtime
+and interpreter share the JSON event grammar (key, close, host error); no
+window is created by configuration or authority grant. Scripted sessions
+consume that queue and validate rendered scenes without opening a window.
+After a successful native entry, the launcher invokes a context-local check for
+unconsumed scripted Random, Clock, and Graphics inputs in that order. It records
+the interpreter's exact terminal message and fails the entry; an earlier runtime
+failure skips the check. Context destruction and owned-value cleanup still run
+once on either path.
+
+Runtime exports use fixed-width scalar parameters and typed leaf operations;
+no universal operation/name dispatcher. Panics are contained at each C boundary.
+The existing ABI v1 lifecycle remains compatible; added leaf signatures are
+shared by the runtime and emitter. Layout/tag tests pin the added contract.
+
+Temporary capacity is a structural MIR bound on emitter ownership operations,
+not a multiplier on string-typed expressions. Literals, string-local retains,
+string-call results and string-producing intrinsics each own one slot.
+Interpolation owns an initial empty string, then one concatenation per segment
+and one formatting slot per scalar segment (text segments own a literal).
+Print owns its empty accumulator, argument formatting/concatenations, two slots
+per separator, and two for a newline. Child costs accumulate recursively until
+full-expression cleanup; both short-circuit branches get distinct frame slots.
+The maximum full-expression cost determines the frame capacity.
+
+## Float32 oracle correction
+
+The design defines float32 as 32-bit floating point, with IEEE arithmetic.
+Retaining parsed f64 precision in the interpreter contradicts that contract:
+`(value + 1.0) - 1.0` at float32 must round the intermediate addition, not
+just the final result. Native already emits typed f32 instructions. The
+interpreter therefore must normalize float32 at its existing checked-expression
+and declared-type boundaries (including literal, assignment, argument, return,
+and explicit comptime evaluation), just as it already normalizes narrow integers.
+The internal Value::Float64 f64 carrier may represent a widened f32, but cannot
+retain extra precision for a checked float32 expression. Alias/refinement base
+type resolution remains centralized in the existing normalization boundary.
+
+Two possible formatting changes were considered: dedicated shortest-f32 decimal
+formatting, or retaining the current shared f64-carrier display. This fix retains
+the existing display: normalize the value first, then format the exactly widened
+f32 with the same f64 conversion used by native and interpreter. Thus float32
+0.1 displays as 0.10000000149011612, while float64 0.1 still displays as 0.1.
+This does not introduce a new shortest-f32 formatting policy, disable formatting,
+or treat the old unnormalized f64 oracle as evidence of correct float32 behavior.
+Regression tests compare actual executable bytes to the corrected checked oracle
+and pin formatting-dependent string equality/control flow, including comptime.
+
+
+`print` and `println` retain their existing language diagnostic-output permission:
+their dedicated leaf receives the explicit runtime context, not a fabricated
+Stdout token. `Stdout.write` requires the separate granted token and rejects a
+token from another context. Ordinary user code cannot construct that token.
+
+Typed numeric leaves preserve fixed-width wrapping, IEEE values, and exact
+library error text. Integer division syntax remains governed by the frontend
+nonzero proof; leaf errors such as invalid `math.clamp` bounds are terminal.
+Checked `float64.from_int64` and `int64.from_float64` return ordinary result
+values. They accept only exactly representable inputs, including the signed
+minimum boundary, and return the interpreter's error strings for precision
+loss, fractional values, non-finite values, or overflow.
+
+Cleanup evidence is executable: destruction rejects a nonempty value registry,
+and launcher tests prove that a deliberately leaked owner overrides entry failure
+with exit 72. An expected runtime failure counts in the exhaustive audit only when
+its output/message match and exit 71 establishes successful checked destruction.
+Resource finalizer instrumentation must be extended before move-only resource
+families can use this gate.
+
+## Linear bytes places (phase 3)
+
+CopyValuePlan retains its copy-only public guard. MoveValuePlan additionally
+proves definite availability over the MIR CFG, with intersection at joins and
+loop backedges, ordered operand evaluation, and call-bounded view loans. It
+rejects consuming a view, escaping a view into an owner, moving a borrowed
+argument during later argument evaluation, and reading a moved place. It does
+not yet accept aggregates, sums, resources, or hidden handler control flow.
+
+Bytes use distinct context-associated handles backed by owned mutable Vec<u8>
+storage, not UTF-8 strings and not reference-counted owners. Explicit clone
+allocates independent storage. A local move clears its materialized source
+slot and creates one owning expression slot. Zero is the drop flag for an
+uninitialized/moved slot. Assignment evaluates the RHS before dropping the old
+owner. Owned call arguments transfer only after every argument is evaluated;
+temporary owners remain available to failure cleanup until that point. Views
+borrow a local or an owning temporary through the call only. Callees own owned
+parameters and never destroy view parameters. Owned returns detach their slot
+before frame cleanup. Leaf byte kernels borrow their inputs for the call;
+compiled stdlib bodies implement language-level consumption and control flow.
+
+Function types retain the checked view mode of every parameter. Native
+indirect calls borrow view arguments until the call returns and transfer only
+owned arguments; the borrowed callee parameter never destroys the caller's
+value. A call-site `view` to an owned parameter is rejected before codegen.
+Immutable local view aliases retain their immediate backing local in HIR/MIR.
+Native storage excludes these aliases from owning slots and retains the root
+owner through transitive alias reads. This includes qualified strings and
+function descriptors as well as supported linear carriers. Handler extraction
+uses checked formal view modes and stages independent snapshots when needed;
+it resolves an indirect callback after its arguments. Mutable and temporary
+alias origins, allocating conversions, and later root consumption or rebinding
+remain explicit implementation limits, described in
+[the local alias note](../completed/native_codegen/native_local_view_aliases.md).
+Function-valued callee expressions use the same descriptor ABI as named local
+callbacks. Argument temporaries remain owned while a returned, projected, or
+handled callee expression is evaluated; a callee failure or handler return
+cleans them up before any transfer to the selected function. Native differential
+fixtures cover successful calls and terminal callee failure with owned list
+arguments.
+
+Function descriptors use three initialized fields: a borrowed code address at
+index 0, an owned capture-environment handle (or borrowed zero) at index 1, and
+an owned debug-label string at index 2. The label is derived from checked source
+metadata: `function(namespace.name)` for a named function and
+`function(parameter, names)` for an inline function, excluding synthetic capture
+parameters. HIR and MIR preserve this distinction explicitly even when a
+capture-free inline function uses the same call representation as a named one.
+The runtime debug-layout format appends the zero-payload `Function` tag (13)
+without changing earlier tag values. Its reader borrows the descriptor and
+label; it never calls the code address or exposes the capture environment.
+Ordinary clone/drop and failure cleanup own the label through the descriptor.
+The current host representation retains this label on every function value;
+eliding unused debug metadata is a later optimization.
+
+Bytes new/from_string/slice/concat, explicit clone, length and to_hex execute
+natively. Concat creates real checked-capacity byte storage. No byte mutation
+syntax is added. Byte temporaries add one structural slot per allocating call,
+intrinsic, explicit clone, or local move; local views add none. Existing string
+structural costs are unchanged. Cleanup accepts both owned families, including
+terminal failure, and byte creation/destruction counters must balance in
+addition to both registries being empty. Runtime tests separately prove byte
+storage independence, exact destruction and byte-only leak detection. This is
+not evidence for resource finalizers or full native parity.
+
+Encoding leaves borrow their byte or string input and return an owned string
+or an owned `result` with an owned byte/string payload. Native and interpreter
+call the same base64, strict hex, URL, and form kernels, including validation
+precedence and UTF-8 errors. Failed sum allocation drops the newly created
+payload before propagating terminal failure.
+
+CSV leaves parse strict records into nested owned string lists or header maps,
+and stringify checked nested string lists. The interpreter and native runtime
+share the parser, quoting, and header-validation rules. Native construction
+releases partial rows, fields, maps, and result payloads if an allocation
+boundary fails; the runtime fault-injection test checks each boundary.
+
+Secret and refinement wrappers retain their underlying native representation.
+The checked base-to-secret lift is recorded in expression types before MIR
+lowering, so local storage, calls, and aggregate fields agree on the wrapper.
+Native redaction returns the fixed `***` string after evaluating its operand.
+Native secret comparison accepts the checked string and bytes payload shapes,
+returns false on a public length mismatch, and uses constant-time byte
+comparison for equal lengths. Wrapper-aware ownership retains and releases
+strings and transfers or clones owned bytes and aggregates as their base types.
+Explicit `declassify` transfers the same underlying value after the verifier
+checks its source `secret[T]` and destination `T`.
+Explicit `coarsen` likewise transfers the underlying value after the verifier
+walks the checked refinement ancestry to the requested base type. It creates
+no runtime wrapper and does not bypass the separate fallible validation needed
+to construct a refinement. MIR snapshots a cloneable owned local before either
+transparent conversion, preserving the original refinement or secret value
+for a later read while the converted result owns its copy. Linked differential
+fixtures cover reuse after `coarsen` and repeated `declassify` of a secret list.
+When the conversion is used as a borrowed argument, MIR and native emission
+preserve the underlying view instead of creating or consuming an owner. Linked
+debug/release coverage checks local and projected bytes, direct and indirect
+calls, later-argument handlers, source removal, and terminal argument failure
+with successful cleanup.
+Private crypto leaves borrow checked bytes and
+return owned digests; the interpreter and native runtime use
+the same SHA-256, SHA-512, MD5, and HMAC-SHA-256 kernels behind public `.jett`
+wrappers. The HMAC result retains its secret type in MIR and native ownership.
+
+At a base-value refinement `handle error` boundary, HIR supplies one checked
+predicate function per refinement ancestor. MIR calls them in base-first order
+with a clone of the candidate, branches on each result, and transfers the
+candidate into the refined output only after all predicates pass. A false
+result creates the interpreter's type-specific error string and enters the
+source failure block. When the candidate is a cloneable owned local, MIR
+snapshots it before validation so both success and handled failure can still
+read the original source.
+
+Direct local and struct-field validation reuses the original checked source
+refinement, skipping its established ancestor prefix while preserving remaining
+predicate order, pending depth, ownership, and the constructor's result shape.
+Reference execution captures that proof before evaluation and normalization;
+raw API inputs and changed property candidates retain their existing validation
+entry points. Generic fields and result wrapping follow the constructor's selected
+type arguments and declaration namespace. This repair adds no runtime ABI
+operation or representation. Checked named calls and returns likewise transport
+original expression proofs in the reference engine, including reordered named
+arguments, generic/reflected bodies, NamedFunction values, and source pipelines.
+Raw calls disable proof reuse throughout nested bodies and callbacks; checked
+program and zero-argument verify entries use an explicit bridge with forced
+input normalization. Changed property candidates and forced validators retain
+their separate validation boundaries. Builder finish also remains forced.
+Reference inline closures retain their declared return annotations and validate
+parameters and results inside their captured context before exposing a typed
+call result. Fresh private sum fallback results also validate before checked
+proof reuse; refined summation remains outside native admission. Native checks
+for newly refined root returns now use the existing staged refinement machinery.
+Checked concrete function and inline signatures select the destination. Exact
+sources skip predicates; ancestor sources check only their missing suffix. The
+candidate is evaluated once, and the original string error reaches the existing
+borrowed `RuntimeFailMessage` leaf before owned locals are unwound. The private
+HIR `RuntimeFailureMessage` boundary requires exact string input and nothing
+output; it introduces no source spelling or ABI operation. Outer secret or
+container return conversion admission is not broadened.
+Reference reflected reads also establish new requested invariants in ready
+builtin containers before exposing checked result proof. Exact declared schemas
+preserve pending values; unsupported changed pending, secret, callable, or nominal
+generic conversions fail before exposing a result. Requested-type admission and
+secret observation remain open policy questions. Canonical generic, captured,
+reflected, and checked type identities survive caller import shadowing. These
+reference safeguards add no runtime operation or representation and do not certify
+equivalent native reflected producer validation.
+
+Native reflected root-refinement reads now use complete HIR plans for every
+declared field slot. Exact and established ancestor reads reuse proof; ancestor
+promotion checks its new suffix, while an unrefined or sibling source checks the
+requested chain in base-first order. MIR stages source and selector once, runs
+the original getter's metadata, owner, member, index, requested-type and pending
+checks first, then validates only the selected clone. Predicate identities and
+TypeField layouts are verified before descriptor use. Dynamic predicate errors
+use the existing borrowed failure leaf and cleanup path; no ABI operation is
+added. New native nested-container invariants remain an implementation gap.
+Changed secret, callable and nominal generic proofs retain conservative
+value-free refusals without broadening requested-type admission.
+Direct and piped getters append the same checked field metadata in declaration,
+variant, or state order after the original source/selector evaluation order.
+Narrowed machine owners keep their checked identity and base metadata spelling.
+The admitted one-operand observers `type.variant_value`,
+`type.machine_state_value`, and `type.arg` now share direct/pipeline metadata
+expansion too. Their checked output type selects metadata carrier types after
+the original operand runs once. Existing pending/index checks and independently
+owned metadata clones use the same runtime leaves, with no ABI addition.
+
+## Result and optional ownership and handlers
+
+Native sums have separate context-associated, move-only handles. Their internal
+records contain a genuine discriminant (0: fail/none, 1: ok/some), a 64-bit
+payload carrier, and an owned-payload flag. Fixed-width scalars preserve bits;
+float32/64 are bitcast, never numerically cast into the carrier. Nothing/none
+have no owned payload. Owning payloads transfer into the record only on
+successful construction. Sum destruction recursively drops the active payload
+only; explicit clone recursively clones bytes/sums and retains copyable strings.
+Taking a payload checks the expected tag, destroys the outer record, and
+transfers the payload to a new initialized place without destroying it. A failed
+tag check leaves the record available to terminal cleanup. Sum allocation and
+destruction counters are checked independently from string and byte registries.
+
+Statement-root result/optional handles now lower to SumTag, ordinary Branch,
+SumTake, and explicit continuation blocks. Handler default yields to that
+continuation; return exits the enclosing function; break/continue retain their
+enclosing loop edges. Failure branches without an error binding drop the sum
+normally. Terminal runtime failure still bypasses these language-level branches.
+The move fixed point covers the extracted edges and transferred payload places.
+Emitted SumTag statements call `SumHandleTag` with the source's checked debug
+layout. The leaf rejects outer pending depth before extraction, preserving the
+sum and its owned payload for cleanup. Ready sums return their tag without
+parsing the layout; pending payloads inside a ready sum remain valid. On failure,
+typed observation produces the reference pending-value diagnostic for public
+values while retaining native secret redaction. The separate raw SumTag leaf
+continues to serve internal runtime protocols.
+Nested payloads work. Result/optional handlers inside direct-call arguments
+also lower through `view` wrappers; preceding owned arguments are staged in
+checked evaluation order before the handler's CFG branch. A native differential
+fixture checks present/default branches and named-argument side-effect order.
+Handling a cloneable local result or optional snapshots that local before
+SumTag and SumTake, because the source remains available to later handles.
+This includes view parameters and sums containing owned lists. Direct and
+indirect calls can stage a projected view before a later handler rebinds its
+parent; the callee reads the original projected value.
+The extracted CFG also covers many nested expression and refinement forms;
+unexamined handlers and sums containing noncloneable resources still require
+parity work.
+
+All original bytes_operations fixture functions execute in a supplemental
+native main, including binary conversion errors and borrowed observer aliases.
+int64/uint64/float64 string parsing produces ordinary tagged result data; the
+three original math MIN runtime contracts now execute using that path. Full
+fixture denominators and unsupported families remain unchanged.
+
+Cleanup-operation failure is recorded separately from the first terminal error.
+Even after all registries empty, a double drop forces context destruction to
+fail and launcher exit 72; the original runtime failure diagnostic is retained.
+Named argument tests distinguish lexical evaluation from parameter order and
+prove nested views end before a later legitimate move, while same-call active
+loans reject conflicting moves.
+
+## Initial list layouts and compiled iteration
+
+Native list handles own a homogeneous vector of payload carriers plus the
+checked element ownership category. List construction owns its partially built
+list before evaluating any elements. Append mutates uniquely owned storage,
+transferring the element and returning the same owning list on success; failed
+append leaves both input owners with the caller. Get/first/last return genuine
+optional data and clone the selected element. Explicit list clone recursively
+clones owned elements. Lists have separate creation/destruction counters and
+leak checks, including lists with no owning elements. Scalar, string, bytes,
+sum and nested-list elements are supported; named structs/maps/sets are not.
+
+Insert-at transfers its element into the uniquely owned list after a valid
+index and successful capacity reservation. Remove-at drops the removed owned
+element exactly once and returns the same list handle. Invalid indices leave
+the input list owned by the caller. Terminal failures preserve the signed invalid
+index in the context-owned message, matching the interpreter's error text.
+
+New/length/append/insert/remove/get and primitive sort are typed native leaves.
+Sort reorders the uniquely owned list in place, comparing signed and unsigned widths,
+floating-point values, bools, and owned strings with interpreter semantics.
+Sort carrier selection follows nested refinements over these primitives while
+retaining the identical checked `list[T]` input and result; it preserves existing
+element payloads and ownership. Secret and aggregate element carriers remain
+rejected. Summation retains its separate primitive-only admission rule.
+First/last/is_empty/reverse/repeat and math.sum run their actual compiled Jett
+bodies. list.sum uses a typed leaf for all numeric primitives, including their
+transparent aliases: integers wrap at the checked width, floating addition
+rounds at that width after each step, and empty lists return typed numeric zero.
+The remaining summation type boundary is recorded in
+[the open contract](../open_design/list_sum_type_contract.md). Contextual conversion
+of an empty `list[never]` to an owned element layout remains guarded. No
+name-dispatch or loop interpreter is introduced.
+
+Before native validation, a MIR sequence pass materializes supported iterables
+in a preheader exactly once, creates a cursor and length, and replaces ForEach
+with ordinary Branch, SequenceGet, increment, and existing exit/backedge CFG.
+Direct string iteration uses typed scalar-count and scalar-at leaves, so each
+loop item matches the interpreter's Unicode scalar `for` semantics. This is
+distinct from `string.chars`, which returns grapheme clusters. The string
+source remains owned by its frame slot while each yielded scalar is a new
+owned string handle.
+Consuming iteration transfers scalar/string and move-only elements from initialized
+element places. Each list slot has an independent initialized flag; a take clears
+only that slot after bounds/initialization checks. Partial-list destruction visits
+only remaining initialized slots, including early return/break and terminal failure.
+Borrowed iteration currently yields copyable scalar/string elements only; projected
+move-only views remain rejected until projection lifetimes are implemented. A borrowed container has an explicit token from preheader to
+exit; ownership analysis unions active tokens across edges and preserves nested
+loans of the same owner. Moving or overwriting an actively iterated owner is
+rejected; moving after the exit is valid. Return/break/continue use ordinary
+frame cleanup and loop exit edges. Exact effects prove iterable evaluation once.
+
+Sequence preheaders are selected from CFG predecessors reachable from function entry
+without crossing the loop header, not from numeric block order. The lowering
+requires a unique unconditional entry edge; ambiguous shapes remain rejected.
+Regression coverage relocates the preheader after the loop, re-enters loops from
+an outer loop, checks empty inputs, nested loans and handled loop exits, and
+unpacks float32/int8/uint8 elements. Test-only allocation fault injection confirms
+partial nested list clone releases its cloned prefix without consuming sources.
+
+The typed int64 range leaf builds owned scalar list storage with checked capacity
+and checked progression at signed boundaries. One/two-argument defaults are emitted
+constants, after source arguments are evaluated in their checked order. Zero step
+and oversized output are terminal failures (not ordinary result.fail), matching
+interpreter diagnostics and unwinding live bytes/sum/list owners in callers.
+
+An unconstrained `list()` may have the uninhabited element type `never`. Its
+native handle has no owned elements and supports empty-list length and emptiness
+checks. The backend still rejects a value-producing `never` projection and a
+conversion into another list element layout until it can update nested owner
+metadata without leaking later inserted values.
+
+String chars/words/lines/split are typed segmentation leaves returning genuinely
+owned list[string] storage. Partial construction releases every inserted string
+and the list on allocation failure. Join borrows its native list input for the
+leaf; source-level consumption still moves the list into a tracked caller temporary,
+which is destroyed at full-expression cleanup. Grapheme split requires both ends
+of every delimiter match to be grapheme boundaries, including overlapping rejected
+byte matches. Empty delimiters preserve endpoint empty strings. CR/LF/CRLF line
+segmentation matches the interpreter. split_max, reverse and list.skip remain
+compiled Jett control flow, not runtime implementations of their source bodies.
+
+Primitive sets have distinct context-associated owner handles. Integer and bool
+elements compare their checked scalar bits; string elements compare UTF-8 content
+while retaining separate owner references. Add preserves insertion order, drops a
+consumed duplicate string, and leaves both inputs owned by the caller if capacity
+allocation fails. Remove drops only the removed owner. Clone retains each string
+and rolls back partial construction on failure. Native sequence lowering uses
+initialized element slots for consuming iteration, so an early exit drops only
+the elements still in the set. Borrowed iteration clones strings without moving
+the source set. Primitive-backed refinement elements use their checked integer,
+bool, or string representation, including the string ownership flag. The
+native/interpreter fixtures cover these paths, including duplicate content and
+cleanup at context destruction.
+
+Native maps use distinct ordered owner handles with exact key and value
+ownership flags. Literal construction appends every source entry, including
+duplicate keys; `map.insert` replaces the first matching value and preserves
+the earlier key, while `map.remove` removes every matching entry. String keys
+compare by content. `map.from_lists` zips to the shorter input, replaces
+duplicate keys, and consumes both lists only after a successful result.
+Lookup clones owned values into an optional sum. Explicit map clone recursively
+clones owned entries and releases a partial prefix on failure. Consuming
+iteration transfers each key and value separately; an interrupted iteration
+drops only fields still owned by the map. Borrowed iteration clones supported
+scalar and string fields. Primitive-backed refinement keys use the same key
+bits and string ownership as their underlying type. Native/interpreter execution
+fixtures and runtime cleanup tests cover these paths. Projected move-only
+views and callback-bearing map helpers remain guarded.
+
+Checked generic JSON calls for `json.JsonTree` lower to trusted
+`json.parse_raw` or `json.serialize_raw` source functions. The exact-parse
+path is equivalent for this raw representation because its source validator
+accepts every valid `JsonTree` shape. String, bool, and numeric serialization
+construct a checked `JsonTree` variant and call the same source serializer;
+string payloads are cloned before the tree takes ownership. A literal
+`nothing` constructs the null variant. Checked `json.parse` and `json.parse_exact`
+calls for `string`, `bool`, `int64`, `uint64`, `float64`, `bytes`, and `nothing`
+lower to private stdlib source decoders after compiler policy checks. Lists,
+sets of supported hashable primitives, string-keyed maps, optionals, and results
+composed recursively of these leaves use
+checked source decoders as well. They parse through `JsonTree` and its strict
+accessors, preserving source error messages and ownership. A linked differential
+fixture checks successful values, nested cleanup, and element/key error paths.
+Narrow numeric leaves and named aggregates still require
+native parse lowering.
+
+Concrete structs, lists, string-keyed maps, optionals, and results composed of
+supported primitive values use specialized checked stdlib serialization. The
+public policy gate still runs before the source body. Borrowed bytes and
+containers are cloned before consuming serialization paths; linked
+native/interpreter fixtures check output and
+owner cleanup. Float32 fields and other aggregate JSON shapes remain pending.
+
+The remaining string intrinsics now have typed native leaves. Replace reuses
+the grapheme split matcher and checks output capacity before assembly; empty
+needles preserve the interpreter's leading, between-grapheme and trailing
+replacement positions. Slugify and first-grapheme case changes match the
+interpreter's Unicode behavior. Existing run-pass string fixtures now emit
+native objects, and dedicated linked fixtures compare observable output with
+the interpreter.
+
+## Native user struct ownership (phase 4)
+
+User structs, including concrete generic instances, use distinct context-bound
+move-only handles. A record has fixed indexed field slots, each with a payload
+carrier, ownership category and initialized flag. The compiler validates field
+count, exact field types, owner type and lexical evaluation permutation against
+the checked type table. Native code owns the empty record before evaluating
+fields, initializes slots in source order, and transfers each field owner only
+after the typed initialization leaf succeeds. Partial-construction failure drops
+only initialized fields and the still-owned expression temporaries.
+
+Scalar field bits use the existing exact payload packing (including float32,
+float64 and narrow integers). Field access implicitly borrows its parent.
+Scalar fields copy and string fields retain. An owned field read clones the
+selected move-only value; an explicit projected view remains a bounded borrow.
+A nested projected view keeps its root owner live. Call loans prevent moving that root during evaluation of a
+later argument. Explicit clone recursively copies the selected owned field or
+whole record, and leaves the source intact. A failed deep clone destroys its
+initialized cloned prefix. Whole-record calls, returns, rebindings and cleanup
+use the same materialized owner slots and transfer rules as bytes/sums/lists.
+Struct owners also work inside sums and consuming lists. The runtime checks
+record creation/destruction counts independently, even for empty records.
+
+The checker records the exact Equatable.equals method identity for struct
+comparison operators in per-body facts. HIR lowers equality to that direct
+compiled call with its two view parameters; inequality negates its result.
+The implicit `EquatableResult` boundary checks returned pending depth before
+inequality negation or later expressions. It preserves the exact checked bool
+type and any leading secret qualification, borrows the existing scalar result,
+and uses `RejectPendingScalars` with `Equatable.equals must return bool`.
+Explicit method calls keep ordinary boolean task behavior.
+Native primitive comparison rejects raw struct operands. No structural equality,
+handle equality or method-name dispatcher is used.
+
+Enums use the same owned record handle with a dense variant tag in slot zero.
+Payloads occupy subsequent typed slots. Construction owns the partial record
+before evaluating payloads; a matched arm transfers bound fields out, then
+drops the remaining record. Clone and cleanup recursively handle owned
+payloads, including nested enums. Switch validation rejects duplicate, invalid
+and non-exhaustive arms. Native/interpreter differential fixtures cover unit,
+scalar, string and recursive owned payloads, multiple bindings and an `other`
+arm. Equality borrows both enum operands, compares dense tags, then compares
+the selected variant's scalar payloads. Integer and boolean payloads compare
+their value bits, floating-point payloads use IEEE equality, and strings compare
+their text. A linked differential fixture also covers a user-struct payload
+with owned list fields through construction, borrowed matching, clone, trace,
+list storage, and cleanup. User structs inside aggregate payloads now call their
+exact checked `Equatable.equals` methods. Opaque struct nodes yield through an
+owned comparison cursor to generated direct calls outside the runtime context
+lock. Nested comparisons use independent cursors; temporary borrowed shells
+unwrap matching pending structs without traversing ignored fields. Success,
+false results, and method failures retire every cursor and shell. The four
+additive enum equality leaves and their `JQ` version-1 descriptor are documented
+in `docs/completed/enum_payload_struct_equality.md`.
+Supported aggregate payloads use an explicit comparison stack instead of the
+former 128-level recursion guard. Active `(node, left, right)` paths reject
+malformed cycles; repeated children on separate paths remain valid. Child
+validation is deferred until its comparison executes, preserving short-circuit
+failure precedence. Pointer identity is never an equality shortcut, so nested
+NaN, signed-zero, pending-depth, and collection-order behavior stays intact.
+This changes no ABI signature and does not add direct collection comparisons.
+
+`TypeInfoMatches` and `TypeInfoReflectionMatches` construct their existing
+length-prefixed identity strings with a work stack. Canonical matching still
+erases aliases; reflection matching preserves them. The previous 64-level
+metadata cutoff is removed for finite trees. Active metadata handles detect
+cycles without rejecting shared argument subtrees, and malformed alias arity,
+secret flags, and missing arguments retain their existing errors.
+
+Bitfield values use the same typed record storage for fields, including owned
+payload fields. Native construction, field projection, clone and cleanup match
+the interpreter in a dedicated fixture. `to_bytes` writes checked field widths,
+network or native byte order, enum discriminants and trailing `list[uint8]`
+payloads to owned bytes. `from_bytes` decodes checked widths, enum tags and
+trailing payloads into owned records; invalid bytes return matching error strings.
+Native/interpreter fixtures cover roundtrips and decode failures, while runtime
+allocation-boundary tests cover partial-owner cleanup. Dynamic field-width
+validation still requires bitfield-specific native lowering.
+
+Machine values also use owned records: slot zero stores the dense state tag,
+followed by that state's payload fields. Construction initializes an empty
+record before evaluating payloads; a transition consumes its source and builds
+the declared target state. State tests borrow the record. Reading a field of a
+state-qualified machine projects the corresponding payload slot, and narrowing
+a bare machine local checks its tag before projection. Clone and destruction
+recursively handle owned payloads. The dedicated native/interpreter fixture
+covers construction, transition, two- and three-state branches, payload reads,
+and bare-machine narrowing; the runtime guard test rejects a mismatched tag
+while preserving cleanup.
+
+This is not full aggregate parity. Refinement-validating constructors,
+field-place assignment, borrowed iteration yielding compound views,
+payload-enum equality for aggregate fields, and bitfield width validation remain
+unsupported.
+Composite explicit comptime constants still require baking.
+
+Borrowed native list and map iteration over move-only elements materializes an
+owned deep clone for each loop binding; the source collection retains its
+owner through the loop. A switch over a borrowed enum likewise matches an
+owned clone, preserving the caller's value and existing payload-transfer
+semantics. An explicit `view` passed to an owned direct-call parameter is
+cloned at that call boundary. MIR ownership analysis and temporary capacity
+account for the clone. An ordinary owned read of a move-only struct field also
+deep-clones that field, matching the interpreter's field-copy behavior; a
+projected view keeps the parent loan active instead.
+Iteration over a list, set, or map projected through struct fields also borrows
+the root struct for the loop and clones each binding. The projected collection
+is never placed in an owning temporary, and the parent remains available after
+the loop. This does not permit an owning assignment from the projected field.
+Native `type.variant_value[T]` borrows the enum, reads its runtime tag, and
+selects a compiler-built `TypeVariant` from checked variant metadata. The
+selected record is deep-cloned into an owned result before temporary metadata
+records are released; no payload field is read or moved by this selection.
+Native `type.field_value[T, U]` and `type.variant_field_value[T, U]` borrow the
+source value and reflected `TypeField`. Hidden compiler-built field snapshots
+identify candidates with the checked result representation and secret flag.
+Runtime validation compares the selected candidate's index, owner type, owner
+member, field name, and type name with the supplied metadata before reading
+the value slot. Linear results are deep-cloned, strings are retained, and
+scalar results are unpacked, so the source stays owned by its caller. When a
+`TypeField` owner mismatches, native reports the actual and expected type or
+member labels before candidate selection, including empty active members.
+A valid field with an incompatible requested
+type reports both checked type names. Other invalid metadata still produces a
+static terminal error; exact interpreter diagnostics and alias-equivalence
+behavior remain parity work.
+Native `type.machine_state_value[T]` uses the borrowed machine tag to select
+and clone a checked `TypeMachineState` snapshot. `type.machine_field_value[T, U]`
+borrows both the machine and `TypeField`, selects a checked field snapshot by
+state tag and field index, and validates it before reading the payload slot.
+The result is cloned or retained when it owns storage. Wrong-state owner
+metadata and incompatible requested types report the interpreter's specific
+errors; other metadata errors still need exact diagnostic parity.
+The reflected field-read leaves reject a pending `TypeField` before inspecting
+its owner or selecting a checked field. The construction leaves do the same
+for `construct_put` and reject pending `TypeVariant` or `TypeMachineState`
+builder-start metadata. Source-derived debug layouts format these errors with
+the interpreter's full pending value while retaining borrowed metadata.
+The selection and field-read leaves also reject pending source enum, machine,
+struct, and bitfield records before returning reflected data. For payload
+fields, a pending `TypeField` is diagnosed first, then a pending source value,
+then an owner mismatch; struct field reads retain their checked field/type
+validation before checking the source value. Secret-bearing owners use recursive
+redaction in these diagnostics. Debug tag `Redacted` (16) has no payload and
+formats `[redacted]` without accessing hidden handles or pending depth. It is
+not an equality layout and never changes ownership or declassifies a value.
+Public pending text equal to the literal `[redacted]` still retains its pending
+wrappers; redaction is determined by the layout, not the resulting string.
+Static machine layout, state, and transition reflection materializes checked
+metadata as ordinary owned structs and lists, including nested `TypeField`
+records. State-qualified machine types expose their machine's full layout;
+alias and non-machine total probes produce empty values.
+Native `type.arg` checks pending and negative indexes and reports an
+out-of-range index with the reflected source type name. It validates the index
+before cloning the selected checked `TypeInfo` record.
+Native `TypeConstruction` is a move-only handle backed by a partially filled
+owned record and checked field layout metadata. The HIR handoff keeps
+each field's source type spelling alongside its canonical value type, so
+alias-typed fields validate against reflected metadata without weakening the
+provided value check. `construct_put` borrows
+the reflected `TypeField`, consumes the builder and value, and returns an owned
+result. A handled validation failure drops both consumed owners; a successful
+put transfers the builder through the result. `construct_finish` checks the
+owner and every required field, then transfers the completed record into its
+result or drops the incomplete builder on a handled error. Deep cloning copies
+both populated fields and builder metadata. Context destruction checks that
+no builder metadata or owned fields remain. Concrete structs without
+refinement-validating construction, bitfields with supported integer or
+unit-enum bit fields, and enums without refinement-validating payload fields
+use this path. Enum start validates the borrowed `TypeVariant` and its payload
+field metadata, then creates an owned tagged record. Put validates each
+selected variant field, and finish reports a handled missing-payload error.
+Bitfield finish checks widths and reports handled errors for out-of-range
+values. Machine start validates the borrowed `TypeMachineState` and selected
+state fields. A state-qualified target accepts the checked state builder, then
+finish reports a handled error if the selected state differs from its target.
+Machine put and finish preserve the same owned-builder cleanup contract.
+The checked `.jett` JSON decoder now reaches that builder for supported
+concrete structs and bare or state-qualified machines with supported state
+fields. An empty machine state performs no reflected field dispatch before
+finishing its builder. It selects the struct, machine, or alias branch before
+unrelated generic decoder bodies, so direct aliases decode through their base struct
+and alias-typed fields retain their checked metadata names.
+The checked source serializer now reaches supported bare and state-qualified
+machines, including nested collections and public projection that omits secret
+state fields. Assigning an exact machine-state local to a bare machine local
+transfers ownership; an explicit clone preserves the source for later use.
+The decoder now also reaches supported `secret[T]` values and secret-bearing
+record and machine fields. MIR verification accepts the checked promotion of
+an inner local to its secret wrapper while retaining the type-checker's
+prohibition on implicit secret exposure. Public record serialization omits
+direct secret fields. Raw `secret[json.JsonTree]` uses a dedicated trusted
+`.jett` parser with the same open-shape exact-parse policy as `JsonTree`.
+Supported top-level enums call checked generic `.jett` parse and serialize
+hooks. Payload decoding constructs the selected variant inside its reflected
+variant loop; raw `JsonTree` keeps its dedicated wire path. Nested enum source
+dispatch remains pending.
+Reflected `comptime type` dispatch borrows its runtime `TypeInfo` selector.
+The runtime leaf derives a recursive structural identity, unwrapping aliases;
+native branches compare it with the checker-owned identity of each specialized
+arm. The selector remains live until the selected edge releases expression
+temporaries, and only that arm executes.
+`type.arg[T](index)` carries checked `TypeInfo` snapshots for each source-aware
+type argument. Native code validates the runtime index, selects one snapshot,
+and returns an owned clone. Out-of-range errors are terminal, but their exact
+diagnostic still needs interpreter parity.
+
+Function values use an owned native descriptor with a code address and an
+environment handle. Named and capture-free inline functions have an empty
+environment. Inline functions that read enclosing locals extract to checked
+HIR/MIR functions with leading capture parameters; creation copies those
+locals into an owned environment. Internal native functions receive a hidden
+environment argument after the runtime context, while the exported entry
+wrapper retains its one-context-argument ABI. Indirect calls read both fields
+from the descriptor and pass the environment to the checked target signature.
+Function values copy by deep-cloning their descriptors and captured values;
+aggregate fields own and release them. Source argument order, runtime-failure
+checks, and owned result handling match direct calls. View-parameter function
+values retain their checked borrow modes, including capability arguments.
+Ownership planning reserves an independent result temporary for every indirect
+call returning an owned aggregate or interface, as well as the callee descriptor
+and argument temporaries. Linked debug/release tests cover collections built
+from multiple owned callbacks, both live and baked interface facade results,
+and cleanup after a later callback fails.
+The `list.sort_by` callback now runs in `.jett` over
+one precomputed key per item, then performs stable swaps of parallel key and
+item lists. This avoids invoking Jett callbacks while a runtime collection
+lock is held. The current implementation uses quadratic comparisons and swaps;
+larger-list performance remains a follow-up.
+
+Indexed-row list sorting uses a stable runtime sort over borrowed row keys and
+keeps the owning outer list intact until validation succeeds. Sortedness checks
+borrow the list. Both select the checked carrier for every numeric width,
+`bool`, and `string`, including primitive-backed refinements. Pending strings,
+scalar keys, and rows compare as equal without observing their payloads, while
+their owning handles and pending depths remain intact. Floating sortedness uses
+IEEE `<=`: an adjacent ready NaN makes the check false; ordinary sorting retains
+the interpreter's equal-comparison fallback for NaN. `list.group_by` now invokes
+its named key callback in `.jett` and builds the map through trusted collection
+intrinsics. Its current map lookup
+clones accumulated groups, so larger-input performance remains a follow-up.
+
+Borrowed sequence tokens now end on each CFG edge leaving the loop region,
+including handler default edges that bypass the ordinary loop exit. Split edges
+end only that loop token, preserving outer loans. Nested iterable element IDs
+are checked before sequence preprocessing resolves them.
+
+Native object emission also lowers checked `verify` and `property` blocks to
+callable test symbols. Property `given` bindings are typed parameters, not
+values synthesized by the object emitter. Test-body functions preserve the
+source policy that ordinary owned values can be read repeatedly: an owned
+native read deep-clones the value while a view borrows it. The default `assert`
+failure records the static terminal message `assertion failed`. A custom
+interpolated assertion message is evaluated only on the failed branch and
+copied into context-owned terminal storage. The existing v1 result still
+returns static message bytes; `jett_rt_v1_value_failure_copy` queries and copies
+the exact failure text into caller-owned storage before context destruction.
+The same path carries signed invalid indices from `list.insert_at` and
+`list.remove_at`, matching the interpreter's terminal error text.
+The launcher uses that copy for its error line, and the normal owned-value
+cleanup epilogue still runs. Production program objects still select
+only the checked source `main`. A separate native verify build synthesizes one
+entry that calls the primary file's top-level verify functions in declaration
+order, stopping on terminal failure. A separate property suite embeds the
+existing deterministic `given` samples as typed HIR constructions and calls
+each checked property body 100 times. The interpreter chooses inputs, while
+the emitted code executes the property body. Compiler-owned HIR marks each case
+with its property name and one-based trial number before constructing inputs,
+then clears the context after the body returns. `PropertyCaseSet` copies this
+diagnostic prefix into runtime context storage; `PropertyCaseClear` removes it.
+Neither operation retains a Jett value. Terminal failure copies prepend this
+context without changing caught predicate errors or the static v1 result.
+The driver performs native counterexample shrinking by regenerating checked
+input constructions and invoking fresh native processes through the same
+launcher. It shares the interpreter's bounded shrink search, preserves the
+original suite output, and accepts failed candidates only after successful
+runtime cleanup. A standalone suite executable does not itself run this search.
+
+Evidence includes existing generic_struct and explicit_struct_equality fixture
+bodies executed with supplemental mains, nested owners and early returns,
+partial construction terminal cleanup (exit 71), runtime clone fault boundaries,
+malformed MIR rejection, and one generated object executed with four distinct
+process inputs through a test-only scalar input adapter. Allocation tests cover
+returned leaf failures, not allocator abort, OS termination or resource finalizers.
+
+
+## Callback conversion descriptors
+
+Nested interface-compatible container conversions carry a finite compiler-owned
+conversion tree. Its callback leaf (tag 7) contains an eight-byte linked function
+address. Object emission clears the placeholder function ID and writes a native
+function relocation at the recorded byte offset. The host linker resolves it;
+the runtime never interprets a function ID or looks up source declarations.
+Descriptor parsing uses an explicit parent stack in place of the former
+128-level recursion cutoff. Its wire encoding, result branch order, ownership
+flags, and leaf validation remain unchanged. A descriptor must consume exactly
+the supplied bytes before any value conversion begins.
+
+Each converted callback owns an adapter descriptor retaining its original
+function, captures, debug label, and pending depth. Container allocation failure
+releases every completed adapter and partial owner, while the source stays valid.
+The checked HIR descriptor retains source/target signatures and the generated
+function ID so reachability and MIR signature validation cover all relocated
+bodies, including adapters nested inside higher-order callback parameters.

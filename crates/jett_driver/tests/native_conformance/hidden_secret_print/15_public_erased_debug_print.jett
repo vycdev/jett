@@ -1,0 +1,12 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+struct Public:
+    token: string
+implement Named for Public:
+    function name(view self: Public) returns string:
+        return "public"
+function main() returns nothing:
+    Named erased = Public(token: "sentinel-public")
+    println(view erased)
+    return nothing

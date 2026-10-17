@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    secret[bytes] key = run bytes.from_string("k")
+    bytes message = bytes.from_string("m")
+    secret[bytes] tag = crypto.hmac_sha256(view key, view message)
+    return nothing

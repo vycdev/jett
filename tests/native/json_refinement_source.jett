@@ -1,0 +1,33 @@
+namespace test
+type NonEmpty = string where string.char_count(value) > 0
+struct Profile:
+    name: string
+type Named = Profile where string.char_count(value.name) > 0
+function parse_scalar() returns string:
+    NonEmpty value = json.parse[NonEmpty]("\"Ada\"") handle error:
+        return error
+    return coarsen value
+function reject_empty_scalar() returns string:
+    NonEmpty value = json.parse[NonEmpty]("\"\"") handle error:
+        return error
+    return coarsen value
+function parse_exact_record() returns string:
+    Named value = json.parse_exact[Named]("{{\"name\":\"Ada\"}}") handle error:
+        return error
+    Profile raw = coarsen value
+    return raw.name
+function reject_unknown_record_field() returns string:
+    Named value = json.parse_exact[Named]("{{\"name\":\"Ada\",\"extra\":1}}") handle error:
+        return error
+    Profile raw = coarsen value
+    return raw.name
+function serialize_scalar() returns string:
+    NonEmpty value = "Ada" handle error:
+        return error
+    return json.serialize[NonEmpty](view value)
+function serialize_record() returns string:
+    Named value = json.parse_exact[Named]("{{\"name\":\"Ada\"}}") handle error:
+        return error
+    return json.serialize[Named](view value)
+function main() returns nothing:
+    println(parse_scalar(), reject_empty_scalar(), parse_exact_record(), reject_unknown_record_field(), serialize_scalar(), serialize_record())

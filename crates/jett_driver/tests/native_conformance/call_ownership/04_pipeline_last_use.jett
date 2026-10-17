@@ -1,0 +1,10 @@
+namespace call_probe
+export function count(view values: list[int64]) returns int64:
+    return list.length[int64](view values)
+namespace app
+function main(stdout: Stdout) returns nothing:
+    use call_probe
+    list[int64] values = list(1, 2)
+    int64 answer = values into call_probe.count()
+    Stdout.write(view stdout, "pipeline:{answer}\n")
+    return nothing

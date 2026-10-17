@@ -1,0 +1,14 @@
+namespace app
+function with_extra(view values: list[int64], extra: int64) returns int64:
+    return list.length[int64](view values) + extra
+function choose(values: list[int64], backup: list[int64], incoming: optional[int64], view stdout: Stdout) returns list[int64]:
+    Stdout.write(view stdout, "before:return\n")
+    int64 answer = with_extra(values, incoming handle:
+        Stdout.write(view stdout, "later:return\n")
+        return backup
+    )
+    return list(answer)
+function main(stdout: Stdout) returns nothing:
+    list[int64] selected = choose(list(1, 2), list(3, 4, 5), none, view stdout)
+    Stdout.write(view stdout, "returned:{list.length[int64](selected)}\n")
+    return nothing

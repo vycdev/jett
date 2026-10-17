@@ -1,0 +1,19 @@
+namespace app
+
+function triangular(limit: int64) returns int64:
+    mutable int64 index = 0
+    mutable int64 total = 0
+    while index < limit:
+        total = total + index
+        index = index + 1
+    return total
+
+verify triangular:
+    assert triangular(0) == 0
+    assert triangular(10) == 45
+
+function main() returns nothing:
+    mutable int64 computed = triangular(10)
+    while computed != 45:
+        computed = computed
+    return nothing

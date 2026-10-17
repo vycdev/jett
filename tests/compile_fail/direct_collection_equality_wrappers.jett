@@ -1,0 +1,14 @@
+# ERROR: E0376 x4
+namespace app
+type Values = list[int64]
+type Selected = Values where true
+type Again = Selected where true
+type Hidden = secret[list[int64]] where true
+function aliased(view left: Values, view right: Values) returns bool:
+    return left == right
+function refined(view left: Again, view right: Again) returns bool:
+    return left != right
+function hidden(view left: secret[list[int64]], view right: secret[list[int64]]) returns secret[bool]:
+    return left == right
+function refined_hidden(view left: Hidden, view right: Hidden) returns secret[bool]:
+    return left != right

@@ -1,0 +1,14 @@
+namespace app
+struct Record:
+    label: string
+function item(view stdout: Stdout, index: int64) returns Record:
+    Stdout.write(view stdout, "{index};")
+    if index == 3:
+        string rejected = string.repeat("ab", 9223372036854775807)
+        return Record(label: rejected)
+    return Record(label: "item:{index}")
+function collect[T](factory: function(view Stdout, int64) returns T, view stdout: Stdout) returns list[T]:
+    return list(factory(view stdout, 1), factory(view stdout, 2), factory(view stdout, 3), factory(view stdout, 4))
+function main(stdout: Stdout) returns nothing:
+    list[Record] values = collect[Record](item, view stdout)
+    Stdout.write(view stdout, "{list.length(view values)}")

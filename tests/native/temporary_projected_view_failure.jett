@@ -1,0 +1,20 @@
+namespace app
+struct Store:
+    names: list[string]
+struct Envelope:
+    inner: Store
+function make() returns Envelope:
+    println("owner")
+    return Envelope(inner: Store(names: list("owned", "temporary")))
+function first(view names: list[string], extra: string) returns string:
+    string name = list.get[string](view names, 0) handle:
+        default "empty"
+    return "{name}:{extra}"
+function failing() returns string:
+    println("argument")
+    list[string] invalid = list.remove_at[string](list("other", "owner"), -1)
+    return "{list.length[string](view invalid)}"
+function main() returns nothing:
+    function(view list[string], string) returns string callback = first
+    println(callback(view make().inner.names, failing()))
+    return nothing

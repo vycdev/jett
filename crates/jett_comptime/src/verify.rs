@@ -1,3 +1,4 @@
+use crate::checked_types::CheckedExpressionTypes;
 use jett_common::{FileId, Span};
 use jett_diagnostics::Diagnostic;
 use jett_parser::ast::{
@@ -6,9 +7,10 @@ use jett_parser::ast::{
 };
 use jett_types::ReflectionMetadata;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::DebugEvent;
 use crate::interpreter::Interpreter;
 use crate::value::Value;
 
@@ -52,7 +54,7 @@ fn update_current_namespace(
 // Default iteration count for property-based testing
 // ---------------------------------------------------------------------------
 
-const PROPERTY_DEFAULT_ITERATIONS: usize = 100;
+pub const PROPERTY_DEFAULT_ITERATIONS: usize = 100;
 // Backstop recursion whose generic arguments change on every expansion.
 const PROPERTY_GENERATION_MAX_DEPTH: usize = 32;
 const PROPERTY_GENERATION_MAX_TYPE_NODES: usize = 1024;
@@ -188,6 +190,29 @@ pub struct VerifyResult {
     pub iterations: Option<usize>,
     /// If this was a property block, whether it is a property (true) or verify (false).
     pub is_property: bool,
+    /// Generation and actual block/trial events in execution order, including
+    /// the original failure. Shrinking and case-collection replay remain private.
+    pub debug_events: Vec<DebugEvent>,
+}
+
+/// Inputs chosen by the existing property generator for one test iteration.
+/// The compiler can embed these checked cases into a native property runner.
+#[derive(Debug, Clone)]
+pub struct PropertyCase {
+    pub property_span: Span,
+    pub iteration: usize,
+    pub arguments: Vec<Value>,
+}
+
+#[path = "verify/checked_property_cases.rs"]
+mod checked_property_cases;
+pub use checked_property_cases::{
+    CheckedPropertyCases, collect_checked_property_cases_with_checked_values,
+};
+
+struct VerificationRun {
+    results: Vec<VerifyResult>,
+    property_cases: Vec<PropertyCase>,
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +228,7 @@ pub struct VerifyResult {
 ///    `assert` statements (kept for backward compatibility).
 pub fn run_verify_blocks(module: &Module) -> Vec<Diagnostic> {
     let results = run_verify_blocks_detailed(module);
-    verify_results_to_diagnostics(results)
+    verify_results_to_diagnostics(&results)
 }
 
 /// Run all verify blocks with checked reflection metadata from type checking.
@@ -212,27 +237,87 @@ pub fn run_verify_blocks_with_metadata(
     metadata: Arc<ReflectionMetadata>,
 ) -> Vec<Diagnostic> {
     let results = run_verify_blocks_detailed_with_metadata(module, Some(metadata));
-    verify_results_to_diagnostics(results)
+    verify_results_to_diagnostics(&results)
 }
 
 /// Run all verify blocks with checked metadata and expression type facts from
 /// type checking.
+/// Namespace constants require `run_verify_blocks_with_checked_values`, using
+/// the values produced by the compiler's required evaluation phase.
 pub fn run_verify_blocks_with_metadata_and_expression_types(
     module: &Module,
     metadata: Arc<ReflectionMetadata>,
-    expression_types: Arc<HashMap<Span, String>>,
+    expression_types: Arc<CheckedExpressionTypes>,
+    breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
 ) -> Vec<Diagnostic> {
     let results = run_verify_blocks_detailed_with_metadata_and_expression_types(
         module,
         Some(metadata),
         Some(expression_types),
+        Some(breakpoint_exclusions),
     );
-    verify_results_to_diagnostics(results)
+    verify_results_to_diagnostics(&results)
 }
 
-fn verify_results_to_diagnostics(results: Vec<VerifyResult>) -> Vec<Diagnostic> {
+/// Execute checked tests using the same immutable values as the compiler handoff.
+pub fn run_verify_blocks_with_checked_values(
+    module: &Module,
+    metadata: Arc<ReflectionMetadata>,
+    expression_types: Arc<CheckedExpressionTypes>,
+    breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
+    values: Arc<crate::ExplicitComptimeValues>,
+) -> Vec<Diagnostic> {
+    let results = run_verify_blocks_detailed_with_checked_values(
+        module,
+        metadata,
+        expression_types,
+        breakpoint_exclusions,
+        values,
+    );
+    verify_results_to_diagnostics(&results)
+}
+
+pub fn run_verify_blocks_detailed_with_checked_values(
+    module: &Module,
+    metadata: Arc<ReflectionMetadata>,
+    expression_types: Arc<CheckedExpressionTypes>,
+    breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
+    values: Arc<crate::ExplicitComptimeValues>,
+) -> Vec<VerifyResult> {
+    run_verification(
+        module,
+        Some(metadata),
+        Some(expression_types),
+        Some(breakpoint_exclusions),
+        Some(values),
+        false,
+    )
+    .results
+}
+
+pub fn collect_property_cases_with_checked_values(
+    module: &Module,
+    metadata: Arc<ReflectionMetadata>,
+    expression_types: Arc<CheckedExpressionTypes>,
+    breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
+    values: Arc<crate::ExplicitComptimeValues>,
+) -> Vec<PropertyCase> {
+    run_verification(
+        module,
+        Some(metadata),
+        Some(expression_types),
+        Some(breakpoint_exclusions),
+        Some(values),
+        true,
+    )
+    .property_cases
+}
+
+/// Convert a captured verification pass to diagnostics without executing it again
+/// or consuming its debug events.
+pub fn verify_results_to_diagnostics(results: &[VerifyResult]) -> Vec<Diagnostic> {
     results
-        .into_iter()
+        .iter()
         .filter_map(|r| {
             if r.passed {
                 None
@@ -242,7 +327,7 @@ fn verify_results_to_diagnostics(results: Vec<VerifyResult>) -> Vec<Diagnostic> 
                     format!(
                         "comptime verify failed in '{}': {}",
                         r.name,
-                        r.error.unwrap_or_default()
+                        r.error.as_deref().unwrap_or_default()
                     ),
                     r.span,
                 ))
@@ -261,41 +346,158 @@ pub fn run_verify_blocks_detailed_with_metadata(
     module: &Module,
     metadata: Option<Arc<ReflectionMetadata>>,
 ) -> Vec<VerifyResult> {
-    run_verify_blocks_detailed_with_metadata_and_expression_types(module, metadata, None)
+    run_verify_blocks_detailed_with_metadata_and_expression_types(module, metadata, None, None)
 }
 
 pub fn run_verify_blocks_detailed_with_metadata_and_expression_types(
     module: &Module,
     metadata: Option<Arc<ReflectionMetadata>>,
-    expression_types: Option<Arc<HashMap<Span, String>>>,
+    expression_types: Option<Arc<CheckedExpressionTypes>>,
+    breakpoint_exclusions: Option<Arc<HashMap<Span, HashSet<String>>>>,
 ) -> Vec<VerifyResult> {
+    run_verification(
+        module,
+        metadata,
+        expression_types,
+        breakpoint_exclusions,
+        None,
+        false,
+    )
+    .results
+}
+
+/// Reuse the interpreter's deterministic property pools for native test input
+/// generation. The source has already passed frontend verification before the
+/// driver calls this, so generated cases are valid values of their `given`
+/// types; the native runner still executes the property bodies itself.
+pub fn collect_property_cases_with_metadata_and_expression_types(
+    module: &Module,
+    metadata: Arc<ReflectionMetadata>,
+    expression_types: Arc<CheckedExpressionTypes>,
+    breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
+) -> Vec<PropertyCase> {
+    run_verification(
+        module,
+        Some(metadata),
+        Some(expression_types),
+        Some(breakpoint_exclusions),
+        None,
+        true,
+    )
+    .property_cases
+}
+
+fn run_verification(
+    module: &Module,
+    metadata: Option<Arc<ReflectionMetadata>>,
+    expression_types: Option<Arc<CheckedExpressionTypes>>,
+    breakpoint_exclusions: Option<Arc<HashMap<Span, HashSet<String>>>>,
+    values: Option<Arc<crate::ExplicitComptimeValues>>,
+    collect_cases: bool,
+) -> VerificationRun {
+    // A checked worker retains the same immutable AST rather than attaching
+    // DefId facts to a freshly cloned same-span module.
+    if expression_types
+        .as_ref()
+        .and_then(|types| types.resource_program.as_ref())
+        .is_some_and(|program| !std::ptr::eq(module, program.module()))
+    {
+        return run_verify_blocks_detailed_inner(
+            module,
+            metadata,
+            expression_types,
+            breakpoint_exclusions,
+            values,
+            collect_cases,
+        );
+    }
     let module_for_thread = module.clone();
     let thread_metadata = metadata.clone();
     let thread_expression_types = expression_types.clone();
+    let thread_exclusions = breakpoint_exclusions.clone();
+    let thread_values = values.clone();
     match std::thread::Builder::new()
         .name("jett-verify".to_string())
         .stack_size(VERIFY_STACK_SIZE)
         .spawn(move || {
+            let retained = thread_expression_types
+                .as_ref()
+                .and_then(|types| types.resource_program.clone());
+            let worker_module = retained
+                .as_ref()
+                .map_or(&module_for_thread, |program| program.module());
             run_verify_blocks_detailed_inner(
-                &module_for_thread,
+                worker_module,
                 thread_metadata,
                 thread_expression_types,
+                thread_exclusions,
+                thread_values,
+                collect_cases,
             )
         }) {
         Ok(handle) => match handle.join() {
             Ok(results) => results,
             Err(payload) => std::panic::resume_unwind(payload),
         },
-        Err(_) => run_verify_blocks_detailed_inner(module, metadata, expression_types),
+        Err(_) => run_verify_blocks_detailed_inner(
+            module,
+            metadata,
+            expression_types,
+            breakpoint_exclusions,
+            values,
+            collect_cases,
+        ),
     }
 }
 
 fn run_verify_blocks_detailed_inner(
     module: &Module,
     metadata: Option<Arc<ReflectionMetadata>>,
-    expression_types: Option<Arc<HashMap<Span, String>>>,
-) -> Vec<VerifyResult> {
+    expression_types: Option<Arc<CheckedExpressionTypes>>,
+    breakpoint_exclusions: Option<Arc<HashMap<Span, HashSet<String>>>>,
+    values: Option<Arc<crate::ExplicitComptimeValues>>,
+    collect_cases: bool,
+) -> VerificationRun {
+    let resource_program = expression_types
+        .as_ref()
+        .and_then(|types| types.resource_program.clone());
+    let setup_failure = |message: String| VerificationRun {
+        results: vec![VerifyResult {
+            name: "checked resource worker".to_string(),
+            span: module.span,
+            passed: false,
+            error: Some(message),
+            iterations: None,
+            is_property: false,
+            debug_events: Vec::new(),
+        }],
+        property_cases: Vec::new(),
+    };
+    if resource_program
+        .as_ref()
+        .is_some_and(|program| !std::ptr::eq(module, program.module()))
+    {
+        return setup_failure(
+            "required worker received a foreign checked source module".to_string(),
+        );
+    }
     let mut interp = Interpreter::new();
+    if let Some(program) = resource_program {
+        if let Err(error) = interp
+            .install_checked_resource_program(program, crate::ExecutionPurpose::Verify)
+            .and_then(|()| {
+                interp.authorize_checked_resource_worker(module, crate::ExecutionPurpose::Verify)
+            })
+        {
+            return setup_failure(error);
+        }
+    }
+    if let Some(values) = values {
+        interp.set_explicit_comptime_values(values);
+    }
+    if let Some(exclusions) = breakpoint_exclusions {
+        interp.set_breakpoint_exclusions(exclusions);
+    }
     if let Some(metadata) = metadata {
         interp.set_reflection_metadata(metadata);
     }
@@ -303,13 +505,14 @@ fn run_verify_blocks_detailed_inner(
         interp.set_checked_expression_types(expression_types);
     }
     let mut results = Vec::new();
+    let mut property_cases = Vec::new();
 
     // First pass: register all functions and type aliases so verify blocks
     // can call them and use refinement types.
     interp.register_module(module);
-    let mut legacy_verify_functions: Vec<(Option<String>, FunctionDef)> = Vec::new();
-    let mut verify_blocks: Vec<(Option<String>, VerifyBlock)> = Vec::new();
-    let mut property_blocks: Vec<(Option<String>, PropertyBlock)> = Vec::new();
+    let mut legacy_verify_functions: Vec<(Option<String>, &FunctionDef)> = Vec::new();
+    let mut verify_blocks: Vec<(Option<String>, &VerifyBlock)> = Vec::new();
+    let mut property_blocks: Vec<(Option<String>, &PropertyBlock)> = Vec::new();
     let mut property_enums: Vec<PropertyEnumDef> = Vec::new();
     let mut property_structs: Vec<PropertyStructDef> = Vec::new();
     let mut property_bitfields: Vec<PropertyBitfieldDef> = Vec::new();
@@ -365,14 +568,14 @@ fn run_verify_blocks_detailed_inner(
             }
             Item::Function(func) => {
                 if has_assert_stmts(func) && func.params.is_empty() && func.name.name != "main" {
-                    legacy_verify_functions.push((current_namespace.clone(), func.clone()));
+                    legacy_verify_functions.push((current_namespace.clone(), func));
                 }
             }
             Item::Verify(vb) => {
-                verify_blocks.push((current_namespace.clone(), vb.clone()));
+                verify_blocks.push((current_namespace.clone(), vb));
             }
             Item::Property(pb) => {
-                property_blocks.push((current_namespace.clone(), pb.clone()));
+                property_blocks.push((current_namespace.clone(), pb));
             }
             _ => {}
         }
@@ -380,7 +583,7 @@ fn run_verify_blocks_detailed_inner(
 
     // Execute proper verify blocks.
     for (namespace, vb) in &verify_blocks {
-        match interp.exec_block_in_namespace(namespace.as_deref(), &vb.body) {
+        match interp.exec_checked_verify_region(namespace.as_deref(), vb) {
             Ok(_) => {
                 results.push(VerifyResult {
                     name: vb.name.name.clone(),
@@ -389,6 +592,7 @@ fn run_verify_blocks_detailed_inner(
                     error: None,
                     iterations: None,
                     is_property: false,
+                    debug_events: interp.take_debug_events(),
                 });
             }
             Err(msg) => {
@@ -399,14 +603,20 @@ fn run_verify_blocks_detailed_inner(
                     error: Some(msg),
                     iterations: None,
                     is_property: false,
+                    debug_events: interp.take_debug_events(),
                 });
             }
         }
     }
 
-    // Execute legacy verify functions (zero-arg functions with asserts).
+    // Zero-argument legacy verify entries carry no unvalidated host payload.
+    // Keep checked source facts available inside their bodies.
     for (namespace, func) in &legacy_verify_functions {
-        match interp.call_function_in_namespace(namespace.as_deref(), &func.name.name, vec![]) {
+        match interp.call_checked_function_in_namespace(
+            namespace.as_deref(),
+            &func.name.name,
+            vec![],
+        ) {
             Ok(_) => {
                 results.push(VerifyResult {
                     name: func.name.name.clone(),
@@ -415,6 +625,7 @@ fn run_verify_blocks_detailed_inner(
                     error: None,
                     iterations: None,
                     is_property: false,
+                    debug_events: interp.take_debug_events(),
                 });
             }
             Err(msg) => {
@@ -425,6 +636,7 @@ fn run_verify_blocks_detailed_inner(
                     error: Some(msg),
                     iterations: None,
                     is_property: false,
+                    debug_events: interp.take_debug_events(),
                 });
             }
         }
@@ -436,15 +648,21 @@ fn run_verify_blocks_detailed_inner(
             &mut interp,
             namespace.as_deref(),
             pb,
-            &property_enums,
-            &property_structs,
-            &property_bitfields,
-            &property_type_aliases,
+            PropertyDefinitions {
+                enums: &property_enums,
+                structs: &property_structs,
+                bitfields: &property_bitfields,
+                aliases: &property_type_aliases,
+            },
+            collect_cases.then_some(&mut property_cases),
         );
         results.push(result);
     }
 
-    results
+    VerificationRun {
+        results,
+        property_cases,
+    }
 }
 
 /// Evaluate a single pure function at compile time with the given arguments.
@@ -480,12 +698,34 @@ pub fn eval_assert(
 // Property-based testing
 // ---------------------------------------------------------------------------
 
-/// Run a single property block for `PROPERTY_DEFAULT_ITERATIONS` iterations.
-/// Each iteration generates random values for each `given` parameter, binds
-/// them into the interpreter, and executes the body.
-/// Generate candidate shrunk versions of a value (ordered from simplest to most complex).
+/// Generate candidates in the property runner's established shrink order.
 fn shrink_value(value: &Value) -> Vec<Value> {
     match value {
+        Value::Typed { type_name, value } if narrow_integer_bounds(type_name).is_some() => {
+            let (min, max) = narrow_integer_bounds(type_name).unwrap();
+            shrink_value(value)
+                .into_iter()
+                .filter(|candidate| matches!(candidate, Value::Int64(n) if (min..=max).contains(n)))
+                .map(|candidate| Value::Typed {
+                    type_name: type_name.clone(),
+                    value: Box::new(candidate),
+                })
+                .collect()
+        }
+        Value::Typed { type_name, value } => shrink_value(value)
+            .into_iter()
+            .map(|candidate| {
+                if type_name == "float32" {
+                    if let Value::Float64(number) = candidate {
+                        return property_float32_value(number);
+                    }
+                }
+                Value::Typed {
+                    type_name: type_name.clone(),
+                    value: Box::new(candidate),
+                }
+            })
+            .collect(),
         Value::Int64(n) => {
             let mut candidates = Vec::new();
             if *n != 0 {
@@ -659,13 +899,18 @@ fn shrink_value(value: &Value) -> Vec<Value> {
             }
             candidates
         }
-        Value::Struct { type_name, fields } if !fields.is_empty() => {
+        Value::Struct {
+            concrete_type,
+            type_name,
+            fields,
+        } if !fields.is_empty() => {
             let mut candidates = Vec::new();
             for (i, (_, field)) in fields.iter().enumerate() {
                 for shrunk_field in shrink_value(field) {
                     let mut new_fields = fields.clone();
                     new_fields[i].1 = shrunk_field;
                     candidates.push(Value::Struct {
+                        concrete_type: concrete_type.clone(),
                         type_name: type_name.clone(),
                         fields: new_fields,
                     });
@@ -695,46 +940,140 @@ fn shrink_inputs(
     pb: &PropertyBlock,
     failing: Vec<Value>,
 ) -> Vec<Value> {
-    let mut current = failing;
+    let result = shrink_property_inputs(failing, |attempt| {
+        if !attempt
+            .iter()
+            .all(|value| valid_shrink_refinements(interp, value))
+        {
+            return Ok::<_, std::convert::Infallible>(false);
+        }
+        interp.push_scope_public();
+        for (given, value) in pb.givens.iter().zip(attempt.iter()) {
+            interp.set_variable_public(&given.name.name, value.clone());
+        }
+        let result = interp.exec_block_in_namespace(namespace, &pb.body);
+        interp.pop_scope_public();
+        Ok::<_, std::convert::Infallible>(result.is_err())
+    });
+    match result {
+        Ok(values) => values,
+        Err(never) => match never {},
+    }
+}
 
+fn valid_shrink_refinements(interp: &mut Interpreter, value: &Value) -> bool {
+    match value {
+        Value::Typed { type_name, value } => {
+            valid_shrink_refinements(interp, value)
+                && interp.check_refinement_type(type_name, value).is_ok()
+        }
+        Value::List(values)
+        | Value::Set(values)
+        | Value::Enum { fields: values, .. }
+        | Value::Machine { fields: values, .. } => values
+            .iter()
+            .all(|value| valid_shrink_refinements(interp, value)),
+        Value::Struct { fields, .. } => fields
+            .iter()
+            .all(|(_, value)| valid_shrink_refinements(interp, value)),
+        Value::Map(entries) => entries.iter().all(|(key, value)| {
+            valid_shrink_refinements(interp, key) && valid_shrink_refinements(interp, value)
+        }),
+        Value::OptionalSome(value)
+        | Value::ResultOk(value)
+        | Value::ResultFail(value)
+        | Value::Pending(value) => valid_shrink_refinements(interp, value),
+        _ => true,
+    }
+}
+
+/// Apply the interpreter's ordered, bounded shrink search using a supplied
+/// execution backend. `Ok(true)` accepts a failing candidate; backend errors
+/// abort the search and must not be treated as property counterexamples.
+pub fn shrink_property_inputs<E>(
+    failing: Vec<Value>,
+    mut fails: impl FnMut(&[Value]) -> Result<bool, E>,
+) -> Result<Vec<Value>, E> {
+    let mut current = failing;
     'outer: for _ in 0..SHRINK_MAX_STEPS {
-        // Try to shrink each input one at a time.
         for i in 0..current.len() {
-            let candidates = shrink_value(&current[i]);
-            for candidate in candidates {
+            for candidate in shrink_value(&current[i]) {
                 let mut attempt = current.clone();
                 attempt[i] = candidate;
-
-                // Run the property with the candidate inputs.
-                interp.push_scope_public();
-                for (given, value) in pb.givens.iter().zip(attempt.iter()) {
-                    interp.set_variable_public(&given.name.name, value.clone());
-                }
-                let result = interp.exec_block_in_namespace(namespace, &pb.body);
-                interp.pop_scope_public();
-
-                if result.is_err() {
-                    // Still fails — use the simpler version.
+                if fails(&attempt)? {
                     current = attempt;
                     continue 'outer;
                 }
             }
         }
-        // No further shrinking possible.
         break;
     }
-
-    current
+    Ok(current)
 }
+
+struct PropertyDefinitions<'a> {
+    enums: &'a [PropertyEnumDef],
+    structs: &'a [PropertyStructDef],
+    bitfields: &'a [PropertyBitfieldDef],
+    aliases: &'a [PropertyTypeAliasDef],
+}
+
+fn with_property_execution_purpose<T>(
+    interp: &mut Interpreter,
+    body: impl FnOnce(&mut Interpreter) -> T,
+) -> T {
+    let previous_purpose = interp.checked_execution_purpose(crate::ExecutionPurpose::Property);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(interp)));
+    if let Some(purpose) = previous_purpose {
+        interp.checked_execution_purpose(purpose);
+    }
+    match result {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+#[cfg(test)]
+#[path = "verify/property_purpose_tests.rs"]
+mod property_purpose_tests;
 
 fn run_property_block(
     interp: &mut Interpreter,
     namespace: Option<&str>,
     pb: &PropertyBlock,
-    enum_defs: &[PropertyEnumDef],
-    struct_defs: &[PropertyStructDef],
-    bitfield_defs: &[PropertyBitfieldDef],
-    type_alias_defs: &[PropertyTypeAliasDef],
+    definitions: PropertyDefinitions<'_>,
+    collected_cases: Option<&mut Vec<PropertyCase>>,
+) -> VerifyResult {
+    with_property_execution_purpose(interp, |interp| {
+        match interp.with_checked_property_region(pb, namespace, |interp| {
+            Ok(run_property_block_inner(
+                interp,
+                namespace,
+                pb,
+                definitions,
+                collected_cases,
+            ))
+        }) {
+            Ok(result) => result,
+            Err(error) => VerifyResult {
+                name: pb.name.name.clone(),
+                span: pb.name.span,
+                passed: false,
+                error: Some(error),
+                iterations: Some(0),
+                is_property: true,
+                debug_events: interp.take_debug_events(),
+            },
+        }
+    })
+}
+
+fn run_property_block_inner(
+    interp: &mut Interpreter,
+    namespace: Option<&str>,
+    pb: &PropertyBlock,
+    definitions: PropertyDefinitions<'_>,
+    mut collected_cases: Option<&mut Vec<PropertyCase>>,
 ) -> VerifyResult {
     let iterations = PROPERTY_DEFAULT_ITERATIONS;
 
@@ -747,10 +1086,10 @@ fn run_property_block(
                 interp,
                 &g.ty,
                 namespace,
-                enum_defs,
-                struct_defs,
-                bitfield_defs,
-                type_alias_defs,
+                definitions.enums,
+                definitions.structs,
+                definitions.bitfields,
+                definitions.aliases,
             )
         })
         .collect();
@@ -768,6 +1107,7 @@ fn run_property_block(
                 )),
                 iterations: Some(0),
                 is_property: true,
+                debug_events: interp.take_debug_events(),
             };
         }
     }
@@ -784,6 +1124,14 @@ fn run_property_block(
             })
             .collect();
 
+        if let Some(cases) = collected_cases.as_deref_mut() {
+            cases.push(PropertyCase {
+                property_span: pb.span,
+                iteration,
+                arguments: chosen.iter().map(|(_, value)| value.clone()).collect(),
+            });
+        }
+
         // Push a scope, bind the given values, execute the body.
         interp.push_scope_public();
         for (given, value) in &chosen {
@@ -796,7 +1144,11 @@ fn run_property_block(
         if let Err(msg) = exec_result {
             // Shrink the failing inputs to find a simpler counterexample.
             let failing_values: Vec<Value> = chosen.iter().map(|(_, v)| v.clone()).collect();
+            // Preserve generation and original trials before replay. Refinement
+            // checks inside shrinking are replay observations too.
+            let debug_events = interp.take_debug_events();
             let shrunk = shrink_inputs(interp, namespace, pb, failing_values);
+            let _ = interp.take_debug_events();
 
             let input_desc: Vec<String> = pb
                 .givens
@@ -815,6 +1167,7 @@ fn run_property_block(
                 )),
                 iterations: Some(iteration + 1),
                 is_property: true,
+                debug_events,
             };
         }
     }
@@ -826,6 +1179,7 @@ fn run_property_block(
         error: None,
         iterations: Some(iterations),
         is_property: true,
+        debug_events: interp.take_debug_events(),
     }
 }
 
@@ -834,6 +1188,34 @@ fn run_property_block(
 fn generate_values_for_type(ty: &TypeExpr) -> Vec<Value> {
     let mut interp = Interpreter::new();
     generate_values_for_type_in_namespace(&mut interp, ty, None, &[], &[], &[], &[])
+}
+
+fn narrow_integer_bounds(type_name: &str) -> Option<(i64, i64)> {
+    match type_name {
+        "int8" => Some((i8::MIN.into(), i8::MAX.into())),
+        "int16" => Some((i16::MIN.into(), i16::MAX.into())),
+        "int32" => Some((i32::MIN.into(), i32::MAX.into())),
+        "uint8" => Some((0, u8::MAX.into())),
+        "uint16" => Some((0, u16::MAX.into())),
+        "uint32" => Some((0, u32::MAX.into())),
+        _ => None,
+    }
+}
+
+fn generate_narrow_integer_values(type_name: &str) -> Vec<Value> {
+    let (min, max) = narrow_integer_bounds(type_name).expect("a checked narrow integer primitive");
+    let values = if min < 0 {
+        generate_signed_integer_values(min, max)
+    } else {
+        generate_unsigned_integer_values(max)
+    };
+    values
+        .into_iter()
+        .map(|value| Value::Typed {
+            type_name: type_name.to_owned(),
+            value: Box::new(value),
+        })
+        .collect()
 }
 
 fn generate_signed_integer_values(min: i64, max: i64) -> Vec<Value> {
@@ -868,14 +1250,21 @@ fn generate_uint64_values() -> Vec<Value> {
     ])
 }
 
-fn generate_float_values() -> Vec<Value> {
-    vec![
-        Value::Float64(0.0),
-        Value::Float64(1.0),
-        Value::Float64(-1.0),
-        Value::Float64(3.14),
-        Value::Float64(-0.0),
-    ]
+fn generate_float_values(type_name: &str) -> Vec<Value> {
+    [0.0, 1.0, -1.0, 3.14, -0.0]
+        .into_iter()
+        .map(|number| match type_name {
+            "float32" => property_float32_value(number),
+            _ => Value::Float64(number),
+        })
+        .collect()
+}
+
+fn property_float32_value(number: f64) -> Value {
+    Value::Typed {
+        type_name: "float32".to_owned(),
+        value: Box::new(Value::Float64(f64::from(number as f32))),
+    }
 }
 
 fn generate_values_for_type_in_namespace(
@@ -904,13 +1293,10 @@ fn generate_values_for_type_in_namespace(
 
     match ty {
         TypeExpr::Named(ident) => match ident.name.as_str() {
-            "int8" => generate_signed_integer_values(i8::MIN as i64, i8::MAX as i64),
-            "int16" => generate_signed_integer_values(i16::MIN as i64, i16::MAX as i64),
-            "int32" => generate_signed_integer_values(i32::MIN as i64, i32::MAX as i64),
+            "int8" | "int16" | "int32" | "uint8" | "uint16" | "uint32" => {
+                generate_narrow_integer_values(&ident.name)
+            }
             "int64" => generate_signed_integer_values(i64::MIN, i64::MAX),
-            "uint8" => generate_unsigned_integer_values(u8::MAX as i64),
-            "uint16" => generate_unsigned_integer_values(u16::MAX as i64),
-            "uint32" => generate_unsigned_integer_values(u32::MAX as i64),
             "uint64" => generate_uint64_values(),
             "string" => vec![
                 Value::String(String::new()),
@@ -920,7 +1306,7 @@ fn generate_values_for_type_in_namespace(
                 Value::String("123".to_string()),
             ],
             "bool" => vec![Value::Bool(true), Value::Bool(false)],
-            "float32" | "float64" => generate_float_values(),
+            "float32" | "float64" => generate_float_values(&ident.name),
             "bytes" => vec![
                 Value::Bytes(Vec::new()),
                 Value::Bytes(vec![0]),
@@ -1440,6 +1826,10 @@ fn generate_type_alias_values(
                 .check_refinement_type(&alias_def.type_name, value)
                 .is_ok()
         })
+        .map(|value| Value::Typed {
+            type_name: alias_def.type_name.clone(),
+            value: Box::new(value),
+        })
         .collect()
 }
 
@@ -1628,6 +2018,7 @@ fn generate_struct_values(
 
     if struct_def.def.fields.is_empty() {
         return vec![Value::Struct {
+            concrete_type: None,
             type_name: struct_def.type_name.clone(),
             fields: vec![],
         }];
@@ -1662,6 +2053,7 @@ fn generate_struct_values(
             })
             .collect();
         values.push(Value::Struct {
+            concrete_type: None,
             type_name: struct_def.type_name.clone(),
             fields,
         });
@@ -1726,6 +2118,13 @@ fn generate_generic_struct_values(
     bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
+    let arguments = struct_def
+        .def
+        .type_params
+        .iter()
+        .map(|param| interp.concrete_type_display(&substitutions[&param.name]))
+        .collect::<Vec<_>>();
+    let concrete_type = format!("{}[{}]", struct_def.type_name, arguments.join(", "));
     let field_namespace = struct_def.namespace.as_deref();
     let substituted_fields: Vec<FieldDef> = struct_def
         .def
@@ -1741,6 +2140,7 @@ fn generate_generic_struct_values(
 
     if substituted_fields.is_empty() {
         return vec![Value::Struct {
+            concrete_type: Some(concrete_type),
             type_name: struct_def.type_name.clone(),
             fields: vec![],
         }];
@@ -1773,6 +2173,7 @@ fn generate_generic_struct_values(
             })
             .collect();
         values.push(Value::Struct {
+            concrete_type: Some(concrete_type.clone()),
             type_name: struct_def.type_name.clone(),
             fields,
         });
@@ -1867,6 +2268,7 @@ fn generate_bitfield_values(
 ) -> Vec<Value> {
     if bitfield_def.def.fields.is_empty() {
         return vec![Value::Struct {
+            concrete_type: None,
             type_name: bitfield_def.type_name.clone(),
             fields: vec![],
         }];
@@ -1901,6 +2303,7 @@ fn generate_bitfield_values(
             })
             .collect();
         values.push(Value::Struct {
+            concrete_type: None,
             type_name: bitfield_def.type_name.clone(),
             fields,
         });
@@ -2208,6 +2611,188 @@ mod tests {
     use jett_parser::ast::*;
 
     use super::*;
+
+    fn debug_capture_module(source: &str) -> Module {
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        parsed.module
+    }
+
+    #[test]
+    fn verify_capture_retains_failed_block_events_and_isolates_following_blocks() {
+        let module = debug_capture_module(
+            r#"
+verify first:
+    print("trace public")
+    assert false "first failure"
+verify second:
+    println("second")
+    assert true
+"#,
+        );
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 2);
+        assert!(!results[0].passed);
+        assert!(results[1].passed);
+        assert_eq!(
+            results[0].debug_events,
+            vec![crate::DebugEvent {
+                kind: crate::DebugEventKind::Print,
+                text: "trace public".into(),
+            }]
+        );
+        assert_eq!(
+            results[1].debug_events,
+            vec![crate::DebugEvent {
+                kind: crate::DebugEventKind::Println,
+                text: "second\n".into(),
+            }]
+        );
+        let diagnostics = verify_results_to_diagnostics(&results);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            results[0].debug_events.len(),
+            1,
+            "diagnostic conversion does not consume capture"
+        );
+    }
+
+    #[test]
+    fn property_capture_keeps_generation_and_original_failure_while_shrinking_stays_private() {
+        let module = debug_capture_module(
+            r#"
+function positive(value: int64) returns bool:
+    println("pool", value)
+    return value > 0
+type Positive = int64 where positive(value)
+property failure:
+    given number: Positive
+    println("trial", coarsen clone number)
+    assert false "trial failure"
+"#,
+        );
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].passed);
+        assert_eq!(results[0].iterations, Some(1));
+        let expected = vec![
+            "pool 0\n",
+            "pool 1\n",
+            "pool -1\n",
+            "pool 42\n",
+            "pool -42\n",
+            "pool 100\n",
+            "pool 9223372036854775807\n",
+            "pool -9223372036854775808\n",
+            "trial 1\n",
+        ];
+        assert_eq!(
+            results[0]
+                .debug_events
+                .iter()
+                .map(|e| e.text.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert!(
+            results[0]
+                .debug_events
+                .iter()
+                .all(|e| e.kind == crate::DebugEventKind::Println)
+        );
+        assert!(
+            results[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("counterexample: number = 1")
+        );
+    }
+
+    #[test]
+    fn empty_property_pool_retains_failed_generation_events_without_trial_events() {
+        let module = debug_capture_module(
+            r#"
+function rejected(value: int64) returns bool:
+    print("generation")
+    return false
+type Impossible = int64 where rejected(value)
+property empty:
+    given number: Impossible
+    println("unreachable trial")
+    assert true
+"#,
+        );
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].passed);
+        assert_eq!(results[0].iterations, Some(0));
+        assert_eq!(results[0].debug_events.len(), 8);
+        assert!(
+            results[0]
+                .debug_events
+                .iter()
+                .all(|event| event.kind == crate::DebugEventKind::Print
+                    && event.text == "generation")
+        );
+    }
+
+    #[test]
+    fn passing_property_capture_retains_all_hundred_actual_trials_in_order() {
+        let module = debug_capture_module(
+            r#"
+property order:
+    given number: int64
+    println(number)
+    assert number == number
+"#,
+        );
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].passed);
+        assert_eq!(results[0].iterations, Some(100));
+        assert_eq!(results[0].debug_events.len(), 100);
+        let prefix = [
+            "0\n",
+            "1\n",
+            "-1\n",
+            "42\n",
+            "-42\n",
+            "100\n",
+            "9223372036854775807\n",
+            "-9223372036854775808\n",
+            "0\n",
+        ];
+        assert_eq!(
+            results[0].debug_events[..9]
+                .iter()
+                .map(|e| e.text.as_str())
+                .collect::<Vec<_>>(),
+            prefix
+        );
+        // Native-input collection runs its own verification pass. Its observations
+        // stay private rather than being appended to this already captured pass.
+        let replay = run_verification(&module, None, None, None, None, true);
+        assert_eq!(replay.property_cases.len(), 100);
+        assert_eq!(results[0].debug_events.len(), 100);
+    }
+
+    #[test]
+    fn native_property_cases_reuse_the_interpreter_pool_and_iteration_order() {
+        let parsed = jett_parser::parse(
+            "namespace app\nproperty identity:\n    given n: int64\n    assert n == n\n",
+            FileId::new(0),
+        );
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let run = run_verification(&parsed.module, None, None, None, None, true);
+        assert_eq!(run.results.len(), 1);
+        assert!(run.results[0].passed);
+        assert_eq!(run.property_cases.len(), PROPERTY_DEFAULT_ITERATIONS);
+        assert_eq!(run.property_cases[0].iteration, 0);
+        assert_eq!(run.property_cases[0].arguments, vec![Value::Int64(0)]);
+        assert_eq!(run.property_cases[1].arguments, vec![Value::Int64(1)]);
+        assert_eq!(run.property_cases[8].arguments, vec![Value::Int64(0)]);
+    }
 
     fn sp() -> Span {
         Span::new(FileId::new(0), 0, 0)
@@ -3362,26 +3947,34 @@ mod tests {
     fn property_generator_supports_sized_numeric_primitives() {
         let int8_values = generate_values_for_type(&type_named("int8"));
         assert!(!int8_values.is_empty());
+        assert!(int8_values.iter().all(|value| matches!(value,
+            Value::Typed { type_name, .. } if type_name == "int8")));
         assert!(int8_values.iter().all(|value| {
-            matches!(value, Value::Int64(n) if (i8::MIN as i64..=i8::MAX as i64).contains(n))
+            matches!(value.payload(), Value::Int64(n) if (i8::MIN as i64..=i8::MAX as i64).contains(n))
         }));
 
         let int16_values = generate_values_for_type(&type_named("int16"));
         assert!(!int16_values.is_empty());
+        assert!(int16_values.iter().all(|value| matches!(value,
+            Value::Typed { type_name, .. } if type_name == "int16")));
         assert!(int16_values.iter().all(|value| {
-            matches!(value, Value::Int64(n) if (i16::MIN as i64..=i16::MAX as i64).contains(n))
+            matches!(value.payload(), Value::Int64(n) if (i16::MIN as i64..=i16::MAX as i64).contains(n))
         }));
 
         let int32_values = generate_values_for_type(&type_named("int32"));
         assert!(!int32_values.is_empty());
+        assert!(int32_values.iter().all(|value| matches!(value,
+            Value::Typed { type_name, .. } if type_name == "int32")));
         assert!(int32_values.iter().all(|value| {
-            matches!(value, Value::Int64(n) if (i32::MIN as i64..=i32::MAX as i64).contains(n))
+            matches!(value.payload(), Value::Int64(n) if (i32::MIN as i64..=i32::MAX as i64).contains(n))
         }));
 
         let uint32_values = generate_values_for_type(&type_named("uint32"));
         assert!(!uint32_values.is_empty());
+        assert!(uint32_values.iter().all(|value| matches!(value,
+            Value::Typed { type_name, .. } if type_name == "uint32")));
         assert!(uint32_values.iter().all(|value| {
-            matches!(value, Value::Int64(n) if (0..=u32::MAX as i64).contains(n))
+            matches!(value.payload(), Value::Int64(n) if (0..=u32::MAX as i64).contains(n))
         }));
 
         let uint64_values = generate_values_for_type(&type_named("uint64"));
@@ -3402,7 +3995,8 @@ mod tests {
         assert!(
             float32_values
                 .iter()
-                .all(|value| matches!(value, Value::Float64(_)))
+                .all(|value| matches!(value, Value::Typed { type_name, value }
+                    if type_name == "float32" && matches!(value.as_ref(), Value::Float64(_))))
         );
     }
 
@@ -3478,7 +4072,7 @@ mod tests {
             values.iter().any(|value| {
                 matches!(
                     value,
-                    Value::Struct { type_name, fields }
+                    Value::Struct { concrete_type: _, type_name, fields }
                         if type_name == "app.PropertyUser"
                             && fields.iter().any(|(name, value)| {
                                 name == "name" && matches!(value, Value::String(_))
@@ -3746,7 +4340,7 @@ mod tests {
             values.iter().any(|value| {
                 matches!(
                     value,
-                    Value::Struct { type_name, fields }
+                    Value::Struct { concrete_type: _, type_name, fields }
                         if type_name == "app.Header"
                             && fields.iter().any(|(name, value)| {
                                 name == "version"
@@ -3767,7 +4361,7 @@ mod tests {
                                         Value::List(items)
                                             if !items.is_empty()
                                                 && items.iter().all(|item| {
-                                                    matches!(item, Value::Int64(n) if (0..=255).contains(n))
+                                                    matches!(item, Value::Typed { type_name, value } if type_name == "uint8" && matches!(value.as_ref(), Value::Int64(n) if (0..=255).contains(n)))
                                                 })
                                     )
                             })
@@ -3827,7 +4421,7 @@ mod tests {
         assert!(
             refined_values
                 .iter()
-                .all(|value| matches!(value, Value::Int64(n) if *n > 0)),
+                .all(|value| matches!(value, Value::Typed { type_name, value } if type_name == "app.Positive" && matches!(value.payload(), Value::Int64(n) if *n > 0))),
             "expected refinement generation to keep only values accepted by the constraint"
         );
     }
@@ -3863,7 +4457,7 @@ mod tests {
                 matches!(
                     value,
                     Value::Struct { fields, .. }
-                        if matches!(fields.as_slice(), [(_, Value::Int64(n))] if *n > 0)
+                        if matches!(fields.as_slice(), [(_, Value::Typed { type_name, value })] if type_name == "app.Positive" && matches!(value.payload(), Value::Int64(n) if *n > 0))
                 )
             }),
             "expected refined struct fields to be generated through refinement filtering"
@@ -3892,7 +4486,7 @@ mod tests {
             values.iter().any(|value| {
                 matches!(
                     value,
-                    Value::Struct { type_name, fields }
+                    Value::Struct { concrete_type: _, type_name, fields }
                         if type_name == "app.Box"
                             && matches!(fields.as_slice(), [(_, Value::Int64(_))])
                 )
@@ -3932,11 +4526,291 @@ mod tests {
                 matches!(
                     value,
                     Value::Struct { fields, .. }
-                        if matches!(fields.as_slice(), [(_, Value::Int64(n))] if *n > 0)
+                        if matches!(fields.as_slice(), [(_, Value::Typed { type_name, value })] if type_name == "app.Positive" && matches!(value.payload(), Value::Int64(n) if *n > 0))
                 )
             }),
             "expected generic struct type arguments to resolve in the use-site namespace"
         );
+    }
+
+    #[test]
+    fn property_generator_retains_generic_arguments_in_empty_structs() {
+        let mut interp = Interpreter::new();
+        let definitions = vec![PropertyStructDef {
+            type_name: "app.Empty".to_owned(),
+            namespace: Some("app".to_owned()),
+            def: generic_struct_def("Empty", vec!["First", "Second"], vec![]),
+        }];
+        let values = generate_values_for_type_in_namespace(
+            &mut interp,
+            &type_generic("Empty", vec![type_named("string"), type_named("int8")]),
+            Some("app"),
+            &[],
+            &definitions,
+            &[],
+            &[],
+        );
+        assert!(
+            matches!(values.as_slice(), [Value::Struct { concrete_type, fields, .. }]
+            if concrete_type.as_deref() == Some("app.Empty[string, int8]") && fields.is_empty())
+        );
+    }
+
+    #[test]
+    fn property_generated_generic_owners_survive_erasure_and_shrinking() {
+        let source = include_str!("../../../tests/native/property_generic_owners.jett");
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty());
+        let results = run_verify_blocks_detailed(&parsed.module);
+        assert!(results.iter().all(|result| result.passed), "{results:?}");
+        let parsed = jett_parser::parse(&source.replace("<= 3", "<= 1"), FileId::new(0));
+        let results = run_verify_blocks_detailed(&parsed.module);
+        assert!(results[0].passed);
+        assert_eq!(results[1].iterations, Some(3));
+        assert_eq!(
+            results[1].error.as_deref(),
+            Some(
+                "length sentinel (counterexample: records = list(app.Boxed(value: 0), app.Boxed(value: 0)), texts = list())"
+            )
+        );
+    }
+
+    #[test]
+    fn property_float32_inputs_and_shrink_candidates_keep_binary32_precision() {
+        let pool = generate_values_for_type(&type_named("float32"));
+        assert_eq!(*pool[3].payload(), Value::Float64(f64::from(3.14_f32)));
+        assert_ne!(*pool[3].payload(), Value::Float64(3.14));
+        assert!(matches!(pool[4].payload(), Value::Float64(number)
+            if number.to_bits() == (-0.0_f64).to_bits()));
+        for number in [3.14_f32, f32::MAX, f32::MIN, f32::from_bits(3)] {
+            let value = property_float32_value(f64::from(number));
+            for candidate in shrink_value(&value) {
+                let Value::Typed { type_name, value } = candidate else {
+                    panic!("lost binary32 type identity");
+                };
+                assert_eq!(type_name, "float32");
+                let Value::Float64(number) = *value else {
+                    panic!("lost float payload");
+                };
+                assert_eq!(number.to_bits(), f64::from(number as f32).to_bits());
+            }
+        }
+        let parsed = jett_parser::parse(
+            "property domain:\n    given number: float32\n    assert number <= 3.0 \"float32 sentinel\"\n",
+            FileId::new(0),
+        );
+        assert!(parsed.errors.is_empty());
+        let results = run_verify_blocks_detailed(&parsed.module);
+        assert_eq!(results[0].iterations, Some(4));
+        assert_eq!(
+            results[0].error.as_deref(),
+            Some("float32 sentinel (counterexample: number = 3.140000104904175)"),
+        );
+        assert_eq!(
+            generate_values_for_type(&type_named("float64"))[3],
+            Value::Float64(3.14),
+        );
+    }
+
+    #[test]
+    fn property_shrinker_does_not_report_an_invalid_refinement_counterexample() {
+        let parsed = jett_parser::parse(
+            "type Positive = int64 where value > 0\nproperty domain:\n    given number: Positive\n    assert false \"refinement sentinel\"\n",
+            FileId::new(0),
+        );
+        assert!(parsed.errors.is_empty());
+        let results = run_verify_blocks_detailed(&parsed.module);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].iterations, Some(1));
+        assert_eq!(
+            results[0].error.as_deref(),
+            Some("refinement sentinel (counterexample: number = 1)")
+        );
+    }
+
+    #[test]
+    fn property_shrinker_checks_refined_payloads_in_every_aggregate_shape() {
+        let mut interp = Interpreter::new();
+        let constraint = binary(var("value"), BinOp::Gt, int(0));
+        interp.register_type_alias_in_namespace(
+            Some("app"),
+            &type_alias("Positive", "int64", Some(constraint)),
+        );
+        let wrap = |number| Value::Typed {
+            type_name: "app.Positive".to_owned(),
+            value: Box::new(Value::Int64(number)),
+        };
+        for number in [0, 1] {
+            let value = wrap(number);
+            let shapes = [
+                value.clone(),
+                Value::List(vec![value.clone()]),
+                Value::Set(vec![value.clone()]),
+                Value::Map(vec![(value.clone(), wrap(1))]),
+                Value::Map(vec![(wrap(1), value.clone())]),
+                Value::OptionalSome(Box::new(value.clone())),
+                Value::ResultOk(Box::new(value.clone())),
+                Value::ResultFail(Box::new(value.clone())),
+                Value::Pending(Box::new(value.clone())),
+                Value::Enum {
+                    type_name: "Choice".to_owned(),
+                    variant: "number".to_owned(),
+                    fields: vec![value.clone()],
+                },
+                Value::Machine {
+                    type_name: "State".to_owned(),
+                    state: "ready".to_owned(),
+                    fields: vec![value.clone()],
+                },
+                Value::Struct {
+                    concrete_type: None,
+                    type_name: "Box[app.Positive]".to_owned(),
+                    fields: vec![("value".to_owned(), value)],
+                },
+            ];
+            for shape in shapes {
+                assert_eq!(
+                    valid_shrink_refinements(&mut interp, &shape),
+                    number > 0,
+                    "{shape:?}"
+                );
+            }
+        }
+        let shrunk = shrink_property_inputs(vec![wrap(42)], |values| {
+            Ok::<_, ()>(
+                values
+                    .iter()
+                    .all(|value| valid_shrink_refinements(&mut interp, value)),
+            )
+        })
+        .unwrap();
+        assert_eq!(
+            shrunk,
+            vec![wrap(1)],
+            "refined values must still shrink within their domain"
+        );
+    }
+
+    #[test]
+    fn property_shrinker_keeps_narrow_integer_domains_at_every_boundary() {
+        for name in ["int8", "int16", "int32", "uint8", "uint16", "uint32"] {
+            let (min, max) = narrow_integer_bounds(name).unwrap();
+            for number in [min, max] {
+                let input = Value::Typed {
+                    type_name: name.to_owned(),
+                    value: Box::new(Value::Int64(number)),
+                };
+                let candidates = shrink_value(&input);
+                assert!(!candidates.is_empty() || number == 0, "{name}: {number}");
+                for candidate in candidates {
+                    assert!(matches!(candidate, Value::Typed { type_name, value }
+                        if type_name == name && matches!(value.as_ref(), Value::Int64(n) if (min..=max).contains(n))));
+                }
+            }
+        }
+        // The same magnitude is a valid int64 candidate; do not suppress it
+        // globally just to make narrow native literals compile.
+        assert!(shrink_value(&Value::Int64(-128)).contains(&Value::Int64(128)));
+    }
+
+    #[test]
+    fn property_shrinker_retains_integer_domains_inside_aggregate_candidates() {
+        let narrow = Value::Typed {
+            type_name: "int8".to_owned(),
+            value: Box::new(Value::Int64(-128)),
+        };
+        let aggregates = [
+            Value::List(vec![narrow.clone()]),
+            Value::Set(vec![narrow.clone()]),
+            Value::Map(vec![(narrow.clone(), narrow.clone())]),
+            Value::OptionalSome(Box::new(narrow.clone())),
+            Value::ResultOk(Box::new(narrow.clone())),
+            Value::ResultFail(Box::new(narrow.clone())),
+            Value::Enum {
+                type_name: "Choice".to_owned(),
+                variant: "number".to_owned(),
+                fields: vec![narrow.clone()],
+            },
+            Value::Struct {
+                concrete_type: None,
+                type_name: "Box[int8]".to_owned(),
+                fields: vec![("value".to_owned(), narrow)],
+            },
+        ];
+        fn check(value: &Value, count: &mut usize) {
+            match value {
+                Value::Typed { type_name, value } => {
+                    assert_eq!(type_name, "int8");
+                    assert!(matches!(value.as_ref(), Value::Int64(n) if (-128..=127).contains(n)));
+                    *count += 1;
+                }
+                Value::List(values) | Value::Set(values) | Value::Enum { fields: values, .. } => {
+                    for value in values {
+                        check(value, count);
+                    }
+                }
+                Value::Map(entries) => {
+                    for (key, value) in entries {
+                        check(key, count);
+                        check(value, count);
+                    }
+                }
+                Value::Struct { fields, .. } => {
+                    for (_, value) in fields {
+                        check(value, count);
+                    }
+                }
+                Value::OptionalSome(value) | Value::ResultOk(value) | Value::ResultFail(value) => {
+                    check(value, count)
+                }
+                Value::OptionalNone => {}
+                other => panic!("lost checked integer identity: {other:?}"),
+            }
+        }
+        for aggregate in aggregates {
+            let mut count = 0;
+            for candidate in shrink_value(&aggregate) {
+                check(&candidate, &mut count);
+            }
+            assert!(count > 0, "expected typed payload candidates");
+        }
+    }
+
+    #[test]
+    fn shared_property_shrinker_preserves_search_order_and_counterexamples() {
+        let mut attempted = Vec::new();
+        let result = shrink_property_inputs(
+            vec![Value::Int64(42), Value::List(vec![Value::Int64(99)])],
+            |values| {
+                attempted.push(values.to_vec());
+                Ok::<_, ()>(matches!(values[0], Value::Int64(n) if n >= 2))
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec![Value::Int64(2), Value::List(vec![])]);
+        assert_eq!(attempted[0][0], Value::Int64(0));
+        assert_eq!(attempted[1][0], Value::Int64(21));
+    }
+
+    #[test]
+    fn shared_property_shrinker_propagates_backend_errors_and_keeps_the_step_bound() {
+        let mut attempts = 0;
+        let result = shrink_property_inputs(vec![Value::Int64(42)], |_| {
+            attempts += 1;
+            Err::<bool, _>("native cleanup failed")
+        });
+        assert_eq!(result.unwrap_err(), "native cleanup failed");
+        assert_eq!(attempts, 1);
+        // The existing float search can propose the same integral value again.
+        // Preserve its bounded behavior even when that candidate still fails.
+        attempts = 0;
+        let result = shrink_property_inputs(vec![Value::Float64(2.0)], |values| {
+            attempts += 1;
+            Ok::<_, ()>(values[0] == Value::Float64(2.0))
+        })
+        .unwrap();
+        assert_eq!(result, vec![Value::Float64(2.0)]);
+        assert_eq!(attempts, SHRINK_MAX_STEPS * 3);
     }
 
     #[test]
@@ -4005,6 +4879,7 @@ mod tests {
     #[test]
     fn property_shrinker_simplifies_struct_fields() {
         let candidates = shrink_value(&Value::Struct {
+            concrete_type: None,
             type_name: "PropertyUser".to_string(),
             fields: vec![
                 ("name".to_string(), Value::String("Ada".to_string())),
@@ -4012,6 +4887,7 @@ mod tests {
             ],
         });
         assert!(candidates.contains(&Value::Struct {
+            concrete_type: None,
             type_name: "PropertyUser".to_string(),
             fields: vec![
                 ("name".to_string(), Value::String(String::new())),
@@ -4019,6 +4895,7 @@ mod tests {
             ],
         }));
         assert!(candidates.contains(&Value::Struct {
+            concrete_type: None,
             type_name: "PropertyUser".to_string(),
             fields: vec![
                 ("name".to_string(), Value::String("Ada".to_string())),
@@ -4257,5 +5134,137 @@ mod tests {
             results[1].error
         );
         assert_eq!(results[1].iterations, Some(100));
+    }
+
+    #[test]
+    fn checked_property_purpose_restores_previous_purpose_after_pass_and_failed_trial() {
+        use crate::ExecutionPurpose;
+        for release in [false, true] {
+            for purpose in [
+                ExecutionPurpose::Verify,
+                ExecutionPurpose::NamespaceConstant,
+            ] {
+                for passes in [true, false] {
+                    let source = format!(
+                        "namespace app\nproperty restored_purpose:\n    given sample: int64\n    assert {passes}\n"
+                    );
+                    let checked = crate::resource_execution::tests::program(&source, release);
+                    let property = checked
+                        .module()
+                        .items
+                        .iter()
+                        .find_map(|item| match item {
+                            Item::Property(property) => Some(property),
+                            _ => None,
+                        })
+                        .expect("exact checked property");
+                    let mut interpreter =
+                        Interpreter::from_checked_resource_program(checked.clone(), purpose)
+                            .unwrap();
+                    let result = run_property_block(
+                        &mut interpreter,
+                        Some("app"),
+                        property,
+                        PropertyDefinitions {
+                            enums: &[],
+                            structs: &[],
+                            bitfields: &[],
+                            aliases: &[],
+                        },
+                        None,
+                    );
+                    assert_eq!(result.passed, passes, "{:?}", result.error);
+                    assert_eq!(
+                        result.iterations,
+                        Some(if passes {
+                            PROPERTY_DEFAULT_ITERATIONS
+                        } else {
+                            1
+                        })
+                    );
+                    if !passes {
+                        assert!(result.error.as_deref().unwrap().contains("counterexample:"));
+                    }
+                    assert!(result.debug_events.is_empty());
+                    assert_eq!(
+                        interpreter.checked_execution_purpose(purpose),
+                        Some(purpose)
+                    );
+
+                    // Metadata-free execution still has no retained purpose.
+                    let mut raw = Interpreter::new();
+                    let raw_result = run_property_block(
+                        &mut raw,
+                        Some("app"),
+                        property,
+                        PropertyDefinitions {
+                            enums: &[],
+                            structs: &[],
+                            bitfields: &[],
+                            aliases: &[],
+                        },
+                        None,
+                    );
+                    assert_eq!(raw_result.passed, result.passed);
+                    assert_eq!(raw_result.error, result.error);
+                    assert_eq!(raw_result.iterations, result.iterations);
+                    assert!(raw_result.debug_events.is_empty());
+                    assert_eq!(raw.checked_execution_purpose(purpose), None);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn checked_property_purpose_restores_previous_purpose_after_unsupported_pool() {
+        use crate::ExecutionPurpose;
+        let source = "namespace app\nstruct UnsupportedPurposeProbe:\n    marker: int64\nproperty restored_pool:\n    given sample: UnsupportedPurposeProbe\n    assert true\n";
+        for release in [false, true] {
+            for purpose in [
+                ExecutionPurpose::Verify,
+                ExecutionPurpose::NamespaceConstant,
+            ] {
+                let checked = crate::resource_execution::tests::program(source, release);
+                let property = checked
+                    .module()
+                    .items
+                    .iter()
+                    .find_map(|item| match item {
+                        Item::Property(property) => Some(property),
+                        _ => None,
+                    })
+                    .expect("checked generator control");
+                // Retain the original checked property and omit its generator
+                // definition below to exercise unsupported-pool recovery.
+                let mut interpreter =
+                    Interpreter::from_checked_resource_program(checked.clone(), purpose).unwrap();
+                let result = run_property_block(
+                    &mut interpreter,
+                    Some("app"),
+                    property,
+                    PropertyDefinitions {
+                        enums: &[],
+                        structs: &[],
+                        bitfields: &[],
+                        aliases: &[],
+                    },
+                    None,
+                );
+                assert!(!result.passed);
+                assert_eq!(result.iterations, Some(0));
+                assert!(
+                    result
+                        .error
+                        .as_deref()
+                        .unwrap()
+                        .contains("cannot generate values")
+                );
+                assert!(result.debug_events.is_empty());
+                assert_eq!(
+                    interpreter.checked_execution_purpose(purpose),
+                    Some(purpose)
+                );
+            }
+        }
     }
 }

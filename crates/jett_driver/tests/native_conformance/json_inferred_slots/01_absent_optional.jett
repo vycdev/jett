@@ -1,0 +1,7 @@
+namespace app
+function encode[T](view candidate: optional[T]) returns string:
+    use json
+    return json.serialize[optional[T]](view candidate)
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "{encode(view none)}\n")
+    return nothing

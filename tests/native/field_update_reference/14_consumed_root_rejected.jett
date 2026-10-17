@@ -1,0 +1,9 @@
+namespace app
+struct Record:
+    value: int64
+function consume(record: Record) returns int64:
+    return record.value
+function main() returns nothing:
+    mutable Record record = Record(value: 1)
+    int64 consumed = consume(record)
+    record.value = consumed

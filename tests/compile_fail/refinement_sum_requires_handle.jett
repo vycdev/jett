@@ -1,0 +1,9 @@
+# ERROR: E0333 x2
+type Choice = optional[int64] where true
+type Outcome = result[int64, string] where true
+function main() returns nothing:
+    optional[int64] maybe = some(1)
+    result[int64, string] source = ok(2)
+    Choice choice = maybe
+    Outcome outcome = source
+    return nothing

@@ -1,0 +1,24 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "value:{self}"
+struct Packet:
+    member: Named
+function report(view item: Named, extra: int64) returns string:
+    return "{Named.name(view item)}:{extra}"
+function observe(packet: Packet, incoming: optional[int64], view stdout: Stdout) returns Packet:
+    Stdout.write(view stdout, "before:return\n")
+    string answer = report(view packet.member, incoming handle:
+        Stdout.write(view stdout, "early\n")
+        return packet
+    )
+    Stdout.write(view stdout, "answer:{answer}\n")
+    return packet
+function main(stdout: Stdout) returns nothing:
+    Packet early = observe(Packet(member: 7), none, view stdout)
+    Stdout.write(view stdout, "returned:{Named.name(view early.member)}\n")
+    Packet ready = observe(Packet(member: 9), some(4), view stdout)
+    Stdout.write(view stdout, "returned:{Named.name(view ready.member)}\n")
+    return nothing

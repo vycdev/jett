@@ -1,0 +1,7 @@
+namespace app
+function identity_report[T](values: list[T]) returns int64:
+    function(T) returns T callback = function(value: T) returns T: return value
+    list[T] mapped = list.map[T, T](values, callback)
+    return list.length[T](view mapped)
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "identity:{identity_report(list())}\n")

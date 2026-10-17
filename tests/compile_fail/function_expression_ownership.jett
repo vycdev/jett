@@ -1,0 +1,51 @@
+# ERROR: E0400 x6
+# ERROR: E0401
+namespace test
+function identity(value: int64) returns int64:
+    return value
+function choose(view items: list[int64]) returns function(int64) returns int64:
+    return identity
+function consume(items: list[int64]) returns int64:
+    return list.length[int64](view items)
+function generic_consume[T](items: list[T]) returns int64:
+    return list.length[T](view items)
+struct Holder:
+    callback: function(int64) returns int64
+function consume_holder(holder: Holder) returns int64:
+    return 7
+function pair(left: int64, right: int64) returns int64:
+    return left + right
+struct PairHolder:
+    callback: function(int64, int64) returns int64
+function consume_pair_holder(holder: PairHolder) returns int64:
+    return 8
+function callee_uses_consumed_argument() returns nothing:
+    list[int64] items = list(1, 2)
+    println(choose(view items)(consume(items)))
+    return nothing
+function field_uses_consumed_owner() returns nothing:
+    Holder holder = Holder(callback: identity)
+    println(holder.callback(consume_holder(holder)))
+    return nothing
+function parentheses_preserve_moves() returns nothing:
+    list[int64] items = list(1, 2)
+    println((consume)(((items))))
+    println(list.length[int64](view items))
+    return nothing
+function generic_parentheses_preserve_moves() returns nothing:
+    list[int64] items = list(1, 2)
+    println(generic_consume[int64]((items)))
+    println(list.length[int64](view items))
+    return nothing
+function pipeline_uses_consumed_owner() returns nothing:
+    PairHolder holder = PairHolder(callback: pair)
+    println(1 into holder.callback(consume_pair_holder(holder)))
+    return nothing
+function parentheses_preserve_view_ownership(view items: list[int64]) returns nothing:
+    println((consume)((items)))
+    return nothing
+function pipeline_call_extra_is_consumed() returns bool:
+    list[int64] items = list(1)
+    list[int64] pool = list(1)
+    bool contained = items into view list.all_elements_in(pool)
+    return list.is_empty[int64](view pool)

@@ -1,0 +1,11 @@
+namespace app
+bitfield Packet:
+    kind: 8 bits
+    payload: list[uint8]
+function main() returns nothing:
+    list[uint8] plain = list(7)
+    list[uint8] payload = run plain
+    Packet packet = Packet(kind: 3, payload: payload)
+    bytes encoded = Packet.to_bytes(packet)
+    trace encoded
+    return nothing

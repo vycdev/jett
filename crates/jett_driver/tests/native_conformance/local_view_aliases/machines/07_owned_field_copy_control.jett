@@ -1,0 +1,9 @@
+namespace app
+machine Packet:
+    states:
+        ready(data: bytes)
+function main(stdout: Stdout) returns nothing:
+    Packet at ready packet = Packet(ready, bytes.from_string("AB"))
+    bytes copy = packet.data
+    bytes grown = bytes.concat(copy, bytes.from_string("C"))
+    Stdout.write(view stdout, "{bytes.to_hex(view grown)}:{bytes.to_hex(view packet.data)}\n")

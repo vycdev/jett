@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    float32 pending = run float32.from_float64(1.25)
+    bool bad = pending == float32.from_float64(1.25)
+    trace bad
+    return nothing

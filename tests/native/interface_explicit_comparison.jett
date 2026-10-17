@@ -1,0 +1,45 @@
+namespace app
+interface Keyed:
+    function key(view self: Keyed) returns string
+implement Keyed for int64:
+    function key(view self: int64) returns string:
+        return string.from_int64(self)
+implement Keyed for string:
+    function key(view self: string) returns string:
+        return self
+struct Record:
+    id: string
+    ignored: Keyed
+implement Equatable for Record:
+    function equals(view self: Record, view other: Record) returns bool:
+        return self.id == other.id
+enum Entry:
+    record(value: Record)
+function same_key(view left: Keyed, view right: Keyed) returns bool:
+    function(view Keyed) returns string key = Keyed.key
+    return key(view left) == key(view right)
+function concrete_comparison() returns bool:
+    Record left = Record(id: "7", ignored: 7)
+    Record right = Record(id: "7", ignored: "different payload")
+    bool same = left == right
+    bool different = left != right
+    return same and not different and left.id == "7" and right.id == "7"
+function nested_comparison() returns bool:
+    Entry left = Entry.record(Record(id: "7", ignored: 7))
+    Entry right = Entry.record(Record(id: "7", ignored: "different payload"))
+    return left == right
+function main(stdout: Stdout) returns nothing:
+    Keyed left = 7
+    Keyed right = "7"
+    Keyed other = "8"
+    Stdout.write(view stdout, "{same_key(view left, view right)} {same_key(view left, view other)}\n")
+    Stdout.write(view stdout, "{concrete_comparison()} {nested_comparison()}\n")
+    Stdout.write(view stdout, "{Keyed.key(view left)} {Keyed.key(view right)} {Keyed.key(view other)}\n")
+verify concrete_equality_and_explicit_domain_comparison:
+    Keyed left = 7
+    Keyed right = "7"
+    assert same_key(view left, view right)
+    assert Keyed.key(view left) == "7"
+    assert Keyed.key(view right) == "7"
+    assert concrete_comparison()
+    assert nested_comparison()

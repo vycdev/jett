@@ -1,0 +1,16 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+struct Hidden:
+    token: secret[string]
+implement Named for Hidden:
+    function name(view self: Hidden) returns string:
+        return "hidden"
+function emit(view value: Named) returns nothing:
+    println(view value)
+    return nothing
+function main() returns nothing:
+    Named borrowed = Hidden(token: "borrowed-secret")
+    borrowed into view emit()
+    println(borrowed)
+    return nothing

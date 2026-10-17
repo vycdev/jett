@@ -1,0 +1,18 @@
+namespace app
+function summarize(raw: string) returns string:
+    json.JsonTree parsed = json.parse[json.JsonTree](raw) handle error:
+        return "parse:{error}"
+    json.JsonTree exact = json.parse_exact[json.JsonTree](raw) handle error:
+        return "exact:{error}"
+    string regular = json.serialize[json.JsonTree](view parsed)
+    string public = json.serialize_public[json.JsonTree](view exact)
+    return "{regular}|{public}|{json.serialize_raw(view parsed)}"
+function exact_error(raw: string) returns string:
+    json.JsonTree parsed = json.parse_exact[json.JsonTree](raw) handle error:
+        return error
+    return json.serialize_raw(view parsed)
+function main() returns nothing:
+    println(summarize("{{\"name\":\"Ada\",\"items\":[1,true,null]}}"))
+    println(summarize("\"line\\nnext\""))
+    println(summarize("[1,"))
+    println(exact_error("[1,"))

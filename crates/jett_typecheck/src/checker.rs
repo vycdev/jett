@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use jett_common::{FileId, Span};
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
+use jett_intrinsics::IntrinsicId;
 use jett_parser::ast::{
     self, BinOp, Block, Expr, FunctionDef, Item, Module, Stmt, StringPart, TypeExpr, UnaryOp,
     VerifyBlock,
@@ -10,20 +11,57 @@ use jett_parser::ast::{
 use jett_resolve::resolver::ResolveResult;
 use jett_resolve::scope::{DefId, DefKind};
 use jett_types::{
-    ActorDef as TypeActorDef, ActorMessageDef, BitfieldDef as TypeBitfieldDef,
+    ActorDef as TypeActorDef, ActorId, ActorMessageDef, BitfieldDef as TypeBitfieldDef,
     BitfieldFieldDef as TypeBitfieldFieldDef, BitfieldFieldKind as TypeBitfieldFieldKind,
-    BitfieldId, EnumDef as TypeEnumDef, FunctionSig, InterfaceDef as TypeInterfaceDef,
-    MachineDef as TypeMachineDef, MachineId, MachineStateDef as TypeMachineStateDef,
-    MachineStateId, MachineTransitionDef as TypeMachineTransitionDef, ReflectionBitfieldFieldInfo,
+    BitfieldId, CapabilityKind, EnumDef as TypeEnumDef, FunctionSig,
+    InterfaceDef as TypeInterfaceDef, MachineDef as TypeMachineDef, MachineId,
+    MachineStateDef as TypeMachineStateDef, MachineStateId,
+    MachineTransitionDef as TypeMachineTransitionDef, ReflectionBitfieldFieldInfo,
     ReflectionBitfieldInfo, ReflectionFieldInfo, ReflectionMachineInfo, ReflectionMachineStateInfo,
     ReflectionMachineTransitionInfo, ReflectionMetadata, ReflectionTypeInfo, ReflectionVariantInfo,
     StructDef as TypeStructDef, StructId, Type, TypeId, TypeInterner, VariantDef,
 };
 
+use crate::actor_messages::{
+    CheckedActorBindingRole, CheckedActorHandler, CheckedActorHandlerBinding,
+    CheckedActorHandlerTarget, CheckedActorMessageCall, CheckedActorMessageKind,
+};
+use crate::assignment_places::{
+    AssignmentContext, AssignmentContextRoot, CheckedAssignmentPlace, CheckedFieldProjection,
+    CheckedFieldUpdateResourceRequirement, checked_field_owner, seal_assignment_ownership,
+    validate_assignment_place_shape,
+};
+use crate::caller_ownership::{
+    CheckedArgumentOwnership, CheckedBindingFact, CheckedCallOwnership, CheckedCalleeAccess,
+    CheckedCallerEffect, CheckedCallerOrigin, CheckedCallerSyntax, CheckedIntrinsicOperandRole,
+    CheckedInvocationShape, CheckedInvocationTarget, CheckedOwnershipContext,
+    intrinsic_operand_access,
+};
 use crate::capability;
 use crate::errors;
+use crate::resource_hooks::{CheckedResourceHook, ResourceHookError};
 
+mod actor_messages;
 mod graphics_audit;
+mod nonzero_facts;
+
+use nonzero_facts::NonzeroFact;
+
+#[cfg(test)]
+mod list_sum_domain_tests;
+
+#[cfg(test)]
+mod assignment_place_tests;
+
+#[cfg(test)]
+mod resource_copy_tests;
+
+/// Resource copy authority for an exact field place, not an evaluation mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResourceProjectionMode {
+    OwningCopy,
+    Borrowed,
+}
 
 /// One accepted concrete generic function body produced by type checking.
 #[derive(Debug, Clone)]
@@ -32,22 +70,149 @@ pub struct CheckedGenericFunctionInstantiation {
     pub definition: DefId,
     /// Concrete type arguments in source type-parameter order.
     pub concrete_args: Vec<TypeId>,
+    /// Checked source-kind and reflection facts that distinguish concrete
+    /// bodies whose canonical `TypeId` arguments are otherwise identical.
+    pub specialization: CheckedGenericSpecialization,
     /// Fully substituted parameter types.
     pub parameter_types: Vec<TypeId>,
     /// Fully substituted return type.
     pub return_type: TypeId,
     /// Expression types captured while checking this concrete body.
     pub type_map: HashMap<Span, TypeId>,
+    /// Contextually inferred source type before expectation-added outer Secret promotion.
+    pub source_type_map: HashMap<Span, TypeId>,
+    /// Checked declared type labels, retaining aliases per concrete body.
+    pub debug_type_names: HashMap<Span, String>,
+    /// Physical copy/borrow facts, keyed by local declaration-name span.
+    pub binding_modes: HashMap<Span, CheckedBindingMode>,
+    pub binding_facts: HashMap<Span, CheckedBindingFact>,
+    pub assignment_places: HashMap<Span, CheckedAssignmentPlace>,
+    pub call_ownership: HashMap<Span, CheckedCallOwnership>,
+    pub actor_message_calls: HashMap<Span, CheckedActorMessageCall>,
     /// Nested generic calls selected while checking this concrete body.
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
+    /// Closed compiler operation selected for each accepted intrinsic call.
+    pub intrinsic_ids: HashMap<Span, IntrinsicId>,
+    /// Concrete type operands for accepted compiler-owned generic calls.
+    ///
+    /// These operands are not recoverable from the runtime arguments or result
+    /// type for reflection operations such as `type.name[T]()`. HIR consumes
+    /// this map instead of resolving source `TypeExpr` syntax again.
+    pub intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
+    /// Source-aware type metadata for reflection calls in this body.
+    pub intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
     /// Source arguments normalized to parameter order for calls in this body.
     pub call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     /// Concrete source-defined method targets selected in this body.
     pub method_calls: HashMap<Span, CheckedMethodCall>,
+    pub interface_calls: HashMap<Span, CheckedInterfaceCall>,
+    /// Source method bodies or interface slots selected as function values.
+    pub method_values: HashMap<Span, CheckedMethodValue>,
     /// Concrete struct construction targets selected in this body.
     pub struct_constructions: HashMap<Span, CheckedStructConstruction>,
+    /// Physical incoming pipeline types sealed before callee checking.
+    pub pipeline_step_input_types: HashMap<Span, TypeId>,
     /// Raw call-result types for pipeline steps before any step-local handle.
     pub pipeline_step_call_types: HashMap<Span, TypeId>,
+    /// Checker-owned compile-time control-flow choices for this concrete body.
+    ///
+    /// HIR must consume these choices instead of re-evaluating reflection or
+    /// visiting branches that were deliberately not checked.
+    pub static_selections: HashMap<Span, CheckedStaticSelection>,
+    /// Concrete expansions of trusted `comptime type` statements in this body.
+    pub comptime_type_bindings: HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
+}
+
+/// Checker facts for one concrete expansion of a `comptime type` body.
+#[derive(Debug, Clone)]
+pub struct CheckedComptimeTypeBinding {
+    /// How lowering selects this concrete body.
+    ///
+    /// Lowering must not execute every exported reflected-iteration body for
+    /// every runtime loop iteration. It may statically unroll the reflected
+    /// loop or emit a compiler-owned dispatch on source-visible reflected type
+    /// identity (with the iteration index retained for stable ordering).
+    pub selection: CheckedComptimeTypeSelection,
+    /// The concrete type bound to the statement's scoped type name.
+    pub bound_type: TypeId,
+    /// Source-visible reflection facts, including transparent aliases.
+    pub reflection: ReflectionTypeInfo,
+    /// Facts produced while checking the body under `bound_type`.
+    pub body: CheckedBodyFacts,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckedComptimeTypeSelection {
+    /// A direct trusted initializer such as `type.info[T]()` or
+    /// `type.arg[T](literal)`; its body executes once at this source point.
+    Unconditional,
+    /// The canonical position in a trusted reflected loop source. Exactly the
+    /// matching body executes for one runtime reflected element.
+    ReflectedIteration(usize),
+}
+
+/// Typed facts belonging to one checker-selected source-body expansion.
+///
+/// The structure is recursive because trusted reflection loops can contain
+/// nested `comptime type` statements. Span-keyed top-level maps cannot encode
+/// multiple checks of the same source body with different bound types.
+#[derive(Debug, Clone, Default)]
+pub struct CheckedBodyFacts {
+    pub type_map: HashMap<Span, TypeId>,
+    /// Contextually inferred source type before expectation-added outer Secret promotion.
+    pub source_type_map: HashMap<Span, TypeId>,
+    /// Checked declared type labels, retaining aliases per concrete body.
+    pub debug_type_names: HashMap<Span, String>,
+    pub binding_modes: HashMap<Span, CheckedBindingMode>,
+    pub binding_facts: HashMap<Span, CheckedBindingFact>,
+    pub assignment_places: HashMap<Span, CheckedAssignmentPlace>,
+    pub call_ownership: HashMap<Span, CheckedCallOwnership>,
+    pub actor_message_calls: HashMap<Span, CheckedActorMessageCall>,
+    pub generic_calls: HashMap<Span, CheckedGenericCall>,
+    pub intrinsic_ids: HashMap<Span, IntrinsicId>,
+    pub intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
+    pub intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
+    pub call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
+    pub method_calls: HashMap<Span, CheckedMethodCall>,
+    pub interface_calls: HashMap<Span, CheckedInterfaceCall>,
+    pub method_values: HashMap<Span, CheckedMethodValue>,
+    pub struct_constructions: HashMap<Span, CheckedStructConstruction>,
+    /// Physical incoming pipeline types sealed before callee checking.
+    pub pipeline_step_input_types: HashMap<Span, TypeId>,
+    pub pipeline_step_call_types: HashMap<Span, TypeId>,
+    pub static_selections: HashMap<Span, CheckedStaticSelection>,
+    pub comptime_type_bindings: HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
+}
+
+/// Checked initializer ownership, independent of declaration readonly policy.
+///
+/// A view records provenance only. It does not select a borrow lifetime or
+/// promise that lowering can preserve the view through a value conversion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckedBindingMode {
+    Owned,
+    View { source: CheckedViewSource },
+}
+
+/// Immediate source of a checked borrowed initializer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckedViewSource {
+    /// Session-local backing binding; forwarded aliases are not flattened.
+    /// A projected initializer retains its typed field path in HIR.
+    Binding(DefId),
+    /// A temporary or another expression without a stable binding root.
+    Other,
+}
+
+/// One compile-time control-flow choice made while checking a concrete generic
+/// function body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckedStaticSelection {
+    IfThen,
+    IfElseIf(usize),
+    IfElse,
+    IfNoBranch,
+    MatchArm(usize),
 }
 
 /// The concrete generic target selected for one checked call expression.
@@ -55,6 +220,19 @@ pub struct CheckedGenericFunctionInstantiation {
 pub struct CheckedGenericCall {
     pub definition: DefId,
     pub concrete_args: Vec<TypeId>,
+    pub specialization: CheckedGenericSpecialization,
+}
+
+/// Checker-owned facts that distinguish generic bodies after canonical type
+/// interning has erased source aliases or other reflection-visible details.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct CheckedGenericSpecialization {
+    pub type_argument_kinds: Vec<String>,
+    pub type_argument_reflections: Vec<ReflectionTypeInfo>,
+    pub type_info_kinds: Vec<(usize, String)>,
+    pub type_info_primitives: Vec<(usize, Option<String>)>,
+    pub type_kind_values: Vec<(usize, String)>,
+    pub type_primitive_values: Vec<(usize, String)>,
 }
 
 /// The checked permutation from parameter order to source argument order.
@@ -71,7 +249,9 @@ pub struct CheckedMethodDefinition {
     pub source_span: Span,
     pub owner_type: TypeId,
     pub owner_name: String,
+    pub method_name: String,
     pub interface_name: Option<String>,
+    pub interface_type: Option<TypeId>,
     pub parameter_types: Vec<TypeId>,
     pub return_type: TypeId,
 }
@@ -80,6 +260,26 @@ pub struct CheckedMethodDefinition {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckedMethodCall {
     pub source_span: Span,
+}
+
+/// Checked interface slot selected when the receiver has an erased interface type.
+/// The concrete body is selected from checked implementations at runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckedInterfaceCall {
+    pub interface_type: TypeId,
+    pub method_index: usize,
+}
+
+/// Checked executable target selected for a qualified method-value expression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckedMethodValue {
+    /// A concrete method body with its receiver as an explicit parameter.
+    Source { source_span: Span },
+    /// An interface dispatcher selected by the explicit receiver at invocation.
+    Interface {
+        interface_type: TypeId,
+        method_index: usize,
+    },
 }
 
 /// The concrete struct type selected for a checked construction call.
@@ -92,36 +292,174 @@ pub struct CheckedStructConstruction {
 /// The result of type checking.
 #[derive(Debug)]
 pub struct CheckResult {
+    // Original checked implementation identities for readonly conversion admission.
+    ordinary_interface_implementations: HashSet<(TypeId, TypeId)>,
+    pub(crate) actor_check_session: crate::actor_messages::ActorCheckSession,
+    pub(crate) actor_message_sites: crate::actor_messages::ActorMessageSites,
+    pub release: bool,
+    /// Source bindings unavailable for observation after checked consumption.
+    pub breakpoint_exclusions: HashMap<Span, HashSet<String>>,
     /// Diagnostics (errors and warnings) emitted during type checking.
     pub diagnostics: Vec<Diagnostic>,
     /// Map from expression spans to their inferred type.
     pub type_map: HashMap<Span, TypeId>,
+    /// Contextually inferred source type before expectation-added outer Secret promotion.
+    pub source_type_map: HashMap<Span, TypeId>,
+    /// Checked declared type labels, retaining aliases per concrete body.
+    pub debug_type_names: HashMap<Span, String>,
+    /// Physical copy/borrow facts outside generic bodies, by declaration name.
+    pub binding_modes: HashMap<Span, CheckedBindingMode>,
+    pub binding_facts: HashMap<Span, CheckedBindingFact>,
+    pub assignment_places: HashMap<Span, CheckedAssignmentPlace>,
+    pub call_ownership: HashMap<Span, CheckedCallOwnership>,
+    pub actor_message_calls: HashMap<Span, CheckedActorMessageCall>,
     /// Session-local resolved definitions and their checked types.
     ///
     /// Lowering uses this map with the resolver's `DefId` join keys. Durable
     /// HIR identity is derived separately from source origin and canonical
     /// declaration metadata.
     pub definition_types: HashMap<DefId, TypeId>,
+    pub actor_handlers: HashMap<CheckedActorHandlerTarget, CheckedActorHandler>,
+    /// Privileged exact hook identities; empty for ordinary checking.
+    pub resource_hooks: HashMap<DefId, CheckedResourceHook>,
     /// Generic calls made outside generic function bodies, keyed by call span.
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
+    /// Closed compiler operation selected for each accepted intrinsic call.
+    pub intrinsic_ids: HashMap<Span, IntrinsicId>,
+    /// Concrete type operands for compiler-owned generic calls outside generic
+    /// function bodies, keyed by call span.
+    pub intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
+    pub intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
     /// Source arguments normalized to parameter order, keyed by call span.
     pub call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     /// Source-defined method bodies in deterministic declaration order.
     pub method_definitions: Vec<CheckedMethodDefinition>,
+    /// Exact explicit struct equality targets, independent of expression spans.
+    pub equality_methods: HashMap<TypeId, CheckedMethodCall>,
     /// Concrete source-defined method targets, keyed by call span.
     pub method_calls: HashMap<Span, CheckedMethodCall>,
+    pub interface_calls: HashMap<Span, CheckedInterfaceCall>,
+    /// Source method bodies or interface slots, keyed by expression span.
+    pub method_values: HashMap<Span, CheckedMethodValue>,
+    /// Source method bodies selected by concrete owner/member lookup. This
+    /// excludes implementation bodies shadowed by an inherent method.
+    pub method_value_definitions: HashSet<Span>,
     /// Checked struct construction targets, keyed by call span.
     pub struct_constructions: HashMap<Span, CheckedStructConstruction>,
+    /// Physical incoming pipeline types sealed before callee checking.
+    pub pipeline_step_input_types: HashMap<Span, TypeId>,
     /// Raw call-result types for pipeline steps before any step-local handle.
     pub pipeline_step_call_types: HashMap<Span, TypeId>,
     /// Accepted concrete generic bodies in deterministic discovery order.
     pub generic_function_instantiations: Vec<CheckedGenericFunctionInstantiation>,
+    /// Concrete expansions of trusted `comptime type` statements outside
+    /// generic function bodies.
+    pub comptime_type_bindings: HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
     /// The type interner, containing all types encountered during checking.
     pub interner: TypeInterner,
     /// Checked reflection metadata snapshot for comptime reflection builtins.
     pub reflection_metadata: Arc<ReflectionMetadata>,
 }
 
+impl CheckResult {
+    /// The ordinary checked conversion relation; this grants no new return proof.
+    pub fn ordinary_types_compatible(&self, expected: TypeId, got: TypeId) -> bool {
+        ordinary_types_compatible(
+            &self.interner,
+            &|pair| self.ordinary_interface_implementations.contains(pair),
+            expected,
+            got,
+        )
+    }
+
+    /// Contravariant input admission, retaining exact view and capability types.
+    /// Return strengthening is independently selected by the reflected plan.
+    pub fn ordinary_callable_parameters_compatible(
+        &self,
+        actual: TypeId,
+        requested: TypeId,
+    ) -> bool {
+        if actual.index() as usize >= self.interner.len()
+            || requested.index() as usize >= self.interner.len()
+        {
+            return false;
+        }
+        let (
+            Type::Function {
+                params: source,
+                view_params: source_views,
+                ..
+            },
+            Type::Function {
+                params: target,
+                view_params: target_views,
+                ..
+            },
+        ) = (
+            self.interner.resolve(actual),
+            self.interner.resolve(requested),
+        )
+        else {
+            return false;
+        };
+        source.len() == target.len()
+            && source_views == target_views
+            && source
+                .iter()
+                .zip(target)
+                .all(|(source, target)| self.ordinary_types_compatible(*source, *target))
+    }
+}
+
+fn ordinary_types_compatible(
+    types: &TypeInterner,
+    has_implementation: &impl Fn(&(TypeId, TypeId)) -> bool,
+    expected: TypeId,
+    got: TypeId,
+) -> bool {
+    if expected.index() as usize >= types.len() || got.index() as usize >= types.len() {
+        return false;
+    }
+    if expected == got
+        || expected == TypeInterner::ERROR
+        || got == TypeInterner::ERROR
+        || got == TypeInterner::NEVER
+    {
+        return true;
+    }
+    let compatible = |a, b| ordinary_types_compatible(types, has_implementation, a, b);
+    match (types.resolve(expected), types.resolve(got)) {
+        (Type::Interface(_), Type::Interface(_)) => expected == got,
+        (Type::Interface(_), _) => has_implementation(&(expected, got)),
+        (Type::Secret(a), Type::Secret(b)) => compatible(*a, *b),
+        (Type::Secret(a), _) => compatible(*a, got),
+        (Type::List(a), Type::List(b))
+        | (Type::Optional(a), Type::Optional(b))
+        | (Type::Set(a), Type::Set(b)) => compatible(*a, *b),
+        (Type::Map(a, b), Type::Map(c, d)) | (Type::Result(a, b), Type::Result(c, d)) => {
+            compatible(*a, *c) && compatible(*b, *d)
+        }
+        (
+            Type::Function {
+                params: a,
+                view_params: av,
+                return_type: ar,
+            },
+            Type::Function {
+                params: b,
+                view_params: bv,
+                return_type: br,
+            },
+        ) => {
+            a.len() == b.len()
+                && av == bv
+                && a.iter().zip(b).all(|(a, b)| compatible(*b, *a))
+                && compatible(*ar, *br)
+        }
+        (Type::Machine(a), Type::MachineState { machine: b, .. }) => a == b,
+        _ => false,
+    }
+}
 /// Mode-specific policy applied while type checking.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CheckOptions {
@@ -141,33 +479,220 @@ pub fn check_with_options(
     options: CheckOptions,
 ) -> CheckResult {
     let mut checker = TypeChecker::new(resolve, options);
-    checker.check_module(module);
+    let ordinary = resolve.resource_kernels.is_empty();
+    if ordinary {
+        checker.check_module(module);
+    } else {
+        checker.sink.emit(Diagnostic::error(
+            0,
+            "compiler resource catalogs require check_with_resource_kernels",
+            module.span,
+        ));
+    }
+    finish_check(checker, module, options, ordinary)
+}
 
-    let complexity_diagnostics = crate::complexity::check_complexity(module);
+/// The only checker entry granting validated private resource declaration facts.
+pub fn check_with_resource_kernels(
+    module: &Module,
+    resolve: &ResolveResult,
+    options: CheckOptions,
+) -> Result<CheckResult, ResourceHookError> {
+    jett_resolve::validate_resource_kernels(module, resolve)?;
+    if resolve
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+    {
+        return Err(ResourceHookError::SourceResolutionFailed);
+    }
+    let mut checker = TypeChecker::new(resolve, options);
+    checker.check_module(module);
+    if let Some(error) = checker.resource_hook_error.take() {
+        return Err(error);
+    }
+    let checked = finish_check(checker, module, options, true);
+    crate::resource_hooks::validate_resource_hook_identities(module, resolve, &checked)?;
+    Ok(checked)
+}
+
+fn finish_check(
+    mut checker: TypeChecker<'_>,
+    module: &Module,
+    options: CheckOptions,
+    checked_bodies: bool,
+) -> CheckResult {
+    let complexity_diagnostics = if checked_bodies {
+        crate::complexity::check_complexity(module)
+    } else {
+        Vec::new()
+    };
 
     // Run ownership analysis (linear type checking) after type checking.
-    let ownership_diagnostics = crate::ownership::check_ownership(module, &checker.interner);
+    let (ownership_diagnostics, breakpoint_exclusions, mut validated_field_updates, actor_reports) =
+        if checked_bodies {
+            crate::ownership::OwnershipChecker::new(&checker.interner)
+                .with_checked_facts(
+                    checker.resolve,
+                    &checker.binding_facts,
+                    &checker.assignment_places,
+                    &checker.call_ownership,
+                    &checker.actor_message_calls,
+                    &checker.type_map,
+                    &checker.comptime_type_bindings,
+                    &checker.generic_function_instantiations,
+                    &checker.actor_handlers,
+                )
+                .check_module_with_field_updates(module)
+        } else {
+            (Vec::new(), HashMap::new(), HashSet::new(), HashMap::new())
+        };
 
     let reflection_metadata = Arc::new(checker.build_reflection_metadata());
+    let equality_methods = checker
+        .named_types
+        .get("Equatable")
+        .map(|interface| {
+            checker
+                .interface_method_definitions
+                .iter()
+                .filter_map(|((candidate, owner, name), &index)| {
+                    (*candidate == *interface
+                        && name == "equals"
+                        && matches!(checker.interner.resolve(*owner), Type::Struct(_)))
+                    .then_some((
+                        *owner,
+                        CheckedMethodCall {
+                            source_span: checker.method_definitions[index].source_span,
+                        },
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     let mut diagnostics = checker.sink.into_diagnostics();
     diagnostics.extend(complexity_diagnostics);
-    diagnostics.extend(ownership_diagnostics);
+    let typed_rebinding_errors = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code.code() == 404)
+        .map(|diagnostic| (diagnostic.span, diagnostic.code, diagnostic.message.clone()))
+        .collect::<Vec<_>>();
+    diagnostics.extend(ownership_diagnostics.into_iter().filter(|diagnostic| {
+        // The typed boundary check has the precise declaration provenance and
+        // guidance. Suppress only its exact legacy consume-view counterpart.
+        !checker
+            .diagnosed_owned_view_consumptions
+            .get(&diagnostic.span)
+            .is_some_and(|previous| {
+                previous.code == diagnostic.code && previous.message == diagnostic.message
+            })
+            && !(diagnostic.code.code() == 404
+                && typed_rebinding_errors.iter().any(|(span, code, message)| {
+                    *span == diagnostic.span
+                        && *code == diagnostic.code
+                        && *message == diagnostic.message
+                }))
+    }));
 
-    CheckResult {
+    // An error in any selected body invalidates all admission records, including
+    // public diagnostics that a downstream caller might later edit or remove.
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+    {
+        validated_field_updates.clear();
+    }
+    let program_valid = !diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error);
+    for (target, handler) in &mut checker.actor_handlers {
+        if let Some(report) = actor_reports.get(target) {
+            handler.record_exits(report.exits.clone());
+            if program_valid && report.validated {
+                let body = handler.body_mut();
+                seal_assignment_ownership(
+                    &mut body.assignment_places,
+                    &mut body.comptime_type_bindings,
+                    &AssignmentContext {
+                        root: AssignmentContextRoot::ActorHandler(*target),
+                        scopes: Vec::new(),
+                    },
+                    &validated_field_updates,
+                );
+                handler.authorize_ownership();
+            }
+        }
+    }
+    seal_assignment_ownership(
+        &mut checker.assignment_places,
+        &mut checker.comptime_type_bindings,
+        &AssignmentContext::default(),
+        &validated_field_updates,
+    );
+    for (index, body) in checker
+        .generic_function_instantiations
+        .iter_mut()
+        .enumerate()
+    {
+        seal_assignment_ownership(
+            &mut body.assignment_places,
+            &mut body.comptime_type_bindings,
+            &AssignmentContext {
+                root: AssignmentContextRoot::Generic(index),
+                scopes: Vec::new(),
+            },
+            &validated_field_updates,
+        );
+    }
+
+    let method_value_definitions = checker
+        .method_definitions_by_owner
+        .values()
+        // This map selects Source bodies by concrete owner/member. Interface
+        // value slots have no source body and never enter this definition set.
+        .map(|&index| checker.method_definitions[index].source_span)
+        .collect();
+
+    let mut result = CheckResult {
+        ordinary_interface_implementations: checker.interface_impls.keys().copied().collect(),
+        release: options.release,
+        breakpoint_exclusions,
         diagnostics,
         type_map: checker.type_map,
+        source_type_map: checker.source_type_map,
+        debug_type_names: checker.debug_type_names,
+        binding_modes: checker.binding_modes,
+        binding_facts: checker.binding_facts,
+        assignment_places: checker.assignment_places,
+        call_ownership: checker.call_ownership,
+        actor_message_calls: checker.actor_message_calls,
+        actor_handlers: checker.actor_handlers,
+        actor_check_session: checker.actor_check_session,
+        actor_message_sites: crate::actor_messages::ActorMessageSites::default(),
         definition_types: checker.type_env,
+        resource_hooks: checker.resource_hooks,
         generic_calls: checker.generic_calls,
+        intrinsic_ids: checker.intrinsic_ids,
+        intrinsic_type_arguments: checker.intrinsic_type_arguments,
+        intrinsic_reflection_arguments: checker.intrinsic_reflection_arguments,
         call_argument_orders: checker.call_argument_orders,
         method_definitions: checker.method_definitions,
+        equality_methods,
         method_calls: checker.method_calls,
+        interface_calls: checker.interface_calls,
+        method_values: checker.method_values,
+        method_value_definitions,
         struct_constructions: checker.struct_constructions,
+        pipeline_step_input_types: checker.pipeline_step_input_types,
         pipeline_step_call_types: checker.pipeline_step_call_types,
         generic_function_instantiations: checker.generic_function_instantiations,
+        comptime_type_bindings: checker.comptime_type_bindings,
         interner: checker.interner,
         reflection_metadata,
-    }
+    };
+    result.freeze_actor_message_sites();
+    result
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
@@ -216,22 +741,15 @@ impl StaticReflectionEnumValue {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReflectionBranchContext {
-    TopLevel,
-    StaticReflectionBranch,
-    RuntimeBranch,
-}
-
-impl ReflectionBranchContext {
-    fn permits_shape_reflection(self) -> bool {
-        matches!(self, Self::TopLevel | Self::StaticReflectionBranch)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MachineStateTruth {
     Is,
     IsNot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AssignmentBinding {
+    OwnedMutable,
+    View,
 }
 
 #[derive(Debug, Default)]
@@ -246,11 +764,45 @@ struct ClosureCaptureScope {
 struct ActiveGenericInstantiation {
     manifest_index: usize,
     type_map: HashMap<Span, TypeId>,
+    source_type_map: HashMap<Span, TypeId>,
+    debug_type_names: HashMap<Span, String>,
+    binding_modes: HashMap<Span, CheckedBindingMode>,
+    binding_facts: HashMap<Span, CheckedBindingFact>,
+    assignment_places: HashMap<Span, CheckedAssignmentPlace>,
+    call_ownership: HashMap<Span, CheckedCallOwnership>,
+    actor_message_calls: HashMap<Span, CheckedActorMessageCall>,
+    invocation_signatures: HashMap<Span, (Vec<TypeId>, TypeId)>,
     generic_calls: HashMap<Span, CheckedGenericCall>,
+    intrinsic_ids: HashMap<Span, IntrinsicId>,
+    intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
+    intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
     call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     method_calls: HashMap<Span, CheckedMethodCall>,
+    interface_calls: HashMap<Span, CheckedInterfaceCall>,
+    method_values: HashMap<Span, CheckedMethodValue>,
     struct_constructions: HashMap<Span, CheckedStructConstruction>,
+    pipeline_step_input_types: HashMap<Span, TypeId>,
     pipeline_step_call_types: HashMap<Span, TypeId>,
+    static_selections: HashMap<Span, CheckedStaticSelection>,
+    comptime_type_bindings: HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
+}
+
+fn merge_static_selections(
+    destination: &mut HashMap<Span, CheckedStaticSelection>,
+    incoming: HashMap<Span, CheckedStaticSelection>,
+) -> Vec<Span> {
+    let mut conflicts = Vec::new();
+    for (span, selection) in incoming {
+        match destination.get(&span) {
+            Some(existing) if *existing != selection => conflicts.push(span),
+            Some(_) => {}
+            None => {
+                destination.insert(span, selection);
+            }
+        }
+    }
+    conflicts.sort_by_key(|span| (span.file.index(), span.start, span.end));
+    conflicts
 }
 
 // ---------------------------------------------------------------------------
@@ -264,6 +816,8 @@ struct TypeChecker<'a> {
     sink: DiagnosticSink,
     /// DefId → TypeId for variables, parameters, and functions.
     type_env: HashMap<DefId, TypeId>,
+    resource_hooks: HashMap<DefId, CheckedResourceHook>,
+    resource_hook_error: Option<ResourceHookError>,
     /// Declaration span → DefId for locally declared names.
     decl_defs: HashMap<Span, DefId>,
     /// User-defined type name → TypeId.
@@ -274,6 +828,10 @@ struct TypeChecker<'a> {
     resolving_type_aliases: HashSet<String>,
     /// Expression span → TypeId (the output type map).
     type_map: HashMap<Span, TypeId>,
+    source_type_map: HashMap<Span, TypeId>,
+    debug_type_names: HashMap<Span, String>,
+    /// Source declarations retain nested aliases when inferring generic witnesses.
+    declared_source_types: HashMap<DefId, TypeExpr>,
     /// The expected return type for the function currently being checked.
     current_return_type: Option<TypeId>,
     /// (interface, concrete type) -> implemented method signatures.
@@ -307,16 +865,28 @@ struct TypeChecker<'a> {
     trusted_stdlib_function_signatures: HashMap<String, (Vec<TypeId>, TypeId)>,
     /// Name of the function currently being type-checked (None outside functions).
     current_function_name: Option<String>,
+    constant_declarations: HashSet<Span>,
+    /// Declaration identity preserves assignment policy across scopes and
+    /// generic rechecks. Other bindings are immutable by default.
+    assignment_bindings: HashMap<Span, AssignmentBinding>,
+    /// Exact legacy consume-view diagnostics replaced by typed boundary errors.
+    diagnosed_owned_view_consumptions: HashMap<Span, Diagnostic>,
+    diagnosed_caller_view_arguments: HashSet<Span>,
+    /// A generic recheck may revisit the same invalid owning payload source.
+    diagnosed_resource_payload_views: HashSet<Span>,
+    /// A written return annotation may be resolved in several specializations.
+    diagnosed_view_return_annotations: HashSet<Span>,
     /// Whether the function currently being type-checked is pure.
     current_function_pure: bool,
     /// Whether we are inside a verify block.
     in_verify_block: bool,
+    ownership_context: CheckedOwnershipContext,
     /// Whether we are inside a property block.
     in_property_block: bool,
     /// Nesting depth inside an explicit `comptime` expression.
     comptime_expr_depth: usize,
-    /// Lexically visible proofs that integer bindings are nonzero.
-    nonzero_fact_scopes: Vec<HashSet<DefId>>,
+    /// Lexically visible nonzero observations of exact bindings and field places.
+    nonzero_fact_scopes: Vec<HashSet<NonzeroFact>>,
     /// The name of the verify block currently being checked (for error messages).
     current_verify_name: Option<String>,
     /// Nesting depth inside a handle-block body. Used to validate `default`.
@@ -343,6 +913,8 @@ struct TypeChecker<'a> {
     reflection_variants_by_id: HashMap<TypeId, (String, Vec<ReflectionVariantInfo>)>,
     /// Active type variable substitution during monomorphization (type_param_name → TypeId).
     type_var_subst: HashMap<String, TypeId>,
+    /// Source-aware metadata for the concrete generic type parameters.
+    type_var_reflections: HashMap<String, ReflectionTypeInfo>,
     /// Source-level reflected kind tags for active type variables. This keeps
     /// simple aliases visible to `type.kind_tag[T]()` while their TypeId may
     /// resolve to the alias base type.
@@ -360,9 +932,9 @@ struct TypeChecker<'a> {
     /// reflected primitive facts.
     reflection_type_primitive_value_scopes: Vec<HashMap<DefId, String>>,
     /// Trusted field types currently available from direct `type.fields[T]()` loops.
-    reflected_field_type_scopes: Vec<HashMap<String, Vec<TypeId>>>,
+    reflected_field_type_scopes: Vec<HashMap<String, Vec<(TypeId, ReflectionTypeInfo)>>>,
     /// Trusted TypeInfo types currently available from direct reflected `args` loops.
-    reflected_type_info_scopes: Vec<HashMap<String, Vec<TypeId>>>,
+    reflected_type_info_scopes: Vec<HashMap<String, Vec<(TypeId, ReflectionTypeInfo)>>>,
     /// Trusted TypeVariant owners currently available from direct `type.variants[T]()` loops.
     reflected_variant_type_scopes: Vec<HashMap<String, TypeId>>,
     /// Trusted TypeMachineState owners currently available from direct `type.machine_states[T]()` loops.
@@ -373,27 +945,50 @@ struct TypeChecker<'a> {
     generic_function_templates: HashMap<String, FunctionDef>,
     /// Generic function instantiations whose bodies have already been checked.
     checked_generic_function_instantiations:
-        HashSet<(String, Vec<TypeId>, Vec<String>, ReflectionParamFacts)>,
+        HashSet<(String, Vec<TypeId>, CheckedGenericSpecialization)>,
     /// Canonical concrete identity to its deterministic manifest slot.
-    generic_instantiation_indices: HashMap<(DefId, Vec<TypeId>), usize>,
+    generic_instantiation_indices:
+        HashMap<(DefId, Vec<TypeId>, CheckedGenericSpecialization), usize>,
     /// Ordered, concrete checked-program handoff consumed by HIR.
     generic_function_instantiations: Vec<CheckedGenericFunctionInstantiation>,
     /// Concrete generic calls made outside a generic function body.
     generic_calls: HashMap<Span, CheckedGenericCall>,
+    /// Closed compiler operations selected outside generic function bodies.
+    intrinsic_ids: HashMap<Span, IntrinsicId>,
+    /// Concrete type operands for compiler-owned generic calls outside a
+    /// generic function body.
+    intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
+    intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
     /// Checked source-to-parameter permutations outside generic bodies.
     call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     /// Source method bodies exported to HIR.
     method_definitions: Vec<CheckedMethodDefinition>,
+    /// Exact source-formal access selected with each checked method body.
+    method_parameter_modes: HashMap<Span, Vec<bool>>,
     /// (owner type, method name) -> exported method definition index.
     method_definitions_by_owner: HashMap<(TypeId, String), usize>,
     /// (interface type, owner type, method name) -> definition index.
     interface_method_definitions: HashMap<(TypeId, TypeId, String), usize>,
     /// Checked method calls outside generic bodies.
     method_calls: HashMap<Span, CheckedMethodCall>,
+    interface_calls: HashMap<Span, CheckedInterfaceCall>,
+    /// Checked source method values outside generic bodies.
+    method_values: HashMap<Span, CheckedMethodValue>,
+    /// Physical local binding modes outside generic bodies.
+    binding_modes: HashMap<Span, CheckedBindingMode>,
+    binding_facts: HashMap<Span, CheckedBindingFact>,
+    assignment_places: HashMap<Span, CheckedAssignmentPlace>,
+    call_ownership: HashMap<Span, CheckedCallOwnership>,
+    actor_message_calls: HashMap<Span, CheckedActorMessageCall>,
+    invocation_signatures: HashMap<Span, (Vec<TypeId>, TypeId)>,
     /// Checked struct constructions outside generic bodies.
     struct_constructions: HashMap<Span, CheckedStructConstruction>,
+    /// Physical incoming pipeline types outside generic bodies.
+    pipeline_step_input_types: HashMap<Span, TypeId>,
     /// Raw pipeline call-result types outside generic bodies.
     pipeline_step_call_types: HashMap<Span, TypeId>,
+    /// Trusted `comptime type` expansions outside generic function bodies.
+    comptime_type_bindings: HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
     /// Per-instantiation facts currently being collected. Nested generic body
     /// checks push another scope so their spans never overwrite the caller's.
     active_generic_instantiations: Vec<ActiveGenericInstantiation>,
@@ -402,6 +997,10 @@ struct TypeChecker<'a> {
     specialize_reflection_branches: bool,
 
     // -- Actor support --
+    actor_check_session: crate::actor_messages::ActorCheckSession,
+    actor_definitions: HashMap<ActorId, DefId>,
+    actor_message_modes: HashMap<CheckedActorHandlerTarget, Vec<bool>>,
+    actor_handlers: HashMap<CheckedActorHandlerTarget, CheckedActorHandler>,
     /// The expected `responds T` type for the receive handler being checked.
     /// `None` when not inside a receive handler.
     current_respond_type: Option<TypeId>,
@@ -413,6 +1012,7 @@ impl<'a> TypeChecker<'a> {
             .scope_table
             .definitions
             .iter()
+            .filter(|def| !resolve.resource_kernels.contains_definition(def.id))
             .map(|def| (def.span, def.id))
             .collect();
 
@@ -422,12 +1022,17 @@ impl<'a> TypeChecker<'a> {
             options,
             sink: DiagnosticSink::new(),
             type_env: HashMap::new(),
+            resource_hooks: HashMap::new(),
+            resource_hook_error: None,
             decl_defs,
             named_types: HashMap::new(),
             trusted_stdlib_named_types: HashMap::new(),
             type_aliases: HashMap::new(),
             resolving_type_aliases: HashSet::new(),
             type_map: HashMap::new(),
+            source_type_map: HashMap::new(),
+            debug_type_names: HashMap::new(),
+            declared_source_types: HashMap::new(),
             current_return_type: None,
             interface_impls: HashMap::new(),
             impl_methods_by_type: HashMap::new(),
@@ -445,8 +1050,15 @@ impl<'a> TypeChecker<'a> {
             graphics_authority_params: HashSet::new(),
             trusted_stdlib_function_signatures: HashMap::new(),
             current_function_name: None,
+            constant_declarations: HashSet::new(),
+            assignment_bindings: HashMap::new(),
+            diagnosed_owned_view_consumptions: HashMap::new(),
+            diagnosed_caller_view_arguments: HashSet::new(),
+            diagnosed_resource_payload_views: HashSet::new(),
+            diagnosed_view_return_annotations: HashSet::new(),
             current_function_pure: false,
             in_verify_block: false,
+            ownership_context: CheckedOwnershipContext::Ordinary,
             in_property_block: false,
             comptime_expr_depth: 0,
             nonzero_fact_scopes: Vec::new(),
@@ -462,6 +1074,7 @@ impl<'a> TypeChecker<'a> {
             reflection_machines_by_id: HashMap::new(),
             reflection_variants_by_id: HashMap::new(),
             type_var_subst: HashMap::new(),
+            type_var_reflections: HashMap::new(),
             type_var_kind_tags: HashMap::new(),
             reflection_type_info_kind_scopes: Vec::new(),
             reflection_type_info_primitive_scopes: Vec::new(),
@@ -476,16 +1089,34 @@ impl<'a> TypeChecker<'a> {
             generic_instantiation_indices: HashMap::new(),
             generic_function_instantiations: Vec::new(),
             generic_calls: HashMap::new(),
+            intrinsic_ids: HashMap::new(),
+            intrinsic_type_arguments: HashMap::new(),
+            intrinsic_reflection_arguments: HashMap::new(),
             call_argument_orders: HashMap::new(),
             method_definitions: Vec::new(),
+            method_parameter_modes: HashMap::new(),
             method_definitions_by_owner: HashMap::new(),
             interface_method_definitions: HashMap::new(),
             method_calls: HashMap::new(),
+            interface_calls: HashMap::new(),
+            method_values: HashMap::new(),
+            binding_modes: HashMap::new(),
+            binding_facts: HashMap::new(),
+            assignment_places: HashMap::new(),
+            call_ownership: HashMap::new(),
+            actor_message_calls: HashMap::new(),
+            invocation_signatures: HashMap::new(),
             struct_constructions: HashMap::new(),
+            pipeline_step_input_types: HashMap::new(),
             pipeline_step_call_types: HashMap::new(),
+            comptime_type_bindings: HashMap::new(),
             active_generic_instantiations: Vec::new(),
             specialize_reflection_branches: false,
             current_respond_type: None,
+            actor_check_session: crate::actor_messages::ActorCheckSession::new(),
+            actor_definitions: HashMap::new(),
+            actor_message_modes: HashMap::new(),
+            actor_handlers: HashMap::new(),
         };
         checker.install_builtin_metadata_types();
         checker
@@ -511,6 +1142,7 @@ impl<'a> TypeChecker<'a> {
                 "machine_type",
                 "machine_state_type",
                 "unknown_type",
+                "resource_type",
             ]),
         });
         let type_kind_ty = self.interner.intern(Type::Enum(type_kind_eid));
@@ -550,7 +1182,7 @@ impl<'a> TypeChecker<'a> {
         self.named_types
             .insert("TypeBitfieldFieldShape".to_string(), bitfield_shape_ty);
 
-        let type_info_sid = self.interner.add_struct(TypeStructDef {
+        let type_info_sid = self.interner.add_compiler_metadata_struct(TypeStructDef {
             name: "TypeInfo".to_string(),
             fields: Vec::new(),
             methods: Vec::new(),
@@ -577,7 +1209,7 @@ impl<'a> TypeChecker<'a> {
             .insert("TypeInfo".to_string(), type_info_ty);
 
         let optional_string_ty = self.interner.intern(Type::Optional(TypeInterner::STRING));
-        let type_field_sid = self.interner.add_struct(TypeStructDef {
+        let type_field_sid = self.interner.add_compiler_metadata_struct(TypeStructDef {
             name: "TypeField".to_string(),
             fields: vec![
                 ("index".to_string(), TypeInterner::INT64),
@@ -598,7 +1230,7 @@ impl<'a> TypeChecker<'a> {
             .insert("TypeField".to_string(), type_field_ty);
 
         let optional_type_info_ty = self.interner.intern(Type::Optional(type_info_ty));
-        let type_bitfield_field_sid = self.interner.add_struct(TypeStructDef {
+        let type_bitfield_field_sid = self.interner.add_compiler_metadata_struct(TypeStructDef {
             name: "TypeBitfieldField".to_string(),
             fields: vec![
                 ("index".to_string(), TypeInterner::INT64),
@@ -616,7 +1248,7 @@ impl<'a> TypeChecker<'a> {
             .insert("TypeBitfieldField".to_string(), type_bitfield_field_ty);
 
         let type_bitfield_fields_ty = self.interner.intern(Type::List(type_bitfield_field_ty));
-        let type_bitfield_sid = self.interner.add_struct(TypeStructDef {
+        let type_bitfield_sid = self.interner.add_compiler_metadata_struct(TypeStructDef {
             name: "TypeBitfield".to_string(),
             fields: vec![
                 ("network_order".to_string(), TypeInterner::BOOL),
@@ -629,7 +1261,7 @@ impl<'a> TypeChecker<'a> {
             .insert("TypeBitfield".to_string(), type_bitfield_ty);
 
         let type_variant_fields_ty = self.interner.intern(Type::List(type_field_ty));
-        let type_variant_sid = self.interner.add_struct(TypeStructDef {
+        let type_variant_sid = self.interner.add_compiler_metadata_struct(TypeStructDef {
             name: "TypeVariant".to_string(),
             fields: vec![
                 ("index".to_string(), TypeInterner::INT64),
@@ -646,7 +1278,7 @@ impl<'a> TypeChecker<'a> {
             .insert("TypeVariant".to_string(), type_variant_ty);
 
         let type_machine_state_fields_ty = self.interner.intern(Type::List(type_field_ty));
-        let type_machine_state_sid = self.interner.add_struct(TypeStructDef {
+        let type_machine_state_sid = self.interner.add_compiler_metadata_struct(TypeStructDef {
             name: "TypeMachineState".to_string(),
             fields: vec![
                 ("index".to_string(), TypeInterner::INT64),
@@ -661,17 +1293,18 @@ impl<'a> TypeChecker<'a> {
         self.named_types
             .insert("TypeMachineState".to_string(), type_machine_state_ty);
 
-        let type_machine_transition_sid = self.interner.add_struct(TypeStructDef {
-            name: "TypeMachineTransition".to_string(),
-            fields: vec![
-                ("index".to_string(), TypeInterner::INT64),
-                ("source_index".to_string(), TypeInterner::INT64),
-                ("source".to_string(), TypeInterner::STRING),
-                ("target_index".to_string(), TypeInterner::INT64),
-                ("target".to_string(), TypeInterner::STRING),
-            ],
-            methods: Vec::new(),
-        });
+        let type_machine_transition_sid =
+            self.interner.add_compiler_metadata_struct(TypeStructDef {
+                name: "TypeMachineTransition".to_string(),
+                fields: vec![
+                    ("index".to_string(), TypeInterner::INT64),
+                    ("source_index".to_string(), TypeInterner::INT64),
+                    ("source".to_string(), TypeInterner::STRING),
+                    ("target_index".to_string(), TypeInterner::INT64),
+                    ("target".to_string(), TypeInterner::STRING),
+                ],
+                methods: Vec::new(),
+            });
         let type_machine_transition_ty = self
             .interner
             .intern(Type::Struct(type_machine_transition_sid));
@@ -683,7 +1316,7 @@ impl<'a> TypeChecker<'a> {
         let type_machine_states_ty = self.interner.intern(Type::List(type_machine_state_ty));
         let type_machine_transitions_ty =
             self.interner.intern(Type::List(type_machine_transition_ty));
-        let type_machine_sid = self.interner.add_struct(TypeStructDef {
+        let type_machine_sid = self.interner.add_compiler_metadata_struct(TypeStructDef {
             name: "TypeMachine".to_string(),
             fields: vec![
                 ("states".to_string(), type_machine_states_ty),
@@ -729,6 +1362,8 @@ impl<'a> TypeChecker<'a> {
             Type::Bytes => "bytes".to_string(),
             Type::Nothing => "nothing".to_string(),
             Type::TypeConstruction => "TypeConstruction".to_string(),
+            Type::Never => "<never>".to_string(),
+            Type::Capability(kind) => kind.name().to_string(),
             Type::List(inner) => format!("list[{}]", self.type_name(*inner)),
             Type::Map(k, v) => format!("map[{}, {}]", self.type_name(*k), self.type_name(*v)),
             Type::Set(inner) => format!("set[{}]", self.type_name(*inner)),
@@ -752,9 +1387,17 @@ impl<'a> TypeChecker<'a> {
             }
             Type::Function {
                 params,
+                view_params,
                 return_type,
             } => {
-                let params: Vec<String> = params.iter().map(|p| self.type_name(*p)).collect();
+                let params: Vec<String> = params
+                    .iter()
+                    .zip(view_params)
+                    .map(|(param, view)| {
+                        let name = self.type_name(*param);
+                        if *view { format!("view {name}") } else { name }
+                    })
+                    .collect();
                 format!(
                     "function({}) returns {}",
                     params.join(", "),
@@ -949,20 +1592,6 @@ impl<'a> TypeChecker<'a> {
             .is_some_and(|ty| matches!(self.interner.resolve(*ty), Type::Bitfield(_)))
     }
 
-    fn is_reflection_metadata_type_name(name: &str) -> bool {
-        matches!(
-            name,
-            "TypeInfo"
-                | "TypeField"
-                | "TypeBitfield"
-                | "TypeBitfieldField"
-                | "TypeMachine"
-                | "TypeMachineState"
-                | "TypeMachineTransition"
-                | "TypeVariant"
-        )
-    }
-
     /// Returns true if the type is numeric (any integer or float type).
     fn is_numeric(&self, id: TypeId) -> bool {
         matches!(
@@ -1091,15 +1720,17 @@ impl<'a> TypeChecker<'a> {
             | Expr::Paren(inner, _)
             | Expr::Comptime(inner, _)
             | Expr::Coarsen(inner, _) => {
-                let inner_ty = self.type_map.get(&inner.span()).copied().unwrap_or(ty);
+                let inner_ty = self.checked_expression_type(inner.span()).unwrap_or(ty);
                 self.expression_is_proven_nonzero(inner, inner_ty)
             }
-            Expr::Ident(ident) => self.ident_def_id(ident).is_some_and(|def_id| {
-                self.nonzero_fact_scopes
-                    .iter()
-                    .rev()
-                    .any(|scope| scope.contains(&def_id))
-            }),
+            Expr::Ident(_) | Expr::FieldAccess(_, _, _) => {
+                self.nonzero_fact(expr).is_some_and(|fact| {
+                    self.nonzero_fact_scopes
+                        .iter()
+                        .rev()
+                        .any(|scope| scope.contains(&fact))
+                })
+            }
             _ => false,
         }
     }
@@ -1168,6 +1799,7 @@ impl<'a> TypeChecker<'a> {
             | Type::String
             | Type::Bool
             | Type::Nothing
+            | Type::Never
             | Type::Error => false,
             Type::Refinement { base, .. } => self.json_read_requires_view(*base),
             _ => true,
@@ -1233,7 +1865,9 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn type_requires_handle_error(&self, expected: TypeId, got: TypeId) -> bool {
-        if matches!(self.interner.resolve(expected), Type::Result(_, _)) {
+        if self.types_compatible(expected, got)
+            || matches!(self.interner.resolve(expected), Type::Result(_, _))
+        {
             return false;
         }
         match self.interner.resolve(got) {
@@ -1243,10 +1877,12 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn type_requires_bare_handle(&self, expected: TypeId, got: TypeId) -> bool {
-        if matches!(
-            self.interner.resolve(expected),
-            Type::Result(_, _) | Type::Optional(_)
-        ) {
+        if self.types_compatible(expected, got)
+            || matches!(
+                self.interner.resolve(expected),
+                Type::Result(_, _) | Type::Optional(_)
+            )
+        {
             return false;
         }
         match self.interner.resolve(got) {
@@ -1376,6 +2012,31 @@ impl<'a> TypeChecker<'a> {
         !Self::is_impure_builtin(name) && self.purity_map.get(name).copied().unwrap_or(true)
     }
 
+    fn check_call_purity(&mut self, callee_name: &str, span: Span) {
+        if self.current_function_pure
+            && let Some(caller_name) = &self.current_function_name
+        {
+            self.sink
+                .emit(errors::pure_calls_impure(caller_name, callee_name, span));
+        }
+        if self.in_verify_block
+            && let Some(verify_name) = &self.current_verify_name
+        {
+            self.sink
+                .emit(errors::verify_calls_impure(verify_name, callee_name, span));
+        }
+        if self.comptime_expr_depth > 0 {
+            self.sink
+                .emit(errors::comptime_calls_impure(callee_name, span));
+        }
+    }
+
+    fn function_parameters_are_pure(&self, params: &[TypeId]) -> bool {
+        params
+            .iter()
+            .all(|param| !matches!(self.interner.resolve(*param), Type::Capability(_)))
+    }
+
     fn is_secret_safe_builtin(name: &str) -> bool {
         matches!(name, "secret.redact" | "secret.compare")
     }
@@ -1458,6 +2119,13 @@ impl<'a> TypeChecker<'a> {
                 }),
             Type::Refinement { base, .. } => self.type_contains_secret_data_inner(*base, visited),
             _ => false,
+        }
+    }
+
+    fn check_resource_copy(&mut self, ty: TypeId, span: Span) {
+        if self.type_contains_resource_data(ty) {
+            self.sink
+                .emit(errors::resource_cannot_be_cloned(&self.type_name(ty), span));
         }
     }
 
@@ -1555,6 +2223,28 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn build_reflection_metadata(&mut self) -> ReflectionMetadata {
+        fn source_operands(
+            metadata: &mut ReflectionMetadata,
+            types: &HashMap<Span, Vec<TypeId>>,
+            reflection: &HashMap<Span, Vec<ReflectionTypeInfo>>,
+            bindings: &HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
+        ) {
+            for (span, infos) in reflection {
+                if let Some(args) = types.get(span) {
+                    for (ty, info) in args.iter().zip(infos) {
+                        metadata.insert_source_type_info(*ty, info.clone());
+                    }
+                }
+            }
+            for binding in bindings.values().flatten() {
+                source_operands(
+                    metadata,
+                    &binding.body.intrinsic_type_arguments,
+                    &binding.body.intrinsic_reflection_arguments,
+                    &binding.body.comptime_type_bindings,
+                );
+            }
+        }
         let mut metadata = ReflectionMetadata::new();
 
         let type_ids = self.interner.type_ids().collect::<Vec<_>>();
@@ -1592,6 +2282,20 @@ impl<'a> TypeChecker<'a> {
             metadata.insert_type_variants_for_id(type_id, type_name, variants);
         }
 
+        source_operands(
+            &mut metadata,
+            &self.intrinsic_type_arguments,
+            &self.intrinsic_reflection_arguments,
+            &self.comptime_type_bindings,
+        );
+        for instance in &self.generic_function_instantiations {
+            source_operands(
+                &mut metadata,
+                &instance.intrinsic_type_arguments,
+                &instance.intrinsic_reflection_arguments,
+                &instance.comptime_type_bindings,
+            );
+        }
         metadata
     }
 
@@ -1679,7 +2383,11 @@ impl<'a> TypeChecker<'a> {
             Type::Machine(_) => "machine",
             Type::MachineState { .. } => "machine_state",
             Type::Resource(_) => "resource",
-            Type::Interface(_) | Type::Actor(_) | Type::Error => "unknown",
+            Type::Interface(_)
+            | Type::Actor(_)
+            | Type::Capability(_)
+            | Type::Never
+            | Type::Error => "unknown",
         }
     }
 
@@ -1714,7 +2422,11 @@ impl<'a> TypeChecker<'a> {
             Type::Machine(_) => "machine_type",
             Type::MachineState { .. } => "machine_state_type",
             Type::Resource(_) => "resource_type",
-            Type::Interface(_) | Type::Actor(_) | Type::Error => "unknown_type",
+            Type::Interface(_)
+            | Type::Actor(_)
+            | Type::Capability(_)
+            | Type::Never
+            | Type::Error => "unknown_type",
         }
     }
 
@@ -2033,6 +2745,11 @@ impl<'a> TypeChecker<'a> {
         if let TypeExpr::View(inner, _) = ty {
             return self.reflection_type_info_for_type_expr(inner, namespace, resolved_ty);
         }
+        if let TypeExpr::Named(ident) = ty
+            && let Some(info) = self.type_var_reflections.get(&ident.name)
+        {
+            return info.clone();
+        }
 
         let type_name = self.reflection_type_expr_display(ty, namespace);
         let args = self.reflection_type_info_args_for_type_expr(ty, namespace, resolved_ty);
@@ -2163,7 +2880,11 @@ impl<'a> TypeChecker<'a> {
 
     fn reflection_type_expr_display(&self, ty: &TypeExpr, namespace: Option<&str>) -> String {
         match ty {
-            TypeExpr::Named(ident) => self.reflection_type_name_in_namespace(ident, namespace),
+            TypeExpr::Named(ident) => self
+                .type_var_reflections
+                .get(&ident.name)
+                .map(|info| info.type_name.clone())
+                .unwrap_or_else(|| self.reflection_type_name_in_namespace(ident, namespace)),
             TypeExpr::Generic(ident, args, _) => {
                 let args = args
                     .iter()
@@ -2202,11 +2923,353 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn reflection_arguments_for_type_args(
+        &mut self,
+        type_args: &[TypeExpr],
+        concrete_args: &[TypeId],
+    ) -> Vec<ReflectionTypeInfo> {
+        let namespace = self.current_function_name.as_deref().and_then(|name| {
+            name.rsplit_once('.')
+                .map(|(namespace, _)| namespace.to_string())
+        });
+        type_args
+            .iter()
+            .zip(concrete_args)
+            .map(|(source, &ty)| {
+                self.reflection_type_info_for_type_expr(source, namespace.as_deref(), ty)
+            })
+            .collect()
+    }
+
+    fn reflection_arguments_for_inferred_types(
+        &self,
+        concrete_args: &[TypeId],
+    ) -> Vec<ReflectionTypeInfo> {
+        concrete_args
+            .iter()
+            .map(|&ty| self.reflection_type_info_for_type(ty))
+            .collect()
+    }
+
+    fn inferred_argument_reflection(
+        &mut self,
+        expression: Option<&Expr>,
+        actual: TypeId,
+    ) -> ReflectionTypeInfo {
+        let source = expression.and_then(|expression| {
+            let mut expression = expression;
+            while let Expr::View(inner, _) | Expr::Paren(inner, _) = expression {
+                expression = inner;
+            }
+            if let Expr::Ident(ident) = expression
+                && let Some(definition) = self.ident_def_id(ident)
+                && let Some(ty) = self.declared_source_types.get(&definition)
+            {
+                return Some((
+                    ty.clone(),
+                    self.resolve.scope_table.def(definition).namespace.clone(),
+                ));
+            }
+            if let Expr::InlineFn(params, return_type, _, span) = expression {
+                return Some((
+                    Self::source_callback_type(params, return_type.as_ref(), *span),
+                    self.current_function_name.as_deref().and_then(|name| {
+                        name.rsplit_once('.')
+                            .map(|(namespace, _)| namespace.to_string())
+                    }),
+                ));
+            }
+            let name = self.resolved_expr_name(expression)?;
+            let function = self.graphics_callback_definitions.get(&name)?;
+            if !function.type_params.is_empty() {
+                return None;
+            }
+            Some((
+                Self::source_callback_type(
+                    &function.params,
+                    function.return_type.as_ref(),
+                    function.span,
+                ),
+                name.rsplit_once('.')
+                    .map(|(namespace, _)| namespace.to_string()),
+            ))
+        });
+        let mut info = match source {
+            Some((source, namespace)) => {
+                self.reflection_type_info_for_type_expr(&source, namespace.as_deref(), actual)
+            }
+            None => self.reflection_type_info_for_type(actual),
+        };
+        // The reference inference peels a whole argument's aliases, then keeps
+        // aliases encountered inside its list, sum or callable signature.
+        while info.kind == "alias" && info.args.len() == 1 {
+            info = info.args.remove(0);
+        }
+        info
+    }
+
+    fn source_callback_type(
+        params: &[ast::Param],
+        return_type: Option<&TypeExpr>,
+        span: Span,
+    ) -> TypeExpr {
+        TypeExpr::Function(
+            params
+                .iter()
+                .map(|param| {
+                    if param.view && !matches!(param.ty, TypeExpr::View(_, _)) {
+                        TypeExpr::View(Box::new(param.ty.clone()), param.span)
+                    } else {
+                        param.ty.clone()
+                    }
+                })
+                .collect(),
+            Box::new(return_type.cloned().unwrap_or_else(|| {
+                TypeExpr::Named(ast::Ident {
+                    name: "nothing".into(),
+                    span,
+                })
+            })),
+            span,
+        )
+    }
+
+    fn reflection_arguments_for_inferred_call(
+        &mut self,
+        template: &FunctionDef,
+        concrete_args: &[TypeId],
+        actual_types: &[TypeId],
+        expressions: &[Option<&Expr>],
+    ) -> Vec<ReflectionTypeInfo> {
+        let parameters = template
+            .type_params
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect::<HashSet<_>>();
+        let mut witnesses = HashMap::new();
+        for ((parameter, &actual), expression) in
+            template.params.iter().zip(actual_types).zip(expressions)
+        {
+            let info = self.inferred_argument_reflection(*expression, actual);
+            self.collect_inferred_reflection(
+                &parameter.ty,
+                actual,
+                info,
+                &parameters,
+                &mut witnesses,
+            );
+        }
+        template
+            .type_params
+            .iter()
+            .zip(concrete_args)
+            .map(|(parameter, &concrete)| {
+                let Some((source, info)) = witnesses.remove(&parameter.name) else {
+                    return self.reflection_type_info_for_type(concrete);
+                };
+                if source == concrete {
+                    info
+                } else if self.merge_inferred_never(source, concrete, false) == Some(concrete) {
+                    let contextual = self.reflection_type_info_for_type(concrete);
+                    self.merge_inferred_reflection(source, concrete, concrete, info, contextual)
+                } else {
+                    self.reflection_type_info_for_type(concrete)
+                }
+            })
+            .collect()
+    }
+
+    fn apply_inferred_reflection_kinds(
+        template: &FunctionDef,
+        reflections: &[ReflectionTypeInfo],
+        kinds: &mut HashMap<String, String>,
+    ) {
+        for (parameter, reflection) in template.type_params.iter().zip(reflections) {
+            kinds.insert(
+                parameter.name.clone(),
+                ReflectionTypeInfo::kind_tag_variant(&reflection.kind).to_string(),
+            );
+        }
+    }
+
+    fn collect_inferred_reflection(
+        &mut self,
+        expected: &TypeExpr,
+        actual: TypeId,
+        info: ReflectionTypeInfo,
+        parameters: &HashSet<&str>,
+        witnesses: &mut HashMap<String, (TypeId, ReflectionTypeInfo)>,
+    ) {
+        match expected {
+            TypeExpr::Named(parameter) if parameters.contains(parameter.name.as_str()) => {
+                match witnesses.remove(&parameter.name) {
+                    Some((first, first_info)) => {
+                        let merged = self
+                            .merge_inferred_never(first, actual, false)
+                            .unwrap_or(first);
+                        let info =
+                            self.merge_inferred_reflection(first, actual, merged, first_info, info);
+                        witnesses.insert(parameter.name.clone(), (merged, info));
+                    }
+                    None => {
+                        witnesses.insert(parameter.name.clone(), (actual, info));
+                    }
+                }
+            }
+            TypeExpr::View(inner, _) | TypeExpr::StateQualified(inner, _, _) => {
+                self.collect_inferred_reflection(inner, actual, info, parameters, witnesses);
+            }
+            TypeExpr::Generic(owner, args, _)
+                if owner.name == self.reflection_kind_for_type(actual) =>
+            {
+                let actual_args = self.type_info_arg_types_for_type(actual);
+                let infos = self.inferred_child_reflections(actual, &info);
+                for ((expected, actual), info) in args.iter().zip(actual_args).zip(infos) {
+                    self.collect_inferred_reflection(expected, actual, info, parameters, witnesses);
+                }
+            }
+            TypeExpr::Function(params, result, _) => {
+                let Type::Function {
+                    params: actual_params,
+                    return_type,
+                    ..
+                } = self.interner.resolve(actual).clone()
+                else {
+                    return;
+                };
+                let mut infos = self.inferred_child_reflections(actual, &info).into_iter();
+                for (expected, actual) in params.iter().zip(actual_params) {
+                    let info = infos
+                        .next()
+                        .unwrap_or_else(|| self.reflection_type_info_for_type(actual));
+                    self.collect_inferred_reflection(expected, actual, info, parameters, witnesses);
+                }
+                let info = infos
+                    .next()
+                    .unwrap_or_else(|| self.reflection_type_info_for_type(return_type));
+                self.collect_inferred_reflection(result, return_type, info, parameters, witnesses);
+            }
+            _ => {}
+        }
+    }
+
+    fn inferred_child_reflections(
+        &self,
+        ty: TypeId,
+        info: &ReflectionTypeInfo,
+    ) -> Vec<ReflectionTypeInfo> {
+        let children = self.type_info_arg_types_for_type(ty);
+        if info.kind == self.reflection_kind_for_type(ty) && info.args.len() == children.len() {
+            info.args.clone()
+        } else {
+            children
+                .into_iter()
+                .map(|ty| self.reflection_type_info_for_type(ty))
+                .collect()
+        }
+    }
+
+    fn merge_inferred_reflection(
+        &self,
+        first: TypeId,
+        next: TypeId,
+        merged: TypeId,
+        first_info: ReflectionTypeInfo,
+        next_info: ReflectionTypeInfo,
+    ) -> ReflectionTypeInfo {
+        if merged == first {
+            return first_info;
+        }
+        if first == TypeInterner::NEVER && merged == next {
+            return next_info;
+        }
+        let children = self.type_info_arg_types_for_type(merged);
+        let first_children = self.type_info_arg_types_for_type(first);
+        let next_children = self.type_info_arg_types_for_type(next);
+        if children.len() != first_children.len() || children.len() != next_children.len() {
+            return self.reflection_type_info_for_type(merged);
+        }
+        let args = children
+            .into_iter()
+            .zip(first_children.into_iter().zip(next_children))
+            .zip(
+                self.inferred_child_reflections(first, &first_info)
+                    .into_iter()
+                    .zip(self.inferred_child_reflections(next, &next_info)),
+            )
+            .map(|((merged, (first, next)), (first_info, next_info))| {
+                self.merge_inferred_reflection(first, next, merged, first_info, next_info)
+            })
+            .collect::<Vec<_>>();
+        let name = self.inferred_reflection_display(merged, &args);
+        self.reflection_type_info_for_type_named_with_args(merged, name, args)
+    }
+
+    fn inferred_reflection_display(&self, ty: TypeId, args: &[ReflectionTypeInfo]) -> String {
+        let names = args
+            .iter()
+            .map(|argument| argument.type_name.as_str())
+            .collect::<Vec<_>>();
+        match self.interner.resolve(ty) {
+            Type::List(_)
+            | Type::Set(_)
+            | Type::Map(_, _)
+            | Type::Optional(_)
+            | Type::Result(_, _)
+            | Type::Secret(_) => {
+                format!(
+                    "{}[{}]",
+                    self.reflection_kind_for_type(ty),
+                    names.join(", ")
+                )
+            }
+            Type::Function { view_params, .. } => {
+                let Some((result, params)) = names.split_last() else {
+                    return self.type_name(ty);
+                };
+                let params = params
+                    .iter()
+                    .zip(view_params)
+                    .map(|(name, view)| {
+                        if *view {
+                            format!("view {name}")
+                        } else {
+                            (*name).to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                format!("function({}) returns {result}", params.join(", "))
+            }
+            _ => self.type_name(ty),
+        }
+    }
+
     fn reflection_type_name_in_namespace(
         &self,
         ident: &ast::Ident,
         namespace: Option<&str>,
     ) -> String {
+        let expanded = self.resolved_or_expanded_name(&ident.name, ident.span);
+        if self.reflection_type_name_is_registered(&expanded) {
+            return expanded;
+        }
+        if let Some(definition) = self.resolve.resolutions.get(&ident.span) {
+            let resolved = self.resolve.scope_table.def(*definition);
+            if matches!(
+                resolved.kind,
+                DefKind::Type
+                    | DefKind::Struct
+                    | DefKind::Enum
+                    | DefKind::Bitfield
+                    | DefKind::Interface
+                    | DefKind::Machine
+                    | DefKind::Actor
+                    | DefKind::Resource
+            ) && self.reflection_type_name_is_registered(&resolved.name)
+            {
+                return resolved.name.clone();
+            }
+        }
         if ident.name.contains('.') {
             return ident.name.clone();
         }
@@ -2325,10 +3388,12 @@ impl<'a> TypeChecker<'a> {
             | Type::Bool
             | Type::Bytes
             | Type::Nothing
+            | Type::Never
             | Type::Error => {}
             Type::TypeConstruction
             | Type::Interface(_)
             | Type::Actor(_)
+            | Type::Capability(_)
             | Type::Resource(_)
             | Type::Function { .. } => {
                 self.push_json_unsupported_type(ty, unsupported_types, unsupported);
@@ -2644,52 +3709,407 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn types_compatible(&self, expected: TypeId, got: TypeId) -> bool {
-        if expected == got || expected == TypeInterner::ERROR || got == TypeInterner::ERROR {
-            return true;
+    // Select only shapes whose reflected serializer can be checked as concrete
+    // source today; other JSON calls retain their existing intrinsic lowering.
+    fn native_json_source_supported(&self, ty: TypeId, visiting: &mut HashSet<TypeId>) -> bool {
+        match self.interner.resolve(ty) {
+            Type::String
+            | Type::Bool
+            | Type::Bytes
+            | Type::Nothing
+            | Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64
+            | Type::Float32
+            | Type::Float64 => true,
+            // Inferred empty carriers have no Never payload to serialize.
+            // Their checked source bodies still precede uninhabited lowering.
+            Type::Never => true,
+            Type::List(element) => self.native_json_source_supported(*element, visiting),
+            Type::Set(element) => {
+                self.is_primitive_hashable_type(*element)
+                    && self.native_json_source_supported(*element, visiting)
+            }
+            Type::Map(key, value) if *key == TypeInterner::STRING => {
+                self.native_json_source_supported(*value, visiting)
+            }
+            Type::Optional(inner) => self.native_json_source_supported(*inner, visiting),
+            Type::Result(ok, err) => {
+                self.native_json_source_supported(*ok, visiting)
+                    && self.native_json_source_supported(*err, visiting)
+            }
+            Type::Secret(_) => false,
+            Type::Refinement { base, .. } => self.native_json_source_supported(*base, visiting),
+            Type::Enum(id) if self.interner.resolve_enum(*id).name == "json.JsonTree" => true,
+            Type::Enum(id) => {
+                if !visiting.insert(ty) {
+                    return true;
+                }
+                let supported = self
+                    .interner
+                    .resolve_enum(*id)
+                    .variants
+                    .iter()
+                    .flat_map(|variant| variant.fields.iter())
+                    .all(|(_, field_ty)| self.native_json_source_supported(*field_ty, visiting));
+                visiting.remove(&ty);
+                supported
+            }
+            Type::Bitfield(_) => self.native_json_bitfield_source_supported(ty),
+            Type::Struct(id) => {
+                // A checked finite self-reference reuses the same source
+                // specialization; the remaining fields still decide support.
+                if !visiting.insert(ty) {
+                    return true;
+                }
+                let supported =
+                    self.interner
+                        .resolve_struct(*id)
+                        .fields
+                        .iter()
+                        .all(|(_, field_ty)| {
+                            self.type_contains_secret_data(*field_ty)
+                                || self.native_json_source_supported(*field_ty, visiting)
+                        });
+                visiting.remove(&ty);
+                supported
+            }
+            Type::Machine(id) => {
+                if !visiting.insert(ty) {
+                    return false;
+                }
+                let supported = self
+                    .interner
+                    .resolve_machine(*id)
+                    .states
+                    .iter()
+                    .flat_map(|state| state.fields.iter())
+                    .all(|(_, field_ty)| {
+                        self.type_contains_secret_data(*field_ty)
+                            || self.native_json_source_supported(*field_ty, visiting)
+                    });
+                visiting.remove(&ty);
+                supported
+            }
+            Type::MachineState { machine, state } => {
+                if !visiting.insert(ty) {
+                    return false;
+                }
+                let supported = self
+                    .interner
+                    .resolve_machine(*machine)
+                    .state(*state)
+                    .is_some_and(|state| {
+                        state.fields.iter().all(|(_, field_ty)| {
+                            self.type_contains_secret_data(*field_ty)
+                                || self.native_json_source_supported(*field_ty, visiting)
+                        })
+                    });
+                visiting.remove(&ty);
+                supported
+            }
+            _ => false,
         }
+    }
 
-        match (self.interner.resolve(expected), self.interner.resolve(got)) {
-            (Type::Interface(_), Type::Interface(_)) => expected == got,
-            (Type::Interface(_), _) => self.interface_impls.contains_key(&(expected, got)),
-            (Type::Secret(expected_inner), Type::Secret(got_inner)) => {
-                self.types_compatible(*expected_inner, *got_inner)
+    fn native_json_enum_source_supported(&self, ty: TypeId) -> bool {
+        let Type::Enum(id) = self.interner.resolve(ty) else {
+            return false;
+        };
+        let definition = self.interner.resolve_enum(*id);
+        definition.name != "json.JsonTree"
+            && definition
+                .variants
+                .iter()
+                .flat_map(|variant| variant.fields.iter())
+                .all(|(_, field_ty)| {
+                    self.native_json_source_supported(*field_ty, &mut HashSet::new())
+                })
+    }
+
+    fn native_json_bitfield_source_supported(&self, ty: TypeId) -> bool {
+        let Type::Bitfield(id) = self.interner.resolve(ty) else {
+            return false;
+        };
+        self.interner
+            .resolve_bitfield(*id)
+            .fields
+            .iter()
+            .all(|field| match self.interner.resolve(field.ty) {
+                Type::Enum(enum_id) => {
+                    let definition = self.interner.resolve_enum(*enum_id);
+                    definition.name != "json.JsonTree"
+                        && definition
+                            .variants
+                            .iter()
+                            .all(|variant| variant.fields.is_empty())
+                }
+                _ => self.native_json_source_supported(field.ty, &mut HashSet::new()),
+            })
+    }
+
+    fn native_json_bitfield_parse_supported(&self, ty: TypeId) -> bool {
+        let Type::Bitfield(id) = self.interner.resolve(ty) else {
+            return false;
+        };
+        self.interner
+            .resolve_bitfield(*id)
+            .fields
+            .iter()
+            .all(|field| match self.interner.resolve(field.ty) {
+                Type::Enum(enum_id) => {
+                    let definition = self.interner.resolve_enum(*enum_id);
+                    definition.name != "json.JsonTree"
+                        && definition
+                            .variants
+                            .iter()
+                            .all(|variant| variant.fields.is_empty())
+                }
+                _ => self.native_json_parse_source_supported_inner(field.ty, &mut HashSet::new()),
+            })
+    }
+
+    fn native_json_parse_source_supported(&self, ty: TypeId) -> bool {
+        self.native_json_parse_source_supported_inner(ty, &mut HashSet::new())
+    }
+
+    fn native_json_enum_parse_supported(&self, ty: TypeId) -> bool {
+        let Type::Enum(id) = self.interner.resolve(ty) else {
+            return false;
+        };
+        let definition = self.interner.resolve_enum(*id);
+        definition.name != "json.JsonTree"
+            && definition
+                .variants
+                .iter()
+                .flat_map(|variant| variant.fields.iter())
+                .all(|(_, field_ty)| {
+                    self.native_json_parse_source_supported_inner(*field_ty, &mut HashSet::new())
+                })
+    }
+
+    fn native_json_parse_source_supported_inner(
+        &self,
+        ty: TypeId,
+        visiting: &mut HashSet<TypeId>,
+    ) -> bool {
+        match self.interner.resolve(ty) {
+            Type::String
+            | Type::Bool
+            | Type::Bytes
+            | Type::Nothing
+            | Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64
+            | Type::Float32
+            | Type::Float64 => true,
+            // The checked unknown-kind decoder returns only a string error.
+            // Empty carriers retain their inferred uninhabited payload slot.
+            Type::Never => true,
+            Type::List(element) => {
+                self.native_json_parse_source_supported_inner(*element, visiting)
             }
-            (Type::Secret(expected_inner), _) => self.types_compatible(*expected_inner, got),
-            (Type::List(expected_inner), Type::List(got_inner))
-            | (Type::Optional(expected_inner), Type::Optional(got_inner)) => {
-                self.types_compatible(*expected_inner, *got_inner)
+            Type::Set(element) => {
+                self.is_primitive_hashable_type(*element)
+                    && self.native_json_parse_source_supported_inner(*element, visiting)
             }
-            (Type::Set(expected_inner), Type::Set(got_inner)) => {
-                self.types_compatible(*expected_inner, *got_inner)
+            Type::Map(key, value) if *key == TypeInterner::STRING => {
+                self.native_json_parse_source_supported_inner(*value, visiting)
             }
-            (Type::Map(expected_key, expected_val), Type::Map(got_key, got_val))
-            | (Type::Result(expected_key, expected_val), Type::Result(got_key, got_val)) => {
-                self.types_compatible(*expected_key, *got_key)
-                    && self.types_compatible(*expected_val, *got_val)
+            Type::Optional(inner) => {
+                self.native_json_parse_source_supported_inner(*inner, visiting)
+            }
+            Type::Result(ok, err) => {
+                self.native_json_parse_source_supported_inner(*ok, visiting)
+                    && self.native_json_parse_source_supported_inner(*err, visiting)
+            }
+            Type::Secret(inner) => self.native_json_parse_source_supported_inner(*inner, visiting),
+            Type::Enum(id) if self.interner.resolve_enum(*id).name == "json.JsonTree" => true,
+            Type::Enum(id) => {
+                if !visiting.insert(ty) {
+                    return true;
+                }
+                let supported = self
+                    .interner
+                    .resolve_enum(*id)
+                    .variants
+                    .iter()
+                    .flat_map(|variant| variant.fields.iter())
+                    .all(|(_, field_ty)| {
+                        self.native_json_parse_source_supported_inner(*field_ty, visiting)
+                    });
+                visiting.remove(&ty);
+                supported
+            }
+            Type::Bitfield(_) => self.native_json_bitfield_parse_supported(ty),
+            Type::Refinement { base, .. } => {
+                self.native_json_parse_source_supported_inner(*base, visiting)
+            }
+            Type::Struct(id) => {
+                // Source decode may recurse through the same finite struct.
+                if !visiting.insert(ty) {
+                    return true;
+                }
+                let supported =
+                    self.interner
+                        .resolve_struct(*id)
+                        .fields
+                        .iter()
+                        .all(|(_, field_ty)| {
+                            self.native_json_parse_source_supported_inner(*field_ty, visiting)
+                        });
+                visiting.remove(&ty);
+                supported
+            }
+            Type::Machine(id) => {
+                if !visiting.insert(ty) {
+                    return false;
+                }
+                let supported = self
+                    .interner
+                    .resolve_machine(*id)
+                    .states
+                    .iter()
+                    .flat_map(|state| state.fields.iter())
+                    .all(|(_, field_ty)| {
+                        self.native_json_parse_source_supported_inner(*field_ty, visiting)
+                    });
+                visiting.remove(&ty);
+                supported
+            }
+            Type::MachineState { machine, state } => {
+                if !visiting.insert(ty) {
+                    return false;
+                }
+                let supported = self
+                    .interner
+                    .resolve_machine(*machine)
+                    .state(*state)
+                    .is_some_and(|state| {
+                        state.fields.iter().all(|(_, field_ty)| {
+                            self.native_json_parse_source_supported_inner(*field_ty, visiting)
+                        })
+                    });
+                visiting.remove(&ty);
+                supported
+            }
+            _ => false,
+        }
+    }
+
+    fn types_compatible(&self, expected: TypeId, got: TypeId) -> bool {
+        ordinary_types_compatible(
+            &self.interner,
+            &|pair| self.interface_impls.contains_key(pair),
+            expected,
+            got,
+        )
+    }
+    /// Fill only absent inferred slots. Existing concrete widths and nominal
+    /// owners must match; this is not a promotion or refinement coarsening.
+    /// Function parameters reverse the direction because callable substitution
+    /// is contravariant, including when the missing slot is nested in a sum.
+    fn merge_inferred_never(
+        &mut self,
+        first: TypeId,
+        next: TypeId,
+        contravariant: bool,
+    ) -> Option<TypeId> {
+        if first == next {
+            return Some(first);
+        }
+        if first == TypeInterner::NEVER || next == TypeInterner::NEVER {
+            return Some(if contravariant {
+                TypeInterner::NEVER
+            } else if first == TypeInterner::NEVER {
+                next
+            } else {
+                first
+            });
+        }
+        let merged = match (
+            self.interner.resolve(first).clone(),
+            self.interner.resolve(next).clone(),
+        ) {
+            (Type::List(first), Type::List(next)) => {
+                Type::List(self.merge_inferred_never(first, next, contravariant)?)
+            }
+            (Type::Set(first), Type::Set(next)) => {
+                Type::Set(self.merge_inferred_never(first, next, contravariant)?)
+            }
+            (Type::Optional(first), Type::Optional(next)) => {
+                Type::Optional(self.merge_inferred_never(first, next, contravariant)?)
+            }
+            (Type::Secret(first), Type::Secret(next)) => {
+                Type::Secret(self.merge_inferred_never(first, next, contravariant)?)
+            }
+            (Type::Map(first_key, first_value), Type::Map(next_key, next_value)) => Type::Map(
+                self.merge_inferred_never(first_key, next_key, contravariant)?,
+                self.merge_inferred_never(first_value, next_value, contravariant)?,
+            ),
+            (Type::Result(first_ok, first_error), Type::Result(next_ok, next_error)) => {
+                Type::Result(
+                    self.merge_inferred_never(first_ok, next_ok, contravariant)?,
+                    self.merge_inferred_never(first_error, next_error, contravariant)?,
+                )
             }
             (
                 Type::Function {
-                    params: expected_params,
-                    return_type: expected_return,
+                    params: first_params,
+                    view_params: first_views,
+                    return_type: first_return,
                 },
                 Type::Function {
-                    params: got_params,
-                    return_type: got_return,
+                    params: next_params,
+                    view_params: next_views,
+                    return_type: next_return,
                 },
-            ) => {
-                expected_params.len() == got_params.len()
-                    && expected_params
-                        .iter()
-                        .zip(got_params.iter())
-                        .all(|(expected, got)| self.types_compatible(*expected, *got))
-                    && self.types_compatible(*expected_return, *got_return)
+            ) if first_params.len() == next_params.len() && first_views == next_views => {
+                Type::Function {
+                    params: first_params
+                        .into_iter()
+                        .zip(next_params)
+                        .map(|(first, next)| self.merge_inferred_never(first, next, !contravariant))
+                        .collect::<Option<_>>()?,
+                    view_params: first_views,
+                    return_type: self.merge_inferred_never(
+                        first_return,
+                        next_return,
+                        contravariant,
+                    )?,
+                }
             }
-            // This compatibility is intentionally one-way. Crossing a bare
-            // machine boundary erases exact state; recovering it requires an
-            // explicit `at` guard rather than remembered caller provenance.
-            (Type::Machine(expected_machine), Type::MachineState { machine, .. }) => {
-                expected_machine == machine
+            _ => return None,
+        };
+        Some(self.interner.intern(merged))
+    }
+
+    fn contains_inferred_never(&self, ty: TypeId) -> bool {
+        match self.interner.resolve(ty) {
+            Type::Never => true,
+            Type::List(inner) | Type::Set(inner) | Type::Optional(inner) | Type::Secret(inner) => {
+                self.contains_inferred_never(*inner)
+            }
+            Type::Map(key, value) | Type::Result(key, value) => {
+                self.contains_inferred_never(*key) || self.contains_inferred_never(*value)
+            }
+            Type::Function {
+                params,
+                return_type,
+                ..
+            } => {
+                params.iter().any(|ty| self.contains_inferred_never(*ty))
+                    || self.contains_inferred_never(*return_type)
             }
             _ => false,
         }
@@ -2717,7 +4137,14 @@ impl<'a> TypeChecker<'a> {
         return_type: TypeId,
     ) -> Option<(Vec<TypeId>, TypeId)> {
         self.expect_no_type_args(builtin_name, type_args, span);
-        Some((params, return_type))
+        // Keep the operand shape for independent checking, but an invalid
+        // invocation cannot select an ownership handoff or a usable result.
+        let checked_return = if type_args.is_empty() {
+            return_type
+        } else {
+            TypeInterner::ERROR
+        };
+        Some((params, checked_return))
     }
 
     /// Extract T from an optional single-argument builtin type list.
@@ -2766,8 +4193,19 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn function_type(&mut self, params: Vec<TypeId>, return_type: TypeId) -> TypeId {
+        let view_params = vec![false; params.len()];
+        self.function_type_with_modes(params, view_params, return_type)
+    }
+
+    fn function_type_with_modes(
+        &mut self,
+        params: Vec<TypeId>,
+        view_params: Vec<bool>,
+        return_type: TypeId,
+    ) -> TypeId {
         self.interner.intern(Type::Function {
             params,
+            view_params,
             return_type,
         })
     }
@@ -2801,8 +4239,27 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn resolved_expr_name(&self, expr: &Expr) -> Option<String> {
+        if let Expr::FieldAccess(_, field, _) = expr {
+            if let Some((owner, _)) = self.method_signature_for_callee(expr) {
+                return Some(format!("{}.{}", self.type_name(owner), field.name));
+            }
+        }
         match expr {
             Expr::Ident(ident) => Some(self.resolved_symbol_name(&ident.name, ident.span)),
+            Expr::FieldAccess(base, field, _)
+                if matches!(field.name.as_str(), "to_bytes" | "from_bytes") =>
+            {
+                let resolved_owner =
+                    self.resolve
+                        .resolutions
+                        .get(&expr.span())
+                        .and_then(|definition| {
+                            let info = self.resolve.scope_table.def(*definition);
+                            (info.kind == DefKind::Bitfield).then(|| info.name.clone())
+                        });
+                let owner = resolved_owner.or_else(|| self.expanded_dotted_expr_name(base))?;
+                Some(format!("{owner}.{}", field.name,))
+            }
             Expr::FieldAccess(_, _, _) => self.expanded_dotted_expr_name(expr),
             _ => None,
         }
@@ -2814,161 +4271,181 @@ impl<'a> TypeChecker<'a> {
         type_args: &[TypeExpr],
         span: Span,
     ) -> Option<(Vec<TypeId>, TypeId)> {
+        let signature = self.builtin_signature_unrecorded(callee, type_args, span);
+        if let Some(signature) = &signature {
+            if let Some(active) = self.active_generic_instantiations.last_mut() {
+                active.invocation_signatures.insert(span, signature.clone());
+            } else {
+                self.invocation_signatures.insert(span, signature.clone());
+            }
+        }
+        signature
+    }
+
+    fn builtin_signature_unrecorded(
+        &mut self,
+        callee: &Expr,
+        type_args: &[TypeExpr],
+        span: Span,
+    ) -> Option<(Vec<TypeId>, TypeId)> {
         let name = self.resolved_expr_name(callee)?;
+        // This is the sole acceptance boundary for compiler-provided call
+        // signatures. A new string arm cannot become a builtin until it has a
+        // shared closed identity.
+        let intrinsic = IntrinsicId::from_callable_name(&name)?;
         let private_stdlib_kernel = matches!(
-            name.as_str(),
-            "list.__new"
-                | "list.__append"
-                | "list.__length"
-                | "list.__get_clone"
-                | "list.__sort"
-                | "list.__insert_at"
-                | "list.__remove_at"
-                | "list.__swap"
-                | "list.__sort_by_index"
-                | "list.__is_sorted"
-                | "list.__sum"
-                | "list.__sort_by"
-                | "list.__group_by"
-                | "math.__abs"
-                | "math.__min"
-                | "math.__max"
-                | "math.__sqrt"
-                | "math.__pow"
-                | "math.__floor"
-                | "math.__ceil"
-                | "math.__round"
-                | "math.__clamp"
-                | "math.__log"
-                | "math.__log2"
-                | "math.__log10"
-                | "math.__average"
-                | "math.__median"
-                | "math.__pi"
-                | "math.__e"
-                | "math.__sin"
-                | "math.__cos"
-                | "math.__tan"
-                | "math.__mod"
-                | "math.__gcd"
-                | "math.__lcm"
-                | "math.__factorial"
-                | "string.__from_int64"
-                | "string.__from_uint64"
-                | "string.__from_float64"
-                | "string.__from_bool"
-                | "string.__char_count"
-                | "string.__chars"
-                | "string.__slice"
-                | "string.__index_of"
-                | "string.__count"
-                | "string.__trim"
-                | "string.__trim_start"
-                | "string.__trim_end"
-                | "string.__upper"
-                | "string.__lower"
-                | "string.__replace"
-                | "string.__split"
-                | "string.__join"
-                | "string.__repeat"
-                | "string.__slugify"
-                | "string.__words"
-                | "string.__lines"
-                | "string.__to_upper_first"
-                | "string.__to_lower_first"
-                | "string.__is_numeric"
-                | "string.__is_alpha"
-                | "map.__new"
-                | "map.__length"
-                | "map.__has"
-                | "map.__get"
-                | "map.__insert"
-                | "map.__remove"
-                | "map.__from_lists"
-                | "set.__new"
-                | "set.__add"
-                | "set.__remove"
-                | "set.__contains"
-                | "set.__length"
-                | "bytes.__new"
-                | "bytes.__length"
-                | "bytes.__slice"
-                | "bytes.__concat"
-                | "bytes.__from_string"
-                | "bytes.__to_string"
-                | "bytes.__get"
-                | "bytes.__to_hex"
-                | "bytes.__from_hex"
-                | "encoding.__base64_encode"
-                | "encoding.__base64_decode"
-                | "encoding.__hex_decode"
-                | "encoding.__url_encode"
-                | "encoding.__url_decode"
-                | "encoding.__form_encode"
-                | "encoding.__form_decode"
-                | "crypto.__sha256"
-                | "crypto.__sha512"
-                | "crypto.__md5"
-                | "crypto.__hmac_sha256"
-                | "csv.__parse"
-                | "csv.__stringify"
-                | "csv.__parse_with_header"
-                | "random.__bounded"
-                | "random.__unit_float64"
-                | "random.__bool"
-                | "Clock.__now"
-                | "Environment.__get"
-                | "Environment.__args"
-                | "test.mock.__random"
-                | "test.mock.__clock"
-                | "test.mock.__environment"
-                | "log.__emit"
-                | "graphics.__run"
+            intrinsic,
+            IntrinsicId::ListNew
+                | IntrinsicId::ListAppend
+                | IntrinsicId::ListLength
+                | IntrinsicId::ListGetClone
+                | IntrinsicId::ListSort
+                | IntrinsicId::ListInsertAt
+                | IntrinsicId::ListRemoveAt
+                | IntrinsicId::ListSwap
+                | IntrinsicId::ListSortByIndex
+                | IntrinsicId::ListIsSorted
+                | IntrinsicId::ListSum
+                | IntrinsicId::ListSortBy
+                | IntrinsicId::ListGroupBy
+                | IntrinsicId::MathKernelAbs
+                | IntrinsicId::MathKernelMin
+                | IntrinsicId::MathKernelMax
+                | IntrinsicId::MathSqrt
+                | IntrinsicId::MathPow
+                | IntrinsicId::MathFloor
+                | IntrinsicId::MathCeil
+                | IntrinsicId::MathRound
+                | IntrinsicId::MathClamp
+                | IntrinsicId::MathLog
+                | IntrinsicId::MathLog2
+                | IntrinsicId::MathLog10
+                | IntrinsicId::MathAverage
+                | IntrinsicId::MathMedian
+                | IntrinsicId::MathPi
+                | IntrinsicId::MathE
+                | IntrinsicId::MathSin
+                | IntrinsicId::MathCos
+                | IntrinsicId::MathTan
+                | IntrinsicId::MathMod
+                | IntrinsicId::MathGcd
+                | IntrinsicId::MathLcm
+                | IntrinsicId::MathFactorial
+                | IntrinsicId::StringFromInt64
+                | IntrinsicId::StringFromUint64
+                | IntrinsicId::StringFromFloat64
+                | IntrinsicId::StringFromBool
+                | IntrinsicId::StringCharCount
+                | IntrinsicId::StringChars
+                | IntrinsicId::StringSlice
+                | IntrinsicId::StringIndexOf
+                | IntrinsicId::StringCount
+                | IntrinsicId::StringTrim
+                | IntrinsicId::StringTrimStart
+                | IntrinsicId::StringTrimEnd
+                | IntrinsicId::StringUpper
+                | IntrinsicId::StringLower
+                | IntrinsicId::StringReplace
+                | IntrinsicId::StringSplit
+                | IntrinsicId::StringJoin
+                | IntrinsicId::StringRepeat
+                | IntrinsicId::StringSlugify
+                | IntrinsicId::StringWords
+                | IntrinsicId::StringLines
+                | IntrinsicId::StringToUpperFirst
+                | IntrinsicId::StringToLowerFirst
+                | IntrinsicId::StringIsNumeric
+                | IntrinsicId::StringIsAlpha
+                | IntrinsicId::MapNew
+                | IntrinsicId::MapLength
+                | IntrinsicId::MapHas
+                | IntrinsicId::MapGet
+                | IntrinsicId::MapInsert
+                | IntrinsicId::MapRemove
+                | IntrinsicId::MapFromLists
+                | IntrinsicId::SetNew
+                | IntrinsicId::SetAdd
+                | IntrinsicId::SetRemove
+                | IntrinsicId::SetContains
+                | IntrinsicId::SetLength
+                | IntrinsicId::BytesNew
+                | IntrinsicId::BytesLength
+                | IntrinsicId::BytesSlice
+                | IntrinsicId::BytesConcat
+                | IntrinsicId::BytesFromString
+                | IntrinsicId::BytesToString
+                | IntrinsicId::BytesGet
+                | IntrinsicId::BytesToHex
+                | IntrinsicId::BytesFromHex
+                | IntrinsicId::EncodingBase64Encode
+                | IntrinsicId::EncodingBase64Decode
+                | IntrinsicId::EncodingHexDecode
+                | IntrinsicId::EncodingUrlEncode
+                | IntrinsicId::EncodingUrlDecode
+                | IntrinsicId::EncodingFormEncode
+                | IntrinsicId::EncodingFormDecode
+                | IntrinsicId::CryptoSha256
+                | IntrinsicId::CryptoSha512
+                | IntrinsicId::CryptoMd5
+                | IntrinsicId::CryptoHmacSha256
+                | IntrinsicId::CsvParse
+                | IntrinsicId::CsvStringify
+                | IntrinsicId::CsvParseWithHeader
+                | IntrinsicId::RandomBounded
+                | IntrinsicId::RandomUnitFloat64
+                | IntrinsicId::RandomBool
+                | IntrinsicId::ClockNow
+                | IntrinsicId::EnvironmentGet
+                | IntrinsicId::EnvironmentArgs
+                | IntrinsicId::TestMockRandom
+                | IntrinsicId::TestMockClock
+                | IntrinsicId::TestMockEnvironment
+                | IntrinsicId::LogEmit
+                | IntrinsicId::GraphicsRun
         );
         if private_stdlib_kernel && !span.file.is_stdlib() {
             self.sink
                 .emit(errors::not_callable("private stdlib kernel", span));
         }
-        if let Some((type_name, method_name)) = name.rsplit_once('.') {
-            if let Some(&type_id) = self.named_types.get(type_name) {
-                if matches!(self.interner.resolve(type_id), Type::Bitfield(_)) {
-                    match method_name {
-                        "to_bytes" => {
-                            if !type_args.is_empty() {
-                                self.sink.emit(errors::unknown_type(
-                                    &format!(
-                                        "{name} (expected 0 type arguments, got {})",
-                                        type_args.len()
-                                    ),
-                                    span,
-                                ));
-                            }
-                            return Some((vec![type_id], TypeInterner::BYTES));
-                        }
-                        "from_bytes" => {
-                            if !type_args.is_empty() {
-                                self.sink.emit(errors::unknown_type(
-                                    &format!(
-                                        "{name} (expected 0 type arguments, got {})",
-                                        type_args.len()
-                                    ),
-                                    span,
-                                ));
-                            }
-                            return Some((
-                                vec![TypeInterner::BYTES],
-                                self.interner
-                                    .intern(Type::Result(type_id, TypeInterner::STRING)),
-                            ));
-                        }
-                        _ => {}
+        if let Some((type_name, _)) = name.rsplit_once('.')
+            && let Some(&type_id) = self.named_types.get(type_name)
+            && matches!(self.interner.resolve(type_id), Type::Bitfield(_))
+        {
+            match intrinsic {
+                IntrinsicId::BitfieldToBytes => {
+                    if !type_args.is_empty() {
+                        self.sink.emit(errors::unknown_type(
+                            &format!(
+                                "{name} (expected 0 type arguments, got {})",
+                                type_args.len()
+                            ),
+                            span,
+                        ));
                     }
+                    return Some((vec![type_id], TypeInterner::BYTES));
                 }
+                IntrinsicId::BitfieldFromBytes => {
+                    if !type_args.is_empty() {
+                        self.sink.emit(errors::unknown_type(
+                            &format!(
+                                "{name} (expected 0 type arguments, got {})",
+                                type_args.len()
+                            ),
+                            span,
+                        ));
+                    }
+                    return Some((
+                        vec![TypeInterner::BYTES],
+                        self.interner
+                            .intern(Type::Result(type_id, TypeInterner::STRING)),
+                    ));
+                }
+                _ => {}
             }
         }
 
-        match name.as_str() {
-            "int64.from_float64" => {
+        match intrinsic {
+            IntrinsicId::Int64FromFloat64 => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::FLOAT64],
@@ -2976,7 +4453,7 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::INT64, TypeInterner::STRING)),
                 ))
             }
-            "int64.from_string" => {
+            IntrinsicId::Int64FromString => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::STRING],
@@ -2984,7 +4461,7 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::INT64, TypeInterner::STRING)),
                 ))
             }
-            "uint64.from_string" => {
+            IntrinsicId::Uint64FromString => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::STRING],
@@ -2992,7 +4469,7 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::UINT64, TypeInterner::STRING)),
                 ))
             }
-            "float64.from_string" => {
+            IntrinsicId::Float64FromString => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::STRING],
@@ -3000,35 +4477,42 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::FLOAT64, TypeInterner::STRING)),
                 ))
             }
-            "string.__from_int64" => self.no_type_args_signature(
+            IntrinsicId::Float32FromFloat64 => self.no_type_args_signature(
+                &name,
+                type_args,
+                span,
+                vec![TypeInterner::FLOAT64],
+                TypeInterner::FLOAT32,
+            ),
+            IntrinsicId::StringFromInt64 => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::INT64],
                 TypeInterner::STRING,
             ),
-            "string.__from_uint64" => self.no_type_args_signature(
+            IntrinsicId::StringFromUint64 => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::UINT64],
                 TypeInterner::STRING,
             ),
-            "string.__from_float64" => self.no_type_args_signature(
+            IntrinsicId::StringFromFloat64 => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::FLOAT64],
                 TypeInterner::STRING,
             ),
-            "string.__from_bool" => self.no_type_args_signature(
+            IntrinsicId::StringFromBool => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::BOOL],
                 TypeInterner::STRING,
             ),
-            "float64.from_int64" => {
+            IntrinsicId::Float64FromInt64 => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::INT64],
@@ -3036,21 +4520,22 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::FLOAT64, TypeInterner::STRING)),
                 ))
             }
-            "string.__char_count" => self.no_type_args_signature(
+            IntrinsicId::StringCharCount => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING],
                 TypeInterner::INT64,
             ),
-            "string.__trim" | "string.__upper" | "string.__lower" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::STRING],
-                TypeInterner::STRING,
-            ),
-            "string.__replace" => self.no_type_args_signature(
+            IntrinsicId::StringTrim | IntrinsicId::StringUpper | IntrinsicId::StringLower => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::STRING],
+                    TypeInterner::STRING,
+                ),
+            IntrinsicId::StringReplace => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -3061,29 +4546,29 @@ impl<'a> TypeChecker<'a> {
                 ],
                 TypeInterner::STRING,
             ),
-            "string.__split" => {
+            IntrinsicId::StringSplit => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(TypeInterner::STRING));
                 Some((vec![TypeInterner::STRING, TypeInterner::STRING], list_ty))
             }
-            "string.__join" => {
+            IntrinsicId::StringJoin => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(TypeInterner::STRING));
                 Some((vec![list_ty, TypeInterner::STRING], TypeInterner::STRING))
             }
-            "Filesystem.read_file" => {
+            IntrinsicId::FilesystemReadFile => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
-                    vec![TypeInterner::ERROR, TypeInterner::STRING],
+                    vec![TypeInterner::FILESYSTEM, TypeInterner::STRING],
                     self.interner
                         .intern(Type::Result(TypeInterner::STRING, TypeInterner::STRING)),
                 ))
             }
-            "Filesystem.write_file" => {
+            IntrinsicId::FilesystemWriteFile => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![
-                        TypeInterner::ERROR,
+                        TypeInterner::FILESYSTEM,
                         TypeInterner::STRING,
                         TypeInterner::STRING,
                     ],
@@ -3091,14 +4576,14 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::NOTHING, TypeInterner::STRING)),
                 ))
             }
-            "Stdout.write" => self.no_type_args_signature(
+            IntrinsicId::StdoutWrite => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
-                vec![TypeInterner::ERROR, TypeInterner::STRING],
+                vec![TypeInterner::STDOUT, TypeInterner::STRING],
                 TypeInterner::NOTHING,
             ),
-            "json.parse" | "json.parse_exact" => {
+            IntrinsicId::JsonParse | IntrinsicId::JsonParseExact => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3113,7 +4598,7 @@ impl<'a> TypeChecker<'a> {
                     .intern(Type::Result(value_ty, TypeInterner::STRING));
                 Some((vec![TypeInterner::STRING], result_ty))
             }
-            "json.serialize" | "json.serialize_public" => {
+            IntrinsicId::JsonSerialize | IntrinsicId::JsonSerializePublic => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3125,7 +4610,7 @@ impl<'a> TypeChecker<'a> {
                 let value_ty = self.resolve_type_expr(&type_args[0]);
                 Some((vec![value_ty], TypeInterner::STRING))
             }
-            "type.name" | "type.kind" => {
+            IntrinsicId::TypeName | IntrinsicId::TypeKind => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3136,7 +4621,7 @@ impl<'a> TypeChecker<'a> {
                 let _ = self.resolve_type_expr(&type_args[0]);
                 Some((vec![], TypeInterner::STRING))
             }
-            "type.kind_tag" => {
+            IntrinsicId::TypeKindTag => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3153,7 +4638,7 @@ impl<'a> TypeChecker<'a> {
                         .unwrap_or(TypeInterner::ERROR),
                 ))
             }
-            "type.primitive_tag" => {
+            IntrinsicId::TypePrimitiveTag => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3169,7 +4654,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![], self.interner.intern(Type::Optional(primitive_ty))))
             }
-            "type.has_secret" => {
+            IntrinsicId::TypeHasSecret => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3180,7 +4665,7 @@ impl<'a> TypeChecker<'a> {
                 let _ = self.resolve_type_expr(&type_args[0]);
                 Some((vec![], TypeInterner::BOOL))
             }
-            "type.info" => {
+            IntrinsicId::TypeInfo => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3196,7 +4681,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![], type_info_ty))
             }
-            "type.arg" => {
+            IntrinsicId::TypeArg => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3215,7 +4700,7 @@ impl<'a> TypeChecker<'a> {
             // Reflected construction deliberately exposes one explicit builder
             // lifecycle. Keep construct_start/put/finish canonical instead of
             // adding a parallel hidden-builder block or callback spelling.
-            "type.construct_start" => {
+            IntrinsicId::TypeConstructStart => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3238,7 +4723,7 @@ impl<'a> TypeChecker<'a> {
                 }
                 Some((vec![], TypeInterner::TYPE_CONSTRUCTION))
             }
-            "type.construct_variant_start" => {
+            IntrinsicId::TypeConstructVariantStart => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3269,7 +4754,7 @@ impl<'a> TypeChecker<'a> {
                     )),
                 ))
             }
-            "type.construct_machine_start" => {
+            IntrinsicId::TypeConstructMachineStart => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3303,7 +4788,7 @@ impl<'a> TypeChecker<'a> {
                     )),
                 ))
             }
-            "type.construct_put" => {
+            IntrinsicId::TypeConstructPut => {
                 if type_args.len() != 2 {
                     self.sink.emit(errors::unknown_type(
                         &format!(
@@ -3355,7 +4840,7 @@ impl<'a> TypeChecker<'a> {
                     )),
                 ))
             }
-            "type.construct_finish" => {
+            IntrinsicId::TypeConstructFinish => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3364,6 +4849,16 @@ impl<'a> TypeChecker<'a> {
                     return Some((vec![TypeInterner::TYPE_CONSTRUCTION], TypeInterner::ERROR));
                 }
                 let target_ty = self.resolve_type_expr(&type_args[0]);
+                if let Type::Machine(machine) = self.interner.resolve(target_ty) {
+                    let machine = *machine;
+                    let states = self.interner.resolve_machine(machine).states.len();
+                    for index in 0..states {
+                        self.interner.intern(Type::MachineState {
+                            machine,
+                            state: MachineStateId::new(index as u32),
+                        });
+                    }
+                }
                 if !matches!(
                     self.interner.resolve(target_ty),
                     Type::Struct(_)
@@ -3386,7 +4881,7 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(target_ty, TypeInterner::STRING)),
                 ))
             }
-            "type.fields" => {
+            IntrinsicId::TypeFields => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3402,7 +4897,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![], self.interner.intern(Type::List(type_field_ty))))
             }
-            "type.bitfield_layout" => {
+            IntrinsicId::TypeBitfieldLayout => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3418,7 +4913,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![], type_bitfield_ty))
             }
-            "type.bitfield_fields" => {
+            IntrinsicId::TypeBitfieldFields => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3437,7 +4932,7 @@ impl<'a> TypeChecker<'a> {
                     self.interner.intern(Type::List(type_bitfield_field_ty)),
                 ))
             }
-            "type.machine_layout" => {
+            IntrinsicId::TypeMachineLayout => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3453,7 +4948,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![], type_machine_ty))
             }
-            "type.machine_states" => {
+            IntrinsicId::TypeMachineStates => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3472,7 +4967,7 @@ impl<'a> TypeChecker<'a> {
                     self.interner.intern(Type::List(type_machine_state_ty)),
                 ))
             }
-            "type.machine_transitions" => {
+            IntrinsicId::TypeMachineTransitions => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3491,7 +4986,7 @@ impl<'a> TypeChecker<'a> {
                     self.interner.intern(Type::List(type_machine_transition_ty)),
                 ))
             }
-            "type.machine_state_value" => {
+            IntrinsicId::TypeMachineStateValue => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3501,6 +4996,7 @@ impl<'a> TypeChecker<'a> {
                 }
 
                 let value_ty = self.resolve_type_expr(&type_args[0]);
+                self.check_resource_root_value_reflection(value_ty, &name, span);
                 let type_machine_state_ty = self
                     .named_types
                     .get("TypeMachineState")
@@ -3508,7 +5004,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![value_ty], type_machine_state_ty))
             }
-            "type.variants" => {
+            IntrinsicId::TypeVariants => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3524,7 +5020,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![], self.interner.intern(Type::List(type_variant_ty))))
             }
-            "type.variant_value" => {
+            IntrinsicId::TypeVariantValue => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3534,6 +5030,7 @@ impl<'a> TypeChecker<'a> {
                 }
 
                 let value_ty = self.resolve_type_expr(&type_args[0]);
+                self.check_resource_root_value_reflection(value_ty, &name, span);
                 let type_variant_ty = self
                     .named_types
                     .get("TypeVariant")
@@ -3541,7 +5038,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![value_ty], type_variant_ty))
             }
-            "type.field_value" => {
+            IntrinsicId::TypeFieldValue => {
                 if type_args.len() != 2 {
                     self.sink.emit(errors::unknown_type(
                         &format!(
@@ -3555,6 +5052,14 @@ impl<'a> TypeChecker<'a> {
 
                 let value_ty = self.resolve_type_expr(&type_args[0]);
                 let return_ty = self.resolve_type_expr(&type_args[1]);
+                if matches!(self.interner.resolve(value_ty), Type::Resource(_)) {
+                    self.sink.emit(errors::type_mismatch(
+                        &format!("non-resource value for {name}"),
+                        &self.type_name(value_ty),
+                        span,
+                    ));
+                }
+                self.check_resource_copy(return_ty, span);
                 let type_field_ty = self
                     .named_types
                     .get("TypeField")
@@ -3562,7 +5067,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![value_ty, type_field_ty], return_ty))
             }
-            "type.machine_field_value" => {
+            IntrinsicId::TypeMachineFieldValue => {
                 if type_args.len() != 2 {
                     self.sink.emit(errors::unknown_type(
                         &format!(
@@ -3576,6 +5081,14 @@ impl<'a> TypeChecker<'a> {
 
                 let value_ty = self.resolve_type_expr(&type_args[0]);
                 let return_ty = self.resolve_type_expr(&type_args[1]);
+                if matches!(self.interner.resolve(value_ty), Type::Resource(_)) {
+                    self.sink.emit(errors::type_mismatch(
+                        &format!("non-resource value for {name}"),
+                        &self.type_name(value_ty),
+                        span,
+                    ));
+                }
+                self.check_resource_copy(return_ty, span);
                 let type_field_ty = self
                     .named_types
                     .get("TypeField")
@@ -3583,7 +5096,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![value_ty, type_field_ty], return_ty))
             }
-            "type.variant_field_value" => {
+            IntrinsicId::TypeVariantFieldValue => {
                 if type_args.len() != 2 {
                     self.sink.emit(errors::unknown_type(
                         &format!(
@@ -3597,6 +5110,14 @@ impl<'a> TypeChecker<'a> {
 
                 let value_ty = self.resolve_type_expr(&type_args[0]);
                 let return_ty = self.resolve_type_expr(&type_args[1]);
+                if matches!(self.interner.resolve(value_ty), Type::Resource(_)) {
+                    self.sink.emit(errors::type_mismatch(
+                        &format!("non-resource value for {name}"),
+                        &self.type_name(value_ty),
+                        span,
+                    ));
+                }
+                self.check_resource_copy(return_ty, span);
                 let type_field_ty = self
                     .named_types
                     .get("TypeField")
@@ -3604,27 +5125,27 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![value_ty, type_field_ty], return_ty))
             }
-            "secret.redact" => {
+            IntrinsicId::SecretRedact => {
                 self.expect_no_type_args(&name, type_args, span);
                 let secret_ty = self.interner.intern(Type::Secret(TypeInterner::ERROR));
                 Some((vec![secret_ty], TypeInterner::STRING))
             }
-            "secret.compare" => {
+            IntrinsicId::SecretCompare => {
                 self.expect_no_type_args(&name, type_args, span);
                 let secret_ty = self.interner.intern(Type::Secret(TypeInterner::ERROR));
                 Some((vec![secret_ty, secret_ty], TypeInterner::BOOL))
             }
-            "bytes.__new" => {
+            IntrinsicId::BytesNew => {
                 self.no_type_args_signature(&name, type_args, span, vec![], TypeInterner::BYTES)
             }
-            "bytes.__length" => self.no_type_args_signature(
+            IntrinsicId::BytesLength => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::BYTES],
                 TypeInterner::INT64,
             ),
-            "bytes.__slice" => self.no_type_args_signature(
+            IntrinsicId::BytesSlice => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -3635,21 +5156,21 @@ impl<'a> TypeChecker<'a> {
                 ],
                 TypeInterner::BYTES,
             ),
-            "bytes.__concat" => self.no_type_args_signature(
+            IntrinsicId::BytesConcat => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::BYTES, TypeInterner::BYTES],
                 TypeInterner::BYTES,
             ),
-            "bytes.__from_string" => self.no_type_args_signature(
+            IntrinsicId::BytesFromString => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING],
                 TypeInterner::BYTES,
             ),
-            "bytes.__to_string" => {
+            IntrinsicId::BytesToString => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::BYTES],
@@ -3657,21 +5178,21 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::STRING, TypeInterner::STRING)),
                 ))
             }
-            "bytes.__get" => {
+            IntrinsicId::BytesGet => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::BYTES, TypeInterner::INT64],
                     self.interner.intern(Type::Optional(TypeInterner::INT64)),
                 ))
             }
-            "bytes.__to_hex" => self.no_type_args_signature(
+            IntrinsicId::BytesToHex => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::BYTES],
                 TypeInterner::STRING,
             ),
-            "bytes.__from_hex" => {
+            IntrinsicId::BytesFromHex => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::STRING],
@@ -3679,30 +5200,31 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::BYTES, TypeInterner::STRING)),
                 ))
             }
-            "list.__new" => {
+            IntrinsicId::ListNew => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 Some((vec![], self.interner.intern(Type::List(inner))))
             }
-            "list.__append" => {
+            IntrinsicId::ListAppend => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty, inner], list_ty))
             }
-            "list.__length" => {
+            IntrinsicId::ListLength => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 Some((
                     vec![self.interner.intern(Type::List(inner))],
                     TypeInterner::INT64,
                 ))
             }
-            "list.__get_clone" => {
+            IntrinsicId::ListGetClone => {
                 let inner = self.optional_type_arg(&name, type_args, span);
+                self.check_resource_copy(inner, span);
                 Some((
                     vec![self.interner.intern(Type::List(inner)), TypeInterner::INT64],
                     self.interner.intern(Type::Optional(inner)),
                 ))
             }
-            "list.__sort" => {
+            IntrinsicId::ListSort => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 if inner != TypeInterner::ERROR && !self.is_orderable_list_element(inner) {
                     self.sink.emit(errors::type_mismatch(
@@ -3714,17 +5236,17 @@ impl<'a> TypeChecker<'a> {
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], list_ty))
             }
-            "list.__insert_at" => {
+            IntrinsicId::ListInsertAt => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty, TypeInterner::INT64, inner], list_ty))
             }
-            "list.__remove_at" => {
+            IntrinsicId::ListRemoveAt => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty, TypeInterner::INT64], list_ty))
             }
-            "list.__swap" => {
+            IntrinsicId::ListSwap => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((
@@ -3732,7 +5254,7 @@ impl<'a> TypeChecker<'a> {
                     list_ty,
                 ))
             }
-            "list.__sort_by_index" => {
+            IntrinsicId::ListSortByIndex => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 if inner != TypeInterner::ERROR && !self.is_orderable_list_element(inner) {
                     self.sink.emit(errors::type_mismatch(
@@ -3745,7 +5267,7 @@ impl<'a> TypeChecker<'a> {
                 let rows_ty = self.interner.intern(Type::List(row_ty));
                 Some((vec![rows_ty, TypeInterner::INT64], rows_ty))
             }
-            "list.__is_sorted" => {
+            IntrinsicId::ListIsSorted => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 if inner != TypeInterner::ERROR && !self.is_orderable_list_element(inner) {
                     self.sink.emit(errors::type_mismatch(
@@ -3757,13 +5279,31 @@ impl<'a> TypeChecker<'a> {
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], TypeInterner::BOOL))
             }
-            "list.__sum" => {
-                let inner = self.optional_type_arg(&name, type_args, span);
+            IntrinsicId::ListSum => {
+                let inner = if let [element] = type_args {
+                    self.resolve_type_expr(element)
+                } else {
+                    self.sink.emit(errors::unknown_type(
+                        &format!("{name} (expected 1 type argument, got {})", type_args.len()),
+                        span,
+                    ));
+                    TypeInterner::ERROR
+                };
+                // Transparent aliases already resolve to their target TypeId.
+                // Do not coarsen refinements or unwrap secret element types:
+                // neither has a summation identity and closure contract.
+                if inner != TypeInterner::ERROR && !self.is_numeric(inner) {
+                    self.sink.emit(errors::type_mismatch(
+                        "numeric primitive for list.sum",
+                        &self.type_name(inner),
+                        span,
+                    ));
+                }
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], inner))
             }
             // Private math kernels
-            "math.__abs" => {
+            IntrinsicId::MathKernelAbs => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 if inner != TypeInterner::ERROR
                     && !matches!(inner, TypeInterner::INT64 | TypeInterner::FLOAT64)
@@ -3776,7 +5316,7 @@ impl<'a> TypeChecker<'a> {
                 }
                 Some((vec![inner], inner))
             }
-            "math.__min" | "math.__max" => {
+            IntrinsicId::MathKernelMin | IntrinsicId::MathKernelMax => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 if inner != TypeInterner::ERROR
                     && !matches!(inner, TypeInterner::INT64 | TypeInterner::FLOAT64)
@@ -3789,7 +5329,24 @@ impl<'a> TypeChecker<'a> {
                 }
                 Some((vec![inner, inner], inner))
             }
-            "math.__sqrt" | "math.__log" | "math.__log2" | "math.__log10" => self
+            IntrinsicId::MathSqrt
+            | IntrinsicId::MathLog
+            | IntrinsicId::MathLog2
+            | IntrinsicId::MathLog10 => self.no_type_args_signature(
+                &name,
+                type_args,
+                span,
+                vec![TypeInterner::FLOAT64],
+                TypeInterner::FLOAT64,
+            ),
+            IntrinsicId::MathPow => self.no_type_args_signature(
+                &name,
+                type_args,
+                span,
+                vec![TypeInterner::FLOAT64, TypeInterner::FLOAT64],
+                TypeInterner::FLOAT64,
+            ),
+            IntrinsicId::MathFloor | IntrinsicId::MathCeil | IntrinsicId::MathRound => self
                 .no_type_args_signature(
                     &name,
                     type_args,
@@ -3797,21 +5354,7 @@ impl<'a> TypeChecker<'a> {
                     vec![TypeInterner::FLOAT64],
                     TypeInterner::FLOAT64,
                 ),
-            "math.__pow" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::FLOAT64, TypeInterner::FLOAT64],
-                TypeInterner::FLOAT64,
-            ),
-            "math.__floor" | "math.__ceil" | "math.__round" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::FLOAT64],
-                TypeInterner::FLOAT64,
-            ),
-            "math.__clamp" => self.no_type_args_signature(
+            IntrinsicId::MathClamp => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -3822,7 +5365,7 @@ impl<'a> TypeChecker<'a> {
                 ],
                 TypeInterner::FLOAT64,
             ),
-            "math.__average" | "math.__median" => {
+            IntrinsicId::MathAverage | IntrinsicId::MathMedian => {
                 let inner = match type_args.len() {
                     0 => TypeInterner::FLOAT64,
                     1 => {
@@ -3849,24 +5392,26 @@ impl<'a> TypeChecker<'a> {
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], TypeInterner::FLOAT64))
             }
-            "math.__pi" | "math.__e" => {
+            IntrinsicId::MathPi | IntrinsicId::MathE => {
                 self.no_type_args_signature(&name, type_args, span, vec![], TypeInterner::FLOAT64)
             }
-            "math.__sin" | "math.__cos" | "math.__tan" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::FLOAT64],
-                TypeInterner::FLOAT64,
-            ),
-            "math.__mod" | "math.__gcd" | "math.__lcm" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::INT64, TypeInterner::INT64],
-                TypeInterner::INT64,
-            ),
-            "math.__factorial" => self.no_type_args_signature(
+            IntrinsicId::MathSin | IntrinsicId::MathCos | IntrinsicId::MathTan => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::FLOAT64],
+                    TypeInterner::FLOAT64,
+                ),
+            IntrinsicId::MathMod | IntrinsicId::MathGcd | IntrinsicId::MathLcm => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::INT64, TypeInterner::INT64],
+                    TypeInterner::INT64,
+                ),
+            IntrinsicId::MathFactorial => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -3874,69 +5419,70 @@ impl<'a> TypeChecker<'a> {
                 TypeInterner::INT64,
             ),
             // string extras
-            "string.__trim_start" | "string.__trim_end" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::STRING],
-                TypeInterner::STRING,
-            ),
+            IntrinsicId::StringTrimStart | IntrinsicId::StringTrimEnd => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::STRING],
+                    TypeInterner::STRING,
+                ),
             // Private string segmentation kernels return list[string].
-            "string.__chars" | "string.__words" | "string.__lines" => {
+            IntrinsicId::StringChars | IntrinsicId::StringWords | IntrinsicId::StringLines => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_str = self.interner.intern(Type::List(TypeInterner::STRING));
                 Some((vec![TypeInterner::STRING], list_str))
             }
             // Private graphics kernel; public data and signature are source-owned.
-            "graphics.__run" => {
+            IntrinsicId::GraphicsRun => {
                 let state = self.optional_type_arg(&name, type_args, span);
                 let config = *self.named_types.get("graphics.Config")?;
                 let key = *self.named_types.get("graphics.Key")?;
                 let scene = *self.named_types.get("graphics.Scene")?;
                 let update = self.function_type(vec![state, key], state);
-                let render = self.function_type(vec![state], scene);
+                let render = self.function_type_with_modes(vec![state], vec![true], scene);
                 let result = self
                     .interner
                     .intern(Type::Result(TypeInterner::NOTHING, TypeInterner::STRING));
                 Some((
-                    vec![TypeInterner::ERROR, config, state, update, render],
+                    vec![TypeInterner::GRAPHICS, config, state, update, render],
                     result,
                 ))
             }
             // Private random kernels; public signatures live in stdlib/random.jett.
-            "random.__bounded" => self.no_type_args_signature(
+            IntrinsicId::RandomBounded => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![
-                    TypeInterner::ERROR,
+                    TypeInterner::RANDOM,
                     TypeInterner::INT64,
                     TypeInterner::INT64,
                 ],
                 TypeInterner::INT64,
             ),
-            "random.__unit_float64" => self.no_type_args_signature(
+            IntrinsicId::RandomUnitFloat64 => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
-                vec![TypeInterner::ERROR],
+                vec![TypeInterner::RANDOM],
                 TypeInterner::FLOAT64,
             ),
-            "random.__bool" => self.no_type_args_signature(
+            IntrinsicId::RandomBool => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
-                vec![TypeInterner::ERROR],
+                vec![TypeInterner::RANDOM],
                 TypeInterner::BOOL,
             ),
-            "string.__repeat" => self.no_type_args_signature(
+            IntrinsicId::StringRepeat => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING, TypeInterner::INT64],
                 TypeInterner::STRING,
             ),
-            "string.__slice" => self.no_type_args_signature(
+            IntrinsicId::StringSlice => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -3947,77 +5493,77 @@ impl<'a> TypeChecker<'a> {
                 ],
                 TypeInterner::STRING,
             ),
-            "string.__slugify" => self.no_type_args_signature(
+            IntrinsicId::StringSlugify => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING],
                 TypeInterner::STRING,
             ),
-            "map.__new" => {
+            IntrinsicId::MapNew => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![], map_ty))
             }
-            "map.__length" => {
+            IntrinsicId::MapLength => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![map_ty], TypeInterner::INT64))
             }
-            "map.__has" => {
+            IntrinsicId::MapHas => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![map_ty, k], TypeInterner::BOOL))
             }
-            "map.__get" => {
+            IntrinsicId::MapGet => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![map_ty, k], self.interner.intern(Type::Optional(v))))
             }
-            "map.__insert" => {
+            IntrinsicId::MapInsert => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![map_ty, k, v], map_ty))
             }
-            "map.__remove" => {
+            IntrinsicId::MapRemove => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![map_ty, k], map_ty))
             }
-            "map.__from_lists" => {
+            IntrinsicId::MapFromLists => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let keys_ty = self.interner.intern(Type::List(k));
                 let values_ty = self.interner.intern(Type::List(v));
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![keys_ty, values_ty], map_ty))
             }
-            "set.__new" => {
+            IntrinsicId::SetNew => {
                 let inner = self.set_type_arg(&name, type_args, span);
                 Some((vec![], self.interner.intern(Type::Set(inner))))
             }
-            "set.__add" | "set.__remove" => {
+            IntrinsicId::SetAdd | IntrinsicId::SetRemove => {
                 let inner = self.set_type_arg(&name, type_args, span);
                 let set_ty = self.interner.intern(Type::Set(inner));
                 Some((vec![set_ty, inner], set_ty))
             }
-            "set.__contains" => {
+            IntrinsicId::SetContains => {
                 let inner = self.set_type_arg(&name, type_args, span);
                 let set_ty = self.interner.intern(Type::Set(inner));
                 Some((vec![set_ty, inner], TypeInterner::BOOL))
             }
-            "set.__length" => {
+            IntrinsicId::SetLength => {
                 let inner = self.set_type_arg(&name, type_args, span);
                 let set_ty = self.interner.intern(Type::Set(inner));
                 Some((vec![set_ty], TypeInterner::INT64))
             }
 
-            "list.__sort_by" => {
+            IntrinsicId::ListSortBy => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 let key_fn_ty = self.function_type(vec![inner], TypeInterner::INT64);
                 Some((vec![list_ty, key_fn_ty], list_ty))
             }
-            "list.__group_by" => {
+            IntrinsicId::ListGroupBy => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 let group_map_ty = self
@@ -4026,45 +5572,47 @@ impl<'a> TypeChecker<'a> {
                 let key_fn_ty = self.function_type(vec![inner], TypeInterner::STRING);
                 Some((vec![list_ty, key_fn_ty], group_map_ty))
             }
-            "uuid.new" => {
+            IntrinsicId::UuidNew => {
                 self.no_type_args_signature(&name, type_args, span, vec![], TypeInterner::STRING)
             }
             // char-level string operations
-            "string.__index_of" => {
+            IntrinsicId::StringIndexOf => {
                 self.expect_no_type_args(&name, type_args, span);
                 let opt_int = self.interner.intern(Type::Optional(TypeInterner::INT64));
                 Some((vec![TypeInterner::STRING, TypeInterner::STRING], opt_int))
             }
-            "string.__count" => self.no_type_args_signature(
+            IntrinsicId::StringCount => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING, TypeInterner::STRING],
                 TypeInterner::INT64,
             ),
-            "string.__to_upper_first" | "string.__to_lower_first" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::STRING],
-                TypeInterner::STRING,
-            ),
-            "string.__is_numeric" | "string.__is_alpha" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::STRING],
-                TypeInterner::BOOL,
-            ),
+            IntrinsicId::StringToUpperFirst | IntrinsicId::StringToLowerFirst => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::STRING],
+                    TypeInterner::STRING,
+                ),
+            IntrinsicId::StringIsNumeric | IntrinsicId::StringIsAlpha => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::STRING],
+                    TypeInterner::BOOL,
+                ),
             // Private encoding kernels; public signatures live in stdlib/encoding.jett.
-            "encoding.__base64_encode" => self.no_type_args_signature(
+            IntrinsicId::EncodingBase64Encode => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::BYTES],
                 TypeInterner::STRING,
             ),
-            "encoding.__base64_decode" | "encoding.__hex_decode" => {
+            IntrinsicId::EncodingBase64Decode | IntrinsicId::EncodingHexDecode => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::STRING],
@@ -4072,14 +5620,15 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::BYTES, TypeInterner::STRING)),
                 ))
             }
-            "encoding.__url_encode" | "encoding.__form_encode" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::STRING],
-                TypeInterner::STRING,
-            ),
-            "encoding.__url_decode" | "encoding.__form_decode" => {
+            IntrinsicId::EncodingUrlEncode | IntrinsicId::EncodingFormEncode => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::STRING],
+                    TypeInterner::STRING,
+                ),
+            IntrinsicId::EncodingUrlDecode | IntrinsicId::EncodingFormDecode => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::STRING],
@@ -4088,68 +5637,72 @@ impl<'a> TypeChecker<'a> {
                 ))
             }
             // Private crypto kernels; public signatures live in stdlib/crypto.jett.
-            "crypto.__sha256" | "crypto.__sha512" | "crypto.__md5" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::BYTES],
-                TypeInterner::BYTES,
-            ),
-            "crypto.__hmac_sha256" => {
+            IntrinsicId::CryptoSha256 | IntrinsicId::CryptoSha512 | IntrinsicId::CryptoMd5 => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::BYTES],
+                    TypeInterner::BYTES,
+                ),
+            IntrinsicId::CryptoHmacSha256 => {
                 self.expect_no_type_args(&name, type_args, span);
                 let secret_bytes = self.interner.intern(Type::Secret(TypeInterner::BYTES));
                 Some((vec![secret_bytes, TypeInterner::BYTES], secret_bytes))
             }
-            "Clock.__now" => self.no_type_args_signature(
+            IntrinsicId::ClockNow => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
-                vec![TypeInterner::ERROR],
+                vec![TypeInterner::CLOCK],
                 TypeInterner::INT64,
             ),
-            "Environment.__get" => {
+            IntrinsicId::EnvironmentGet => {
                 self.expect_no_type_args(&name, type_args, span);
                 let optional_string = self.interner.intern(Type::Optional(TypeInterner::STRING));
                 let result = self
                     .interner
                     .intern(Type::Result(optional_string, TypeInterner::STRING));
-                Some((vec![TypeInterner::ERROR, TypeInterner::STRING], result))
+                Some((
+                    vec![TypeInterner::ENVIRONMENT, TypeInterner::STRING],
+                    result,
+                ))
             }
-            "Environment.__args" => {
+            IntrinsicId::EnvironmentArgs => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
-                Some((vec![TypeInterner::ERROR], list_string))
+                Some((vec![TypeInterner::ENVIRONMENT], list_string))
             }
-            "test.mock.__random" => {
+            IntrinsicId::TestMockRandom => {
                 self.expect_no_type_args(&name, type_args, span);
                 let step = *self.named_types.get("test.mock.RandomStep")?;
                 let steps = self.interner.intern(Type::List(step));
-                Some((vec![steps], TypeInterner::ERROR))
+                Some((vec![steps], TypeInterner::RANDOM))
             }
-            "test.mock.__clock" => {
+            IntrinsicId::TestMockClock => {
                 self.expect_no_type_args(&name, type_args, span);
                 let step = *self.named_types.get("test.mock.ClockStep")?;
                 let steps = self.interner.intern(Type::List(step));
-                Some((vec![steps], TypeInterner::ERROR))
+                Some((vec![steps], TypeInterner::CLOCK))
             }
-            "test.mock.__environment" => {
+            IntrinsicId::TestMockEnvironment => {
                 self.expect_no_type_args(&name, type_args, span);
                 let arguments = self.interner.intern(Type::List(TypeInterner::STRING));
                 let entry = *self.named_types.get("test.mock.EnvironmentEntry")?;
                 let entries = self.interner.intern(Type::List(entry));
-                Some((vec![arguments, entries], TypeInterner::ERROR))
+                Some((vec![arguments, entries], TypeInterner::ENVIRONMENT))
             }
-            "log.__emit" => {
+            IntrinsicId::LogEmit => {
                 self.expect_no_type_args(&name, type_args, span);
                 let event = *self.named_types.get("log.Event")?;
                 let error = *self.named_types.get("log.Error")?;
                 let result = self
                     .interner
                     .intern(Type::Result(TypeInterner::NOTHING, error));
-                Some((vec![TypeInterner::ERROR, event], result))
+                Some((vec![TypeInterner::LOG, event], result))
             }
             // Private CSV kernels; public signatures live in stdlib/csv.jett.
-            "csv.__parse" => {
+            IntrinsicId::CsvParse => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
                 let rows_ty = self.interner.intern(Type::List(list_string));
@@ -4158,13 +5711,13 @@ impl<'a> TypeChecker<'a> {
                     .intern(Type::Result(rows_ty, TypeInterner::STRING));
                 Some((vec![TypeInterner::STRING], result_ty))
             }
-            "csv.__stringify" => {
+            IntrinsicId::CsvStringify => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
                 let rows_ty = self.interner.intern(Type::List(list_string));
                 Some((vec![rows_ty], TypeInterner::STRING))
             }
-            "csv.__parse_with_header" => {
+            IntrinsicId::CsvParseWithHeader => {
                 self.expect_no_type_args(&name, type_args, span);
                 let row_ty = self
                     .interner
@@ -4175,7 +5728,16 @@ impl<'a> TypeChecker<'a> {
                     .intern(Type::Result(rows_ty, TypeInterner::STRING));
                 Some((vec![TypeInterner::STRING], result_ty))
             }
-            _ => None,
+            // These signatures are resolved by dedicated paths before this
+            // central compiler-builtin table.
+            IntrinsicId::BitfieldFromBytes
+            | IntrinsicId::BitfieldToBytes
+            | IntrinsicId::MathAbs
+            | IntrinsicId::MathMax
+            | IntrinsicId::MathMin
+            | IntrinsicId::Print
+            | IntrinsicId::Println
+            | IntrinsicId::Range => None,
         }
     }
 
@@ -4183,7 +5745,160 @@ impl<'a> TypeChecker<'a> {
     // Module
     // ------------------------------------------------------------------
 
+    fn check_written_function_return_views(&mut self, module: &Module) {
+        // Signature syntax is checked even for unused generic declarations.
+        // Do not resolve named aliases or inspect deferred function bodies here.
+        for item in &module.items {
+            match item {
+                Item::Function(function) => self.check_function_return_view_syntax(
+                    &function.params,
+                    function.return_type.as_ref(),
+                ),
+                Item::Mutual(block) => {
+                    for function in &block.declarations {
+                        self.check_function_return_view_syntax(
+                            &function.params,
+                            function.return_type.as_ref(),
+                        );
+                    }
+                }
+                Item::Interface(interface) => {
+                    for method in &interface.methods {
+                        self.check_function_return_view_syntax(
+                            &method.params,
+                            method.return_type.as_ref(),
+                        );
+                    }
+                }
+                Item::Struct(definition) => {
+                    for field in &definition.fields {
+                        self.check_callable_return_view_syntax(&field.ty);
+                    }
+                    for method in &definition.methods {
+                        self.check_function_return_view_syntax(
+                            &method.params,
+                            method.return_type.as_ref(),
+                        );
+                    }
+                }
+                Item::Implement(block) => {
+                    for method in &block.methods {
+                        self.check_function_return_view_syntax(
+                            &method.params,
+                            method.return_type.as_ref(),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn check_function_return_view_syntax(
+        &mut self,
+        params: &[ast::Param],
+        return_type: Option<&TypeExpr>,
+    ) {
+        for param in params {
+            self.check_callable_return_view_syntax(&param.ty);
+        }
+        if let Some(return_type) = return_type {
+            self.check_return_view_annotation(return_type);
+            self.check_callable_return_view_syntax(return_type);
+        }
+    }
+
+    fn check_return_view_annotation(&mut self, return_type: &TypeExpr) {
+        if Self::type_is_view(return_type)
+            && self
+                .diagnosed_view_return_annotations
+                .insert(return_type.span())
+        {
+            self.sink.emit(crate::ownership::cannot_declare_view_return(
+                return_type.span(),
+            ));
+        }
+    }
+
+    fn check_callable_return_view_syntax(&mut self, ty: &TypeExpr) {
+        match ty {
+            TypeExpr::Function(params, result, _) => {
+                self.check_return_view_annotation(result);
+                for param in params {
+                    self.check_callable_return_view_syntax(param);
+                }
+                self.check_callable_return_view_syntax(result);
+            }
+            TypeExpr::Generic(_, args, _) => {
+                for arg in args {
+                    self.check_callable_return_view_syntax(arg);
+                }
+            }
+            TypeExpr::View(inner, _) | TypeExpr::StateQualified(inner, _, _) => {
+                self.check_callable_return_view_syntax(inner);
+            }
+            TypeExpr::Named(_) => {}
+        }
+    }
+
+    fn register_resource_kernels(&mut self) -> Result<(), ResourceHookError> {
+        for entry in self.resolve.resource_kernels.iter() {
+            let resource_type = *self.type_env.get(&entry.resource_definition).ok_or(
+                ResourceHookError::MissingResourceType(entry.resource_definition),
+            )?;
+            let function_type = entry
+                .recipe
+                .intern_signature(&mut self.interner, resource_type)
+                .ok_or(ResourceHookError::InvalidResourceType(
+                    entry.resource_definition,
+                ))?;
+            self.type_env.insert(entry.definition, function_type);
+            self.resource_hooks.insert(
+                entry.definition,
+                CheckedResourceHook {
+                    definition: entry.definition,
+                    resource_definition: entry.resource_definition,
+                    resource_type,
+                    kind: entry.recipe.kind(),
+                    function_type,
+                },
+            );
+            let definition = self.resolve.scope_table.def(entry.definition);
+            let Type::Function {
+                params,
+                return_type,
+                ..
+            } = self.interner.resolve(function_type)
+            else {
+                return Err(ResourceHookError::InvalidFunctionShape(entry.definition));
+            };
+            self.function_signatures
+                .insert(definition.name.clone(), (params.clone(), *return_type));
+            self.function_parameter_names.insert(
+                definition.name.clone(),
+                entry
+                    .recipe
+                    .parameter_names()
+                    .iter()
+                    .map(|name| (*name).to_owned())
+                    .collect(),
+            );
+            let is_pure = self.function_parameters_are_pure(params);
+            self.purity_map.insert(definition.name.clone(), is_pure);
+        }
+        Ok(())
+    }
+
     fn check_module(&mut self, module: &Module) {
+        self.check_written_function_return_views(module);
+        self.constant_declarations = module
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::VarDecl(decl) if !decl.mutable => Some(decl.name.span),
+                _ => None,
+            })
+            .collect();
         self.collect_type_aliases(module);
 
         // First pass: predeclare all user-defined types so function signatures,
@@ -4204,6 +5919,11 @@ impl<'a> TypeChecker<'a> {
                 Item::Resource(def) => self.predeclare_resource(def, current_namespace.as_deref()),
                 _ => {}
             }
+        }
+
+        if let Err(error) = self.register_resource_kernels() {
+            self.resource_hook_error = Some(error);
+            return;
         }
 
         // Second pass: fill in the struct/enum contents now that all names exist.
@@ -4381,7 +6101,16 @@ impl<'a> TypeChecker<'a> {
                 }
                 Item::Bitfield(_) => {}
                 Item::Actor(def) => self.check_actor(def, current_namespace.as_deref()),
-                Item::VarDecl(decl) => self.check_var_decl(decl),
+                Item::VarDecl(decl) => {
+                    if decl.mutable {
+                        self.sink
+                            .emit(errors::mutable_global(&decl.name.name, decl.name.span));
+                    } else if !self.is_constant_initializer(&decl.value) {
+                        self.sink
+                            .emit(errors::constant_initializer(decl.value.span()));
+                    }
+                    self.check_var_decl(decl);
+                }
                 Item::Verify(verify) => self.check_verify_block(verify),
                 Item::Property(prop) => self.check_property_block(prop),
                 _ => {}
@@ -4481,6 +6210,7 @@ impl<'a> TypeChecker<'a> {
         self.register_trusted_stdlib_named_type(&trusted_name, ty, def.name.span);
         if let Some(def_id) = self.declaration_def_id(def.name.span) {
             self.type_env.insert(def_id, ty);
+            self.actor_definitions.insert(aid, def_id);
         }
     }
 
@@ -4659,6 +6389,22 @@ impl<'a> TypeChecker<'a> {
             })
             .collect();
 
+        if let Some(&actor_definition) = self.actor_definitions.get(&aid) {
+            for (handler_index, handler) in def.handlers.iter().enumerate() {
+                self.actor_message_modes.insert(
+                    CheckedActorHandlerTarget {
+                        actor_definition,
+                        actor: aid,
+                        handler_index,
+                    },
+                    handler
+                        .params
+                        .iter()
+                        .map(|param| param.view || Self::type_is_view(&param.ty))
+                        .collect(),
+                );
+            }
+        }
         self.interner.update_actor(
             aid,
             TypeActorDef {
@@ -4678,86 +6424,132 @@ impl<'a> TypeChecker<'a> {
         let Type::Actor(aid) = *self.interner.resolve(actor_ty) else {
             return;
         };
+        let Some(&actor_definition) = self.actor_definitions.get(&aid) else {
+            return;
+        };
         let actor_def = self.interner.resolve_actor(aid).clone();
+        let mut captures = Vec::new();
 
-        // Register state fields and capability params in a fresh type env scope.
-        let mut local_env: HashMap<String, TypeId> = HashMap::new();
-        for (name, ty) in &actor_def.capability_params {
-            local_env.insert(name.clone(), *ty);
-        }
-        for (name, ty) in &actor_def.state_fields {
-            local_env.insert(name.clone(), *ty);
-        }
-
-        for (param_ast, (_, param_ty)) in def
+        for (parameter, (param, (_, ty))) in def
             .capability_params
             .iter()
-            .zip(actor_def.capability_params.iter())
+            .zip(&actor_def.capability_params)
+            .enumerate()
         {
-            if let Some(def_id) = self.declaration_def_id(param_ast.name.span) {
-                self.type_env.insert(def_id, *param_ty);
+            self.record_debug_type_name(&param.name, &param.ty);
+            if let Some(definition) = self.declaration_def_id(param.name.span) {
+                self.type_env.insert(definition, *ty);
+                self.record_expression_type(param.name.span, *ty);
+            }
+            self.record_assignment_binding(
+                &param.name,
+                param.mutable,
+                param.view || Self::type_is_view(&param.ty),
+            );
+            if let Some(&fact) = self.binding_facts.get(&param.name.span) {
+                captures.push(CheckedActorHandlerBinding {
+                    role: CheckedActorBindingRole::Capability { parameter },
+                    fact,
+                });
             }
         }
 
-        // Type-check state field initializers.
-        for field in &def.state_fields {
-            let declared_ty = self.resolve_type_expr(&field.ty);
-            let init_ty = self.check_expr_for_expected(&field.value, declared_ty, true);
+        // Resolve/check sequential initializers before installing their own
+        // binding, exactly as the resolver's top-to-bottom actor scope does.
+        for (field_index, (field, (_, declared_ty))) in def
+            .state_fields
+            .iter()
+            .zip(&actor_def.state_fields)
+            .enumerate()
+        {
+            self.record_debug_type_name(&field.name, &field.ty);
+            let init_ty = self.check_expr_for_expected(&field.value, *declared_ty, true);
+            let mode = self.checked_binding_mode(field, init_ty);
+            if let Some(definition) = self.declaration_def_id(field.name.span) {
+                self.type_env.insert(definition, *declared_ty);
+                self.record_expression_type(field.name.span, *declared_ty);
+            }
+            self.record_binding_mode(field.name.span, mode);
+            self.record_assignment_binding(
+                &field.name,
+                field.mutable,
+                matches!(mode, CheckedBindingMode::View { .. }),
+            );
+            if let Some(&fact) = self.binding_facts.get(&field.name.span) {
+                captures.push(CheckedActorHandlerBinding {
+                    role: CheckedActorBindingRole::State { field: field_index },
+                    fact,
+                });
+            }
             if init_ty != TypeInterner::ERROR
-                && declared_ty != TypeInterner::ERROR
-                && !self.types_compatible(declared_ty, init_ty)
+                && *declared_ty != TypeInterner::ERROR
+                && !self.types_compatible(*declared_ty, init_ty)
             {
                 self.sink.emit(errors::type_mismatch(
-                    &self.type_name(declared_ty),
+                    &self.type_name(*declared_ty),
                     &self.type_name(init_ty),
                     field.value.span(),
                 ));
             }
         }
 
-        // Type-check each handler body.
         let prev_return = self.current_return_type;
         let prev_respond = self.current_respond_type;
         let prev_function_name = self.current_function_name.clone();
-
-        for (handler_ast, handler_def) in def.handlers.iter().zip(actor_def.messages.iter()) {
-            // Set up respond type.
-            let responds_ty = if handler_def.responds == TypeInterner::NOTHING {
-                None
-            } else {
-                Some(handler_def.responds)
-            };
-            self.current_respond_type = responds_ty;
+        for (handler_index, (handler, message)) in
+            def.handlers.iter().zip(&actor_def.messages).enumerate()
+        {
+            self.current_respond_type =
+                (message.responds != TypeInterner::NOTHING).then_some(message.responds);
             self.current_return_type = None;
-            self.current_function_name =
-                Some(format!("{}.{}", actor_def.name, handler_ast.name.name));
-
-            // Register message params in the type env temporarily.
-            for (param_ast, (_, param_ty)) in
-                handler_ast.params.iter().zip(handler_def.params.iter())
+            self.current_function_name = Some(format!("{}.{}", actor_def.name, handler.name.name));
+            let mut bindings = captures.clone();
+            for (parameter, (param, (_, ty))) in
+                handler.params.iter().zip(&message.params).enumerate()
             {
-                if let Some(def_id) = self.declaration_def_id(param_ast.name.span) {
-                    self.type_env.insert(def_id, *param_ty);
+                self.record_debug_type_name(&param.name, &param.ty);
+                if let Some(definition) = self.declaration_def_id(param.name.span) {
+                    self.type_env.insert(definition, *ty);
+                    self.record_expression_type(param.name.span, *ty);
+                }
+                self.record_assignment_binding(
+                    &param.name,
+                    param.mutable,
+                    param.view || Self::type_is_view(&param.ty),
+                );
+                if let Some(&fact) = self.binding_facts.get(&param.name.span) {
+                    bindings.push(CheckedActorHandlerBinding {
+                        role: CheckedActorBindingRole::Message { parameter },
+                        fact,
+                    });
                 }
             }
-
-            // Register local_env vars into type_env using resolve declarations.
-            for field in &def.state_fields {
-                if let Some(def_id) = self.declaration_def_id(field.name.span) {
-                    let ty = self.resolve_type_expr(&field.ty);
-                    self.type_env.insert(def_id, ty);
-                }
+            self.check_block(&handler.body);
+            let mut body = self.checked_body_facts(handler.body.span);
+            for binding in &bindings {
+                body.binding_facts
+                    .insert(binding.fact.declaration_span, binding.fact);
+                body.binding_modes
+                    .insert(binding.fact.declaration_span, binding.fact.mode);
             }
-            for cap in &def.capability_params {
-                if let Some(def_id) = self.declaration_def_id(cap.name.span) {
-                    let ty = self.resolve_type_expr(&cap.ty);
-                    self.type_env.insert(def_id, ty);
-                }
-            }
-
-            self.check_block(&handler_ast.body);
+            let target = CheckedActorHandlerTarget {
+                actor_definition,
+                actor: aid,
+                handler_index,
+            };
+            self.actor_handlers.insert(
+                target,
+                CheckedActorHandler::new(
+                    target,
+                    handler.body.span,
+                    bindings,
+                    message.responds,
+                    body,
+                    self.actor_check_session.clone(),
+                    def,
+                ),
+            );
         }
-
         self.current_return_type = prev_return;
         self.current_respond_type = prev_respond;
         self.current_function_name = prev_function_name;
@@ -5208,6 +7000,7 @@ impl<'a> TypeChecker<'a> {
         let (param_types, return_type) = self.function_decl_signature(decl);
         let fn_type = self.interner.intern(Type::Function {
             params: param_types,
+            view_params: decl.params.iter().map(|param| param.view).collect(),
             return_type,
         });
 
@@ -5231,6 +7024,7 @@ impl<'a> TypeChecker<'a> {
 
         let fn_type = self.interner.intern(Type::Function {
             params: param_types,
+            view_params: func.params.iter().map(|param| param.view).collect(),
             return_type,
         });
 
@@ -5613,35 +7407,27 @@ impl<'a> TypeChecker<'a> {
         function_name: &str,
         func: &FunctionDef,
         concrete_args: &[TypeId],
+        type_argument_reflections: Vec<ReflectionTypeInfo>,
         subst: HashMap<String, TypeId>,
         kind_subst: HashMap<String, String>,
         param_facts: ReflectionParamFacts,
     ) {
         let uses_type_param_reflection = self.generic_function_uses_type_param_reflection(func);
-        let branch_specializable = uses_type_param_reflection
-            && self.generic_function_reflection_is_branch_specializable(func);
-        if uses_type_param_reflection && !branch_specializable {
-            return;
-        }
-        let specialize_reflection_branches = branch_specializable || !param_facts.is_empty();
+        // Trusted facts remain available inside closures and arbitrary expression
+        // contexts. Unknown guards fall back to checking every branch normally.
+        let specialize_reflection_branches = uses_type_param_reflection || !param_facts.is_empty();
 
         let definition = self.declaration_def_id(func.name.span);
-
-        let kind_key = func
-            .type_params
-            .iter()
-            .map(|param| {
-                kind_subst
-                    .get(&param.name)
-                    .cloned()
-                    .unwrap_or_else(|| "unknown_type".to_string())
-            })
-            .collect::<Vec<_>>();
+        let specialization = Self::generic_specialization(
+            func,
+            &kind_subst,
+            &type_argument_reflections,
+            &param_facts,
+        );
         let cache_key = (
             function_name.to_string(),
             concrete_args.to_vec(),
-            kind_key,
-            param_facts.clone(),
+            specialization.clone(),
         );
         if !self
             .checked_generic_function_instantiations
@@ -5657,6 +7443,14 @@ impl<'a> TypeChecker<'a> {
         let instantiated_name = format!("{function_name}[{}]", type_arg_names.join(", "));
 
         let old_subst = std::mem::replace(&mut self.type_var_subst, subst);
+        let old_reflections = std::mem::replace(
+            &mut self.type_var_reflections,
+            func.type_params
+                .iter()
+                .map(|param| param.name.clone())
+                .zip(type_argument_reflections)
+                .collect(),
+        );
         let old_kind_subst = std::mem::replace(&mut self.type_var_kind_tags, kind_subst);
         let parameter_types = func
             .params
@@ -5669,7 +7463,7 @@ impl<'a> TypeChecker<'a> {
             .map(|ty| self.resolve_type_expr(ty))
             .unwrap_or(TypeInterner::NOTHING);
         let manifest_index = definition.map(|definition| {
-            let identity = (definition, concrete_args.to_vec());
+            let identity = (definition, concrete_args.to_vec(), specialization.clone());
             if let Some(index) = self.generic_instantiation_indices.get(&identity) {
                 *index
             } else {
@@ -5679,14 +7473,30 @@ impl<'a> TypeChecker<'a> {
                     .push(CheckedGenericFunctionInstantiation {
                         definition,
                         concrete_args: concrete_args.to_vec(),
+                        specialization: specialization.clone(),
                         parameter_types: parameter_types.clone(),
                         return_type,
                         type_map: HashMap::new(),
+                        source_type_map: HashMap::new(),
+                        debug_type_names: HashMap::new(),
+                        binding_modes: HashMap::new(),
+                        binding_facts: HashMap::new(),
+                        assignment_places: HashMap::new(),
+                        call_ownership: HashMap::new(),
+                        actor_message_calls: HashMap::new(),
                         generic_calls: HashMap::new(),
+                        intrinsic_ids: HashMap::new(),
+                        intrinsic_type_arguments: HashMap::new(),
+                        intrinsic_reflection_arguments: HashMap::new(),
                         call_argument_orders: HashMap::new(),
                         method_calls: HashMap::new(),
+                        interface_calls: HashMap::new(),
+                        method_values: HashMap::new(),
                         struct_constructions: HashMap::new(),
+                        pipeline_step_input_types: HashMap::new(),
                         pipeline_step_call_types: HashMap::new(),
+                        static_selections: HashMap::new(),
+                        comptime_type_bindings: HashMap::new(),
                     });
                 index
             }
@@ -5700,6 +7510,12 @@ impl<'a> TypeChecker<'a> {
         let old_handle_body_depth = self.handle_body_depth;
         let old_respond_type = self.current_respond_type;
         let old_specialize_reflection_branches = self.specialize_reflection_branches;
+        // Nested generic checks reuse source DefIds for parameters and locals.
+        // Preserve the outer concrete types while checking the inner body.
+        let old_type_env = self.type_env.clone();
+        // The instantiated body belongs to its own declaration, not to the
+        // closure whose call triggered instantiation.
+        let old_closure_capture_scopes = std::mem::take(&mut self.closure_capture_scopes);
 
         self.in_verify_block = false;
         self.in_property_block = false;
@@ -5713,11 +7529,27 @@ impl<'a> TypeChecker<'a> {
                 .push(ActiveGenericInstantiation {
                     manifest_index,
                     type_map: HashMap::new(),
+                    source_type_map: HashMap::new(),
+                    debug_type_names: HashMap::new(),
+                    binding_modes: HashMap::new(),
+                    binding_facts: HashMap::new(),
+                    assignment_places: HashMap::new(),
+                    call_ownership: HashMap::new(),
+                    actor_message_calls: HashMap::new(),
+                    invocation_signatures: HashMap::new(),
                     generic_calls: HashMap::new(),
+                    intrinsic_ids: HashMap::new(),
+                    intrinsic_type_arguments: HashMap::new(),
+                    intrinsic_reflection_arguments: HashMap::new(),
                     call_argument_orders: HashMap::new(),
                     method_calls: HashMap::new(),
+                    interface_calls: HashMap::new(),
+                    method_values: HashMap::new(),
                     struct_constructions: HashMap::new(),
+                    pipeline_step_input_types: HashMap::new(),
                     pipeline_step_call_types: HashMap::new(),
+                    static_selections: HashMap::new(),
+                    comptime_type_bindings: HashMap::new(),
                 });
         }
 
@@ -5730,22 +7562,52 @@ impl<'a> TypeChecker<'a> {
                 .active_generic_instantiations
                 .pop()
                 .expect("generic instantiation fact scope must be balanced");
-            let entry = &mut self.generic_function_instantiations[active.manifest_index];
-            entry.type_map.extend(active.type_map);
-            entry.generic_calls.extend(active.generic_calls);
-            entry
-                .call_argument_orders
-                .extend(active.call_argument_orders);
-            entry.method_calls.extend(active.method_calls);
-            entry
-                .struct_constructions
-                .extend(active.struct_constructions);
-            entry
-                .pipeline_step_call_types
-                .extend(active.pipeline_step_call_types);
+            let conflicts = {
+                let entry = &mut self.generic_function_instantiations[active.manifest_index];
+                entry.type_map.extend(active.type_map);
+                entry.source_type_map.extend(active.source_type_map);
+                entry.debug_type_names.extend(active.debug_type_names);
+                entry.binding_modes.extend(active.binding_modes);
+                entry.binding_facts.extend(active.binding_facts);
+                entry.assignment_places.extend(active.assignment_places);
+                entry.call_ownership.extend(active.call_ownership);
+                entry.actor_message_calls.extend(active.actor_message_calls);
+                entry.generic_calls.extend(active.generic_calls);
+                entry.intrinsic_ids.extend(active.intrinsic_ids);
+                entry
+                    .intrinsic_type_arguments
+                    .extend(active.intrinsic_type_arguments);
+                entry
+                    .intrinsic_reflection_arguments
+                    .extend(active.intrinsic_reflection_arguments);
+                entry
+                    .call_argument_orders
+                    .extend(active.call_argument_orders);
+                entry.method_calls.extend(active.method_calls);
+                entry.interface_calls.extend(active.interface_calls);
+                entry.method_values.extend(active.method_values);
+                entry
+                    .struct_constructions
+                    .extend(active.struct_constructions);
+                entry
+                    .pipeline_step_input_types
+                    .extend(active.pipeline_step_input_types);
+                entry
+                    .pipeline_step_call_types
+                    .extend(active.pipeline_step_call_types);
+                entry
+                    .comptime_type_bindings
+                    .extend(active.comptime_type_bindings);
+                merge_static_selections(&mut entry.static_selections, active.static_selections)
+            };
+            for span in conflicts {
+                self.sink
+                    .emit(errors::conflicting_generic_static_selection(span));
+            }
         }
 
         self.type_var_subst = old_subst;
+        self.type_var_reflections = old_reflections;
         self.type_var_kind_tags = old_kind_subst;
         self.current_return_type = old_return_type;
         self.current_function_name = old_function_name;
@@ -5756,12 +7618,44 @@ impl<'a> TypeChecker<'a> {
         self.handle_body_depth = old_handle_body_depth;
         self.current_respond_type = old_respond_type;
         self.specialize_reflection_branches = old_specialize_reflection_branches;
+        self.type_env = old_type_env;
+        self.closure_capture_scopes = old_closure_capture_scopes;
+    }
+
+    fn record_debug_type_name(&mut self, name: &ast::Ident, ty: &TypeExpr) {
+        if let Some(definition) = self.declaration_def_id(name.span) {
+            self.declared_source_types.insert(definition, ty.clone());
+        }
+        let namespace = self
+            .declaration_def_id(name.span)
+            .and_then(|id| self.resolve.scope_table.def(id).namespace.as_deref());
+        let label = self.reflection_type_expr_display(ty, namespace);
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.debug_type_names.insert(name.span, label);
+        } else {
+            self.debug_type_names.insert(name.span, label);
+        }
     }
 
     fn record_expression_type(&mut self, span: Span, ty: TypeId) {
         self.type_map.insert(span, ty);
         if let Some(active) = self.active_generic_instantiations.last_mut() {
             active.type_map.insert(span, ty);
+        }
+    }
+
+    fn record_source_expression_type(&mut self, span: Span, ty: TypeId) {
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.source_type_map.insert(span, ty);
+        } else {
+            self.source_type_map.insert(span, ty);
+        }
+    }
+
+    fn checked_source_expression_type(&self, span: Span) -> Option<TypeId> {
+        match self.active_generic_instantiations.last() {
+            Some(active) => active.source_type_map.get(&span).copied(),
+            None => self.source_type_map.get(&span).copied(),
         }
     }
 
@@ -5774,16 +7668,31 @@ impl<'a> TypeChecker<'a> {
         interface_type: Option<TypeId>,
     ) {
         let index = self.method_definitions.len();
+        self.method_parameter_modes.insert(
+            method.span,
+            signature.params.iter().map(|(_, _, view)| *view).collect(),
+        );
         self.method_definitions.push(CheckedMethodDefinition {
             source_span: method.span,
             owner_type,
             owner_name: owner_name.to_string(),
+            method_name: method.name.name.clone(),
             interface_name: interface_type.map(|interface| self.type_name(interface)),
+            interface_type,
             parameter_types: signature.params.iter().map(|(_, ty, _)| *ty).collect(),
             return_type: signature.return_type,
         });
-        self.method_definitions_by_owner
-            .insert((owner_type, method.name.name.clone()), index);
+        let owner_key = (owner_type, method.name.name.clone());
+        // Concrete type lookup prefers an inherent method over an interface
+        // implementation. Preserve that same choice for executable targets;
+        // interface-qualified dispatch has its own exact implementation map.
+        let existing_inherent = self
+            .method_definitions_by_owner
+            .get(&owner_key)
+            .is_some_and(|&existing| self.method_definitions[existing].interface_name.is_none());
+        if interface_type.is_none() || !existing_inherent {
+            self.method_definitions_by_owner.insert(owner_key, index);
+        }
         if let Some(interface_type) = interface_type {
             self.interface_method_definitions.insert(
                 (interface_type, owner_type, method.name.name.clone()),
@@ -5797,6 +7706,65 @@ impl<'a> TypeChecker<'a> {
             active.generic_calls.insert(span, call);
         } else {
             self.generic_calls.insert(span, call);
+        }
+    }
+
+    fn record_intrinsic_id(&mut self, span: Span, name: &str) {
+        let Some(intrinsic) = IntrinsicId::from_callable_name(name) else {
+            self.sink.emit(errors::not_callable(
+                &format!("unclassified compiler intrinsic `{name}`"),
+                span,
+            ));
+            return;
+        };
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.intrinsic_ids.insert(span, intrinsic);
+        } else {
+            self.intrinsic_ids.insert(span, intrinsic);
+        }
+    }
+
+    fn record_intrinsic_type_arguments(&mut self, span: Span, type_args: &[TypeExpr]) {
+        if type_args.is_empty() {
+            return;
+        }
+        let resolved = type_args
+            .iter()
+            .map(|type_arg| self.resolve_type_expr(type_arg))
+            .collect::<Vec<_>>();
+        if resolved.contains(&TypeInterner::ERROR) {
+            return;
+        }
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.intrinsic_type_arguments.insert(span, resolved);
+        } else {
+            self.intrinsic_type_arguments.insert(span, resolved);
+        }
+    }
+
+    fn record_intrinsic_reflection_arguments(&mut self, span: Span, type_args: &[TypeExpr]) {
+        let intrinsic = self
+            .active_generic_instantiations
+            .last()
+            .and_then(|active| active.intrinsic_ids.get(&span))
+            .or_else(|| self.intrinsic_ids.get(&span));
+        if !intrinsic.is_some_and(|id| id.canonical_name().starts_with("type.")) {
+            return;
+        }
+        let concrete_args = type_args
+            .iter()
+            .map(|arg| self.resolve_type_expr(arg))
+            .collect::<Vec<_>>();
+        if concrete_args.contains(&TypeInterner::ERROR) {
+            return;
+        }
+        let reflected = self.reflection_arguments_for_type_args(type_args, &concrete_args);
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active
+                .intrinsic_reflection_arguments
+                .insert(span, reflected);
+        } else {
+            self.intrinsic_reflection_arguments.insert(span, reflected);
         }
     }
 
@@ -5818,6 +7786,610 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn record_source_method_value(&mut self, owner_type: TypeId, name: &str, span: Span) {
+        let Some(&index) = self
+            .method_definitions_by_owner
+            .get(&(owner_type, name.to_string()))
+        else {
+            return;
+        };
+        let value = CheckedMethodValue::Source {
+            source_span: self.method_definitions[index].source_span,
+        };
+        self.record_method_value(span, value);
+    }
+
+    fn record_method_value(&mut self, span: Span, value: CheckedMethodValue) {
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.method_values.insert(span, value);
+        } else {
+            self.method_values.insert(span, value);
+        }
+    }
+
+    fn checked_expression_type(&self, span: Span) -> Option<TypeId> {
+        match self.active_generic_instantiations.last() {
+            Some(active) => active.type_map.get(&span).copied(),
+            None => self.type_map.get(&span).copied(),
+        }
+    }
+
+    fn record_binding_fact(&mut self, fact: CheckedBindingFact) {
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.binding_facts.insert(fact.declaration_span, fact);
+        } else {
+            self.binding_facts.insert(fact.declaration_span, fact);
+        }
+    }
+
+    fn caller_binding_fact(&self, definition: DefId) -> Option<CheckedBindingFact> {
+        let span = self.resolve.scope_table.def(definition).span;
+        let recorded = match self.active_generic_instantiations.last() {
+            Some(active) => active.binding_facts.get(&span),
+            None => self.binding_facts.get(&span),
+        };
+        if let Some(fact) = recorded {
+            return Some(*fact);
+        }
+        // Captures may be declared outside this body.
+        // Their identity and concrete type still come from this checked session.
+        let ty = *self.type_env.get(&definition)?;
+        let assignment = self.assignment_bindings.get(&span);
+        Some(CheckedBindingFact {
+            definition,
+            declaration_span: span,
+            ty,
+            mode: if assignment == Some(&AssignmentBinding::View)
+                && !crate::ownership::is_implicitly_copyable(&self.interner, ty)
+            {
+                CheckedBindingMode::View {
+                    source: CheckedViewSource::Other,
+                }
+            } else {
+                CheckedBindingMode::Owned
+            },
+            mutable: assignment == Some(&AssignmentBinding::OwnedMutable),
+        })
+    }
+
+    fn caller_definition_is_producer(&self, definition: DefId) -> bool {
+        let declared = self.resolve.scope_table.def(definition);
+        matches!(declared.kind, DefKind::Function | DefKind::Constant)
+            || self.constant_declarations.contains(&declared.span)
+    }
+
+    fn caller_is_qualified_unit_enum(&self, expression: &Expr) -> bool {
+        let Expr::FieldAccess(_, variant, span) = expression else {
+            return false;
+        };
+        let Some(definition) = self.resolve.resolutions.get(span) else {
+            return false;
+        };
+        if self.resolve.scope_table.def(*definition).kind != DefKind::Enum {
+            return false;
+        }
+        let Some(&enum_ty) = self.type_env.get(definition) else {
+            return false;
+        };
+        if self.checked_source_expression_type(*span) != Some(enum_ty) {
+            return false;
+        }
+        let Type::Enum(id) = *self.interner.resolve(enum_ty) else {
+            return false;
+        };
+        self.interner
+            .resolve_enum(id)
+            .variants
+            .iter()
+            .any(|declared| declared.name == variant.name && declared.fields.is_empty())
+    }
+
+    fn caller_origin(
+        &mut self,
+        expression: Option<&Expr>,
+        written_view: bool,
+    ) -> CheckedCallerOrigin {
+        let Some(mut expression) = expression else {
+            return CheckedCallerOrigin::OwnedExpression;
+        };
+        while let Expr::Paren(inner, _)
+        | Expr::View(inner, _)
+        | Expr::Coarsen(inner, _)
+        | Expr::Declassify(inner, _) = expression
+        {
+            expression = inner;
+        }
+        if matches!(expression, Expr::FieldAccess(..)) {
+            let resolved_function = self
+                .resolve
+                .resolutions
+                .get(&expression.span())
+                .is_some_and(|definition| {
+                    self.resolve.scope_table.def(*definition).kind == DefKind::Function
+                });
+            let checked_method = match self.active_generic_instantiations.last() {
+                Some(active) => active.method_values.contains_key(&expression.span()),
+                None => self.method_values.contains_key(&expression.span()),
+            };
+            // HIR lowers these exact checked declarations to FunctionRef or
+            // zero-payload EnumConstruct, not to a runtime field. A type or
+            // namespace spelling alone cannot replace declaration identity.
+            if resolved_function || checked_method || self.caller_is_qualified_unit_enum(expression)
+            {
+                return CheckedCallerOrigin::OwnedExpression;
+            }
+        }
+        let root = Self::assignment_root(expression).and_then(|ident| self.ident_def_id(ident));
+        if root.is_some_and(|definition| {
+            self.caller_definition_is_producer(definition)
+                || !matches!(
+                    self.resolve.scope_table.def(definition).kind,
+                    DefKind::Variable | DefKind::Param
+                )
+        }) {
+            // Named descriptors, baked constants and static type/namespace
+            // projections produce values; none supplies a caller-local root.
+            return CheckedCallerOrigin::OwnedExpression;
+        }
+        let binding = root.and_then(|definition| self.caller_binding_fact(definition));
+        if let Some(fact) = binding {
+            // Captured roots may be declared outside this body. Retain only the
+            // exact fact referenced by this occurrence in its concrete frame.
+            self.record_binding_fact(fact);
+        }
+        let source = root
+            .map(CheckedViewSource::Binding)
+            .unwrap_or(CheckedViewSource::Other);
+        match expression {
+            Expr::Ident(_) => binding
+                .map(CheckedCallerOrigin::Binding)
+                .unwrap_or(CheckedCallerOrigin::OwnedExpression),
+            Expr::FieldAccess(..) if written_view => {
+                CheckedCallerOrigin::BorrowedProjection { source }
+            }
+            Expr::FieldAccess(..) => CheckedCallerOrigin::OwnedFieldCopy { parent: source },
+            _ => CheckedCallerOrigin::OwnedExpression,
+        }
+    }
+
+    fn invocation_facts(
+        &self,
+        span: Span,
+    ) -> (
+        Option<CheckedGenericCall>,
+        Option<CheckedMethodCall>,
+        Option<CheckedInterfaceCall>,
+        Option<IntrinsicId>,
+        Option<CheckedCallArgumentOrder>,
+        Option<(Vec<TypeId>, TypeId)>,
+    ) {
+        if let Some(active) = self.active_generic_instantiations.last() {
+            (
+                active.generic_calls.get(&span).cloned(),
+                active.method_calls.get(&span).cloned(),
+                active.interface_calls.get(&span).cloned(),
+                active.intrinsic_ids.get(&span).copied(),
+                active.call_argument_orders.get(&span).cloned(),
+                active.invocation_signatures.get(&span).cloned(),
+            )
+        } else {
+            (
+                self.generic_calls.get(&span).cloned(),
+                self.method_calls.get(&span).cloned(),
+                self.interface_calls.get(&span).cloned(),
+                self.intrinsic_ids.get(&span).copied(),
+                self.call_argument_orders.get(&span).cloned(),
+                self.invocation_signatures.get(&span).cloned(),
+            )
+        }
+    }
+
+    fn caller_observation_data(&self, ty: TypeId, visited: &mut HashSet<TypeId>) -> bool {
+        if !visited.insert(ty) {
+            return true;
+        }
+        match self.interner.resolve(ty) {
+            Type::Capability(_)
+            | Type::Resource(_)
+            | Type::Actor(_)
+            | Type::Interface(_)
+            | Type::TypeConstruction => false,
+            Type::Secret(inner)
+            | Type::Refinement { base: inner, .. }
+            | Type::List(inner)
+            | Type::Set(inner)
+            | Type::Optional(inner) => self.caller_observation_data(*inner, visited),
+            Type::Map(left, right) | Type::Result(left, right) => {
+                self.caller_observation_data(*left, visited)
+                    && self.caller_observation_data(*right, visited)
+            }
+            Type::Struct(id) => self
+                .interner
+                .resolve_struct(*id)
+                .fields
+                .iter()
+                .all(|(_, ty)| self.caller_observation_data(*ty, visited)),
+            Type::Enum(id) => self
+                .interner
+                .resolve_enum(*id)
+                .variants
+                .iter()
+                .all(|variant| {
+                    variant
+                        .fields
+                        .iter()
+                        .all(|(_, ty)| self.caller_observation_data(*ty, visited))
+                }),
+            Type::Machine(id) => self
+                .interner
+                .resolve_machine(*id)
+                .states
+                .iter()
+                .all(|state| {
+                    state
+                        .fields
+                        .iter()
+                        .all(|(_, ty)| self.caller_observation_data(*ty, visited))
+                }),
+            Type::MachineState { machine, state } => self
+                .interner
+                .resolve_machine(*machine)
+                .state(*state)
+                .is_some_and(|state| {
+                    state
+                        .fields
+                        .iter()
+                        .all(|(_, ty)| self.caller_observation_data(*ty, visited))
+                }),
+            Type::Bitfield(_)
+            | Type::Function { .. }
+            | Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64
+            | Type::Float32
+            | Type::Float64
+            | Type::String
+            | Type::Bool
+            | Type::Bytes
+            | Type::Nothing
+            | Type::Never
+            | Type::Error => true,
+        }
+    }
+
+    fn record_invocation_ownership(
+        &mut self,
+        callee: &Expr,
+        span: Span,
+        result: TypeId,
+        occurrences: &[(Option<&Expr>, Span, bool, Option<TypeId>)],
+    ) {
+        if result == TypeInterner::ERROR {
+            return;
+        }
+        let callee = Self::unparenthesized(callee);
+        let (mut generic, method, interface, intrinsic, order, intrinsic_signature) =
+            self.invocation_facts(span);
+        // The closed public JSON operation owns the source disposition. Its
+        // checked generic helper is an independent implementation handoff.
+        if intrinsic.is_some_and(|id| {
+            matches!(
+                id,
+                IntrinsicId::JsonSerialize
+                    | IntrinsicId::JsonSerializePublic
+                    | IntrinsicId::JsonParse
+                    | IntrinsicId::JsonParseExact
+            )
+        }) {
+            generic = None;
+        }
+        let (target, mut params, modes, intrinsic_shape, signature_result) = if let Some(call) =
+            generic
+        {
+            let Some(body) = self.generic_function_instantiations.iter().find(|body| {
+                body.definition == call.definition
+                    && body.concrete_args == call.concrete_args
+                    && body.specialization == call.specialization
+            }) else {
+                return;
+            };
+            let Some(template) = self.generic_function_templates.values().find(|template| {
+                self.declaration_def_id(template.name.span) == Some(call.definition)
+            }) else {
+                return;
+            };
+            (
+                CheckedInvocationTarget::Generic(call),
+                body.parameter_types.clone(),
+                template
+                    .params
+                    .iter()
+                    .map(|param| param.view || Self::type_is_view(&param.ty))
+                    .collect::<Vec<_>>(),
+                None,
+                body.return_type,
+            )
+        } else if let Some(call) = method {
+            let Some(definition) = self
+                .method_definitions
+                .iter()
+                .find(|definition| definition.source_span == call.source_span)
+            else {
+                return;
+            };
+            let Some(modes) = self.method_parameter_modes.get(&call.source_span).cloned() else {
+                return;
+            };
+            (
+                CheckedInvocationTarget::Method(call),
+                definition.parameter_types.clone(),
+                modes,
+                None,
+                definition.return_type,
+            )
+        } else if let Some(call) = interface {
+            let Type::Interface(id) = self.interner.resolve(call.interface_type) else {
+                return;
+            };
+            let Some(signature) = self
+                .interner
+                .resolve_interface(*id)
+                .methods
+                .get(call.method_index)
+            else {
+                return;
+            };
+            (
+                CheckedInvocationTarget::Interface(call),
+                signature.params.iter().map(|(_, ty, _)| *ty).collect(),
+                signature.params.iter().map(|(_, _, view)| *view).collect(),
+                None,
+                signature.return_type,
+            )
+        } else if let Some(intrinsic) = intrinsic {
+            let params = if let Some((params, _)) = intrinsic_signature {
+                params
+            } else if matches!(
+                intrinsic,
+                IntrinsicId::Print
+                    | IntrinsicId::Println
+                    | IntrinsicId::Range
+                    | IntrinsicId::MathAbs
+                    | IntrinsicId::MathMin
+                    | IntrinsicId::MathMax
+            ) {
+                let Some(types) = occurrences
+                    .iter()
+                    .map(|(_, _, _, ty)| *ty)
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    return;
+                };
+                types
+            } else {
+                return;
+            };
+            let Some(modes) = (0..params.len())
+                .map(|index| {
+                    intrinsic_operand_access(intrinsic, index, params.len())
+                        .map(|access| access == CheckedCalleeAccess::View)
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                return;
+            };
+            (
+                CheckedInvocationTarget::Intrinsic(intrinsic),
+                params,
+                modes,
+                Some(intrinsic),
+                result,
+            )
+        } else {
+            let definition = self.resolve.resolutions.get(&callee.span()).copied();
+            let signature_type = definition
+                .and_then(|definition| self.type_env.get(&definition).copied())
+                .or_else(|| self.checked_expression_type(callee.span()));
+            let Some(signature_type) = signature_type else {
+                return;
+            };
+            let Type::Function {
+                params,
+                view_params,
+                return_type,
+            } = self.interner.resolve(signature_type).clone()
+            else {
+                return;
+            };
+            let target = if let Some(definition) = definition.filter(|definition| {
+                self.resolve.scope_table.def(*definition).kind == DefKind::Function
+            }) {
+                CheckedInvocationTarget::Resolved(definition)
+            } else {
+                CheckedInvocationTarget::Indirect(signature_type)
+            };
+            (target, params, view_params, None, return_type)
+        };
+        if params.len() != occurrences.len() || modes.len() != params.len() {
+            return;
+        }
+        // Secret operations have a closed polymorphic payload role, not a
+        // function signature containing the builtin's internal ERROR wildcard.
+        if intrinsic_shape.is_some_and(|intrinsic| {
+            matches!(
+                intrinsic,
+                IntrinsicId::SecretCompare | IntrinsicId::SecretRedact
+            )
+        }) {
+            let Some(concrete) = occurrences
+                .iter()
+                .map(|(_, _, _, ty)| *ty)
+                .collect::<Option<Vec<_>>>()
+            else {
+                return;
+            };
+            params = concrete;
+        }
+        let order = order
+            .map(|order| order.source_indices)
+            .unwrap_or_else(|| (0..params.len()).collect());
+        if order.len() != params.len() {
+            return;
+        }
+        let mut inverse = vec![None; params.len()];
+        for (parameter_index, &source_index) in order.iter().enumerate() {
+            let Some(slot) = inverse.get_mut(source_index) else {
+                return;
+            };
+            if slot.replace(parameter_index).is_some() {
+                return;
+            }
+        }
+        let mut arguments = Vec::with_capacity(params.len());
+        let mut roles = Vec::with_capacity(params.len());
+        for (source_index, &(expression, source_span, written_view, actual_type)) in
+            occurrences.iter().enumerate()
+        {
+            let (Some(parameter_index), Some(actual_type)) = (inverse[source_index], actual_type)
+            else {
+                return;
+            };
+            if actual_type == TypeInterner::ERROR || params[parameter_index] == TypeInterner::ERROR
+            {
+                return;
+            }
+            let origin = self.caller_origin(expression, written_view);
+            let access = if modes[parameter_index] {
+                CheckedCalleeAccess::View
+            } else {
+                CheckedCalleeAccess::Owned
+            };
+            let access = if intrinsic_shape.is_some_and(|intrinsic| {
+                matches!(intrinsic, IntrinsicId::Print | IntrinsicId::Println)
+            }) && written_view
+            {
+                CheckedCalleeAccess::View
+            } else {
+                access
+            };
+            let copyable = crate::ownership::is_implicitly_copyable(&self.interner, actual_type);
+            let observe = self.ownership_context != CheckedOwnershipContext::Ordinary
+                && self.caller_observation_data(actual_type, &mut HashSet::new());
+            // Ordinary function checking has already validated source syntax
+            // (including the pipeline step's original E0375 label). Closed
+            // intrinsic operands have their own sealed role gate here.
+            if intrinsic_shape.is_some() {
+                self.check_argument_view(
+                    access == CheckedCalleeAccess::View,
+                    written_view,
+                    source_span,
+                );
+            }
+            if !observe
+                && !written_view
+                && let Some(expression) = expression
+            {
+                self.check_owned_argument(
+                    access == CheckedCalleeAccess::View,
+                    expression,
+                    params[parameter_index],
+                    actual_type,
+                );
+            }
+            let effect = if copyable {
+                CheckedCallerEffect::Copy
+            } else if observe {
+                CheckedCallerEffect::ObserveData
+            } else if written_view {
+                CheckedCallerEffect::RetainBorrow
+            } else if access == CheckedCalleeAccess::View {
+                CheckedCallerEffect::RelinquishOwned
+            } else {
+                CheckedCallerEffect::TransferOwned
+            };
+            arguments.push(CheckedArgumentOwnership {
+                source_span,
+                source_index,
+                parameter_index,
+                actual_type,
+                parameter_type: params[parameter_index],
+                syntax: if written_view {
+                    CheckedCallerSyntax::WrittenView
+                } else {
+                    CheckedCallerSyntax::Bare
+                },
+                origin,
+                callee_access: access,
+                effect,
+            });
+        }
+        let shape = if let Some(intrinsic) = intrinsic_shape {
+            for (parameter_index, &ty) in params.iter().enumerate() {
+                roles.push(
+                    if matches!(intrinsic, IntrinsicId::Print | IntrinsicId::Println) {
+                        CheckedIntrinsicOperandRole::PrintArgument { ty }
+                    } else if crate::ownership::is_implicitly_copyable(&self.interner, ty) {
+                        CheckedIntrinsicOperandRole::Copy { ty }
+                    } else if modes[parameter_index] {
+                        CheckedIntrinsicOperandRole::View { ty }
+                    } else {
+                        CheckedIntrinsicOperandRole::Owned { ty }
+                    },
+                );
+            }
+            CheckedInvocationShape::Intrinsic {
+                intrinsic,
+                result_type: result,
+                operands: roles,
+            }
+        } else {
+            let signature_type = self.interner.intern(Type::Function {
+                params,
+                view_params: modes,
+                return_type: signature_result,
+            });
+            CheckedInvocationShape::Function { signature_type }
+        };
+        let packet = CheckedCallOwnership {
+            target,
+            shape,
+            context: self.ownership_context,
+            arguments,
+        };
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.call_ownership.insert(span, packet);
+        } else {
+            self.call_ownership.insert(span, packet);
+        }
+    }
+
+    fn record_binding_mode(&mut self, span: Span, mode: CheckedBindingMode) {
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.binding_modes.insert(span, mode);
+        } else {
+            self.binding_modes.insert(span, mode);
+        }
+    }
+
+    fn clear_interface_method_value(&mut self, span: Span) {
+        let values = if let Some(active) = self.active_generic_instantiations.last_mut() {
+            &mut active.method_values
+        } else {
+            &mut self.method_values
+        };
+        if matches!(
+            values.get(&span),
+            Some(CheckedMethodValue::Interface { .. })
+        ) {
+            values.remove(&span);
+        }
+    }
+
     fn record_struct_construction(
         &mut self,
         span: Span,
@@ -5835,6 +8407,14 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn record_pipeline_step_input_type(&mut self, span: Span, ty: TypeId) {
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.pipeline_step_input_types.insert(span, ty);
+        } else {
+            self.pipeline_step_input_types.insert(span, ty);
+        }
+    }
+
     fn record_pipeline_step_call_type(&mut self, span: Span, ty: TypeId) {
         if let Some(active) = self.active_generic_instantiations.last_mut() {
             active.pipeline_step_call_types.insert(span, ty);
@@ -5843,11 +8423,311 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn span_is_within(span: Span, owner: Span) -> bool {
+        span.file == owner.file && span.start >= owner.start && span.end <= owner.end
+    }
+
+    fn facts_in_span<V: Clone>(source: &HashMap<Span, V>, owner: Span) -> HashMap<Span, V> {
+        source
+            .iter()
+            .filter(|(span, _)| Self::span_is_within(**span, owner))
+            .map(|(span, value)| (*span, value.clone()))
+            .collect()
+    }
+
+    fn clear_facts_in_span<V>(source: &mut HashMap<Span, V>, owner: Span) {
+        source.retain(|span, _| !Self::span_is_within(*span, owner));
+    }
+
+    /// Retain only dependencies of actual local view declarations. The supplied
+    /// map belongs to this concrete body; missing captures remain unsupported.
+    fn retain_local_view_dependencies(
+        &self,
+        bindings: &HashMap<Span, CheckedBindingFact>,
+        facts: &mut HashMap<Span, CheckedBindingFact>,
+    ) {
+        let mut pending = facts.values().copied().collect::<Vec<_>>();
+        let mut visited = HashSet::new();
+        while let Some(fact) = pending.pop() {
+            let CheckedBindingMode::View {
+                source: CheckedViewSource::Binding(definition),
+            } = fact.mode
+            else {
+                continue;
+            };
+            if !visited.insert(definition) {
+                continue;
+            }
+            let Some(declaration) = self
+                .resolve
+                .scope_table
+                .definitions
+                .get(definition.index() as usize)
+                .filter(|declaration| declaration.id == definition)
+            else {
+                continue;
+            };
+            let Some(source) = bindings.get(&declaration.span).filter(|source| {
+                source.definition == definition && source.declaration_span == declaration.span
+            }) else {
+                continue;
+            };
+            if facts
+                .get(&declaration.span)
+                .is_some_and(|retained| retained != source)
+            {
+                continue;
+            }
+            facts.insert(declaration.span, *source);
+            pending.push(*source);
+        }
+    }
+
+    fn body_binding_facts(
+        &self,
+        bindings: &HashMap<Span, CheckedBindingFact>,
+        calls: &HashMap<Span, CheckedCallOwnership>,
+        owner: Span,
+    ) -> HashMap<Span, CheckedBindingFact> {
+        let mut facts = Self::facts_in_span(bindings, owner);
+        let assignments = self
+            .active_generic_instantiations
+            .last()
+            .map(|active| &active.assignment_places)
+            .unwrap_or(&self.assignment_places);
+        for place in assignments
+            .values()
+            .filter(|place| Self::span_is_within(place.assignment_span, owner))
+        {
+            if bindings.get(&place.root.declaration_span) == Some(&place.root) {
+                facts.insert(place.root.declaration_span, place.root);
+            }
+        }
+        let actor_calls = self
+            .active_generic_instantiations
+            .last()
+            .map(|active| &active.actor_message_calls)
+            .unwrap_or(&self.actor_message_calls);
+        for (_, call) in actor_calls
+            .iter()
+            .filter(|(span, _)| Self::span_is_within(**span, owner))
+        {
+            // Receiver expressions can be projected or computed. Retain only
+            // their actual resolver references from this selected fact scope.
+            for (_, definition) in self
+                .resolve
+                .resolutions
+                .iter()
+                .filter(|(span, _)| Self::span_is_within(**span, call.receiver_span))
+            {
+                let declaration = self.resolve.scope_table.def(*definition).span;
+                if let Some(fact) = bindings
+                    .get(&declaration)
+                    .filter(|fact| fact.definition == *definition)
+                {
+                    facts.insert(declaration, *fact);
+                }
+            }
+        }
+        let call_arguments = calls
+            .iter()
+            .map(|(span, call)| (span, &call.arguments))
+            .chain(
+                actor_calls
+                    .iter()
+                    .map(|(span, call)| (span, &call.arguments)),
+            );
+        for (_, arguments) in call_arguments.filter(|(span, _)| Self::span_is_within(**span, owner))
+        {
+            for argument in arguments {
+                match &argument.origin {
+                    CheckedCallerOrigin::Binding(fact) => {
+                        facts.insert(fact.declaration_span, *fact);
+                    }
+                    CheckedCallerOrigin::BorrowedProjection {
+                        source: CheckedViewSource::Binding(definition),
+                    }
+                    | CheckedCallerOrigin::OwnedFieldCopy {
+                        parent: CheckedViewSource::Binding(definition),
+                    } => {
+                        let span = self.resolve.scope_table.def(*definition).span;
+                        if let Some(fact) = bindings
+                            .get(&span)
+                            .filter(|fact| fact.definition == *definition)
+                        {
+                            facts.insert(span, *fact);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        self.retain_local_view_dependencies(bindings, &mut facts);
+        facts
+    }
+
+    fn clear_checked_body_facts(&mut self, owner: Span) {
+        // Expression types are also retained in the root map for the existing
+        // interpreter handoff, even while a generic fact scope is active.
+        Self::clear_facts_in_span(&mut self.type_map, owner);
+        Self::clear_facts_in_span(&mut self.debug_type_names, owner);
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            Self::clear_facts_in_span(&mut active.type_map, owner);
+            Self::clear_facts_in_span(&mut active.source_type_map, owner);
+            Self::clear_facts_in_span(&mut active.debug_type_names, owner);
+            Self::clear_facts_in_span(&mut active.binding_modes, owner);
+            Self::clear_facts_in_span(&mut active.binding_facts, owner);
+            Self::clear_facts_in_span(&mut active.assignment_places, owner);
+            Self::clear_facts_in_span(&mut active.call_ownership, owner);
+            Self::clear_facts_in_span(&mut active.actor_message_calls, owner);
+            Self::clear_facts_in_span(&mut active.invocation_signatures, owner);
+            Self::clear_facts_in_span(&mut active.generic_calls, owner);
+            Self::clear_facts_in_span(&mut active.intrinsic_ids, owner);
+            Self::clear_facts_in_span(&mut active.intrinsic_type_arguments, owner);
+            Self::clear_facts_in_span(&mut active.intrinsic_reflection_arguments, owner);
+            Self::clear_facts_in_span(&mut active.call_argument_orders, owner);
+            Self::clear_facts_in_span(&mut active.method_calls, owner);
+            Self::clear_facts_in_span(&mut active.interface_calls, owner);
+            Self::clear_facts_in_span(&mut active.method_values, owner);
+            Self::clear_facts_in_span(&mut active.struct_constructions, owner);
+            Self::clear_facts_in_span(&mut active.pipeline_step_input_types, owner);
+            Self::clear_facts_in_span(&mut active.pipeline_step_call_types, owner);
+            Self::clear_facts_in_span(&mut active.static_selections, owner);
+            Self::clear_facts_in_span(&mut active.comptime_type_bindings, owner);
+        } else {
+            Self::clear_facts_in_span(&mut self.source_type_map, owner);
+            Self::clear_facts_in_span(&mut self.binding_modes, owner);
+            Self::clear_facts_in_span(&mut self.binding_facts, owner);
+            Self::clear_facts_in_span(&mut self.assignment_places, owner);
+            Self::clear_facts_in_span(&mut self.call_ownership, owner);
+            Self::clear_facts_in_span(&mut self.actor_message_calls, owner);
+            Self::clear_facts_in_span(&mut self.invocation_signatures, owner);
+            Self::clear_facts_in_span(&mut self.generic_calls, owner);
+            Self::clear_facts_in_span(&mut self.intrinsic_ids, owner);
+            Self::clear_facts_in_span(&mut self.intrinsic_type_arguments, owner);
+            Self::clear_facts_in_span(&mut self.intrinsic_reflection_arguments, owner);
+            Self::clear_facts_in_span(&mut self.call_argument_orders, owner);
+            Self::clear_facts_in_span(&mut self.method_calls, owner);
+            Self::clear_facts_in_span(&mut self.interface_calls, owner);
+            Self::clear_facts_in_span(&mut self.method_values, owner);
+            Self::clear_facts_in_span(&mut self.struct_constructions, owner);
+            Self::clear_facts_in_span(&mut self.pipeline_step_input_types, owner);
+            Self::clear_facts_in_span(&mut self.pipeline_step_call_types, owner);
+            Self::clear_facts_in_span(&mut self.comptime_type_bindings, owner);
+        }
+    }
+
+    fn checked_body_facts(&self, owner: Span) -> CheckedBodyFacts {
+        if let Some(active) = self.active_generic_instantiations.last() {
+            return CheckedBodyFacts {
+                type_map: Self::facts_in_span(&active.type_map, owner),
+                source_type_map: Self::facts_in_span(&active.source_type_map, owner),
+                debug_type_names: Self::facts_in_span(&active.debug_type_names, owner),
+                binding_modes: Self::facts_in_span(&active.binding_modes, owner),
+                binding_facts: self.body_binding_facts(
+                    &active.binding_facts,
+                    &active.call_ownership,
+                    owner,
+                ),
+                call_ownership: Self::facts_in_span(&active.call_ownership, owner),
+                actor_message_calls: Self::facts_in_span(&active.actor_message_calls, owner),
+                assignment_places: Self::facts_in_span(&active.assignment_places, owner),
+                generic_calls: Self::facts_in_span(&active.generic_calls, owner),
+                intrinsic_ids: Self::facts_in_span(&active.intrinsic_ids, owner),
+                intrinsic_type_arguments: Self::facts_in_span(
+                    &active.intrinsic_type_arguments,
+                    owner,
+                ),
+                intrinsic_reflection_arguments: Self::facts_in_span(
+                    &active.intrinsic_reflection_arguments,
+                    owner,
+                ),
+                call_argument_orders: Self::facts_in_span(&active.call_argument_orders, owner),
+                method_calls: Self::facts_in_span(&active.method_calls, owner),
+                interface_calls: Self::facts_in_span(&active.interface_calls, owner),
+                method_values: Self::facts_in_span(&active.method_values, owner),
+                struct_constructions: Self::facts_in_span(&active.struct_constructions, owner),
+                pipeline_step_input_types: Self::facts_in_span(
+                    &active.pipeline_step_input_types,
+                    owner,
+                ),
+                pipeline_step_call_types: Self::facts_in_span(
+                    &active.pipeline_step_call_types,
+                    owner,
+                ),
+                static_selections: Self::facts_in_span(&active.static_selections, owner),
+                comptime_type_bindings: Self::facts_in_span(&active.comptime_type_bindings, owner),
+            };
+        }
+        CheckedBodyFacts {
+            type_map: Self::facts_in_span(&self.type_map, owner),
+            source_type_map: Self::facts_in_span(&self.source_type_map, owner),
+            debug_type_names: Self::facts_in_span(&self.debug_type_names, owner),
+            binding_modes: Self::facts_in_span(&self.binding_modes, owner),
+            binding_facts: self.body_binding_facts(
+                &self.binding_facts,
+                &self.call_ownership,
+                owner,
+            ),
+            call_ownership: Self::facts_in_span(&self.call_ownership, owner),
+            actor_message_calls: Self::facts_in_span(&self.actor_message_calls, owner),
+            assignment_places: Self::facts_in_span(&self.assignment_places, owner),
+            generic_calls: Self::facts_in_span(&self.generic_calls, owner),
+            intrinsic_ids: Self::facts_in_span(&self.intrinsic_ids, owner),
+            intrinsic_type_arguments: Self::facts_in_span(&self.intrinsic_type_arguments, owner),
+            intrinsic_reflection_arguments: Self::facts_in_span(
+                &self.intrinsic_reflection_arguments,
+                owner,
+            ),
+            call_argument_orders: Self::facts_in_span(&self.call_argument_orders, owner),
+            method_calls: Self::facts_in_span(&self.method_calls, owner),
+            interface_calls: Self::facts_in_span(&self.interface_calls, owner),
+            method_values: Self::facts_in_span(&self.method_values, owner),
+            struct_constructions: Self::facts_in_span(&self.struct_constructions, owner),
+            pipeline_step_input_types: Self::facts_in_span(&self.pipeline_step_input_types, owner),
+            pipeline_step_call_types: Self::facts_in_span(&self.pipeline_step_call_types, owner),
+            static_selections: HashMap::new(),
+            comptime_type_bindings: Self::facts_in_span(&self.comptime_type_bindings, owner),
+        }
+    }
+
+    fn record_comptime_type_bindings(
+        &mut self,
+        span: Span,
+        bindings: Vec<CheckedComptimeTypeBinding>,
+    ) {
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.comptime_type_bindings.insert(span, bindings);
+        } else {
+            self.comptime_type_bindings.insert(span, bindings);
+        }
+    }
+
+    fn record_static_selection(&mut self, span: Span, selection: CheckedStaticSelection) {
+        let conflict = self
+            .active_generic_instantiations
+            .last_mut()
+            .is_some_and(|active| match active.static_selections.get(&span) {
+                Some(existing) => *existing != selection,
+                None => {
+                    active.static_selections.insert(span, selection);
+                    false
+                }
+            });
+        if conflict {
+            self.sink
+                .emit(errors::conflicting_generic_static_selection(span));
+        }
+    }
+
     fn record_generic_call_for_template(
         &mut self,
         span: Span,
         func: &FunctionDef,
         concrete_args: &[TypeId],
+        kind_subst: &HashMap<String, String>,
+        type_argument_reflections: &[ReflectionTypeInfo],
+        param_facts: &ReflectionParamFacts,
     ) {
         let Some(definition) = self.declaration_def_id(func.name.span) else {
             return;
@@ -5857,8 +8737,39 @@ impl<'a> TypeChecker<'a> {
             CheckedGenericCall {
                 definition,
                 concrete_args: concrete_args.to_vec(),
+                specialization: Self::generic_specialization(
+                    func,
+                    kind_subst,
+                    type_argument_reflections,
+                    param_facts,
+                ),
             },
         );
+    }
+
+    fn generic_specialization(
+        func: &FunctionDef,
+        kind_subst: &HashMap<String, String>,
+        type_argument_reflections: &[ReflectionTypeInfo],
+        param_facts: &ReflectionParamFacts,
+    ) -> CheckedGenericSpecialization {
+        CheckedGenericSpecialization {
+            type_argument_kinds: func
+                .type_params
+                .iter()
+                .map(|param| {
+                    kind_subst
+                        .get(&param.name)
+                        .cloned()
+                        .unwrap_or_else(|| "unknown_type".to_string())
+                })
+                .collect(),
+            type_argument_reflections: type_argument_reflections.to_vec(),
+            type_info_kinds: param_facts.type_info_kinds.clone(),
+            type_info_primitives: param_facts.type_info_primitives.clone(),
+            type_kind_values: param_facts.type_kind_values.clone(),
+            type_primitive_values: param_facts.type_primitive_values.clone(),
+        }
     }
 
     fn generic_function_uses_type_param_reflection(&self, func: &FunctionDef) -> bool {
@@ -5868,404 +8779,6 @@ impl<'a> TypeChecker<'a> {
             .map(|param| param.name.clone())
             .collect::<HashSet<_>>();
         self.block_uses_type_param_reflection(&func.body, &type_params)
-    }
-
-    fn generic_function_reflection_is_branch_specializable(&self, func: &FunctionDef) -> bool {
-        let type_params = func
-            .type_params
-            .iter()
-            .map(|param| param.name.clone())
-            .collect::<HashSet<_>>();
-        self.block_reflection_is_branch_specializable(&func.body, &type_params)
-    }
-
-    fn block_reflection_is_branch_specializable(
-        &self,
-        block: &Block,
-        type_params: &HashSet<String>,
-    ) -> bool {
-        self.block_reflection_is_branch_specializable_in_context(
-            block,
-            type_params,
-            ReflectionBranchContext::TopLevel,
-        )
-    }
-
-    fn block_reflection_is_branch_specializable_in_context(
-        &self,
-        block: &Block,
-        type_params: &HashSet<String>,
-        context: ReflectionBranchContext,
-    ) -> bool {
-        block
-            .stmts
-            .iter()
-            .all(|stmt| self.stmt_reflection_is_branch_specializable(stmt, type_params, context))
-    }
-
-    fn stmt_reflection_is_branch_specializable(
-        &self,
-        stmt: &Stmt,
-        type_params: &HashSet<String>,
-        context: ReflectionBranchContext,
-    ) -> bool {
-        if context == ReflectionBranchContext::StaticReflectionBranch {
-            return true;
-        }
-
-        match stmt {
-            Stmt::If(if_stmt) => {
-                let condition_static =
-                    self.expr_is_potential_static_reflection_condition(&if_stmt.condition);
-                if self.expr_uses_type_param_reflection(&if_stmt.condition, type_params)
-                    && !condition_static
-                {
-                    return false;
-                }
-
-                let then_context = if condition_static {
-                    ReflectionBranchContext::StaticReflectionBranch
-                } else {
-                    ReflectionBranchContext::RuntimeBranch
-                };
-                let then_ok = self.block_reflection_is_branch_specializable_in_context(
-                    &if_stmt.then_block,
-                    type_params,
-                    then_context,
-                );
-
-                let mut all_conditions_static = condition_static;
-                let else_ifs_ok = if_stmt.else_ifs.iter().all(|(condition, block)| {
-                    let else_if_static =
-                        self.expr_is_potential_static_reflection_condition(condition);
-                    all_conditions_static &= else_if_static;
-                    if self.expr_uses_type_param_reflection(condition, type_params)
-                        && !else_if_static
-                    {
-                        return false;
-                    }
-                    let else_if_context = if else_if_static {
-                        ReflectionBranchContext::StaticReflectionBranch
-                    } else {
-                        ReflectionBranchContext::RuntimeBranch
-                    };
-                    self.block_reflection_is_branch_specializable_in_context(
-                        block,
-                        type_params,
-                        else_if_context,
-                    )
-                });
-
-                then_ok
-                    && else_ifs_ok
-                    && if_stmt.else_block.as_ref().map_or(true, |block| {
-                        let else_context = if all_conditions_static {
-                            ReflectionBranchContext::StaticReflectionBranch
-                        } else {
-                            ReflectionBranchContext::RuntimeBranch
-                        };
-                        self.block_reflection_is_branch_specializable_in_context(
-                            block,
-                            type_params,
-                            else_context,
-                        )
-                    })
-            }
-            Stmt::VarDecl(decl) => {
-                !self.expr_uses_type_param_reflection(&decl.value, type_params)
-                    || (context.permits_shape_reflection()
-                        && (self
-                            .expr_is_direct_reflection_statement_source(&decl.value, type_params)
-                            || (!decl.mutable
-                                && self.expr_is_reflection_local_fact_source(
-                                    &decl.value,
-                                    type_params,
-                                ))))
-            }
-            Stmt::Return(ret) => ret.value.as_ref().map_or(true, |expr| {
-                !self.expr_uses_type_param_reflection(expr, type_params)
-                    || (context.permits_shape_reflection()
-                        && self.expr_is_direct_reflection_statement_source(expr, type_params))
-            }),
-            Stmt::ComptimeTypeBind(bind) => {
-                self.comptime_type_bind_reflection_is_specializable(bind, type_params, context)
-            }
-            Stmt::For(for_stmt) => {
-                self.for_reflection_is_branch_specializable(for_stmt, type_params, context)
-            }
-            Stmt::Match(match_stmt) => {
-                self.match_reflection_is_branch_specializable(match_stmt, type_params, context)
-            }
-            _ => !self.stmt_uses_type_param_reflection(stmt, type_params),
-        }
-    }
-
-    fn comptime_type_bind_reflection_is_specializable(
-        &self,
-        bind: &ast::ComptimeTypeBindStmt,
-        type_params: &HashSet<String>,
-        context: ReflectionBranchContext,
-    ) -> bool {
-        let source_mentions_type_param = comptime_type_info_binding(&bind.value)
-            .or_else(|| comptime_type_arg_binding(&bind.value).map(|(ty, _)| ty))
-            .is_some_and(|ty| Self::type_expr_mentions_type_param(ty, type_params));
-
-        if source_mentions_type_param {
-            return context.permits_shape_reflection()
-                && self.block_reflection_is_branch_specializable_in_context(
-                    &bind.body,
-                    type_params,
-                    context,
-                );
-        }
-
-        !self.expr_uses_type_param_reflection(&bind.value, type_params)
-            && self.block_reflection_is_branch_specializable_in_context(
-                &bind.body,
-                type_params,
-                context,
-            )
-    }
-
-    fn for_reflection_is_branch_specializable(
-        &self,
-        for_stmt: &ast::ForStmt,
-        type_params: &HashSet<String>,
-        context: ReflectionBranchContext,
-    ) -> bool {
-        if let Some(owner_ty) = direct_reflected_loop_owner_type(&for_stmt.iterable) {
-            if Self::type_expr_mentions_type_param(owner_ty, type_params) {
-                return context.permits_shape_reflection()
-                    && self.block_reflection_is_branch_specializable_in_context(
-                        &for_stmt.body,
-                        type_params,
-                        ReflectionBranchContext::StaticReflectionBranch,
-                    );
-            }
-        }
-
-        !self.expr_uses_type_param_reflection(&for_stmt.iterable, type_params)
-            && self.block_reflection_is_branch_specializable_in_context(
-                &for_stmt.body,
-                type_params,
-                context,
-            )
-    }
-
-    fn match_reflection_is_branch_specializable(
-        &self,
-        match_stmt: &ast::MatchStmt,
-        type_params: &HashSet<String>,
-        _context: ReflectionBranchContext,
-    ) -> bool {
-        let scrutinee_static = self.expr_is_potential_static_reflection_value(&match_stmt.expr);
-        if self.expr_uses_type_param_reflection(&match_stmt.expr, type_params) && !scrutinee_static
-        {
-            return false;
-        }
-
-        let arm_context = if scrutinee_static {
-            ReflectionBranchContext::StaticReflectionBranch
-        } else {
-            ReflectionBranchContext::RuntimeBranch
-        };
-
-        match_stmt.arms.iter().all(|arm| {
-            self.block_reflection_is_branch_specializable_in_context(
-                &arm.body,
-                type_params,
-                arm_context,
-            )
-        })
-    }
-
-    fn expr_is_reflection_local_fact_source(
-        &self,
-        expr: &Expr,
-        type_params: &HashSet<String>,
-    ) -> bool {
-        self.expr_is_type_info_reflection(expr, type_params)
-            || self.expr_is_type_kind_reflection(expr, type_params)
-            || self.expr_is_type_primitive_reflection_value(expr, type_params)
-    }
-
-    fn expr_is_direct_reflection_statement_source(
-        &self,
-        expr: &Expr,
-        type_params: &HashSet<String>,
-    ) -> bool {
-        match expr {
-            Expr::Paren(inner, _) => {
-                self.expr_is_direct_reflection_statement_source(inner, type_params)
-            }
-            Expr::Handle(target, _, _, _) => {
-                self.expr_is_direct_reflection_statement_source(target, type_params)
-            }
-            Expr::GenericCall(callee, type_args, _, _) => {
-                self.resolved_expr_name(callee).is_some_and(|name| {
-                    matches!(
-                        name.as_str(),
-                        "type.variant_value"
-                            | "type.construct_start"
-                            | "type.construct_variant_start"
-                            | "type.construct_machine_start"
-                            | "type.construct_finish"
-                    )
-                }) && type_args
-                    .iter()
-                    .any(|arg| Self::type_expr_mentions_type_param(arg, type_params))
-            }
-            _ => false,
-        }
-    }
-
-    fn expr_is_potential_static_reflection_condition(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::BoolLiteral(_, _) => true,
-            Expr::Paren(inner, _) => self.expr_is_potential_static_reflection_condition(inner),
-            Expr::Unary(UnaryOp::Not, inner, _) => {
-                self.expr_is_potential_static_reflection_condition(inner)
-            }
-            Expr::Binary(lhs, BinOp::And | BinOp::Or, rhs, _) => {
-                self.expr_is_potential_static_reflection_condition(lhs)
-                    && self.expr_is_potential_static_reflection_condition(rhs)
-            }
-            Expr::Binary(lhs, BinOp::Eq | BinOp::NotEq, rhs, _) => {
-                (self.expr_is_potential_static_reflection_value(lhs)
-                    && self.expr_is_static_reflection_literal(rhs))
-                    || (self.expr_is_static_reflection_literal(lhs)
-                        && self.expr_is_potential_static_reflection_value(rhs))
-            }
-            _ => false,
-        }
-    }
-
-    fn expr_is_potential_static_reflection_value(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Paren(inner, _) => self.expr_is_potential_static_reflection_value(inner),
-            Expr::Ident(_) => true,
-            Expr::GenericCall(callee, _, args, _) => {
-                args.is_empty()
-                    && self
-                        .resolved_expr_name(callee)
-                        .is_some_and(|name| name == "type.kind_tag")
-            }
-            Expr::FieldAccess(_, field, _) if field.name == "kind_tag" => true,
-            Expr::Handle(target, _, body, _) => {
-                self.expr_is_potential_optional_type_primitive_reflection(target)
-                    && Self::handle_default_expr(body)
-                        .is_some_and(|default| self.expr_is_type_primitive_literal(default))
-            }
-            _ => self.expr_is_static_reflection_value(expr, &HashSet::new()),
-        }
-    }
-
-    fn expr_is_potential_optional_type_primitive_reflection(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Paren(inner, _) => {
-                self.expr_is_potential_optional_type_primitive_reflection(inner)
-            }
-            Expr::FieldAccess(_, field, _) if field.name == "primitive_tag" => true,
-            Expr::GenericCall(callee, _, args, _) => {
-                args.is_empty()
-                    && self
-                        .resolved_expr_name(callee)
-                        .is_some_and(|name| name == "type.primitive_tag")
-            }
-            _ => false,
-        }
-    }
-
-    fn expr_is_static_reflection_value(&self, expr: &Expr, type_params: &HashSet<String>) -> bool {
-        self.expr_is_type_kind_reflection(expr, type_params)
-            || self.expr_is_type_primitive_reflection_value(expr, type_params)
-    }
-
-    fn expr_is_static_reflection_literal(&self, expr: &Expr) -> bool {
-        self.expr_is_type_kind_literal(expr) || self.expr_is_type_primitive_literal(expr)
-    }
-
-    fn expr_is_type_kind_reflection(&self, expr: &Expr, type_params: &HashSet<String>) -> bool {
-        match expr {
-            Expr::GenericCall(callee, type_args, args, _) => {
-                args.is_empty()
-                    && self
-                        .resolved_expr_name(callee)
-                        .is_some_and(|name| name == "type.kind_tag")
-                    && type_args.len() == 1
-                    && Self::type_expr_mentions_type_param(&type_args[0], type_params)
-            }
-            Expr::FieldAccess(base, field, _) if field.name == "kind_tag" => {
-                self.expr_is_type_info_reflection(base, type_params)
-            }
-            Expr::Paren(inner, _) => self.expr_is_type_kind_reflection(inner, type_params),
-            _ => false,
-        }
-    }
-
-    fn expr_is_type_primitive_reflection_value(
-        &self,
-        expr: &Expr,
-        type_params: &HashSet<String>,
-    ) -> bool {
-        match expr {
-            Expr::Handle(target, _, body, _) => {
-                self.expr_is_optional_type_primitive_reflection(target, type_params)
-                    && Self::handle_default_expr(body)
-                        .is_some_and(|default| self.expr_is_type_primitive_literal(default))
-            }
-            Expr::Paren(inner, _) => {
-                self.expr_is_type_primitive_reflection_value(inner, type_params)
-            }
-            _ => false,
-        }
-    }
-
-    fn expr_is_optional_type_primitive_reflection(
-        &self,
-        expr: &Expr,
-        type_params: &HashSet<String>,
-    ) -> bool {
-        match expr {
-            Expr::GenericCall(callee, type_args, args, _) => {
-                args.is_empty()
-                    && self
-                        .resolved_expr_name(callee)
-                        .is_some_and(|name| name == "type.primitive_tag")
-                    && type_args.len() == 1
-                    && Self::type_expr_mentions_type_param(&type_args[0], type_params)
-            }
-            Expr::FieldAccess(base, field, _) if field.name == "primitive_tag" => {
-                self.expr_is_type_info_reflection(base, type_params)
-            }
-            Expr::Paren(inner, _) => {
-                self.expr_is_optional_type_primitive_reflection(inner, type_params)
-            }
-            _ => false,
-        }
-    }
-
-    fn expr_is_type_info_reflection(&self, expr: &Expr, type_params: &HashSet<String>) -> bool {
-        match expr {
-            Expr::GenericCall(callee, type_args, args, _) => {
-                args.is_empty()
-                    && self
-                        .resolved_expr_name(callee)
-                        .is_some_and(|name| name == "type.info")
-                    && type_args.len() == 1
-                    && Self::type_expr_mentions_type_param(&type_args[0], type_params)
-            }
-            Expr::Paren(inner, _) => self.expr_is_type_info_reflection(inner, type_params),
-            _ => false,
-        }
-    }
-
-    fn expr_is_type_kind_literal(&self, expr: &Expr) -> bool {
-        self.type_kind_literal_name(expr).is_some()
-    }
-
-    fn expr_is_type_primitive_literal(&self, expr: &Expr) -> bool {
-        self.type_primitive_literal_name(expr).is_some()
     }
 
     fn type_kind_literal_name(&self, expr: &Expr) -> Option<String> {
@@ -6312,6 +8825,15 @@ impl<'a> TypeChecker<'a> {
         match expr {
             Expr::BoolLiteral(value, _) => Some(*value),
             Expr::Paren(inner, _) => self.eval_static_type_condition(inner),
+            Expr::GenericCall(callee, type_args, args, _)
+                if args.is_empty()
+                    && self
+                        .resolved_expr_name(callee)
+                        .is_some_and(|name| name == "type.has_secret") =>
+            {
+                let type_id = self.reflection_type_arg_id(type_args)?;
+                Some(self.type_contains_secret_data(type_id))
+            }
             Expr::Unary(UnaryOp::Not, inner, _) => {
                 self.eval_static_type_condition(inner).map(|value| !value)
             }
@@ -6324,9 +8846,21 @@ impl<'a> TypeChecker<'a> {
                 false => self.eval_static_type_condition(rhs),
             },
             Expr::Binary(lhs, BinOp::Eq | BinOp::NotEq, rhs, _) => {
-                let lhs_value = self.eval_static_reflection_enum_value(lhs)?;
-                let rhs_value = self.eval_static_reflection_enum_value(rhs)?;
-                let equal = lhs_value == rhs_value;
+                let lhs_name = self.eval_static_type_name_value(lhs);
+                let rhs_name = self.eval_static_type_name_value(rhs);
+                let equal = if let (Some(name), Some(literal)) =
+                    (lhs_name, Self::static_string_literal(rhs))
+                {
+                    name == literal
+                } else if let (Some(literal), Some(name)) =
+                    (Self::static_string_literal(lhs), rhs_name)
+                {
+                    literal == name
+                } else {
+                    let lhs_value = self.eval_static_reflection_enum_value(lhs)?;
+                    let rhs_value = self.eval_static_reflection_enum_value(rhs)?;
+                    lhs_value == rhs_value
+                };
                 Some(if matches!(expr, Expr::Binary(_, BinOp::Eq, _, _)) {
                     equal
                 } else {
@@ -6349,6 +8883,44 @@ impl<'a> TypeChecker<'a> {
         }
         self.eval_type_primitive_value(expr)
             .map(StaticReflectionEnumValue::TypePrimitive)
+    }
+
+    fn eval_static_type_name_value(&mut self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Paren(inner, _) => self.eval_static_type_name_value(inner),
+            Expr::GenericCall(callee, type_args, args, _)
+                if args.is_empty()
+                    && self
+                        .resolved_expr_name(callee)
+                        .is_some_and(|name| name == "type.name") =>
+            {
+                let [type_arg] = type_args.as_slice() else {
+                    return None;
+                };
+                let type_id = self.reflection_type_arg_id(type_args)?;
+                let namespace = self.current_function_name.as_deref().and_then(|name| {
+                    name.rsplit_once('.')
+                        .map(|(namespace, _)| namespace.to_string())
+                });
+                Some(
+                    self.reflection_type_info_for_type_expr(
+                        type_arg,
+                        namespace.as_deref(),
+                        type_id,
+                    )
+                    .type_name,
+                )
+            }
+            _ => None,
+        }
+    }
+
+    fn static_string_literal(expr: &Expr) -> Option<&str> {
+        match expr {
+            Expr::Paren(inner, _) => Self::static_string_literal(inner),
+            Expr::StringLiteral(value, _) => Some(value),
+            _ => None,
+        }
     }
 
     fn eval_type_kind_value(&mut self, expr: &Expr) -> Option<String> {
@@ -6483,105 +9055,6 @@ impl<'a> TypeChecker<'a> {
             .any(|stmt| self.stmt_uses_type_param_reflection(stmt, type_params))
     }
 
-    fn block_type_param_reflection_span(
-        &self,
-        block: &Block,
-        type_params: &HashSet<String>,
-    ) -> Option<Span> {
-        block
-            .stmts
-            .iter()
-            .find_map(|stmt| self.stmt_type_param_reflection_span(stmt, type_params))
-    }
-
-    fn if_branch_type_param_reflection_span(
-        &self,
-        if_stmt: &ast::IfStmt,
-        type_params: &HashSet<String>,
-    ) -> Option<Span> {
-        self.block_type_param_reflection_span(&if_stmt.then_block, type_params)
-            .or_else(|| {
-                if_stmt.else_ifs.iter().find_map(|(_, block)| {
-                    self.block_type_param_reflection_span(block, type_params)
-                })
-            })
-            .or_else(|| {
-                if_stmt
-                    .else_block
-                    .as_ref()
-                    .and_then(|block| self.block_type_param_reflection_span(block, type_params))
-            })
-    }
-
-    fn stmt_type_param_reflection_span(
-        &self,
-        stmt: &Stmt,
-        type_params: &HashSet<String>,
-    ) -> Option<Span> {
-        match stmt {
-            Stmt::VarDecl(decl) => self
-                .expr_uses_type_param_reflection(&decl.value, type_params)
-                .then(|| decl.value.span()),
-            Stmt::Assign(assign) => self
-                .expr_uses_type_param_reflection(&assign.target, type_params)
-                .then(|| assign.target.span())
-                .or_else(|| {
-                    self.expr_uses_type_param_reflection(&assign.value, type_params)
-                        .then(|| assign.value.span())
-                }),
-            Stmt::Return(ret) => ret.value.as_ref().and_then(|expr| {
-                self.expr_uses_type_param_reflection(expr, type_params)
-                    .then(|| expr.span())
-            }),
-            Stmt::Respond(resp) => self
-                .expr_uses_type_param_reflection(&resp.value, type_params)
-                .then(|| resp.value.span()),
-            Stmt::ComptimeTypeBind(bind) => self
-                .expr_uses_type_param_reflection(&bind.value, type_params)
-                .then(|| bind.value.span())
-                .or_else(|| self.block_type_param_reflection_span(&bind.body, type_params)),
-            Stmt::If(if_stmt) => self
-                .expr_uses_type_param_reflection(&if_stmt.condition, type_params)
-                .then(|| if_stmt.condition.span())
-                .or_else(|| self.if_branch_type_param_reflection_span(if_stmt, type_params)),
-            Stmt::For(for_stmt) => self
-                .expr_uses_type_param_reflection(&for_stmt.iterable, type_params)
-                .then(|| for_stmt.iterable.span())
-                .or_else(|| self.block_type_param_reflection_span(&for_stmt.body, type_params)),
-            Stmt::While(while_stmt) => self
-                .expr_uses_type_param_reflection(&while_stmt.condition, type_params)
-                .then(|| while_stmt.condition.span())
-                .or_else(|| self.block_type_param_reflection_span(&while_stmt.body, type_params)),
-            Stmt::Match(match_stmt) => self
-                .expr_uses_type_param_reflection(&match_stmt.expr, type_params)
-                .then(|| match_stmt.expr.span())
-                .or_else(|| {
-                    match_stmt.arms.iter().find_map(|arm| {
-                        self.block_type_param_reflection_span(&arm.body, type_params)
-                    })
-                }),
-            Stmt::Expr(expr_stmt) => self
-                .expr_uses_type_param_reflection(&expr_stmt.expr, type_params)
-                .then(|| expr_stmt.expr.span()),
-            Stmt::Assert(assert_stmt) => self
-                .expr_uses_type_param_reflection(&assert_stmt.condition, type_params)
-                .then(|| assert_stmt.condition.span())
-                .or_else(|| {
-                    assert_stmt.message.as_ref().and_then(|message| {
-                        self.expr_uses_type_param_reflection(message, type_params)
-                            .then(|| message.span())
-                    })
-                }),
-            Stmt::Breakpoint(breakpoint_stmt) => {
-                breakpoint_stmt.condition.as_ref().and_then(|expr| {
-                    self.expr_uses_type_param_reflection(expr, type_params)
-                        .then(|| expr.span())
-                })
-            }
-            Stmt::Trace(_) | Stmt::Use(_) | Stmt::Break(_) | Stmt::Continue(_) => None,
-        }
-    }
-
     fn stmt_uses_type_param_reflection(&self, stmt: &Stmt, type_params: &HashSet<String>) -> bool {
         match stmt {
             Stmt::VarDecl(decl) => self.expr_uses_type_param_reflection(&decl.value, type_params),
@@ -6709,11 +9182,10 @@ impl<'a> TypeChecker<'a> {
                             })
                     })
             }
-            Expr::InlineFn(_, return_ty, body, _) => {
-                return_ty
-                    .as_ref()
-                    .is_some_and(|ty| Self::type_expr_mentions_type_param(ty, type_params))
-                    || self.block_uses_type_param_reflection(body, type_params)
+            // Generic signature annotations require ordinary substitution;
+            // only operations inside the closure body can use reflection.
+            Expr::InlineFn(_, _, body, _) => {
+                self.block_uses_type_param_reflection(body, type_params)
             }
             Expr::IntLiteral(_, _)
             | Expr::FloatLiteral(_, _)
@@ -6755,6 +9227,10 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_function_impl(&mut self, func: &FunctionDef, function_name: String) {
+        let saved_ownership_context = std::mem::replace(
+            &mut self.ownership_context,
+            CheckedOwnershipContext::Ordinary,
+        );
         self.graphics_method_definitions
             .insert(func.span, func.clone());
         let is_main = func.name.name == "main" && !function_name.contains('.');
@@ -6794,10 +9270,16 @@ impl<'a> TypeChecker<'a> {
 
         // Bind parameter types into the type environment.
         for param in &func.params {
+            self.record_debug_type_name(&param.name, &param.ty);
             let param_type = self.resolve_type_expr(&param.ty);
             if let Some(def_id) = self.declaration_def_id(param.name.span) {
                 self.type_env.insert(def_id, param_type);
             }
+            self.record_assignment_binding(
+                &param.name,
+                param.mutable,
+                param.view || Self::type_is_view(&param.ty),
+            );
         }
 
         self.check_block(&func.body);
@@ -6805,26 +9287,37 @@ impl<'a> TypeChecker<'a> {
         self.current_return_type = None;
         self.current_function_name = None;
         self.current_function_pure = false;
+        self.ownership_context = saved_ownership_context;
     }
 
     fn check_verify_block(&mut self, verify: &VerifyBlock) {
+        let saved_context =
+            std::mem::replace(&mut self.ownership_context, CheckedOwnershipContext::Verify);
         self.in_verify_block = true;
         self.current_verify_name = Some(verify.name.name.clone());
         self.check_block(&verify.body);
         self.in_verify_block = false;
         self.current_verify_name = None;
+        self.ownership_context = saved_context;
     }
 
     fn check_property_block(&mut self, prop: &ast::PropertyBlock) {
+        let saved_context = std::mem::replace(
+            &mut self.ownership_context,
+            CheckedOwnershipContext::Property,
+        );
         self.in_property_block = true;
         for given in &prop.givens {
+            self.record_debug_type_name(&given.name, &given.ty);
             let given_type = self.resolve_type_expr(&given.ty);
             if let Some(def_id) = self.declaration_def_id(given.name.span) {
                 self.type_env.insert(def_id, given_type);
+                self.record_assignment_binding(&given.name, false, false);
             }
         }
         self.check_block(&prop.body);
         self.in_property_block = false;
+        self.ownership_context = saved_context;
     }
 
     // ------------------------------------------------------------------
@@ -6885,7 +9378,30 @@ impl<'a> TypeChecker<'a> {
                 return;
             }
 
-            self.check_comptime_type_bind_body(&bind.name.name, bound_ty, &bind.body);
+            let namespace = self.current_function_name.as_deref().and_then(|name| {
+                name.rsplit_once('.')
+                    .map(|(namespace, _)| namespace.to_string())
+            });
+            let reflection = self.reflection_type_info_for_type_expr(
+                bound_type_expr,
+                namespace.as_deref(),
+                bound_ty,
+            );
+            let body = self.check_comptime_type_bind_body(
+                &bind.name.name,
+                bound_ty,
+                reflection.clone(),
+                &bind.body,
+            );
+            self.record_comptime_type_bindings(
+                bind.span,
+                vec![CheckedComptimeTypeBinding {
+                    selection: CheckedComptimeTypeSelection::Unconditional,
+                    bound_type: bound_ty,
+                    reflection,
+                    body,
+                }],
+            );
             return;
         }
 
@@ -6899,7 +9415,35 @@ impl<'a> TypeChecker<'a> {
             let arg_types = self.type_info_arg_types_for_type_expr(source_type_expr);
             if let Some(&bound_ty) = arg_types.get(index) {
                 if bound_ty != TypeInterner::ERROR {
-                    self.check_comptime_type_bind_body(&bind.name.name, bound_ty, &bind.body);
+                    let namespace = self.current_function_name.as_deref().and_then(|name| {
+                        name.rsplit_once('.')
+                            .map(|(namespace, _)| namespace.to_string())
+                    });
+                    let source_info = self.reflection_type_info_for_type_expr(
+                        source_type_expr,
+                        namespace.as_deref(),
+                        source_ty,
+                    );
+                    let reflection = source_info
+                        .args
+                        .get(index)
+                        .cloned()
+                        .unwrap_or_else(|| self.reflection_type_info_for_type(bound_ty));
+                    let body = self.check_comptime_type_bind_body(
+                        &bind.name.name,
+                        bound_ty,
+                        reflection.clone(),
+                        &bind.body,
+                    );
+                    self.record_comptime_type_bindings(
+                        bind.span,
+                        vec![CheckedComptimeTypeBinding {
+                            selection: CheckedComptimeTypeSelection::Unconditional,
+                            bound_type: bound_ty,
+                            reflection,
+                            body,
+                        }],
+                    );
                 }
                 return;
             }
@@ -6911,23 +9455,54 @@ impl<'a> TypeChecker<'a> {
         }
 
         if let Some(field_name) = reflected_field_type_info_binding(&bind.value) {
-            if let Some(field_types) = self.reflected_field_types_for_name(field_name) {
-                for field_ty in field_types {
+            if let Some(field_types) = self.reflected_field_candidates_for_name(field_name) {
+                let mut bindings = Vec::new();
+                for (iteration_index, (field_ty, reflection)) in field_types.into_iter().enumerate()
+                {
                     if field_ty != TypeInterner::ERROR {
-                        self.check_comptime_type_bind_body(&bind.name.name, field_ty, &bind.body);
+                        let body = self.check_comptime_type_bind_body(
+                            &bind.name.name,
+                            field_ty,
+                            reflection.clone(),
+                            &bind.body,
+                        );
+                        bindings.push(CheckedComptimeTypeBinding {
+                            selection: CheckedComptimeTypeSelection::ReflectedIteration(
+                                iteration_index,
+                            ),
+                            bound_type: field_ty,
+                            reflection,
+                            body,
+                        });
                     }
                 }
+                self.record_comptime_type_bindings(bind.span, bindings);
                 return;
             }
         }
 
         if let Some(info_name) = reflected_type_info_binding(&bind.value) {
             if let Some(info_types) = self.reflected_type_info_types_for_name(info_name) {
-                for info_ty in info_types {
+                let mut bindings = Vec::new();
+                for (iteration_index, (info_ty, reflection)) in info_types.into_iter().enumerate() {
                     if info_ty != TypeInterner::ERROR {
-                        self.check_comptime_type_bind_body(&bind.name.name, info_ty, &bind.body);
+                        let body = self.check_comptime_type_bind_body(
+                            &bind.name.name,
+                            info_ty,
+                            reflection.clone(),
+                            &bind.body,
+                        );
+                        bindings.push(CheckedComptimeTypeBinding {
+                            selection: CheckedComptimeTypeSelection::ReflectedIteration(
+                                iteration_index,
+                            ),
+                            bound_type: info_ty,
+                            reflection,
+                            body,
+                        });
                     }
                 }
+                self.record_comptime_type_bindings(bind.span, bindings);
                 return;
             }
         }
@@ -6937,17 +9512,47 @@ impl<'a> TypeChecker<'a> {
         self.check_block(&bind.body);
     }
 
-    fn check_comptime_type_bind_body(&mut self, name: &str, bound_ty: TypeId, body: &Block) {
+    fn check_comptime_type_bind_body(
+        &mut self,
+        name: &str,
+        bound_ty: TypeId,
+        reflection: ReflectionTypeInfo,
+        body: &Block,
+    ) -> CheckedBodyFacts {
+        // The same source spans may be checked repeatedly for different
+        // reflected elements. Clear the previous flat facts so this snapshot
+        // contains only the current concrete expansion; the last expansion
+        // remains in the legacy flat maps for interpreter compatibility.
+        self.clear_checked_body_facts(body.span);
+        let kind_tag = ReflectionTypeInfo::kind_tag_variant(&reflection.kind).to_string();
         let previous = self.type_var_subst.insert(name.to_string(), bound_ty);
+        let previous_reflection = self
+            .type_var_reflections
+            .insert(name.to_string(), reflection);
+        let previous_kind = self.type_var_kind_tags.insert(name.to_string(), kind_tag);
         self.check_block(body);
         if let Some(previous) = previous {
             self.type_var_subst.insert(name.to_string(), previous);
         } else {
             self.type_var_subst.remove(name);
         }
+        if let Some(previous) = previous_reflection {
+            self.type_var_reflections.insert(name.to_string(), previous);
+        } else {
+            self.type_var_reflections.remove(name);
+        }
+        if let Some(previous) = previous_kind {
+            self.type_var_kind_tags.insert(name.to_string(), previous);
+        } else {
+            self.type_var_kind_tags.remove(name);
+        }
+        self.checked_body_facts(body.span)
     }
 
-    fn reflected_field_types_for_name(&self, name: &str) -> Option<Vec<TypeId>> {
+    fn reflected_field_candidates_for_name(
+        &self,
+        name: &str,
+    ) -> Option<Vec<(TypeId, ReflectionTypeInfo)>> {
         self.reflected_field_type_scopes
             .iter()
             .rev()
@@ -6955,7 +9560,10 @@ impl<'a> TypeChecker<'a> {
             .cloned()
     }
 
-    fn reflected_type_info_types_for_name(&self, name: &str) -> Option<Vec<TypeId>> {
+    fn reflected_type_info_types_for_name(
+        &self,
+        name: &str,
+    ) -> Option<Vec<(TypeId, ReflectionTypeInfo)>> {
         self.reflected_type_info_scopes
             .iter()
             .rev()
@@ -7142,6 +9750,56 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn reflected_field_infos_for_owner(&self, owner_ty: TypeId) -> Vec<ReflectionTypeInfo> {
+        match self.interner.resolve(owner_ty) {
+            Type::Struct(_) | Type::Bitfield(_) => self
+                .reflection_fields_by_id
+                .get(&owner_ty)
+                .map(|(_, fields)| fields.iter().map(|field| field.type_info.clone()).collect())
+                .unwrap_or_default(),
+            Type::Enum(_) => self
+                .reflection_variants_by_id
+                .get(&owner_ty)
+                .map(|(_, variants)| {
+                    variants
+                        .iter()
+                        .flat_map(|variant| {
+                            variant.fields.iter().map(|field| field.type_info.clone())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Type::Machine(_) => self
+                .reflection_machines_by_id
+                .get(&owner_ty)
+                .map(|(_, machine)| {
+                    machine
+                        .states
+                        .iter()
+                        .flat_map(|state| state.fields.iter().map(|field| field.type_info.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Type::MachineState { machine, state } => {
+                let base_ty = self.interner.type_ids().find(
+                    |ty| matches!(self.interner.resolve(*ty), Type::Machine(id) if id == machine),
+                );
+                base_ty
+                    .and_then(|ty| self.reflection_machines_by_id.get(&ty))
+                    .and_then(|(_, machine)| machine.states.get(state.index() as usize))
+                    .map(|state| {
+                        state
+                            .fields
+                            .iter()
+                            .map(|field| field.type_info.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     fn reflected_variant_field_types_for_owner(&self, owner_ty: TypeId) -> Vec<TypeId> {
         match self.interner.resolve(owner_ty) {
             Type::Enum(eid) => self
@@ -7177,22 +9835,51 @@ impl<'a> TypeChecker<'a> {
     fn reflected_type_info_arg_types_for_iterable(
         &mut self,
         iterable: &Expr,
-    ) -> Option<Vec<TypeId>> {
+    ) -> Option<Vec<(TypeId, ReflectionTypeInfo)>> {
         let source = reflected_type_info_args_source(iterable)?;
         let source_types = match source {
-            ReflectedTypeInfoSource::Direct(ty) => vec![self.resolve_type_expr(ty)],
+            ReflectedTypeInfoSource::Direct(ty) => {
+                let concrete = self.resolve_type_expr(ty);
+                let namespace = self.current_function_name.as_deref().and_then(|name| {
+                    name.rsplit_once('.')
+                        .map(|(namespace, _)| namespace.to_string())
+                });
+                vec![(
+                    concrete,
+                    self.reflection_type_info_for_type_expr(ty, namespace.as_deref(), concrete),
+                )]
+            }
             ReflectedTypeInfoSource::Field(field_name) => {
-                self.reflected_field_types_for_name(field_name)?
+                self.reflected_field_candidates_for_name(field_name)?
             }
             ReflectedTypeInfoSource::TypeInfo(info_name) => {
                 self.reflected_type_info_types_for_name(info_name)?
             }
         };
-
         Some(
             source_types
                 .into_iter()
-                .flat_map(|ty| self.type_info_arg_types_for_type(ty))
+                .flat_map(|(ty, reflection)| {
+                    // An alias exposes its base as one reflection argument even when
+                    // canonical interning has already erased that alias layer.
+                    let types = if reflection.kind == "alias" {
+                        vec![ty]
+                    } else {
+                        self.type_info_arg_types_for_type(ty)
+                    };
+                    types
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, ty)| {
+                            let info = reflection
+                                .args
+                                .get(index)
+                                .cloned()
+                                .unwrap_or_else(|| self.reflection_type_info_for_type(ty));
+                            (ty, info)
+                        })
+                        .collect::<Vec<_>>()
+                })
                 .collect(),
         )
     }
@@ -7213,6 +9900,7 @@ impl<'a> TypeChecker<'a> {
             Type::Function {
                 params,
                 return_type,
+                ..
             } => params
                 .iter()
                 .copied()
@@ -7226,6 +9914,18 @@ impl<'a> TypeChecker<'a> {
         match ty {
             TypeExpr::View(inner, _) => self.type_info_arg_types_for_type_expr(inner),
             TypeExpr::StateQualified(_, _, _) => Vec::new(),
+            TypeExpr::Named(ident)
+                if self
+                    .type_var_reflections
+                    .get(&ident.name)
+                    .is_some_and(|info| info.kind == "alias") =>
+            {
+                let alias_name = &self.type_var_reflections[&ident.name].type_name;
+                let Some(alias) = self.type_aliases.get(alias_name).cloned() else {
+                    return Vec::new();
+                };
+                vec![self.resolve_type_expr(&alias.base_type)]
+            }
             TypeExpr::Named(ident) if self.type_aliases.contains_key(&ident.name) => {
                 let alias = self
                     .type_aliases
@@ -7249,9 +9949,25 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn push_reflected_field_type_scope(&mut self, field_name: &str, field_types: Vec<TypeId>) {
+    fn push_reflected_field_type_scope(
+        &mut self,
+        field_name: &str,
+        field_types: Vec<TypeId>,
+        source_infos: Vec<ReflectionTypeInfo>,
+    ) {
+        let candidates = field_types
+            .into_iter()
+            .enumerate()
+            .map(|(index, ty)| {
+                let info = source_infos
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| self.reflection_type_info_for_type(ty));
+                (ty, info)
+            })
+            .collect();
         let mut scope = HashMap::new();
-        scope.insert(field_name.to_string(), field_types);
+        scope.insert(field_name.to_string(), candidates);
         self.reflected_field_type_scopes.push(scope);
     }
 
@@ -7259,7 +9975,11 @@ impl<'a> TypeChecker<'a> {
         self.reflected_field_type_scopes.pop();
     }
 
-    fn push_reflected_type_info_scope(&mut self, info_name: &str, info_types: Vec<TypeId>) {
+    fn push_reflected_type_info_scope(
+        &mut self,
+        info_name: &str,
+        info_types: Vec<(TypeId, ReflectionTypeInfo)>,
+    ) {
         let mut scope = HashMap::new();
         scope.insert(info_name.to_string(), info_types);
         self.reflected_type_info_scopes.push(scope);
@@ -7280,6 +10000,18 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn push_reflected_machine_state_type_scope(&mut self, state_name: &str, owner_ty: TypeId) {
+        // type.machine_states[T]() exposes every declared state even when T
+        // names one state. Its state.fields loops need every corresponding
+        // checked body; direct machine_state_value[T]().fields stays selected.
+        let machine = match self.interner.resolve(owner_ty) {
+            Type::MachineState { machine, .. } => Some(*machine),
+            _ => None,
+        };
+        let owner_ty = if let Some(machine) = machine {
+            self.interner.intern(Type::Machine(machine))
+        } else {
+            owner_ty
+        };
         let mut scope = HashMap::new();
         scope.insert(state_name.to_string(), owner_ty);
         self.reflected_machine_state_type_scopes.push(scope);
@@ -7295,7 +10027,12 @@ impl<'a> TypeChecker<'a> {
 
     fn check_breakpoint(&mut self, breakpoint_stmt: &ast::BreakpointStmt) {
         if let Some(condition) = &breakpoint_stmt.condition {
+            let saved_context = std::mem::replace(
+                &mut self.ownership_context,
+                CheckedOwnershipContext::BreakpointExpression,
+            );
             let cond_type = self.check_expr(condition);
+            self.ownership_context = saved_context;
             if cond_type != TypeInterner::ERROR && cond_type != TypeInterner::BOOL {
                 self.sink.emit(errors::condition_not_bool(
                     &self.type_name(cond_type),
@@ -7313,6 +10050,13 @@ impl<'a> TypeChecker<'a> {
             }
             Some(expected) => {
                 let val_ty = self.check_expr_for_expected(&resp.value, expected, false);
+                if (Self::is_explicit_view(&resp.value)
+                    || !crate::ownership::is_implicitly_copyable(&self.interner, val_ty))
+                    && self.initializer_is_view(&resp.value)
+                {
+                    self.sink
+                        .emit(crate::ownership::cannot_return_view(resp.value.span()));
+                }
                 if val_ty != TypeInterner::ERROR
                     && expected != TypeInterner::ERROR
                     && !self.types_compatible(expected, val_ty)
@@ -7333,18 +10077,44 @@ impl<'a> TypeChecker<'a> {
         expected_ty: TypeId,
         allow_refinement_handle: bool,
     ) -> TypeId {
+        let mut source_ty = None;
         let ty = match expr {
+            Expr::Paren(inner, _) => {
+                let ty = self.check_expr_for_expected(inner, expected_ty, allow_refinement_handle);
+                source_ty = self.checked_source_expression_type(inner.span());
+                ty
+            }
+            Expr::Run(inner, _) => {
+                let saved_in_property_block = self.in_property_block;
+                self.in_property_block = false;
+                let ty = self.check_expr_for_expected(inner, expected_ty, allow_refinement_handle);
+                self.in_property_block = saved_in_property_block;
+                source_ty = self.checked_source_expression_type(inner.span());
+                ty
+            }
             Expr::IntLiteral(value, _)
                 if self.int_literal_matches_expected_type(*value, expected_ty) =>
             {
+                source_ty = Some(
+                    self.direct_secret_inner_type(expected_ty)
+                        .unwrap_or(expected_ty),
+                );
                 expected_ty
             }
             Expr::FloatLiteral(_, _) if self.float_literal_matches_expected_type(expected_ty) => {
+                source_ty = Some(
+                    self.direct_secret_inner_type(expected_ty)
+                        .unwrap_or(expected_ty),
+                );
                 expected_ty
             }
             Expr::Unary(UnaryOp::Neg, inner, _)
                 if self.negated_literal_matches_expected_type(inner, expected_ty) =>
             {
+                source_ty = Some(
+                    self.direct_secret_inner_type(expected_ty)
+                        .unwrap_or(expected_ty),
+                );
                 expected_ty
             }
             Expr::Binary(lhs, op, rhs, span)
@@ -7362,7 +10132,7 @@ impl<'a> TypeChecker<'a> {
                 let expected_inner = self
                     .direct_secret_inner_type(expected_ty)
                     .unwrap_or(expected_ty);
-                match self.interner.resolve(expected_inner).clone() {
+                let ty = match self.interner.resolve(expected_inner).clone() {
                     Type::List(expected_element) => self.check_list_construct_for_expected(
                         elems,
                         expected_ty,
@@ -7370,13 +10140,17 @@ impl<'a> TypeChecker<'a> {
                         allow_refinement_handle,
                     ),
                     _ => self.check_expr(expr),
+                };
+                if ty == expected_ty {
+                    source_ty = Some(expected_inner);
                 }
+                ty
             }
             Expr::MapConstruct(entries, _span) => {
                 let expected_inner = self
                     .direct_secret_inner_type(expected_ty)
                     .unwrap_or(expected_ty);
-                match self.interner.resolve(expected_inner).clone() {
+                let ty = match self.interner.resolve(expected_inner).clone() {
                     Type::Map(expected_key, expected_value) => self
                         .check_map_construct_for_expected(
                             entries,
@@ -7386,13 +10160,17 @@ impl<'a> TypeChecker<'a> {
                             allow_refinement_handle,
                         ),
                     _ => self.check_expr(expr),
+                };
+                if ty == expected_ty {
+                    source_ty = Some(expected_inner);
                 }
+                ty
             }
             Expr::Some(inner, _span) => {
                 let expected_inner = self
                     .direct_secret_inner_type(expected_ty)
                     .unwrap_or(expected_ty);
-                match self.interner.resolve(expected_inner).clone() {
+                let ty = match self.interner.resolve(expected_inner).clone() {
                     Type::Optional(expected_payload) => self.check_wrapper_payload_for_expected(
                         inner,
                         expected_ty,
@@ -7400,13 +10178,17 @@ impl<'a> TypeChecker<'a> {
                         allow_refinement_handle,
                     ),
                     _ => self.check_expr(expr),
+                };
+                if ty == expected_ty {
+                    source_ty = Some(expected_inner);
                 }
+                ty
             }
             Expr::Ok(inner, _span) => {
                 let expected_inner = self
                     .direct_secret_inner_type(expected_ty)
                     .unwrap_or(expected_ty);
-                match self.interner.resolve(expected_inner).clone() {
+                let ty = match self.interner.resolve(expected_inner).clone() {
                     Type::Result(expected_payload, _) => self.check_wrapper_payload_for_expected(
                         inner,
                         expected_ty,
@@ -7414,13 +10196,17 @@ impl<'a> TypeChecker<'a> {
                         allow_refinement_handle,
                     ),
                     _ => self.check_expr(expr),
+                };
+                if ty == expected_ty {
+                    source_ty = Some(expected_inner);
                 }
+                ty
             }
             Expr::Fail(inner, _span) => {
                 let expected_inner = self
                     .direct_secret_inner_type(expected_ty)
                     .unwrap_or(expected_ty);
-                match self.interner.resolve(expected_inner).clone() {
+                let ty = match self.interner.resolve(expected_inner).clone() {
                     Type::Result(_, expected_payload) => self.check_wrapper_payload_for_expected(
                         inner,
                         expected_ty,
@@ -7428,16 +10214,31 @@ impl<'a> TypeChecker<'a> {
                         allow_refinement_handle,
                     ),
                     _ => self.check_expr(expr),
+                };
+                if ty == expected_ty {
+                    source_ty = Some(expected_inner);
                 }
+                ty
             }
             Expr::None(_) => {
                 let expected_inner = self
                     .direct_secret_inner_type(expected_ty)
                     .unwrap_or(expected_ty);
-                match self.interner.resolve(expected_inner) {
+                let ty = match self.interner.resolve(expected_inner) {
                     Type::Optional(_) => expected_ty,
                     _ => self.check_expr(expr),
+                };
+                if ty == expected_ty {
+                    source_ty = Some(expected_inner);
                 }
+                ty
+            }
+            Expr::Comptime(inner, _) => {
+                self.comptime_expr_depth += 1;
+                let ty = self.check_expr_for_expected(inner, expected_ty, allow_refinement_handle);
+                self.comptime_expr_depth -= 1;
+                source_ty = self.checked_source_expression_type(inner.span());
+                ty
             }
             Expr::Coarsen(inner, span) => {
                 let inner_ty = self.check_expr(inner);
@@ -7461,10 +10262,12 @@ impl<'a> TypeChecker<'a> {
                 if allow_refinement_handle && self.is_refinement_type(expected_ty) =>
             {
                 let target_ty = self.check_expr(target);
-                if matches!(
-                    self.interner.resolve(target_ty),
-                    Type::Result(_, _) | Type::Optional(_)
-                ) {
+                if !self.can_refine_from(target_ty, expected_ty)
+                    && matches!(
+                        self.interner.resolve(target_ty),
+                        Type::Result(_, _) | Type::Optional(_)
+                    )
+                {
                     self.check_handle_with_target_type(target_ty, bind_name.as_ref(), body, *span)
                 } else {
                     self.check_refinement_handle_with_input_type(
@@ -7477,8 +10280,37 @@ impl<'a> TypeChecker<'a> {
                     )
                 }
             }
+            Expr::Handle(target, bind_name, body, span) => {
+                let target_ty = self.check_expr(target);
+                let contextual_target = match self.interner.resolve(target_ty).clone() {
+                    Type::Optional(success) => self
+                        .merge_inferred_never(success, expected_ty, false)
+                        .filter(|merged| *merged == expected_ty)
+                        .map(|success| self.interner.intern(Type::Optional(success))),
+                    Type::Result(success, error) => self
+                        .merge_inferred_never(success, expected_ty, false)
+                        .filter(|merged| *merged == expected_ty)
+                        .map(|success| self.interner.intern(Type::Result(success, error))),
+                    _ => None,
+                }
+                .unwrap_or(target_ty);
+                // Check defaults in the output context without changing the
+                // producer's checked signature. HIR inserts a conversion for
+                // inhabited success shapes that contain inferred empty slots.
+                self.check_handle_with_target_type(
+                    contextual_target,
+                    bind_name.as_ref(),
+                    body,
+                    *span,
+                )
+            }
             _ => {
-                let actual_ty = self.check_expr(expr);
+                let actual_ty = match expr {
+                    Expr::Call(callee, args, span) => {
+                        self.check_call(callee, &[], args, *span, Some(expected_ty))
+                    }
+                    _ => self.check_expr(expr),
+                };
                 if actual_ty != TypeInterner::ERROR
                     && self.type_requires_handle_error(expected_ty, actual_ty)
                 {
@@ -7504,11 +10336,22 @@ impl<'a> TypeChecker<'a> {
                     ));
                     expected_ty
                 } else {
+                    source_ty = Some(actual_ty);
                     actual_ty
                 }
             }
         };
 
+        self.record_source_expression_type(expr.span(), source_ty.unwrap_or(ty));
+
+        let ty = if let Type::Secret(inner) = self.interner.resolve(expected_ty)
+            && *inner != TypeInterner::ERROR
+            && ty == *inner
+        {
+            expected_ty
+        } else {
+            ty
+        };
         self.record_expression_type(expr.span(), ty);
         ty
     }
@@ -7546,6 +10389,8 @@ impl<'a> TypeChecker<'a> {
         if let Some(name) = bind_name {
             if let Some(def_id) = self.declaration_def_id(name.span) {
                 self.type_env.insert(def_id, TypeInterner::STRING);
+                self.record_expression_type(name.span, TypeInterner::STRING);
+                self.record_assignment_binding(name, false, false);
                 self.record_closure_local(def_id);
             }
         }
@@ -7604,8 +10449,12 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_var_decl(&mut self, decl: &ast::VarDecl) {
+        self.record_debug_type_name(&decl.name, &decl.ty);
         let declared_type = self.resolve_type_expr(&decl.ty);
         let init_type = self.check_expr_for_expected(&decl.value, declared_type, true);
+        self.record_expression_type(decl.name.span, declared_type);
+        let binding_mode = self.checked_binding_mode(decl, init_type);
+        self.record_binding_mode(decl.name.span, binding_mode);
 
         // Bind the variable's DefId to its declared type.
         if let Some(def_id) = self.declaration_def_id(decl.name.span) {
@@ -7613,10 +10462,15 @@ impl<'a> TypeChecker<'a> {
             self.record_closure_local(def_id);
             if !decl.mutable && self.expression_is_proven_nonzero(&decl.value, init_type) {
                 if let Some(scope) = self.nonzero_fact_scopes.last_mut() {
-                    scope.insert(def_id);
+                    scope.insert(NonzeroFact::Binding(def_id));
                 }
             }
         }
+        self.record_assignment_binding(
+            &decl.name,
+            decl.mutable,
+            Self::type_is_view(&decl.ty) || self.initializer_is_view(&decl.value),
+        );
 
         // Check that the initializer type matches the declared type (skip if Error).
         if !self.types_compatible(declared_type, init_type) {
@@ -7631,24 +10485,610 @@ impl<'a> TypeChecker<'a> {
         self.record_reflection_local_fact(decl, declared_type, init_type);
     }
 
-    fn check_assign(&mut self, assign: &ast::AssignStmt) {
-        if let Expr::Ident(ident) = &assign.target {
-            if let Some(def_id) = self.ident_def_id(ident) {
-                self.clear_reflection_local_fact(def_id);
-                for scope in &mut self.nonzero_fact_scopes {
-                    scope.remove(&def_id);
-                }
+    fn is_constant_initializer(&self, expression: &Expr) -> bool {
+        match expression {
+            Expr::IntLiteral(_, _)
+            | Expr::FloatLiteral(_, _)
+            | Expr::StringLiteral(_, _)
+            | Expr::BoolLiteral(_, _)
+            | Expr::Nothing(_)
+            | Expr::Comptime(_, _) => true,
+            Expr::Ident(ident) => self.resolve.resolutions.get(&ident.span).is_some_and(|id| {
+                self.constant_declarations
+                    .contains(&self.resolve.scope_table.def(*id).span)
+            }),
+            Expr::Paren(inner, _) => self.is_constant_initializer(inner),
+            Expr::Unary(ast::UnaryOp::Neg, inner, _) => {
+                matches!(
+                    inner.as_ref(),
+                    Expr::IntLiteral(_, _) | Expr::FloatLiteral(_, _)
+                )
             }
+            _ => false,
         }
+    }
 
-        let target_type = self.check_expr(&assign.target);
+    fn check_assign(&mut self, assign: &ast::AssignStmt) {
+        if let Some(root) = Self::assignment_root(&assign.target)
+            && let Some(definition) = self.ident_def_id(root)
+            && self
+                .constant_declarations
+                .contains(&self.resolve.scope_table.def(definition).span)
+        {
+            self.sink.emit(crate::ownership::cannot_rebind_immutable(
+                &root.name, root.span,
+            ));
+        } else if !matches!(&assign.target, Expr::Ident(_)) {
+            self.check_projected_assignment_target(&assign.target);
+        }
+        let target_type = if Self::assignment_root(&assign.target).is_some()
+            && !self.check_assignment_owner_policy(&assign.target)
+        {
+            TypeInterner::ERROR
+        } else {
+            self.check_expr_with_resource_projection(
+                &assign.target,
+                ResourceProjectionMode::Borrowed,
+            )
+        };
+        if target_type != TypeInterner::ERROR {
+            self.record_assignment_place(assign);
+        }
+        // The RHS may observe the old root under existing local facts. Clear
+        // changed-root facts after checking it, before any subsequent statement.
         let value_type = self.check_expr_for_expected(&assign.value, target_type, false);
+        let mut projected_target = &assign.target;
+        while let Expr::Paren(inner, _) = projected_target {
+            projected_target = inner;
+        }
+        if matches!(projected_target, Expr::FieldAccess(_, _, _))
+            && target_type != TypeInterner::ERROR
+            && !crate::ownership::is_implicitly_copyable(&self.interner, target_type)
+            && self.initializer_is_view(&assign.value)
+        {
+            self.sink.emit(crate::ownership::cannot_rebind_from_view(
+                assign.value.span(),
+            ));
+        }
+        if let Some(root) = Self::assignment_root(&assign.target)
+            && let Some(definition) = self.ident_def_id(root)
+        {
+            self.clear_reflection_local_fact(definition);
+            self.invalidate_nonzero_root(definition);
+        }
+        self.check_view_rebinding(assign, target_type, value_type);
 
         if !self.types_compatible(target_type, value_type) {
             self.sink.emit(errors::assign_type_mismatch(
                 &self.type_name(target_type),
                 &self.type_name(value_type),
                 assign.span,
+            ));
+        }
+    }
+
+    fn check_assignment_owner_policy(&mut self, target: &Expr) -> bool {
+        match target {
+            Expr::Ident(_) => true,
+            Expr::Paren(inner, _) => self.check_assignment_owner_policy(inner),
+            Expr::FieldAccess(base, _, span) => {
+                if !self.check_assignment_owner_policy(base) {
+                    return false;
+                }
+                let mut owner = self
+                    .check_expr_with_resource_projection(base, ResourceProjectionMode::Borrowed);
+                while let Type::Secret(inner) = self.interner.resolve(owner) {
+                    owner = *inner;
+                }
+                let message = match self.interner.resolve(owner) {
+                    Type::Struct(id) if self.interner.is_compiler_metadata_struct(*id) => Some(
+                        "cannot assign through compiler-produced reflection metadata; replace the complete genuine value instead",
+                    ),
+                    Type::Refinement { .. } => Some(
+                        "cannot assign through a nominal refinement; replace the complete validated value instead",
+                    ),
+                    Type::Bitfield(_) => Some(
+                        "cannot assign through a bitfield; construct and rebind the complete value instead",
+                    ),
+                    Type::Error => return false,
+                    _ => None,
+                };
+                if let Some(message) = message {
+                    self.sink.emit(Diagnostic::error(404, message, *span));
+                    false
+                } else {
+                    true
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn record_assignment_place(&mut self, assign: &ast::AssignStmt) {
+        let Some(root_ident) = Self::assignment_root(&assign.target) else {
+            return;
+        };
+        let Some(definition) = self.ident_def_id(root_ident) else {
+            return;
+        };
+        let declaration = self.resolve.scope_table.def(definition).span;
+        if self.assignment_bindings.get(&declaration) != Some(&AssignmentBinding::OwnedMutable) {
+            return;
+        }
+        let Some(root) = self.caller_binding_fact(definition) else {
+            return;
+        };
+        let Some(root_type) = self.checked_expression_type(root_ident.span) else {
+            return;
+        };
+        let mut projections = Vec::new();
+        if !self.collect_assignment_projections(&assign.target, &mut projections)
+            || projections.is_empty()
+        {
+            return;
+        }
+        let resource = if self.type_contains_resource_data(root.ty) {
+            CheckedFieldUpdateResourceRequirement::RequiresCustody
+        } else {
+            CheckedFieldUpdateResourceRequirement::Ordinary
+        };
+        let place = CheckedAssignmentPlace {
+            assignment_span: assign.span,
+            root,
+            root_use_span: root_ident.span,
+            root_type,
+            projections,
+            resource,
+            ownership_seal: None,
+        };
+        // A malformed or unsupported layout receives no mutation fact. The
+        // source's existing type/place diagnostics remain authoritative.
+        if validate_assignment_place_shape(&place, &self.interner).is_err() {
+            return;
+        }
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.assignment_places.insert(assign.span, place);
+        } else {
+            self.assignment_places.insert(assign.span, place);
+        }
+    }
+
+    fn collect_assignment_projections(
+        &self,
+        expression: &Expr,
+        projections: &mut Vec<CheckedFieldProjection>,
+    ) -> bool {
+        match expression {
+            Expr::Ident(_) => true,
+            Expr::Paren(inner, _) => self.collect_assignment_projections(inner, projections),
+            Expr::FieldAccess(base, field, span) => {
+                if !self.collect_assignment_projections(base, projections) {
+                    return false;
+                }
+                let Some(owner_type) = self.checked_expression_type(base.span()) else {
+                    return false;
+                };
+                let Some(field_type) = self.checked_expression_type(*span) else {
+                    return false;
+                };
+                let Ok((owner, fields)) = checked_field_owner(&self.interner, owner_type) else {
+                    return false;
+                };
+                let Some((field_index, (_, declared_field_type))) = fields
+                    .iter()
+                    .enumerate()
+                    .find(|(_, (name, _))| name == &field.name)
+                else {
+                    return false;
+                };
+                projections.push(CheckedFieldProjection {
+                    source_span: *span,
+                    owner_type,
+                    owner,
+                    field_index,
+                    declared_field_type: *declared_field_type,
+                    field_type,
+                });
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn assignment_root(target: &Expr) -> Option<&ast::Ident> {
+        match target {
+            Expr::Ident(ident) => Some(ident),
+            Expr::FieldAccess(base, _, _) | Expr::Paren(base, _) => Self::assignment_root(base),
+            _ => None,
+        }
+    }
+
+    fn check_view_rebinding(
+        &mut self,
+        assign: &ast::AssignStmt,
+        target_type: TypeId,
+        value_type: TypeId,
+    ) {
+        if target_type == TypeInterner::ERROR || value_type == TypeInterner::ERROR {
+            return;
+        }
+        let mut target = &assign.target;
+        while let Expr::Paren(inner, _) = target {
+            target = inner;
+        }
+        let Expr::Ident(target) = target else {
+            return;
+        };
+        let Some(definition) = self.ident_def_id(target) else {
+            return;
+        };
+        let span = self.resolve.scope_table.def(definition).span;
+        if self.assignment_bindings.get(&span) == Some(&AssignmentBinding::OwnedMutable)
+            && !self.constant_declarations.contains(&span)
+            && !crate::ownership::is_implicitly_copyable(&self.interner, value_type)
+            && self.initializer_is_view(&assign.value)
+        {
+            self.sink.emit(crate::ownership::cannot_rebind_from_view(
+                assign.value.span(),
+            ));
+        }
+    }
+
+    fn record_assignment_binding(&mut self, name: &ast::Ident, mutable: bool, view: bool) {
+        let Some(definition) = self.declaration_def_id(name.span) else {
+            return;
+        };
+        let span = self.resolve.scope_table.def(definition).span;
+        if let Some(&ty) = self.type_env.get(&definition) {
+            let checked_mode = self
+                .active_generic_instantiations
+                .last()
+                .and_then(|active| active.binding_modes.get(&name.span))
+                .copied()
+                .or_else(|| {
+                    self.active_generic_instantiations
+                        .is_empty()
+                        .then(|| self.binding_modes.get(&name.span).copied())
+                        .flatten()
+                })
+                .unwrap_or(
+                    if view && !crate::ownership::is_implicitly_copyable(&self.interner, ty) {
+                        CheckedBindingMode::View {
+                            source: CheckedViewSource::Other,
+                        }
+                    } else {
+                        CheckedBindingMode::Owned
+                    },
+                );
+            self.record_binding_fact(CheckedBindingFact {
+                definition,
+                declaration_span: name.span,
+                ty,
+                mode: checked_mode,
+                mutable,
+            });
+        }
+        let mode = if view {
+            Some(AssignmentBinding::View)
+        } else if mutable {
+            Some(AssignmentBinding::OwnedMutable)
+        } else {
+            None
+        };
+        if let Some(mode) = mode {
+            self.assignment_bindings.insert(span, mode);
+        } else {
+            self.assignment_bindings.remove(&span);
+        }
+    }
+
+    fn type_is_view(ty: &TypeExpr) -> bool {
+        match ty {
+            TypeExpr::View(_, _) => true,
+            TypeExpr::StateQualified(inner, _, _) => Self::type_is_view(inner),
+            _ => false,
+        }
+    }
+
+    fn check_owned_resource_payload(&mut self, payload: &Expr, payload_ty: TypeId) {
+        if payload_ty != TypeInterner::ERROR
+            && self.type_contains_resource_data(payload_ty)
+            && self.initializer_is_view(payload)
+        {
+            if self.diagnosed_resource_payload_views.insert(payload.span()) {
+                self.sink.emit(Diagnostic::error(
+                    401,
+                    "cannot store a resource view in an owned payload; move an owned value instead",
+                    payload.span(),
+                ));
+            }
+            let mut subject = payload;
+            while let Expr::View(inner, _)
+            | Expr::Paren(inner, _)
+            | Expr::Coarsen(inner, _)
+            | Expr::Declassify(inner, _) = subject
+            {
+                subject = inner;
+            }
+            if let Expr::Ident(ident) = subject {
+                self.diagnosed_owned_view_consumptions.insert(
+                    ident.span,
+                    crate::ownership::cannot_consume_view(&ident.name, ident.span),
+                );
+            }
+        }
+    }
+
+    fn check_resource_root_value_reflection(&mut self, owner_ty: TypeId, name: &str, span: Span) {
+        if matches!(self.interner.resolve(owner_ty), Type::Resource(_)) {
+            self.sink.emit(errors::type_mismatch(
+                &format!("non-resource value for {name}"),
+                &self.type_name(owner_ty),
+                span,
+            ));
+        }
+    }
+
+    fn initializer_is_view(&self, value: &Expr) -> bool {
+        match value {
+            Expr::View(_, _) => true,
+            Expr::Ident(ident) => self.ident_def_id(ident).is_some_and(|definition| {
+                let span = self.resolve.scope_table.def(definition).span;
+                self.assignment_bindings.get(&span) == Some(&AssignmentBinding::View)
+                    && self.type_env.get(&definition).is_some_and(|ty| {
+                        !crate::ownership::is_implicitly_copyable(&self.interner, *ty)
+                    })
+            }),
+            Expr::Paren(inner, _) | Expr::Coarsen(inner, _) | Expr::Declassify(inner, _) => {
+                self.initializer_is_view(inner)
+            }
+            // A plain field initializer copies the field into ownership, even
+            // when its parent is borrowed. Clone also deliberately owns a copy.
+            _ => false,
+        }
+    }
+
+    fn checked_binding_mode(
+        &self,
+        declaration: &ast::VarDecl,
+        initializer_type: TypeId,
+    ) -> CheckedBindingMode {
+        if crate::ownership::is_implicitly_copyable(&self.interner, initializer_type)
+            || !(Self::type_is_view(&declaration.ty)
+                || self.initializer_is_view(&declaration.value))
+        {
+            return CheckedBindingMode::Owned;
+        }
+
+        let mut value = &declaration.value;
+        let mut explicit_view = false;
+        loop {
+            match value {
+                Expr::View(inner, _) => {
+                    explicit_view = true;
+                    value = inner;
+                }
+                Expr::Paren(inner, _) | Expr::Coarsen(inner, _) | Expr::Declassify(inner, _) => {
+                    value = inner;
+                }
+                _ => break,
+            }
+        }
+        // Readonly annotations do not turn an ownership-acquiring operation
+        // into a borrow. Explicitly viewing its result remains a temporary view.
+        if !explicit_view && matches!(value, Expr::Clone(_, _) | Expr::FieldAccess(_, _, _)) {
+            return CheckedBindingMode::Owned;
+        }
+        let source = self
+            .borrowed_handle_binding_root(&declaration.value, initializer_type)
+            .or_else(|| Self::assignment_root(value))
+            .and_then(|ident| self.ident_def_id(ident))
+            .map(CheckedViewSource::Binding)
+            .unwrap_or(CheckedViewSource::Other);
+        CheckedBindingMode::View { source }
+    }
+
+    /// A borrowed sum payload retains the exact whole binding as its backing.
+    /// This is provenance only; HIR still checks the complete typed projection.
+    fn borrowed_handle_binding_root<'source>(
+        &self,
+        initializer: &'source Expr,
+        output: TypeId,
+    ) -> Option<&'source ast::Ident> {
+        let Expr::View(value, _) = Self::unparenthesized(initializer) else {
+            return None;
+        };
+        let Expr::Handle(target, error, failure, _) = Self::unparenthesized(value) else {
+            return None;
+        };
+        if Self::handle_body_has_default(failure) {
+            return None;
+        }
+        let target_ty = self.checked_expression_type(target.span())?;
+        match self.interner.resolve(target_ty) {
+            Type::Optional(payload) if *payload == output && error.is_none() => {}
+            Type::Result(payload, _) if *payload == output && error.is_some() => {}
+            _ => return None,
+        }
+        let Expr::View(backing, _) = Self::unparenthesized(target) else {
+            return None;
+        };
+        let Expr::Ident(binding) = Self::unparenthesized(backing) else {
+            return None;
+        };
+        let definition = self.ident_def_id(binding)?;
+        if !matches!(
+            self.resolve.scope_table.def(definition).kind,
+            DefKind::Variable | DefKind::Param
+        ) || self.checked_expression_type(backing.span()) != Some(target_ty)
+        {
+            return None;
+        }
+        Some(binding)
+    }
+
+    /// Defaults in nested Handle bodies yield to that nested Handle, whereas
+    /// defaults anywhere in this lexical body can yield an alternate payload.
+    fn handle_body_has_default(body: &Block) -> bool {
+        body.stmts.iter().any(|statement| match statement {
+            Stmt::VarDecl(value) => Self::handle_expression_has_default(&value.value),
+            Stmt::Assign(value) => {
+                Self::handle_expression_has_default(&value.target)
+                    || Self::handle_expression_has_default(&value.value)
+            }
+            Stmt::Return(value) => value
+                .value
+                .as_ref()
+                .is_some_and(Self::handle_expression_has_default),
+            Stmt::Respond(value) => Self::handle_expression_has_default(&value.value),
+            Stmt::ComptimeTypeBind(value) => {
+                Self::handle_expression_has_default(&value.value)
+                    || Self::handle_body_has_default(&value.body)
+            }
+            Stmt::If(value) => {
+                Self::handle_expression_has_default(&value.condition)
+                    || Self::handle_body_has_default(&value.then_block)
+                    || value.else_ifs.iter().any(|(condition, body)| {
+                        Self::handle_expression_has_default(condition)
+                            || Self::handle_body_has_default(body)
+                    })
+                    || value
+                        .else_block
+                        .as_ref()
+                        .is_some_and(Self::handle_body_has_default)
+            }
+            Stmt::For(value) => {
+                Self::handle_expression_has_default(&value.iterable)
+                    || Self::handle_body_has_default(&value.body)
+            }
+            Stmt::While(value) => {
+                Self::handle_expression_has_default(&value.condition)
+                    || Self::handle_body_has_default(&value.body)
+            }
+            Stmt::Match(value) => {
+                Self::handle_expression_has_default(&value.expr)
+                    || value
+                        .arms
+                        .iter()
+                        .any(|arm| Self::handle_body_has_default(&arm.body))
+            }
+            Stmt::Expr(value) => Self::handle_expression_has_default(&value.expr),
+            Stmt::Assert(value) => {
+                Self::handle_expression_has_default(&value.condition)
+                    || value
+                        .message
+                        .as_ref()
+                        .is_some_and(Self::handle_expression_has_default)
+            }
+            Stmt::Breakpoint(value) => value
+                .condition
+                .as_ref()
+                .is_some_and(Self::handle_expression_has_default),
+            Stmt::Use(_) | Stmt::Trace(_) | Stmt::Break(_) | Stmt::Continue(_) => false,
+        })
+    }
+
+    fn handle_expression_has_default(value: &Expr) -> bool {
+        match value {
+            Expr::Default(_, _) => true,
+            // Evaluating a nested Handle's target still belongs to this body;
+            // its failure body has its own nearest handler.
+            Expr::Handle(target, _, _, _) => Self::handle_expression_has_default(target),
+            Expr::Binary(left, _, right, _) => {
+                Self::handle_expression_has_default(left)
+                    || Self::handle_expression_has_default(right)
+            }
+            Expr::Unary(_, value, _)
+            | Expr::FieldAccess(value, _, _)
+            | Expr::Paren(value, _)
+            | Expr::View(value, _)
+            | Expr::Comptime(value, _)
+            | Expr::Ok(value, _)
+            | Expr::Fail(value, _)
+            | Expr::Some(value, _)
+            | Expr::Declassify(value, _)
+            | Expr::Coarsen(value, _)
+            | Expr::At(value, _, _)
+            | Expr::Spawn(value, _)
+            | Expr::Send(value, _)
+            | Expr::Ask(value, _)
+            | Expr::Clone(value, _)
+            | Expr::Run(value, _)
+            | Expr::Join(value, _)
+            | Expr::Cancel(value, _) => Self::handle_expression_has_default(value),
+            Expr::Call(callee, args, _) | Expr::GenericCall(callee, _, args, _) => {
+                Self::handle_expression_has_default(callee)
+                    || args
+                        .iter()
+                        .any(|arg| Self::handle_expression_has_default(&arg.value))
+            }
+            Expr::ListConstruct(values, _) => {
+                values.iter().any(Self::handle_expression_has_default)
+            }
+            Expr::MapConstruct(entries, _) => entries.iter().any(|(key, value)| {
+                Self::handle_expression_has_default(key)
+                    || Self::handle_expression_has_default(value)
+            }),
+            Expr::StringInterpolation(parts, _) => parts.iter().any(|part| match part {
+                ast::StringPart::Literal(_) => false,
+                ast::StringPart::Expr(value) => Self::handle_expression_has_default(value),
+            }),
+            Expr::Pipeline(value, steps, _) => {
+                Self::handle_expression_has_default(value)
+                    || steps.iter().any(|step| {
+                        Self::handle_expression_has_default(&step.function)
+                            || step
+                                .extra_args
+                                .iter()
+                                .any(|arg| Self::handle_expression_has_default(&arg.value))
+                    })
+            }
+            Expr::IntLiteral(_, _)
+            | Expr::FloatLiteral(_, _)
+            | Expr::StringLiteral(_, _)
+            | Expr::BoolLiteral(_, _)
+            | Expr::Nothing(_)
+            | Expr::Ident(_)
+            | Expr::None(_)
+            | Expr::EnumVariant(_, _, _)
+            | Expr::InlineFn(_, _, _, _)
+            | Expr::Error(_) => false,
+        }
+    }
+
+    fn assignment_place_is_view(&self, target: &Expr) -> bool {
+        match target {
+            Expr::View(_, _) => true,
+            Expr::Ident(ident) => self.ident_def_id(ident).is_some_and(|definition| {
+                let span = self.resolve.scope_table.def(definition).span;
+                self.assignment_bindings.get(&span) == Some(&AssignmentBinding::View)
+            }),
+            Expr::FieldAccess(inner, _, _)
+            | Expr::Paren(inner, _)
+            | Expr::Coarsen(inner, _)
+            | Expr::Declassify(inner, _) => self.assignment_place_is_view(inner),
+            _ => false,
+        }
+    }
+
+    fn check_projected_assignment_target(&mut self, target: &Expr) {
+        if self.assignment_place_is_view(target) {
+            self.sink
+                .emit(crate::ownership::cannot_assign_through_view(target.span()));
+            return;
+        }
+        let Some(root) = Self::assignment_root(target) else {
+            self.sink
+                .emit(crate::ownership::cannot_assign_to_temporary(target.span()));
+            return;
+        };
+        let Some(definition) = self.ident_def_id(root) else {
+            return;
+        };
+        let span = self.resolve.scope_table.def(definition).span;
+        if self.assignment_bindings.get(&span) != Some(&AssignmentBinding::OwnedMutable) {
+            self.sink.emit(crate::ownership::cannot_rebind_immutable(
+                &root.name, root.span,
             ));
         }
     }
@@ -7666,6 +11106,16 @@ impl<'a> TypeChecker<'a> {
         };
 
         if let Some(expected) = self.current_return_type {
+            if expected != TypeInterner::ERROR
+                && ret_type != TypeInterner::ERROR
+                && let Some(value) = &ret.value
+                && (Self::is_explicit_view(value)
+                    || !crate::ownership::is_implicitly_copyable(&self.interner, ret_type))
+                && self.initializer_is_view(value)
+            {
+                self.sink
+                    .emit(crate::ownership::cannot_return_view(value.span()));
+            }
             if !self.satisfies_expected_type(expected, ret_type) {
                 self.sink.emit(errors::return_type_mismatch(
                     &self.type_name(expected),
@@ -7689,6 +11139,16 @@ impl<'a> TypeChecker<'a> {
     fn check_if(&mut self, if_stmt: &ast::IfStmt) {
         if self.specialize_reflection_branches {
             if let Some(selected_branch) = self.static_reflection_if_branch(if_stmt) {
+                let selection = if selected_branch == 0 {
+                    CheckedStaticSelection::IfThen
+                } else if selected_branch <= if_stmt.else_ifs.len() {
+                    CheckedStaticSelection::IfElseIf(selected_branch - 1)
+                } else if if_stmt.else_block.is_some() {
+                    CheckedStaticSelection::IfElse
+                } else {
+                    CheckedStaticSelection::IfNoBranch
+                };
+                self.record_static_selection(if_stmt.span, selection);
                 self.check_condition_expr(&if_stmt.condition);
                 for (else_if_cond, _) in &if_stmt.else_ifs {
                     self.check_condition_expr(else_if_cond);
@@ -7727,18 +11187,6 @@ impl<'a> TypeChecker<'a> {
                     let narrowing = self.machine_state_narrowing_for_branch(None, prior_conditions);
                     self.check_block_with_type_override(else_block, narrowing);
                 }
-                return;
-            }
-
-            let active_type_params = self.type_var_subst.keys().cloned().collect::<HashSet<_>>();
-            if let Some(span) =
-                self.if_branch_type_param_reflection_span(if_stmt, &active_type_params)
-            {
-                self.check_condition_expr(&if_stmt.condition);
-                for (else_if_cond, _) in &if_stmt.else_ifs {
-                    self.check_condition_expr(else_if_cond);
-                }
-                self.sink.emit(errors::invalid_comptime_type_binding(span));
                 return;
             }
         }
@@ -7789,64 +11237,11 @@ impl<'a> TypeChecker<'a> {
         matches!(block.stmts.last(), Some(Stmt::Return(_)))
     }
 
-    fn nonzero_defs_from_conditions<'b>(
-        &self,
-        conditions: impl IntoIterator<Item = (&'b Expr, bool)>,
-    ) -> HashSet<DefId> {
-        let mut facts = HashSet::new();
-        for (condition, truth) in conditions {
-            self.collect_nonzero_defs(condition, truth, &mut facts);
-        }
-        facts
-    }
-
-    fn collect_nonzero_defs(&self, condition: &Expr, truth: bool, facts: &mut HashSet<DefId>) {
-        match condition {
-            Expr::Paren(inner, _) => self.collect_nonzero_defs(inner, truth, facts),
-            Expr::Unary(UnaryOp::Not, inner, _) => self.collect_nonzero_defs(inner, !truth, facts),
-            Expr::Binary(lhs, BinOp::And, rhs, _) if truth => {
-                self.collect_nonzero_defs(lhs, true, facts);
-                self.collect_nonzero_defs(rhs, true, facts);
-            }
-            Expr::Binary(lhs, BinOp::Or, rhs, _) if !truth => {
-                self.collect_nonzero_defs(lhs, false, facts);
-                self.collect_nonzero_defs(rhs, false, facts);
-            }
-            Expr::Binary(lhs, op @ (BinOp::Eq | BinOp::NotEq), rhs, _) => {
-                let proves_nonzero = matches!(op, BinOp::NotEq) == truth;
-                if !proves_nonzero {
-                    return;
-                }
-                let ident = if Self::is_zero_integer_literal(rhs) {
-                    Self::narrowable_ident_expr(lhs)
-                } else if Self::is_zero_integer_literal(lhs) {
-                    Self::narrowable_ident_expr(rhs)
-                } else {
-                    None
-                };
-                if let Some(def_id) = ident.and_then(|ident| self.ident_def_id(ident)) {
-                    facts.insert(def_id);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn is_zero_integer_literal(expr: &Expr) -> bool {
-        match expr {
-            Expr::IntLiteral(value, _) => *value == 0,
-            Expr::Unary(UnaryOp::Neg, inner, _) | Expr::Paren(inner, _) => {
-                Self::is_zero_integer_literal(inner)
-            }
-            _ => false,
-        }
-    }
-
     fn check_block_with_type_override_and_nonzero(
         &mut self,
         block: &Block,
         override_ty: Option<(DefId, TypeId)>,
-        nonzero_defs: HashSet<DefId>,
+        nonzero_defs: HashSet<NonzeroFact>,
     ) {
         self.nonzero_fact_scopes.push(nonzero_defs);
         self.check_block_with_type_override(block, override_ty);
@@ -8049,17 +11444,6 @@ impl<'a> TypeChecker<'a> {
         None
     }
 
-    fn match_arm_type_param_reflection_span(
-        &self,
-        match_stmt: &ast::MatchStmt,
-        type_params: &HashSet<String>,
-    ) -> Option<Span> {
-        match_stmt
-            .arms
-            .iter()
-            .find_map(|arm| self.block_type_param_reflection_span(&arm.body, type_params))
-    }
-
     fn check_for(&mut self, for_stmt: &ast::ForStmt) {
         let iterable_type = self.check_expr(&for_stmt.iterable);
 
@@ -8087,8 +11471,10 @@ impl<'a> TypeChecker<'a> {
         // Bind the loop variable (key for maps, element for lists/strings).
         if let Some(def_id) = self.declaration_def_id(for_stmt.variable.span) {
             self.type_env.insert(def_id, elem_type);
+            self.record_expression_type(for_stmt.variable.span, elem_type);
             self.record_closure_local(def_id);
         }
+        self.record_assignment_binding(&for_stmt.variable, false, for_stmt.view);
 
         // Bind the optional value variable (only for map iteration).
         if let Some(ref val_var) = for_stmt.value_variable {
@@ -8099,8 +11485,10 @@ impl<'a> TypeChecker<'a> {
             };
             if let Some(def_id) = self.declaration_def_id(val_var.span) {
                 self.type_env.insert(def_id, val_type);
+                self.record_expression_type(val_var.span, val_type);
                 self.record_closure_local(def_id);
             }
+            self.record_assignment_binding(val_var, false, for_stmt.view);
         }
 
         let pushed_variant_scope =
@@ -8130,7 +11518,8 @@ impl<'a> TypeChecker<'a> {
             } else {
                 self.reflected_field_types_for_owner(owner_ty)
             };
-            self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
+            let infos = self.reflected_field_infos_for_owner(owner_ty);
+            self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types, infos);
             true
         } else if let Some(owner_ty_expr) = comptime_type_variant_fields_binding(&for_stmt.iterable)
         {
@@ -8140,7 +11529,8 @@ impl<'a> TypeChecker<'a> {
             } else {
                 self.reflected_variant_field_types_for_owner(owner_ty)
             };
-            self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
+            let infos = self.reflected_field_infos_for_owner(owner_ty);
+            self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types, infos);
             true
         } else if let Some(owner_ty_expr) = comptime_type_machine_fields_binding(&for_stmt.iterable)
         {
@@ -8150,7 +11540,8 @@ impl<'a> TypeChecker<'a> {
             } else {
                 self.reflected_machine_field_types_for_owner(owner_ty)
             };
-            self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
+            let infos = self.reflected_field_infos_for_owner(owner_ty);
+            self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types, infos);
             true
         } else if let Some(fields_owner_name) =
             reflected_machine_state_fields_binding(&for_stmt.iterable)
@@ -8158,12 +11549,14 @@ impl<'a> TypeChecker<'a> {
         {
             if let Some(owner_ty) = self.reflected_machine_state_owner_for_name(fields_owner_name) {
                 let field_types = self.reflected_machine_field_types_for_owner(owner_ty);
-                self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
+                let infos = self.reflected_field_infos_for_owner(owner_ty);
+                self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types, infos);
                 true
             } else if let Some(owner_ty) = self.reflected_variant_owner_for_name(fields_owner_name)
             {
                 let field_types = self.reflected_variant_field_types_for_owner(owner_ty);
-                self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
+                let infos = self.reflected_field_infos_for_owner(owner_ty);
+                self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types, infos);
                 true
             } else {
                 false
@@ -8181,6 +11574,7 @@ impl<'a> TypeChecker<'a> {
             false
         };
 
+        self.invalidate_nonzero_loop_facts(&for_stmt.body, None);
         self.check_block(&for_stmt.body);
 
         if pushed_type_info_scope {
@@ -8198,6 +11592,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_while(&mut self, while_stmt: &ast::WhileStmt) {
+        self.invalidate_nonzero_loop_facts(&while_stmt.body, Some(&while_stmt.condition));
         let cond_type = self.check_expr(&while_stmt.condition);
         if cond_type != TypeInterner::ERROR && cond_type != TypeInterner::BOOL {
             self.sink.emit(errors::condition_not_bool(
@@ -8254,24 +11649,18 @@ impl<'a> TypeChecker<'a> {
         } else {
             None
         };
-        let unknown_reflection_span = if self.specialize_reflection_branches
-            && selected_static_arm.is_none()
-        {
-            let active_type_params = self.type_var_subst.keys().cloned().collect::<HashSet<_>>();
-            if self.expr_uses_type_param_reflection(&match_stmt.expr, &active_type_params) {
-                Some(match_stmt.expr.span())
-            } else {
-                self.match_arm_type_param_reflection_span(match_stmt, &active_type_params)
-            }
-        } else {
-            None
-        };
+        if let Some(selected_arm) = selected_static_arm {
+            self.record_static_selection(
+                match_stmt.span,
+                CheckedStaticSelection::MatchArm(selected_arm),
+            );
+        }
         let mut covered = HashSet::new();
         let mut has_other = false;
+        let borrowed_payloads = self.initializer_is_view(&match_stmt.expr);
 
         for (arm_index, arm) in match_stmt.arms.iter().enumerate() {
-            let check_body = unknown_reflection_span.is_none()
-                && selected_static_arm.map_or(true, |selected| selected == arm_index);
+            let check_body = selected_static_arm.map_or(true, |selected| selected == arm_index);
 
             match &arm.pattern {
                 ast::Pattern::Ident(name) => {
@@ -8311,6 +11700,12 @@ impl<'a> TypeChecker<'a> {
                             {
                                 if let Some(def_id) = self.declaration_def_id(binding.span) {
                                     self.type_env.insert(def_id, *field_ty);
+                                    self.record_expression_type(binding.span, *field_ty);
+                                    self.record_assignment_binding(
+                                        binding,
+                                        false,
+                                        borrowed_payloads,
+                                    );
                                     self.record_closure_local(def_id);
                                 }
                             }
@@ -8331,10 +11726,6 @@ impl<'a> TypeChecker<'a> {
             if check_body {
                 self.check_block(&arm.body);
             }
-        }
-
-        if let Some(span) = unknown_reflection_span {
-            self.sink.emit(errors::invalid_comptime_type_binding(span));
         }
 
         if !has_other {
@@ -8373,6 +11764,14 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_expr(&mut self, expr: &Expr) -> TypeId {
+        self.check_expr_with_resource_projection(expr, ResourceProjectionMode::OwningCopy)
+    }
+
+    fn check_expr_with_resource_projection(
+        &mut self,
+        expr: &Expr,
+        projection: ResourceProjectionMode,
+    ) -> TypeId {
         // Provider constructors are direct property operations, not ordinary
         // function values that can escape through aliases or callbacks.
         if matches!(expr, Expr::Ident(_) | Expr::FieldAccess(_, _, _))
@@ -8411,13 +11810,17 @@ impl<'a> TypeChecker<'a> {
             Expr::Ident(ident) => self.check_ident(ident),
             Expr::Binary(lhs, op, rhs, span) => self.check_binary(lhs, *op, rhs, *span),
             Expr::Unary(op, operand, span) => self.check_unary(*op, operand, *span),
-            Expr::Call(callee, args, span) => self.check_call(callee, &[], args, *span),
+            Expr::Call(callee, args, span) => self.check_call(callee, &[], args, *span, None),
             Expr::GenericCall(callee, type_args, args, span) => {
-                self.check_call(callee, type_args, args, *span)
+                self.check_call(callee, type_args, args, *span, None)
             }
-            Expr::Paren(inner, _) => self.check_expr(inner),
-            Expr::FieldAccess(base, field, span) => self.check_field_access(base, field, *span),
-            Expr::View(inner, _) => self.check_expr(inner),
+            Expr::Paren(inner, _) => self.check_expr_with_resource_projection(inner, projection),
+            Expr::FieldAccess(base, field, span) => {
+                self.check_field_access(base, field, *span, projection)
+            }
+            Expr::View(inner, _) => {
+                self.check_expr_with_resource_projection(inner, ResourceProjectionMode::Borrowed)
+            }
             Expr::Comptime(inner, _) => {
                 self.comptime_expr_depth += 1;
                 let ty = self.check_expr(inner);
@@ -8434,24 +11837,29 @@ impl<'a> TypeChecker<'a> {
 
             Expr::Ok(inner, _span) => {
                 let inner_ty = self.check_expr(inner);
-                // ok(T) → result[T, <error>] — the error type is unknown without context.
-                // For now, produce result[T, nothing].
+                self.check_owned_resource_payload(inner, inner_ty);
+                // The absent failure payload is uninhabited until context
+                // supplies a concrete error type.
                 self.interner
-                    .intern(Type::Result(inner_ty, TypeInterner::ERROR))
+                    .intern(Type::Result(inner_ty, TypeInterner::NEVER))
             }
             Expr::Fail(inner, _span) => {
                 let inner_ty = self.check_expr(inner);
-                // fail(E) → result[<error>, E]
+                self.check_owned_resource_payload(inner, inner_ty);
+                // The absent success payload is uninhabited until context
+                // supplies a concrete success type.
                 self.interner
-                    .intern(Type::Result(TypeInterner::ERROR, inner_ty))
+                    .intern(Type::Result(TypeInterner::NEVER, inner_ty))
             }
             Expr::Some(inner, _span) => {
                 let inner_ty = self.check_expr(inner);
+                self.check_owned_resource_payload(inner, inner_ty);
                 self.interner.intern(Type::Optional(inner_ty))
             }
             Expr::None(_) => {
-                // none → optional[<error>] (unknown inner type without context)
-                self.interner.intern(Type::Optional(TypeInterner::ERROR))
+                // `none` has no payload, so its context-free payload type is
+                // the compiler-internal uninhabited type rather than Error.
+                self.interner.intern(Type::Optional(TypeInterner::NEVER))
             }
             Expr::Default(inner, span) => {
                 if self.handle_body_depth == 0 {
@@ -8483,7 +11891,7 @@ impl<'a> TypeChecker<'a> {
                 TypeInterner::STRING
             }
             Expr::Declassify(inner, span) => {
-                let inner_ty = self.check_expr(inner);
+                let inner_ty = self.check_expr_with_resource_projection(inner, projection);
                 if let Some(unwrapped) = self.secret_inner_type(inner_ty) {
                     unwrapped
                 } else {
@@ -8495,7 +11903,7 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Expr::Coarsen(inner, _) => {
-                let inner_ty = self.check_expr(inner);
+                let inner_ty = self.check_expr_with_resource_projection(inner, projection);
                 if inner_ty != TypeInterner::ERROR && !self.is_refinement_type(inner_ty) {
                     self.sink.emit(errors::coarsen_requires_refinement(
                         &self.type_name(inner_ty),
@@ -8507,19 +11915,17 @@ impl<'a> TypeChecker<'a> {
             Expr::Pipeline(initial, steps, _) => self.check_pipeline(initial, steps),
             Expr::At(inner, state, span) => self.check_machine_state_check(inner, state, *span),
             Expr::Spawn(inner, _) => self.check_spawn(inner),
-            Expr::Send(inner, _) => {
-                self.check_send_ask_inner(inner);
+            Expr::Send(inner, span) => {
+                self.check_send_ask_inner(inner, *span, CheckedActorMessageKind::Send);
                 TypeInterner::NOTHING
             }
-            Expr::Ask(inner, _) => self.check_send_ask_inner(inner),
+            Expr::Ask(inner, span) => {
+                self.check_send_ask_inner(inner, *span, CheckedActorMessageKind::Ask)
+            }
             Expr::Clone(inner, span) => {
-                let inner_ty = self.check_expr(inner);
-                if self.type_contains_resource_data(inner_ty) {
-                    self.sink.emit(errors::resource_cannot_be_cloned(
-                        &self.type_name(inner_ty),
-                        *span,
-                    ));
-                }
+                let inner_ty = self
+                    .check_expr_with_resource_projection(inner, ResourceProjectionMode::Borrowed);
+                self.check_resource_copy(inner_ty, *span);
                 inner_ty
             }
             Expr::Run(inner, _) => {
@@ -8551,11 +11957,18 @@ impl<'a> TypeChecker<'a> {
                 self.check_enum_variant(type_name, variant, &[], *span)
             }
             Expr::InlineFn(params, return_type, body, inline_span) => {
+                self.check_function_return_view_syntax(params, return_type.as_ref());
                 // Type-check the inline function body with parameters bound.
                 let saved_return_type = self.current_return_type;
                 let saved_fn_name = self.current_function_name.take();
                 let saved_pure = self.current_function_pure;
+                let saved_in_verify_block = self.in_verify_block;
+                let saved_ownership_context = std::mem::replace(
+                    &mut self.ownership_context,
+                    CheckedOwnershipContext::Ordinary,
+                );
                 let saved_in_property_block = self.in_property_block;
+                let saved_comptime_expr_depth = self.comptime_expr_depth;
                 let saved_graphics_callback = self.in_graphics_callback;
 
                 let ret = return_type
@@ -8565,25 +11978,32 @@ impl<'a> TypeChecker<'a> {
                 self.current_return_type = Some(ret);
                 self.in_graphics_callback =
                     saved_graphics_callback || self.graphics_inline_callbacks.contains(inline_span);
-                // Callback purity is audited once all method targets are known;
-                // checking it here would make mutual declarations order-sensitive.
-                self.current_function_pure = false;
+                let param_types: Vec<_> = params
+                    .iter()
+                    .map(|param| self.resolve_type_expr(&param.ty))
+                    .collect();
+                self.current_function_name = Some("<inline function>".to_string());
+                self.current_function_pure = self.function_parameters_are_pure(&param_types);
+                // Creating a closure does not execute its body. Check its own
+                // signature's effects independently from the enclosing context.
+                self.in_verify_block = false;
                 self.in_property_block = false;
+                self.comptime_expr_depth = 0;
                 self.closure_capture_scopes
                     .push(ClosureCaptureScope::default());
 
-                for param in params {
-                    let param_type = self.resolve_type_expr(&param.ty);
+                for (param, &param_type) in params.iter().zip(&param_types) {
+                    self.record_debug_type_name(&param.name, &param.ty);
                     if let Some(def_id) = self.declaration_def_id(param.name.span) {
                         self.type_env.insert(def_id, param_type);
                         self.record_closure_local(def_id);
                     }
+                    self.record_assignment_binding(
+                        &param.name,
+                        param.mutable,
+                        param.view || Self::type_is_view(&param.ty),
+                    );
                 }
-
-                let param_types: Vec<_> = params
-                    .iter()
-                    .map(|p| self.resolve_type_expr(&p.ty))
-                    .collect();
 
                 self.check_block(body);
                 self.closure_capture_scopes.pop();
@@ -8591,29 +12011,44 @@ impl<'a> TypeChecker<'a> {
                 self.current_return_type = saved_return_type;
                 self.current_function_name = saved_fn_name;
                 self.current_function_pure = saved_pure;
+                self.in_verify_block = saved_in_verify_block;
+                self.ownership_context = saved_ownership_context;
                 self.in_property_block = saved_in_property_block;
+                self.comptime_expr_depth = saved_comptime_expr_depth;
                 self.in_graphics_callback = saved_graphics_callback;
 
                 self.interner.intern(Type::Function {
                     params: param_types,
+                    view_params: params.iter().map(|param| param.view).collect(),
                     return_type: ret,
                 })
             }
         };
 
-        // Record the type for this expression span.
+        // Record the source operation before any surrounding expectation adds
+        // its physical conversion at the same expression occurrence.
+        self.record_source_expression_type(expr.span(), ty);
         self.record_expression_type(expr.span(), ty);
         ty
     }
 
     fn check_pipeline(&mut self, initial: &Expr, steps: &[ast::PipelineStep]) -> TypeId {
         let mut current_ty = self.check_expr(initial);
+        let mut input_span = initial.span();
         for (index, step) in steps.iter().enumerate() {
+            // Callee expressions can share this span. Seal the physical virtual
+            // input independently before checking that source occurrence.
+            self.record_pipeline_step_input_type(step.span, current_ty);
             // The interpreter uses the checked input type to infer source-generic
             // arguments for the synthetic first argument of a pipeline call.
             self.record_expression_type(step.span, current_ty);
-            current_ty =
-                self.check_pipeline_step(current_ty, step, (index == 0).then_some(initial));
+            current_ty = self.check_pipeline_step(
+                current_ty,
+                step,
+                (index == 0).then_some(initial),
+                input_span,
+            );
+            input_span = step.span;
         }
         current_ty
     }
@@ -8626,11 +12061,21 @@ impl<'a> TypeChecker<'a> {
             _ => (&step.function, false),
         };
         match function {
-            Expr::Call(callee, args, _) => (callee, &[], args, piped_as_view),
-            Expr::GenericCall(callee, type_args, args, _) => {
-                (callee, type_args, args, piped_as_view)
+            Expr::Call(callee, args, _) => {
+                (Self::unparenthesized(callee), &[], args, piped_as_view)
             }
-            _ => (function, &[], &step.extra_args, piped_as_view),
+            Expr::GenericCall(callee, type_args, args, _) => (
+                Self::unparenthesized(callee),
+                type_args,
+                args,
+                piped_as_view,
+            ),
+            _ => (
+                Self::unparenthesized(function),
+                &[],
+                &step.extra_args,
+                piped_as_view,
+            ),
         }
     }
 
@@ -8639,15 +12084,16 @@ impl<'a> TypeChecker<'a> {
         current_ty: TypeId,
         step: &ast::PipelineStep,
         initial: Option<&Expr>,
+        input_span: Span,
     ) -> TypeId {
         let (function, type_args, extra_args, piped_as_view) = Self::pipeline_step_call_parts(step);
         let step_ty = if self.resolved_expr_name(function).as_deref() == Some("graphics.run") {
             // Preserve the source authority expression while sharing every gate
             // with ordinary calls, including named arguments and type inference.
             // A prior pipeline result cannot be a declared capability parameter.
-            let input = initial.cloned().unwrap_or(Expr::Error(step.span));
+            let input = initial.cloned().unwrap_or(Expr::Error(input_span));
             let authority = if piped_as_view {
-                Expr::View(Box::new(input), step.span)
+                Expr::View(Box::new(input), input_span)
             } else {
                 input
             };
@@ -8657,27 +12103,63 @@ impl<'a> TypeChecker<'a> {
                 value: authority,
             }];
             args.extend_from_slice(extra_args);
-            self.check_call(function, type_args, &args, step.span)
+            self.check_call(function, type_args, &args, step.span, None)
         } else {
-            self.check_pipeline_step_call(current_ty, step)
+            self.check_pipeline_step_call(current_ty, step, initial, input_span)
         };
         self.record_pipeline_step_call_type(step.span, step_ty);
-        if let Some(handle) = &step.handle {
-            return self.check_handle_with_target_type(
+        let output_ty = if let Some(handle) = &step.handle {
+            self.check_handle_with_target_type(
                 step_ty,
                 handle.error_name.as_ref(),
                 &handle.body,
                 handle.span,
-            );
-        }
-        step_ty
+            )
+        } else {
+            step_ty
+        };
+        self.record_source_expression_type(step.span, output_ty);
+        output_ty
     }
 
-    fn check_pipeline_step_call(&mut self, current_ty: TypeId, step: &ast::PipelineStep) -> TypeId {
+    fn check_pipeline_step_call(
+        &mut self,
+        current_ty: TypeId,
+        step: &ast::PipelineStep,
+        initial: Option<&Expr>,
+        input_span: Span,
+    ) -> TypeId {
+        let result = self.check_pipeline_step_call_inner(current_ty, step, initial);
+        let (callee, _, extra_args, piped_as_view) = Self::pipeline_step_call_parts(step);
+        let mut occurrences = vec![(
+            initial,
+            input_span,
+            piped_as_view || initial.is_some_and(Self::is_explicit_view),
+            self.checked_source_expression_type(input_span),
+        )];
+        occurrences.extend(extra_args.iter().map(|arg| {
+            (
+                Some(&arg.value),
+                arg.value.span(),
+                Self::is_explicit_view(&arg.value),
+                self.checked_source_expression_type(arg.value.span()),
+            )
+        }));
+        self.record_invocation_ownership(callee, step.span, result, &occurrences);
+        result
+    }
+
+    fn check_pipeline_step_call_inner(
+        &mut self,
+        current_ty: TypeId,
+        step: &ast::PipelineStep,
+        initial: Option<&Expr>,
+    ) -> TypeId {
         let (function, type_args, extra_args, piped_as_view) = Self::pipeline_step_call_parts(step);
+        let piped_as_view = piped_as_view || initial.is_some_and(Self::is_explicit_view);
         let callee_name = self.resolved_expr_name(function);
         self.check_test_mock_constructor_call(callee_name.as_deref(), step.span);
-        let callee_is_pure = callee_name
+        let mut callee_is_pure = callee_name
             .as_deref()
             .map(|name| self.named_call_is_pure(name))
             .unwrap_or(false);
@@ -8685,33 +12167,15 @@ impl<'a> TypeChecker<'a> {
         if let Some(callee_name) = callee_name.as_deref()
             && !callee_is_pure
         {
-            if self.current_function_pure
-                && let Some(caller_name) = &self.current_function_name
-            {
-                self.sink.emit(errors::pure_calls_impure(
-                    caller_name,
-                    callee_name,
-                    step.span,
-                ));
-            }
-            if self.in_verify_block
-                && let Some(verify_name) = &self.current_verify_name
-            {
-                self.sink.emit(errors::verify_calls_impure(
-                    verify_name,
-                    callee_name,
-                    step.span,
-                ));
-            }
-            if self.comptime_expr_depth > 0 {
-                self.sink
-                    .emit(errors::comptime_calls_impure(callee_name, step.span));
-            }
+            self.check_call_purity(callee_name, step.span);
         }
 
-        if let Some(builtin_name) = callee_name.as_deref() {
-            match builtin_name {
-                "math.abs" => {
+        if let Some(builtin_name) = callee_name.as_deref()
+            && let Some(intrinsic) = IntrinsicId::from_callable_name(builtin_name)
+        {
+            match intrinsic {
+                IntrinsicId::MathAbs => {
+                    self.record_intrinsic_id(step.span, builtin_name);
                     return self.check_math_abs_pipeline_step(
                         builtin_name,
                         current_ty,
@@ -8720,7 +12184,8 @@ impl<'a> TypeChecker<'a> {
                         step.span,
                     );
                 }
-                "math.min" | "math.max" => {
+                IntrinsicId::MathMin | IntrinsicId::MathMax => {
+                    self.record_intrinsic_id(step.span, builtin_name);
                     return self.check_math_min_max_pipeline_step(
                         builtin_name,
                         current_ty,
@@ -8733,12 +12198,22 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        let diagnostic_count = self.sink.diagnostics().len();
         let builtin_signature = self.builtin_signature(function, type_args, step.span);
+        if builtin_signature.is_some() && self.sink.diagnostics().len() == diagnostic_count {
+            if let Some(name) = callee_name.as_deref() {
+                self.record_intrinsic_id(step.span, name);
+            }
+            self.record_intrinsic_type_arguments(step.span, type_args);
+            self.record_intrinsic_reflection_arguments(step.span, type_args);
+        }
         if builtin_signature.is_none() && type_args.is_empty() {
             if let Some(return_type) = self.check_inferred_generic_function_pipeline_step(
                 callee_name.as_deref(),
                 current_ty,
                 extra_args,
+                piped_as_view,
+                initial,
                 step.span,
             ) {
                 return return_type;
@@ -8750,6 +12225,8 @@ impl<'a> TypeChecker<'a> {
                 type_args,
                 current_ty,
                 extra_args,
+                piped_as_view,
+                initial,
                 step.span,
             ) {
                 return return_type;
@@ -8776,17 +12253,31 @@ impl<'a> TypeChecker<'a> {
             None
         };
 
+        let mut function_view_modes = None;
         let (param_types, return_type) = if let Some(signature) = builtin_signature {
             signature
         } else if let Some(signature) = user_function_signature {
+            function_view_modes = self.function_value_view_modes(function);
             signature
         } else {
             let callee_ty = self.check_expr(function);
             match self.interner.resolve(callee_ty).clone() {
                 Type::Function {
                     params,
+                    view_params,
                     return_type,
-                } => (params, return_type),
+                } => {
+                    let signature_is_pure = self.function_parameters_are_pure(&params);
+                    if !signature_is_pure && (callee_is_pure || callee_name.is_none()) {
+                        self.check_call_purity(
+                            callee_name.as_deref().unwrap_or("<function value>"),
+                            step.span,
+                        );
+                    }
+                    callee_is_pure = signature_is_pure;
+                    function_view_modes = Some(view_params);
+                    (params, return_type)
+                }
                 _ => {
                     for arg in extra_args {
                         self.check_expr(&arg.value);
@@ -8804,15 +12295,17 @@ impl<'a> TypeChecker<'a> {
         let func_name = callee_name
             .clone()
             .unwrap_or_else(|| "<pipeline step>".to_string());
-        let parameter_names = user_parameter_names.or_else(|| {
-            method_metadata.as_ref().map(|(_, signature)| {
-                signature
-                    .params
-                    .iter()
-                    .map(|(name, _, _)| name.clone())
-                    .collect()
+        let parameter_names = user_parameter_names
+            .or_else(|| {
+                method_metadata.as_ref().map(|(_, signature)| {
+                    signature
+                        .params
+                        .iter()
+                        .map(|(name, _, _)| name.clone())
+                        .collect()
+                })
             })
-        });
+            .or_else(|| self.enum_constructor_parameter_names(function));
         let argument_order = if let Some(parameter_names) = parameter_names {
             let Some(order) =
                 self.bind_pipeline_arguments(&func_name, &parameter_names, extra_args, step.span)
@@ -8824,6 +12317,13 @@ impl<'a> TypeChecker<'a> {
             };
             self.record_call_argument_order(step.span, order.clone());
             order
+        } else if function_view_modes.is_some()
+            && self.reject_unbound_argument_names(&func_name, extra_args)
+        {
+            for arg in extra_args {
+                self.check_expr(&arg.value);
+            }
+            return return_type;
         } else if arg_count != param_types.len() {
             self.sink.emit(errors::argument_count_mismatch(
                 &func_name,
@@ -8843,6 +12343,18 @@ impl<'a> TypeChecker<'a> {
         let mut checked_arg_types = Vec::with_capacity(arg_count);
         for (parameter_index, &source_index) in argument_order.iter().enumerate() {
             let param_ty = param_types[parameter_index];
+            if let Some(view_parameter) = function_view_modes
+                .as_ref()
+                .and_then(|modes| modes.get(parameter_index))
+            {
+                self.check_pipeline_argument_view(
+                    *view_parameter,
+                    source_index,
+                    piped_as_view,
+                    extra_args,
+                    step.span,
+                );
+            }
             let (arg_ty, arg_span) = if source_index == 0 {
                 (current_ty, step.span)
             } else {
@@ -8852,6 +12364,20 @@ impl<'a> TypeChecker<'a> {
                     arg.value.span(),
                 )
             };
+            if let Some(view_parameter) = function_view_modes
+                .as_ref()
+                .and_then(|modes| modes.get(parameter_index))
+            {
+                self.check_pipeline_owned_argument(
+                    *view_parameter,
+                    source_index,
+                    piped_as_view,
+                    initial,
+                    extra_args,
+                    param_ty,
+                    arg_ty,
+                );
+            }
             checked_arg_types.push(arg_ty);
             tainted_return |= self.check_argument_against_param_type(
                 callee_name.as_deref(),
@@ -8886,10 +12412,32 @@ impl<'a> TypeChecker<'a> {
             return_type,
         );
 
-        if let Some(callee_name) = callee_name.as_deref()
-            && tainted_return
-            && Self::is_secret_liftable_call(callee_name, callee_is_pure)
+        if let Some(name @ ("json.serialize" | "json.serialize_public")) = callee_name.as_deref()
+            && matches!(
+                self.interner.resolve(current_ty),
+                Type::Struct(_)
+                    | Type::Refinement { .. }
+                    | Type::Machine(_)
+                    | Type::MachineState { .. }
+                    | Type::List(_)
+                    | Type::Set(_)
+                    | Type::Map(_, _)
+                    | Type::Optional(_)
+                    | Type::Result(_, _)
+            )
+            && self.native_json_source_supported(current_ty, &mut HashSet::new())
         {
+            self.check_source_facade_instantiation(name, current_ty, step.span);
+        }
+
+        if let Some(name @ ("json.parse" | "json.parse_exact")) = callee_name.as_deref()
+            && let Type::Result(value_ty, _) = self.interner.resolve(return_type)
+            && self.native_json_parse_source_supported(*value_ty)
+        {
+            self.check_source_facade_instantiation(name, *value_ty, step.span);
+        }
+
+        if tainted_return {
             return self.maybe_wrap_secret(return_type, true);
         }
 
@@ -8901,6 +12449,8 @@ impl<'a> TypeChecker<'a> {
         callee_name: Option<&str>,
         current_ty: TypeId,
         extra_args: &[ast::CallArg],
+        piped_as_view: bool,
+        initial: Option<&Expr>,
         span: Span,
     ) -> Option<TypeId> {
         let function_name = callee_name?;
@@ -8930,13 +12480,23 @@ impl<'a> TypeChecker<'a> {
                 }
             })
             .collect::<Vec<_>>();
-        let Some(inferred) = self.infer_generic_signature(&template, &actual_types) else {
+        let Some(mut inferred) = self.infer_generic_signature(&template, &actual_types, None)
+        else {
             self.emit_cannot_infer_generic(function_name, &template, span);
             return Some(TypeInterner::ERROR);
         };
 
         let mut arguments_match = true;
-        for (&source_index, &expected) in argument_order.iter().zip(&inferred.param_types) {
+        for (parameter_index, (&source_index, &expected)) in
+            argument_order.iter().zip(&inferred.param_types).enumerate()
+        {
+            self.check_pipeline_argument_view(
+                template.params[parameter_index].view,
+                source_index,
+                piped_as_view,
+                extra_args,
+                span,
+            );
             let (got, arg_span) = if source_index == 0 {
                 (current_ty, span)
             } else {
@@ -8946,7 +12506,22 @@ impl<'a> TypeChecker<'a> {
                     arg.value.span(),
                 )
             };
-            if !self.types_compatible(expected, got) {
+            self.check_pipeline_owned_argument(
+                template.params[parameter_index].view,
+                source_index,
+                piped_as_view,
+                initial,
+                extra_args,
+                expected,
+                got,
+            );
+            if !self.graphics_callback_mode_only_mismatch(
+                function_name,
+                parameter_index,
+                expected,
+                got,
+            ) && !self.types_compatible(expected, got)
+            {
                 arguments_match = false;
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(expected),
@@ -8957,14 +12532,44 @@ impl<'a> TypeChecker<'a> {
         }
 
         if arguments_match {
-            self.record_generic_call_for_template(span, &template, &inferred.concrete_args);
+            let param_facts = ReflectionParamFacts::default();
+            let expressions = argument_order
+                .iter()
+                .map(|&index| {
+                    if index == 0 {
+                        None
+                    } else {
+                        Some(&extra_args[index - 1].value)
+                    }
+                })
+                .collect::<Vec<_>>();
+            let type_argument_reflections = self.reflection_arguments_for_inferred_call(
+                &template,
+                &inferred.concrete_args,
+                &actual_types,
+                &expressions,
+            );
+            Self::apply_inferred_reflection_kinds(
+                &template,
+                &type_argument_reflections,
+                &mut inferred.kind_subst,
+            );
+            self.record_generic_call_for_template(
+                span,
+                &template,
+                &inferred.concrete_args,
+                &inferred.kind_subst,
+                &type_argument_reflections,
+                &param_facts,
+            );
             self.check_generic_function_instantiation(
                 function_name,
                 &template,
                 &inferred.concrete_args,
+                type_argument_reflections,
                 inferred.subst,
                 inferred.kind_subst,
-                ReflectionParamFacts::default(),
+                param_facts,
             );
         }
         Some(inferred.return_type)
@@ -8976,6 +12581,8 @@ impl<'a> TypeChecker<'a> {
         type_args: &[TypeExpr],
         current_ty: TypeId,
         extra_args: &[ast::CallArg],
+        piped_as_view: bool,
+        initial: Option<&Expr>,
         span: Span,
     ) -> Option<TypeId> {
         let function_name = callee_name?;
@@ -9064,7 +12671,16 @@ impl<'a> TypeChecker<'a> {
         self.record_call_argument_order(span, argument_order.clone());
 
         let mut arguments_match = true;
-        for (&source_index, &expected) in argument_order.iter().zip(&param_types) {
+        for (parameter_index, (&source_index, &expected)) in
+            argument_order.iter().zip(&param_types).enumerate()
+        {
+            self.check_pipeline_argument_view(
+                template.params[parameter_index].view,
+                source_index,
+                piped_as_view,
+                extra_args,
+                span,
+            );
             let (got, arg_span) = if source_index == 0 {
                 (current_ty, span)
             } else {
@@ -9074,7 +12690,22 @@ impl<'a> TypeChecker<'a> {
                     arg.value.span(),
                 )
             };
-            if !self.types_compatible(expected, got) {
+            self.check_pipeline_owned_argument(
+                template.params[parameter_index].view,
+                source_index,
+                piped_as_view,
+                initial,
+                extra_args,
+                expected,
+                got,
+            );
+            if !self.graphics_callback_mode_only_mismatch(
+                function_name,
+                parameter_index,
+                expected,
+                got,
+            ) && !self.types_compatible(expected, got)
+            {
                 arguments_match = false;
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(expected),
@@ -9085,14 +12716,25 @@ impl<'a> TypeChecker<'a> {
         }
 
         if arguments_match {
-            self.record_generic_call_for_template(span, &template, &concrete_args);
+            let param_facts = ReflectionParamFacts::default();
+            let type_argument_reflections =
+                self.reflection_arguments_for_type_args(type_args, &concrete_args);
+            self.record_generic_call_for_template(
+                span,
+                &template,
+                &concrete_args,
+                &kind_subst,
+                &type_argument_reflections,
+                &param_facts,
+            );
             self.check_generic_function_instantiation(
                 function_name,
                 &template,
                 &concrete_args,
+                type_argument_reflections,
                 subst,
                 kind_subst,
-                ReflectionParamFacts::default(),
+                param_facts,
             );
         }
 
@@ -9319,7 +12961,12 @@ impl<'a> TypeChecker<'a> {
         TypeInterner::ERROR
     }
 
-    fn check_send_ask_inner(&mut self, inner: &Expr) -> TypeId {
+    fn check_send_ask_inner(
+        &mut self,
+        inner: &Expr,
+        outer_span: Span,
+        kind: CheckedActorMessageKind,
+    ) -> TypeId {
         // inner is `actor_expr.handler_name` or `actor_expr.handler_name(args)`
         // We check the actor expression and any args, and return the responds type.
         let (actor_expr, message_name, message_span, args) = match inner {
@@ -9347,8 +12994,24 @@ impl<'a> TypeChecker<'a> {
         // Look up the handler and return its responds type.
         if let Type::Actor(aid) = *self.interner.resolve(actor_ty) {
             let actor_def = self.interner.resolve_actor(aid).clone();
-            if let Some(msg) = actor_def.messages.iter().find(|m| m.name == *message_name) {
+            if let Some((handler_index, msg)) = actor_def
+                .messages
+                .iter()
+                .enumerate()
+                .find(|(_, m)| m.name == *message_name)
+            {
                 self.check_actor_message_args(&actor_def.name, msg, args, inner.span());
+                self.record_actor_message_call(
+                    outer_span,
+                    kind,
+                    inner,
+                    actor_expr,
+                    actor_ty,
+                    aid,
+                    handler_index,
+                    msg.responds,
+                    args.unwrap_or(&[]),
+                );
                 return msg.responds;
             }
             self.sink.emit(errors::type_has_no_member(
@@ -9567,6 +13230,77 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn is_direct_collection_equality_type(&self, mut ty: TypeId) -> bool {
+        loop {
+            match self.interner.resolve(ty) {
+                Type::Secret(inner) | Type::Refinement { base: inner, .. } => ty = *inner,
+                Type::Bytes
+                | Type::List(_)
+                | Type::Map(_, _)
+                | Type::Set(_)
+                | Type::Optional(_)
+                | Type::Result(_, _) => return true,
+                _ => return false,
+            }
+        }
+    }
+
+    fn is_erased_interface_equality_type(&self, mut ty: TypeId) -> bool {
+        loop {
+            match self.interner.resolve(ty) {
+                Type::Secret(inner) | Type::Refinement { base: inner, .. } => ty = *inner,
+                Type::Interface(_) => return true,
+                _ => return false,
+            }
+        }
+    }
+
+    fn aggregate_equality_owners(&self, ty: TypeId) -> Vec<TypeId> {
+        let mut pending = vec![ty];
+        let mut seen = HashSet::new();
+        let mut owners = Vec::new();
+        while let Some(ty) = pending.pop() {
+            if !seen.insert(ty) {
+                continue;
+            }
+            match self.interner.resolve(ty) {
+                Type::Struct(_) | Type::Interface(_) => owners.push(ty),
+                Type::Secret(inner)
+                | Type::Refinement { base: inner, .. }
+                | Type::List(inner)
+                | Type::Set(inner)
+                | Type::Optional(inner) => pending.push(*inner),
+                Type::Map(key, value) | Type::Result(key, value) => pending.extend([*value, *key]),
+                Type::Enum(id) => pending.extend(
+                    self.interner
+                        .resolve_enum(*id)
+                        .variants
+                        .iter()
+                        .rev()
+                        .flat_map(|variant| variant.fields.iter().rev().map(|(_, ty)| *ty)),
+                ),
+                Type::Machine(id) | Type::MachineState { machine: id, .. } => pending.extend(
+                    self.interner
+                        .resolve_machine(*id)
+                        .states
+                        .iter()
+                        .rev()
+                        .flat_map(|state| state.fields.iter().rev().map(|(_, ty)| *ty)),
+                ),
+                Type::Bitfield(id) => pending.extend(
+                    self.interner
+                        .resolve_bitfield(*id)
+                        .fields
+                        .iter()
+                        .rev()
+                        .map(|field| field.ty),
+                ),
+                _ => {}
+            }
+        }
+        owners
+    }
+
     fn check_binary(&mut self, lhs: &Expr, op: BinOp, rhs: &Expr, span: Span) -> TypeId {
         let (lhs_ty, rhs_ty) = if Self::is_numeric_literal(lhs) && !Self::is_numeric_literal(rhs) {
             let rhs_ty = self.check_expr(rhs);
@@ -9669,6 +13403,22 @@ impl<'a> TypeChecker<'a> {
                     ));
                     return TypeInterner::ERROR;
                 }
+                if self.is_direct_collection_equality_type(lhs_base) {
+                    self.sink.emit(errors::direct_collection_equality(
+                        &self.type_name(lhs_ty),
+                        Self::binop_str(op),
+                        span,
+                    ));
+                    return TypeInterner::ERROR;
+                }
+                if self.is_erased_interface_equality_type(lhs_base) {
+                    self.sink.emit(errors::erased_interface_equality(
+                        &self.type_name(lhs_ty),
+                        Self::binop_str(op),
+                        span,
+                    ));
+                    return TypeInterner::ERROR;
+                }
                 if !self.user_struct_has_explicit_equality(lhs_base) {
                     self.sink.emit(errors::equality_requires_equatable(
                         &self.type_name(lhs_base),
@@ -9676,6 +13426,44 @@ impl<'a> TypeChecker<'a> {
                         span,
                     ));
                     return TypeInterner::ERROR;
+                }
+                if matches!(
+                    self.interner.resolve(self.fully_coarsened_type(lhs_base)),
+                    Type::Enum(_)
+                ) {
+                    for owner in self.aggregate_equality_owners(lhs_base) {
+                        if self.is_erased_interface_equality_type(owner) {
+                            self.sink.emit(errors::erased_interface_equality(
+                                &self.type_name(owner),
+                                Self::binop_str(op),
+                                span,
+                            ));
+                            return TypeInterner::ERROR;
+                        }
+                        if !self.user_struct_has_explicit_equality(owner) {
+                            self.sink.emit(errors::equality_requires_equatable(
+                                &self.type_name(owner),
+                                Self::binop_str(op),
+                                span,
+                            ));
+                            return TypeInterner::ERROR;
+                        }
+                    }
+                }
+                if matches!(self.interner.resolve(lhs_base), Type::Struct(_)) {
+                    // Equality is a checked method call, not structural data
+                    // comparison. Preserve its exact body identity for HIR,
+                    // including concrete generic/body fact snapshots.
+                    if let Some(&interface) = self.named_types.get("Equatable")
+                        && let Some(&index) = self.interface_method_definitions.get(&(
+                            interface,
+                            lhs_base,
+                            "equals".to_string(),
+                        ))
+                    {
+                        let source_span = self.method_definitions[index].source_span;
+                        self.record_method_call(span, source_span);
+                    }
                 }
                 self.maybe_wrap_secret(TypeInterner::BOOL, tainted)
             }
@@ -9892,6 +13680,13 @@ impl<'a> TypeChecker<'a> {
         self.expect_no_type_args(name, type_args, span);
         for arg in args {
             let arg_ty = self.check_expr(&arg.value);
+            if matches!(self.interner.resolve(arg_ty), Type::Resource(_)) {
+                self.sink.emit(errors::type_mismatch(
+                    "non-resource value for ordinary printing",
+                    &self.type_name(arg_ty),
+                    arg.value.span(),
+                ));
+            }
             if self.is_secret_type(arg_ty) {
                 self.sink.emit(errors::secret_exposure(
                     name,
@@ -9935,7 +13730,7 @@ impl<'a> TypeChecker<'a> {
 
         match self.math_numeric_policy_base(current_ty) {
             Some((base, tainted)) => {
-                self.check_math_source_facade_instantiation(name, base, span);
+                self.check_source_facade_instantiation(name, base, span);
                 self.maybe_wrap_secret(base, tainted)
             }
             None => {
@@ -10014,7 +13809,7 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         }
 
-        self.check_math_source_facade_instantiation(name, base, span);
+        self.check_source_facade_instantiation(name, base, span);
         self.maybe_wrap_secret(base, left_tainted || right_tainted)
     }
 
@@ -10029,12 +13824,7 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn check_math_source_facade_instantiation(
-        &mut self,
-        name: &str,
-        concrete: TypeId,
-        call_span: Span,
-    ) {
+    fn check_source_facade_instantiation(&mut self, name: &str, concrete: TypeId, call_span: Span) {
         let Some(template) = self.generic_function_templates.get(name).cloned() else {
             return;
         };
@@ -10042,14 +13832,25 @@ impl<'a> TypeChecker<'a> {
             return;
         };
         let subst = HashMap::from([(type_param.name.clone(), concrete)]);
-        self.record_generic_call_for_template(call_span, &template, &[concrete]);
+        let kind_subst = HashMap::new();
+        let param_facts = ReflectionParamFacts::default();
+        let type_argument_reflections = self.reflection_arguments_for_inferred_types(&[concrete]);
+        self.record_generic_call_for_template(
+            call_span,
+            &template,
+            &[concrete],
+            &kind_subst,
+            &type_argument_reflections,
+            &param_facts,
+        );
         self.check_generic_function_instantiation(
             name,
             &template,
             &[concrete],
+            type_argument_reflections,
             subst,
-            HashMap::new(),
-            ReflectionParamFacts::default(),
+            kind_subst,
+            param_facts,
         );
     }
 
@@ -10077,7 +13878,7 @@ impl<'a> TypeChecker<'a> {
 
         match self.math_numeric_policy_base(arg_ty) {
             Some((base, tainted)) => {
-                self.check_math_source_facade_instantiation(name, base, span);
+                self.check_source_facade_instantiation(name, base, span);
                 self.maybe_wrap_secret(base, tainted)
             }
             None => {
@@ -10151,7 +13952,7 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         }
 
-        self.check_math_source_facade_instantiation(name, base, span);
+        self.check_source_facade_instantiation(name, base, span);
         self.maybe_wrap_secret(base, left_tainted || right_tainted)
     }
 
@@ -10161,13 +13962,47 @@ impl<'a> TypeChecker<'a> {
         type_args: &[TypeExpr],
         args: &[ast::CallArg],
         span: Span,
+        expected_return_type: Option<TypeId>,
     ) -> TypeId {
+        let result = self.check_call_inner(callee, type_args, args, span, expected_return_type);
+        let occurrences = args
+            .iter()
+            .map(|arg| {
+                (
+                    Some(&arg.value),
+                    arg.value.span(),
+                    Self::is_explicit_view(&arg.value),
+                    self.checked_source_expression_type(arg.value.span()),
+                )
+            })
+            .collect::<Vec<_>>();
+        self.record_invocation_ownership(callee, span, result, &occurrences);
+        result
+    }
+
+    fn check_call_inner(
+        &mut self,
+        callee: &Expr,
+        type_args: &[TypeExpr],
+        args: &[ast::CallArg],
+        span: Span,
+        expected_return_type: Option<TypeId>,
+    ) -> TypeId {
+        let callee = Self::unparenthesized(callee);
         let callee_name = self.resolved_expr_name(callee);
-        let callee_is_pure = callee_name
+        let mut callee_is_pure = callee_name
             .as_deref()
             .map(|name| self.named_call_is_pure(name))
             .unwrap_or(false);
+        let diagnostic_count = self.sink.diagnostics().len();
         let builtin_signature = self.builtin_signature(callee, type_args, span);
+        if builtin_signature.is_some() && self.sink.diagnostics().len() == diagnostic_count {
+            if let Some(name) = callee_name.as_deref() {
+                self.record_intrinsic_id(span, name);
+            }
+            self.record_intrinsic_type_arguments(span, type_args);
+            self.record_intrinsic_reflection_arguments(span, type_args);
+        }
 
         if let Some(name @ ("time.now_ms" | "time.now_s")) = callee_name.as_deref() {
             let replacement = if name == "time.now_ms" {
@@ -10233,45 +14068,28 @@ impl<'a> TypeChecker<'a> {
         // Extract the callee name so we can look it up in the purity map.
         if let Some(callee_name) = callee_name.as_deref() {
             if !callee_is_pure {
-                // E0500: pure function calls impure function
-                if self.current_function_pure {
-                    if let Some(caller_name) = &self.current_function_name {
-                        self.sink
-                            .emit(errors::pure_calls_impure(caller_name, &callee_name, span));
-                    }
-                }
-                // Verify blocks are the current value-level comptime entrypoint.
-                // Eligibility is exactly purity: do not add a second allowlist
-                // for user, dependency, or stdlib functions here.
-                // E0501: verify block calls impure function
-                if self.in_verify_block {
-                    if let Some(verify_name) = &self.current_verify_name {
-                        self.sink.emit(errors::verify_calls_impure(
-                            verify_name,
-                            &callee_name,
-                            span,
-                        ));
-                    }
-                }
-                if self.comptime_expr_depth > 0 {
-                    self.sink
-                        .emit(errors::comptime_calls_impure(callee_name, span));
-                }
+                self.check_call_purity(callee_name, span);
             }
         }
 
-        if let Some(builtin_name) = callee_name.as_deref() {
-            match builtin_name {
-                "range" => {
+        if let Some(builtin_name) = callee_name.as_deref()
+            && let Some(intrinsic) = IntrinsicId::from_callable_name(builtin_name)
+        {
+            match intrinsic {
+                IntrinsicId::Range => {
+                    self.record_intrinsic_id(span, builtin_name);
                     return self.check_range_builtin_call(builtin_name, type_args, args, span);
                 }
-                "print" | "println" => {
+                IntrinsicId::Print | IntrinsicId::Println => {
+                    self.record_intrinsic_id(span, builtin_name);
                     return self.check_print_builtin_call(builtin_name, type_args, args, span);
                 }
-                "math.abs" => {
+                IntrinsicId::MathAbs => {
+                    self.record_intrinsic_id(span, builtin_name);
                     return self.check_math_abs_call_policy(builtin_name, type_args, args, span);
                 }
-                "math.min" | "math.max" => {
+                IntrinsicId::MathMin | IntrinsicId::MathMax => {
+                    self.record_intrinsic_id(span, builtin_name);
                     return self.check_math_min_max_call_policy(
                         builtin_name,
                         type_args,
@@ -10288,7 +14106,12 @@ impl<'a> TypeChecker<'a> {
             && let Some(function_name) = callee_name.as_deref()
             && self.generic_function_templates.contains_key(function_name)
         {
-            return self.check_inferred_generic_function_call(function_name, args, span);
+            return self.check_inferred_generic_function_call(
+                function_name,
+                args,
+                span,
+                expected_return_type,
+            );
         }
 
         // Check for generic function call: `name[T](args...)`.
@@ -10379,12 +14202,30 @@ impl<'a> TypeChecker<'a> {
                     self.record_call_argument_order(span, argument_order.clone());
                     self.check_graphics_run_policy(function_name, args, &argument_order);
                     let mut arguments_match = true;
-                    for (&source_index, &expected) in argument_order.iter().zip(param_types.iter())
+                    for (parameter_index, (&source_index, &expected)) in
+                        argument_order.iter().zip(param_types.iter()).enumerate()
                     {
                         let arg = &args[source_index];
+                        self.check_argument_view(
+                            template.params[parameter_index].view,
+                            Self::is_explicit_view(&arg.value),
+                            arg.value.span(),
+                        );
                         let got = self.check_expr_for_expected(&arg.value, expected, false);
+                        self.check_owned_argument(
+                            template.params[parameter_index].view,
+                            &arg.value,
+                            expected,
+                            got,
+                        );
                         self.check_graphics_opaque_argument(function_name, expected, got, arg);
-                        if !self.types_compatible(expected, got) {
+                        if !self.graphics_callback_mode_only_mismatch(
+                            function_name,
+                            parameter_index,
+                            expected,
+                            got,
+                        ) && !self.types_compatible(expected, got)
+                        {
                             arguments_match = false;
                             self.sink.emit(errors::type_mismatch(
                                 &self.type_name(expected),
@@ -10403,11 +14244,21 @@ impl<'a> TypeChecker<'a> {
                             &param_types,
                             &ordered_args,
                         );
-                        self.record_generic_call_for_template(span, &template, &concrete_args);
+                        let type_argument_reflections =
+                            self.reflection_arguments_for_type_args(type_args, &concrete_args);
+                        self.record_generic_call_for_template(
+                            span,
+                            &template,
+                            &concrete_args,
+                            &kind_subst,
+                            &type_argument_reflections,
+                            &param_facts,
+                        );
                         self.check_generic_function_instantiation(
                             function_name,
                             &template,
                             &concrete_args,
+                            type_argument_reflections,
                             subst,
                             kind_subst,
                             param_facts,
@@ -10464,14 +14315,6 @@ impl<'a> TypeChecker<'a> {
                 if let Some(type_id) = self.named_types.get(type_name).copied() {
                     match self.interner.resolve(type_id).clone() {
                         Type::Struct(sid) => {
-                            if Self::is_reflection_metadata_type_name(type_name) {
-                                self.sink
-                                    .emit(errors::reflection_metadata_constructor(type_name, span));
-                                for arg in args {
-                                    self.check_expr(&arg.value);
-                                }
-                                return TypeInterner::ERROR;
-                            }
                             return self.check_struct_constructor(sid, args, span);
                         }
                         Type::Bitfield(bid) => {
@@ -10510,9 +14353,11 @@ impl<'a> TypeChecker<'a> {
             None
         };
 
+        let mut function_view_modes = None;
         let (param_types, return_type) = if let Some(signature) = builtin_signature {
             signature
         } else if let Some(signature) = user_function_signature {
+            function_view_modes = self.function_value_view_modes(callee);
             signature
         } else {
             if let Some(function_name) = callee_name.as_deref()
@@ -10548,8 +14393,20 @@ impl<'a> TypeChecker<'a> {
             match self.interner.resolve(callee_ty).clone() {
                 Type::Function {
                     params,
+                    view_params,
                     return_type,
-                } => (params, return_type),
+                } => {
+                    let signature_is_pure = self.function_parameters_are_pure(&params);
+                    if !signature_is_pure && (callee_is_pure || callee_name.is_none()) {
+                        self.check_call_purity(
+                            callee_name.as_deref().unwrap_or("<function value>"),
+                            span,
+                        );
+                    }
+                    callee_is_pure = signature_is_pure;
+                    function_view_modes = Some(view_params);
+                    (params, return_type)
+                }
                 Type::Struct(sid) if self.is_struct_type_name_expr(callee) => {
                     return self.check_struct_constructor(sid, args, span);
                 }
@@ -10573,15 +14430,17 @@ impl<'a> TypeChecker<'a> {
         let func_name = callee_name
             .clone()
             .unwrap_or_else(|| "<anonymous>".to_string());
-        let parameter_names = user_parameter_names.or_else(|| {
-            method_metadata.as_ref().map(|(_, signature)| {
-                signature
-                    .params
-                    .iter()
-                    .map(|(name, _, _)| name.clone())
-                    .collect()
+        let parameter_names = user_parameter_names
+            .or_else(|| {
+                method_metadata.as_ref().map(|(_, signature)| {
+                    signature
+                        .params
+                        .iter()
+                        .map(|(name, _, _)| name.clone())
+                        .collect()
+                })
             })
-        });
+            .or_else(|| self.enum_constructor_parameter_names(callee));
         let argument_order = if let Some(parameter_names) = parameter_names {
             let Some(order) = self.bind_call_arguments(&func_name, &parameter_names, args, span)
             else {
@@ -10592,6 +14451,13 @@ impl<'a> TypeChecker<'a> {
             };
             self.record_call_argument_order(span, order.clone());
             order
+        } else if function_view_modes.is_some()
+            && self.reject_unbound_argument_names(&func_name, args)
+        {
+            for arg in args {
+                self.check_expr(&arg.value);
+            }
+            return return_type;
         } else if args.len() != param_types.len() {
             self.sink.emit(errors::argument_count_mismatch(
                 &func_name,
@@ -10614,7 +14480,22 @@ impl<'a> TypeChecker<'a> {
         for (i, &source_index) in argument_order.iter().enumerate() {
             let arg = &args[source_index];
             let param_ty = param_types[i];
+            if let Some(view_parameter) = function_view_modes
+                .as_ref()
+                .and_then(|modes: &Vec<bool>| modes.get(i))
+            {
+                self.check_argument_view(
+                    *view_parameter,
+                    Self::is_explicit_view(&arg.value),
+                    arg.value.span(),
+                );
+            }
             let arg_ty = self.check_expr_for_expected(&arg.value, param_ty, false);
+            if let Some(view_parameter) =
+                function_view_modes.as_ref().and_then(|modes| modes.get(i))
+            {
+                self.check_owned_argument(*view_parameter, &arg.value, param_ty, arg_ty);
+            }
             checked_arg_types.push(arg_ty);
 
             if self.is_refinement_type(param_ty)
@@ -10672,7 +14553,10 @@ impl<'a> TypeChecker<'a> {
                 continue;
             }
 
-            if !self.types_compatible(param_ty, arg_ty) {
+            let graphics_mode_only_mismatch = callee_name.as_deref().is_some_and(|name| {
+                self.graphics_callback_mode_only_mismatch(name, i, param_ty, arg_ty)
+            });
+            if !graphics_mode_only_mismatch && !self.types_compatible(param_ty, arg_ty) {
                 let param_name = format!("#{}", i + 1);
                 self.sink.emit(errors::argument_type_mismatch(
                     &param_name,
@@ -10712,10 +14596,103 @@ impl<'a> TypeChecker<'a> {
             return_type,
         );
 
-        if let Some(callee_name) = callee_name.as_deref() {
-            if tainted_return && Self::is_secret_liftable_call(callee_name, callee_is_pure) {
-                return self.maybe_wrap_secret(return_type, true);
-            }
+        if matches!(
+            callee_name.as_deref(),
+            Some("json.serialize" | "json.serialize_public")
+        ) && let Some(&value_ty) = checked_arg_types.first()
+            && self.native_json_enum_source_supported(value_ty)
+        {
+            self.check_source_facade_instantiation(
+                "json.json_serialize_native_enum",
+                value_ty,
+                span,
+            );
+        }
+
+        if matches!(
+            callee_name.as_deref(),
+            Some("json.serialize" | "json.serialize_public")
+        ) && let Some(&value_ty) = checked_arg_types.first()
+            && self.native_json_bitfield_source_supported(value_ty)
+        {
+            self.check_source_facade_instantiation(
+                "json.json_serialize_native_bitfield",
+                value_ty,
+                span,
+            );
+        }
+
+        if let Some(name @ ("json.parse" | "json.parse_exact")) = callee_name.as_deref()
+            && let Type::Result(value_ty, _) = self.interner.resolve(return_type)
+            && self.native_json_enum_parse_supported(*value_ty)
+        {
+            let source = if name == "json.parse" {
+                "json.json_parse_native_enum"
+            } else {
+                "json.json_parse_exact_native_enum"
+            };
+            self.check_source_facade_instantiation(source, *value_ty, span);
+        }
+
+        if let Some(name @ ("json.parse" | "json.parse_exact")) = callee_name.as_deref()
+            && let Type::Result(value_ty, _) = self.interner.resolve(return_type)
+            && self.native_json_bitfield_parse_supported(*value_ty)
+        {
+            let source = if name == "json.parse" {
+                "json.json_parse_native_bitfield"
+            } else {
+                "json.json_parse_exact_native_bitfield"
+            };
+            self.check_source_facade_instantiation(source, *value_ty, span);
+        }
+
+        if let Some(name @ ("json.serialize" | "json.serialize_public")) = callee_name.as_deref()
+            && let Some(&value_ty) = checked_arg_types.first()
+            && matches!(
+                self.interner.resolve(value_ty),
+                Type::Struct(_)
+                    | Type::Refinement { .. }
+                    | Type::Machine(_)
+                    | Type::MachineState { .. }
+                    | Type::List(_)
+                    | Type::Set(_)
+                    | Type::Map(_, _)
+                    | Type::Optional(_)
+                    | Type::Result(_, _)
+            )
+            && self.native_json_source_supported(value_ty, &mut HashSet::new())
+        {
+            self.check_source_facade_instantiation(name, value_ty, span);
+        }
+
+        if let Some(name @ ("json.parse" | "json.parse_exact")) = callee_name.as_deref()
+            && let Type::Result(value_ty, _) = self.interner.resolve(return_type)
+            && matches!(
+                self.interner.resolve(*value_ty),
+                Type::Struct(_)
+                    | Type::Refinement { .. }
+                    | Type::Machine(_)
+                    | Type::MachineState { .. }
+                    | Type::Secret(_)
+                    | Type::List(_)
+                    | Type::Set(_)
+                    | Type::Map(_, _)
+                    | Type::Optional(_)
+                    | Type::Result(_, _)
+                    | Type::Int8
+                    | Type::Int16
+                    | Type::Int32
+                    | Type::Uint16
+                    | Type::Uint32
+                    | Type::Float32
+            )
+            && self.native_json_parse_source_supported(*value_ty)
+        {
+            self.check_source_facade_instantiation(name, *value_ty, span);
+        }
+
+        if tainted_return {
+            return self.maybe_wrap_secret(return_type, true);
         }
 
         return_type
@@ -10874,9 +14851,18 @@ impl<'a> TypeChecker<'a> {
         let Expr::FieldAccess(base, field, _) = callee else {
             return None;
         };
-        let base_name = Self::extract_dotted_name(base)?;
-        let base_name = self.resolved_or_expanded_name(&base_name, base.span());
-        let owner_type = self.named_types.get(&base_name).copied()?;
+        let resolved_owner = self
+            .resolve
+            .resolutions
+            .get(&callee.span())
+            .and_then(|definition| {
+                let name = &self.resolve.scope_table.def(*definition).name;
+                self.named_types.get(name).copied()
+            });
+        let owner_type = resolved_owner.or_else(|| {
+            let base_name = self.expanded_dotted_expr_name(base)?;
+            self.named_types.get(&base_name).copied()
+        })?;
         let signature = match self.interner.resolve(owner_type) {
             Type::Interface(iid) => self
                 .interner
@@ -10917,6 +14903,27 @@ impl<'a> TypeChecker<'a> {
         let Expr::FieldAccess(_, field, _) = callee else {
             return;
         };
+        if checked_arg_types.first() == Some(&declared_owner)
+            && let Type::Interface(id) = self.interner.resolve(declared_owner)
+            && let Some(method_index) = self
+                .interner
+                .resolve_interface(*id)
+                .methods
+                .iter()
+                .position(|method| method.name == field.name)
+        {
+            let call = CheckedInterfaceCall {
+                interface_type: declared_owner,
+                method_index,
+            };
+            if let Some(active) = self.active_generic_instantiations.last_mut() {
+                active.interface_calls.insert(span, call);
+            } else {
+                self.interface_calls.insert(span, call);
+            }
+            self.clear_interface_method_value(callee.span());
+            return;
+        }
         let definition_index = match self.interner.resolve(declared_owner) {
             Type::Interface(_) => checked_arg_types.first().and_then(|owner_type| {
                 self.interface_method_definitions
@@ -10931,6 +14938,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(index) = definition_index {
             let source_span = self.method_definitions[index].source_span;
             self.record_method_call(span, source_span);
+            self.clear_interface_method_value(callee.span());
         }
     }
 
@@ -10971,6 +14979,221 @@ impl<'a> TypeChecker<'a> {
                 initial.span(),
             ));
         }
+    }
+
+    fn graphics_callback_mode_only_mismatch(
+        &self,
+        function_name: &str,
+        parameter_index: usize,
+        expected: TypeId,
+        actual: TypeId,
+    ) -> bool {
+        // The graphics callback audit reports E0372 for ownership modes. Keep
+        // E0300 for an actual parameter or return-type mismatch.
+        if function_name != "graphics.run" || !matches!(parameter_index, 3 | 4) {
+            return false;
+        }
+        matches!(
+            (self.interner.resolve(expected), self.interner.resolve(actual)),
+            (
+                Type::Function {
+                    params: expected_params,
+                    return_type: expected_return,
+                    ..
+                },
+                Type::Function {
+                    params: actual_params,
+                    return_type: actual_return,
+                    ..
+                }
+            ) if expected_params == actual_params && expected_return == actual_return
+        )
+    }
+
+    fn function_value_view_modes(&self, callee: &Expr) -> Option<Vec<bool>> {
+        self.resolve
+            .resolutions
+            .get(&callee.span())
+            .and_then(|definition| self.type_env.get(definition))
+            .and_then(|callee_type| match self.interner.resolve(*callee_type) {
+                Type::Function { view_params, .. } => Some(view_params.clone()),
+                _ => None,
+            })
+    }
+
+    fn unparenthesized(mut expression: &Expr) -> &Expr {
+        while let Expr::Paren(inner, _) = expression {
+            expression = inner;
+        }
+        expression
+    }
+
+    fn enum_constructor_parameter_names(&self, callee: &Expr) -> Option<Vec<String>> {
+        let (type_name, variant) = match Self::unparenthesized(callee) {
+            Expr::EnumVariant(owner, variant, _) => {
+                (self.resolved_symbol_name(&owner.name, owner.span), variant)
+            }
+            Expr::FieldAccess(owner, variant, span) => {
+                let name = if let Expr::Ident(owner) = owner.as_ref() {
+                    self.resolved_symbol_name(&owner.name, owner.span)
+                } else {
+                    let name = Self::extract_dotted_name(owner)?;
+                    self.resolved_or_expanded_name(&name, *span)
+                };
+                (name, variant)
+            }
+            _ => return None,
+        };
+        let enum_type = self.named_types.get(&type_name)?;
+        let Type::Enum(enum_id) = self.interner.resolve(*enum_type) else {
+            return None;
+        };
+        self.interner
+            .resolve_enum(*enum_id)
+            .variants
+            .iter()
+            .find(|candidate| candidate.name == variant.name)
+            .map(|variant| {
+                variant
+                    .fields
+                    .iter()
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            })
+    }
+
+    fn reject_unbound_argument_names(
+        &mut self,
+        function_name: &str,
+        args: &[ast::CallArg],
+    ) -> bool {
+        let mut rejected = false;
+        for argument in args {
+            if let Some(name) = &argument.name {
+                self.sink.emit(errors::unknown_named_argument(
+                    function_name,
+                    &name.name,
+                    name.span,
+                ));
+                rejected = true;
+            }
+        }
+        rejected
+    }
+
+    fn is_explicit_view(expression: &Expr) -> bool {
+        match expression {
+            Expr::Paren(inner, _) | Expr::Coarsen(inner, _) | Expr::Declassify(inner, _) => {
+                Self::is_explicit_view(inner)
+            }
+            Expr::View(_, _) => true,
+            // Clone acquires ownership, and FieldAccess reads a copied endpoint.
+            // Neither propagates an inner explicit View to this argument.
+            _ => false,
+        }
+    }
+
+    fn check_argument_view(&mut self, view_parameter: bool, explicit_view: bool, span: Span) {
+        if explicit_view
+            && !view_parameter
+            && !self
+                .sink
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code.code() == 375 && diagnostic.span == span)
+        {
+            self.sink
+                .emit(errors::view_argument_requires_view_parameter(span));
+        }
+    }
+
+    fn check_owned_argument(
+        &mut self,
+        view_parameter: bool,
+        argument: &Expr,
+        expected: TypeId,
+        actual: TypeId,
+    ) {
+        if (self.ownership_context != CheckedOwnershipContext::Ordinary
+            && self.caller_observation_data(actual, &mut HashSet::new()))
+            || Self::is_explicit_view(argument)
+            || expected == TypeInterner::ERROR
+            || actual == TypeInterner::ERROR
+            || crate::ownership::is_implicitly_copyable(&self.interner, actual)
+            || !self.initializer_is_view(argument)
+        {
+            return;
+        }
+        if !self.diagnosed_caller_view_arguments.insert(argument.span()) {
+            return;
+        }
+        self.sink.emit(if view_parameter {
+            Diagnostic::error(
+                401,
+                "cannot pass a borrowed value bare; write `view` to retain its owner",
+                argument.span(),
+            )
+        } else {
+            crate::ownership::cannot_pass_view_to_owned_parameter(argument.span())
+        });
+
+        let mut subject = argument;
+        while let Expr::View(inner, _)
+        | Expr::Paren(inner, _)
+        | Expr::Coarsen(inner, _)
+        | Expr::Declassify(inner, _) = subject
+        {
+            subject = inner;
+        }
+        if let Expr::Ident(ident) = subject {
+            self.diagnosed_owned_view_consumptions.insert(
+                ident.span,
+                crate::ownership::cannot_consume_view(&ident.name, ident.span),
+            );
+        }
+    }
+
+    fn check_pipeline_owned_argument(
+        &mut self,
+        view_parameter: bool,
+        source_index: usize,
+        piped_as_view: bool,
+        initial: Option<&Expr>,
+        extra_args: &[ast::CallArg],
+        expected: TypeId,
+        actual: TypeId,
+    ) {
+        let argument = if source_index == 0 {
+            // Explicit pipeline borrowing already has the E0375 gate. Only the
+            // first step has an original expression; later call results own
+            // their values and must not inherit the initial borrow provenance.
+            if piped_as_view {
+                return;
+            }
+            initial
+        } else {
+            Some(&extra_args[source_index - 1].value)
+        };
+        if let Some(argument) = argument {
+            self.check_owned_argument(view_parameter, argument, expected, actual);
+        }
+    }
+
+    fn check_pipeline_argument_view(
+        &mut self,
+        view_parameter: bool,
+        source_index: usize,
+        piped_as_view: bool,
+        extra_args: &[ast::CallArg],
+        span: Span,
+    ) {
+        let (explicit_view, argument_span) = if source_index == 0 {
+            (piped_as_view, span)
+        } else {
+            let argument = &extra_args[source_index - 1].value;
+            (Self::is_explicit_view(argument), argument.span())
+        };
+        self.check_argument_view(view_parameter, explicit_view, argument_span);
     }
 
     fn check_graphics_callback(&mut self, callback: &Expr, label: &str, views: &[bool]) {
@@ -11068,8 +15291,8 @@ impl<'a> TypeChecker<'a> {
         arg: &ast::CallArg,
     ) {
         if function_name == "graphics.run"
-            && expected != TypeInterner::ERROR
-            && got == TypeInterner::ERROR
+            && !matches!(self.interner.resolve(expected), Type::Capability(_))
+            && matches!(self.interner.resolve(got), Type::Capability(_))
         {
             self.sink.emit(errors::graphics_contract(
                 "graphics data and callbacks cannot be capability values",
@@ -11083,6 +15306,7 @@ impl<'a> TypeChecker<'a> {
         function_name: &str,
         args: &[ast::CallArg],
         span: Span,
+        expected_return_type: Option<TypeId>,
     ) -> TypeId {
         let template = self
             .generic_function_templates
@@ -11109,7 +15333,9 @@ impl<'a> TypeChecker<'a> {
             .iter()
             .map(|&source_index| self.check_expr(&args[source_index].value))
             .collect::<Vec<_>>();
-        let Some(inferred) = self.infer_generic_signature(&template, &actual_types) else {
+        let Some(mut inferred) =
+            self.infer_generic_signature(&template, &actual_types, expected_return_type)
+        else {
             self.emit_cannot_infer_generic(function_name, &template, span);
             return TypeInterner::ERROR;
         };
@@ -11118,7 +15344,7 @@ impl<'a> TypeChecker<'a> {
             && inferred
                 .concrete_args
                 .iter()
-                .any(|&ty| ty == TypeInterner::ERROR)
+                .any(|&ty| matches!(self.interner.resolve(ty), Type::Capability(_) | Type::Error))
         {
             self.sink
                 .emit(errors::random_capability_element(function_name, span));
@@ -11126,11 +15352,30 @@ impl<'a> TypeChecker<'a> {
         }
 
         let mut arguments_match = true;
-        for (&source_index, &expected) in argument_order.iter().zip(&inferred.param_types) {
+        for (parameter_index, (&source_index, &expected)) in
+            argument_order.iter().zip(&inferred.param_types).enumerate()
+        {
             let arg = &args[source_index];
+            self.check_argument_view(
+                template.params[parameter_index].view,
+                Self::is_explicit_view(&arg.value),
+                arg.value.span(),
+            );
             let got = self.check_expr_for_expected(&arg.value, expected, false);
+            self.check_owned_argument(
+                template.params[parameter_index].view,
+                &arg.value,
+                expected,
+                got,
+            );
             self.check_graphics_opaque_argument(function_name, expected, got, arg);
-            if !self.types_compatible(expected, got) {
+            if !self.graphics_callback_mode_only_mismatch(
+                function_name,
+                parameter_index,
+                expected,
+                got,
+            ) && !self.types_compatible(expected, got)
+            {
                 arguments_match = false;
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(expected),
@@ -11150,11 +15395,34 @@ impl<'a> TypeChecker<'a> {
                 &inferred.param_types,
                 &ordered_args,
             );
-            self.record_generic_call_for_template(span, &template, &inferred.concrete_args);
+            let expressions = ordered_args
+                .iter()
+                .map(|arg| Some(&arg.value))
+                .collect::<Vec<_>>();
+            let type_argument_reflections = self.reflection_arguments_for_inferred_call(
+                &template,
+                &inferred.concrete_args,
+                &actual_types,
+                &expressions,
+            );
+            Self::apply_inferred_reflection_kinds(
+                &template,
+                &type_argument_reflections,
+                &mut inferred.kind_subst,
+            );
+            self.record_generic_call_for_template(
+                span,
+                &template,
+                &inferred.concrete_args,
+                &inferred.kind_subst,
+                &type_argument_reflections,
+                &param_facts,
+            );
             self.check_generic_function_instantiation(
                 function_name,
                 &template,
                 &inferred.concrete_args,
+                type_argument_reflections,
                 inferred.subst,
                 inferred.kind_subst,
                 param_facts,
@@ -11167,6 +15435,7 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         template: &FunctionDef,
         actual_types: &[TypeId],
+        expected_return_type: Option<TypeId>,
     ) -> Option<InferredGenericSignature> {
         let type_params = template
             .type_params
@@ -11176,6 +15445,19 @@ impl<'a> TypeChecker<'a> {
         let mut subst = HashMap::new();
         for (param, &actual) in template.params.iter().zip(actual_types) {
             self.infer_type_params_from_type(&param.ty, actual, &type_params, &mut subst);
+        }
+        if let (Some(return_type), Some(expected)) =
+            (template.return_type.as_ref(), expected_return_type)
+            && template
+                .type_params
+                .iter()
+                .all(|param| subst.contains_key(&param.name))
+        {
+            // An empty argument may infer `never`. The result context can
+            // supply the concrete element type without replacing any type
+            // argument already established by a value-bearing argument. It
+            // cannot infer a previously unknown type argument by itself.
+            self.infer_type_params_from_type(return_type, expected, &type_params, &mut subst);
         }
         let concrete_args = template
             .type_params
@@ -11217,7 +15499,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_type_params_from_type(
-        &self,
+        &mut self,
         expected: &TypeExpr,
         actual: TypeId,
         type_params: &HashSet<&str>,
@@ -11225,9 +15507,15 @@ impl<'a> TypeChecker<'a> {
     ) {
         match expected {
             TypeExpr::Named(ident) if type_params.contains(ident.name.as_str()) => {
-                match subst.get_mut(&ident.name) {
-                    Some(inferred) if *inferred == TypeInterner::ERROR => *inferred = actual,
-                    Some(_) => {}
+                match subst.get(&ident.name).copied() {
+                    Some(TypeInterner::ERROR) => {
+                        subst.insert(ident.name.clone(), actual);
+                    }
+                    Some(inferred) => {
+                        if let Some(merged) = self.merge_inferred_never(inferred, actual, false) {
+                            subst.insert(ident.name.clone(), merged);
+                        }
+                    }
                     None => {
                         subst.insert(ident.name.clone(), actual);
                     }
@@ -11237,20 +15525,20 @@ impl<'a> TypeChecker<'a> {
                 self.infer_type_params_from_type(inner, actual, type_params, subst);
             }
             TypeExpr::Generic(owner, args, _) => {
-                match (owner.name.as_str(), self.interner.resolve(actual)) {
+                match (owner.name.as_str(), self.interner.resolve(actual).clone()) {
                     ("list", Type::List(inner))
                     | ("set", Type::Set(inner))
                     | ("optional", Type::Optional(inner))
                     | ("secret", Type::Secret(inner))
                         if args.len() == 1 =>
                     {
-                        self.infer_type_params_from_type(&args[0], *inner, type_params, subst);
+                        self.infer_type_params_from_type(&args[0], inner, type_params, subst);
                     }
                     ("map", Type::Map(key, value)) | ("result", Type::Result(key, value))
                         if args.len() == 2 =>
                     {
-                        self.infer_type_params_from_type(&args[0], *key, type_params, subst);
-                        self.infer_type_params_from_type(&args[1], *value, type_params, subst);
+                        self.infer_type_params_from_type(&args[0], key, type_params, subst);
+                        self.infer_type_params_from_type(&args[1], value, type_params, subst);
                     }
                     _ => {}
                 }
@@ -11259,14 +15547,15 @@ impl<'a> TypeChecker<'a> {
                 if let Type::Function {
                     params: actual_params,
                     return_type: actual_return,
-                } = self.interner.resolve(actual)
+                    ..
+                } = self.interner.resolve(actual).clone()
                 {
-                    for (expected, &actual) in params.iter().zip(actual_params) {
+                    for (expected, actual) in params.iter().zip(actual_params) {
                         self.infer_type_params_from_type(expected, actual, type_params, subst);
                     }
                     self.infer_type_params_from_type(
                         return_type,
-                        *actual_return,
+                        actual_return,
                         type_params,
                         subst,
                     );
@@ -11299,7 +15588,37 @@ impl<'a> TypeChecker<'a> {
         ));
     }
 
-    fn check_field_access(&mut self, base: &Expr, field: &ast::Ident, span: Span) -> TypeId {
+    fn check_field_access(
+        &mut self,
+        base: &Expr,
+        field: &ast::Ident,
+        span: Span,
+        projection: ResourceProjectionMode,
+    ) -> TypeId {
+        let owner_span = if self.resolve.resolutions.contains_key(&base.span()) {
+            base.span()
+        } else {
+            span
+        };
+        if let Some(owner) = Self::extract_dotted_name(base)
+            && let owner = self.resolved_or_expanded_name(&owner, owner_span)
+            && self.generic_struct_templates.contains_key(&owner)
+            && self
+                .resolve
+                .resolutions
+                .get(&owner_span)
+                .is_none_or(|definition| {
+                    matches!(
+                        self.resolve.scope_table.def(*definition).kind,
+                        DefKind::Struct | DefKind::Namespace
+                    )
+                })
+        {
+            // A generic declaration is not a concrete method owner. Reuse the
+            // missing-type-arguments diagnostic instead of letting an untyped
+            // namespace path escape into the backend as an error type.
+            return self.monomorphize_struct(&owner, &[], base.span());
+        }
         if !span.file.is_stdlib()
             && let Some(prefix) = Self::extract_dotted_name(base)
             && self.resolved_or_expanded_name(&format!("{prefix}.{}", field.name), span)
@@ -11339,9 +15658,12 @@ impl<'a> TypeChecker<'a> {
                     return method_ty;
                 }
             }
-            if let Some(type_id) = self.named_types.get(&base_ident.name).copied() {
+            let owner_name = self.resolved_symbol_name(&base_ident.name, owner_span);
+            if let Some(type_id) = self.named_types.get(&owner_name).copied() {
                 if matches!(self.interner.resolve(type_id), Type::Enum(_)) {
-                    return self.check_enum_variant(base_ident, field, &[], span);
+                    // Compiler-defined reflection enums have a named type but
+                    // their type name is not a runtime value in `type_env`.
+                    return self.check_enum_variant_by_type(type_id, field, &[], span);
                 }
                 if let Some(method_ty) = self.check_interface_method(type_id, field, span) {
                     return method_ty;
@@ -11369,12 +15691,13 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        let base_ty = self.check_expr(base);
+        let base_ty =
+            self.check_expr_with_resource_projection(base, ResourceProjectionMode::Borrowed);
         if base_ty == TypeInterner::ERROR {
             return TypeInterner::ERROR;
         }
 
-        match self.interner.resolve(base_ty) {
+        let field_ty = match self.interner.resolve(base_ty) {
             Type::Secret(inner) => match self.interner.resolve(*inner) {
                 Type::Struct(sid) => {
                     let struct_def = self.interner.resolve_struct(*sid);
@@ -11484,7 +15807,11 @@ impl<'a> TypeChecker<'a> {
                 ));
                 TypeInterner::ERROR
             }
+        };
+        if projection == ResourceProjectionMode::OwningCopy {
+            self.check_resource_copy(field_ty, span);
         }
+        field_ty
     }
 
     fn machine_state_field_type(
@@ -11552,15 +15879,25 @@ impl<'a> TypeChecker<'a> {
                 interface_def
                     .methods
                     .iter()
-                    .find(|m| m.name == field.name)
-                    .cloned(),
+                    .enumerate()
+                    .find(|(_, method)| method.name == field.name)
+                    .map(|(index, method)| (index, method.clone())),
             )
         };
 
-        if let Some(method) = method {
+        if let Some((method_index, method)) = method {
+            self.record_method_value(
+                span,
+                CheckedMethodValue::Interface {
+                    interface_type: type_id,
+                    method_index,
+                },
+            );
             let params = method.params.iter().map(|(_, ty, _)| *ty).collect();
+            let view_params = method.params.iter().map(|(_, _, view)| *view).collect();
             return Some(self.interner.intern(Type::Function {
                 params,
+                view_params,
                 return_type: method.return_type,
             }));
         }
@@ -11587,9 +15924,12 @@ impl<'a> TypeChecker<'a> {
                 .find(|m| m.name == field.name)
                 .cloned()
             {
+                self.record_source_method_value(type_id, &field.name, span);
                 let params = method.params.iter().map(|(_, ty, _)| *ty).collect();
+                let view_params = method.params.iter().map(|(_, _, view)| *view).collect();
                 return Some(self.interner.intern(Type::Function {
                     params,
+                    view_params,
                     return_type: method.return_type,
                 }));
             }
@@ -11600,6 +15940,7 @@ impl<'a> TypeChecker<'a> {
                 "to_bytes" => {
                     return Some(self.interner.intern(Type::Function {
                         params: vec![type_id],
+                        view_params: vec![false],
                         return_type: TypeInterner::BYTES,
                     }));
                 }
@@ -11609,6 +15950,7 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(type_id, TypeInterner::STRING));
                     return Some(self.interner.intern(Type::Function {
                         params: vec![TypeInterner::BYTES],
+                        view_params: vec![false],
                         return_type: result_ty,
                     }));
                 }
@@ -11622,9 +15964,12 @@ impl<'a> TypeChecker<'a> {
             .and_then(|methods| methods.get(&field.name))
             .cloned()
         {
+            self.record_source_method_value(type_id, &field.name, span);
             let params = method.params.iter().map(|(_, ty, _)| *ty).collect();
+            let view_params = method.params.iter().map(|(_, _, view)| *view).collect();
             return Some(self.interner.intern(Type::Function {
                 params,
+                view_params,
                 return_type: method.return_type,
             }));
         }
@@ -11687,8 +16032,9 @@ impl<'a> TypeChecker<'a> {
                 return enum_ty;
             }
 
-            let params = variant_def.fields.iter().map(|(_, ty)| *ty).collect();
+            let params: Vec<_> = variant_def.fields.iter().map(|(_, ty)| *ty).collect();
             return self.interner.intern(Type::Function {
+                view_params: vec![false; params.len()],
                 params,
                 return_type: enum_ty,
             });
@@ -11731,6 +16077,16 @@ impl<'a> TypeChecker<'a> {
         span: Span,
     ) -> TypeId {
         let struct_def = self.interner.resolve_struct(sid).clone();
+        if self.interner.is_compiler_metadata_struct(sid) {
+            self.sink.emit(errors::reflection_metadata_constructor(
+                &struct_def.name,
+                span,
+            ));
+            for arg in args {
+                self.check_expr(&arg.value);
+            }
+            return TypeInterner::ERROR;
+        }
         let mut assigned = vec![false; struct_def.fields.len()];
         let mut source_indices = vec![None; struct_def.fields.len()];
         let mut arguments_valid = true;
@@ -11790,6 +16146,7 @@ impl<'a> TypeChecker<'a> {
             } else {
                 self.check_expr_for_expected(&arg.value, expected_ty, false)
             };
+            self.check_owned_resource_payload(&arg.value, arg_ty);
             if self.is_refinement_type(expected_ty) && self.can_refine_from(arg_ty, expected_ty) {
                 continue;
             }
@@ -11994,6 +16351,7 @@ impl<'a> TypeChecker<'a> {
 
         for (arg, (field_name, expected_ty)) in payload_args.iter().zip(state_def.fields.iter()) {
             let arg_ty = self.check_expr_for_expected(&arg.value, *expected_ty, false);
+            self.check_owned_resource_payload(&arg.value, arg_ty);
             if !self.types_compatible(*expected_ty, arg_ty) {
                 self.sink.emit(errors::argument_type_mismatch(
                     field_name,
@@ -12051,6 +16409,15 @@ impl<'a> TypeChecker<'a> {
                 None
             }
         };
+
+        if source_state.is_some() && self.type_contains_resource_data(source_ty) {
+            self.check_argument_view(
+                false,
+                Self::is_explicit_view(&args[0].value),
+                args[0].value.span(),
+            );
+            self.check_owned_argument(false, &args[0].value, source_ty, source_ty);
+        }
 
         let target_ident = match &args[1].value {
             Expr::Ident(ident) if args[1].name.is_none() => ident,
@@ -12116,6 +16483,7 @@ impl<'a> TypeChecker<'a> {
 
         for (arg, (field_name, expected_ty)) in payload_args.iter().zip(target_def.fields.iter()) {
             let arg_ty = self.check_expr_for_expected(&arg.value, *expected_ty, false);
+            self.check_owned_resource_payload(&arg.value, arg_ty);
             if !self.types_compatible(*expected_ty, arg_ty) {
                 self.sink.emit(errors::argument_type_mismatch(
                     field_name,
@@ -12209,17 +16577,24 @@ impl<'a> TypeChecker<'a> {
 
     fn check_list_construct(&mut self, elems: &[Expr]) -> TypeId {
         if elems.is_empty() {
-            // Empty list: list[<error>] since we can't infer the element type.
-            return self.interner.intern(Type::List(TypeInterner::ERROR));
+            // An empty collection has no element value. Keep that fact typed
+            // as an uninhabited element until an expected type supplies one.
+            return self.interner.intern(Type::List(TypeInterner::NEVER));
         }
 
         let first_ty = self.check_expr(&elems[0]);
-        let (element_ty, mut tainted) = self.strip_secret_type(first_ty);
+        self.check_owned_resource_payload(&elems[0], first_ty);
+        let (mut element_ty, mut tainted) = self.strip_secret_type(first_ty);
         for elem in &elems[1..] {
             let elem_ty = self.check_expr(elem);
+            self.check_owned_resource_payload(elem, elem_ty);
             let (elem_base_ty, elem_secret) = self.strip_secret_type(elem_ty);
-            if !self.types_compatible(element_ty, elem_base_ty)
-                && !self.types_compatible(elem_base_ty, element_ty)
+            if let Some(merged) = self.merge_inferred_never(element_ty, elem_base_ty, false) {
+                element_ty = merged;
+            } else if !self.types_compatible(element_ty, elem_base_ty)
+                && (self.contains_inferred_never(element_ty)
+                    || self.contains_inferred_never(elem_base_ty)
+                    || !self.types_compatible(elem_base_ty, element_ty))
             {
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(element_ty),
@@ -12247,6 +16622,7 @@ impl<'a> TypeChecker<'a> {
                 expected_element_ty,
                 allow_refinement_handle,
             );
+            self.check_owned_resource_payload(elem, elem_ty);
             if !self.types_compatible(expected_element_ty, elem_ty) {
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(expected_element_ty),
@@ -12263,19 +16639,24 @@ impl<'a> TypeChecker<'a> {
         if entries.is_empty() {
             return self
                 .interner
-                .intern(Type::Map(TypeInterner::ERROR, TypeInterner::ERROR));
+                .intern(Type::Map(TypeInterner::NEVER, TypeInterner::NEVER));
         }
 
         let first_key_ty = self.check_expr(&entries[0].0);
         let first_value_ty = self.check_expr(&entries[0].1);
-        let (key_ty, mut key_tainted) = self.strip_secret_type(first_key_ty);
-        let (value_ty, mut value_tainted) = self.strip_secret_type(first_value_ty);
+        self.check_owned_resource_payload(&entries[0].1, first_value_ty);
+        let (mut key_ty, mut key_tainted) = self.strip_secret_type(first_key_ty);
+        let (mut value_ty, mut value_tainted) = self.strip_secret_type(first_value_ty);
 
         for (key_expr, value_expr) in &entries[1..] {
             let entry_key_ty = self.check_expr(key_expr);
             let (entry_key_base_ty, entry_key_secret) = self.strip_secret_type(entry_key_ty);
-            if !self.types_compatible(key_ty, entry_key_base_ty)
-                && !self.types_compatible(entry_key_base_ty, key_ty)
+            if let Some(merged) = self.merge_inferred_never(key_ty, entry_key_base_ty, false) {
+                key_ty = merged;
+            } else if !self.types_compatible(key_ty, entry_key_base_ty)
+                && (self.contains_inferred_never(key_ty)
+                    || self.contains_inferred_never(entry_key_base_ty)
+                    || !self.types_compatible(entry_key_base_ty, key_ty))
             {
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(key_ty),
@@ -12286,9 +16667,14 @@ impl<'a> TypeChecker<'a> {
             key_tainted |= entry_key_secret;
 
             let entry_value_ty = self.check_expr(value_expr);
+            self.check_owned_resource_payload(value_expr, entry_value_ty);
             let (entry_value_base_ty, entry_value_secret) = self.strip_secret_type(entry_value_ty);
-            if !self.types_compatible(value_ty, entry_value_base_ty)
-                && !self.types_compatible(entry_value_base_ty, value_ty)
+            if let Some(merged) = self.merge_inferred_never(value_ty, entry_value_base_ty, false) {
+                value_ty = merged;
+            } else if !self.types_compatible(value_ty, entry_value_base_ty)
+                && (self.contains_inferred_never(value_ty)
+                    || self.contains_inferred_never(entry_value_base_ty)
+                    || !self.types_compatible(entry_value_base_ty, value_ty))
             {
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(value_ty),
@@ -12331,6 +16717,7 @@ impl<'a> TypeChecker<'a> {
                 expected_value_ty,
                 allow_refinement_handle,
             );
+            self.check_owned_resource_payload(value_expr, value_ty);
             if !self.types_compatible(expected_value_ty, value_ty) {
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(expected_value_ty),
@@ -12368,6 +16755,7 @@ impl<'a> TypeChecker<'a> {
             expected_payload_ty,
             allow_refinement_handle,
         );
+        self.check_owned_resource_payload(payload, payload_ty);
         if !self.types_compatible(expected_payload_ty, payload_ty) {
             self.sink.emit(errors::type_mismatch(
                 &self.type_name(expected_payload_ty),
@@ -12411,6 +16799,8 @@ impl<'a> TypeChecker<'a> {
                 if let Some(name) = bind_name {
                     if let Some(def_id) = self.declaration_def_id(name.span) {
                         self.type_env.insert(def_id, err_ty);
+                        self.record_expression_type(name.span, err_ty);
+                        self.record_assignment_binding(name, false, false);
                         self.record_closure_local(def_id);
                     }
                 }
@@ -12453,6 +16843,7 @@ impl<'a> TypeChecker<'a> {
 
         match last_stmt {
             Stmt::Return(_) => {}
+            Stmt::Respond(_) if self.current_respond_type.is_some() => {}
             Stmt::Expr(expr_stmt) => {
                 if let Expr::Default(default_value, _) = &expr_stmt.expr {
                     if success_ty != TypeInterner::ERROR {
@@ -12461,7 +16852,7 @@ impl<'a> TypeChecker<'a> {
                             .get(&expr_stmt.expr.span())
                             .copied()
                             .unwrap_or(TypeInterner::ERROR);
-                        if !self.types_compatible(success_ty, default_ty) {
+                        if success_ty != default_ty {
                             default_ty =
                                 self.check_expr_for_expected(default_value, success_ty, false);
                             self.record_expression_type(expr_stmt.expr.span(), default_ty);
@@ -12504,13 +16895,19 @@ impl<'a> TypeChecker<'a> {
                 self.resolve_type_expr(inner)
             }
             TypeExpr::Function(param_types, return_type, _span) => {
+                self.check_return_view_annotation(return_type);
                 let params = param_types
                     .iter()
                     .map(|t| self.resolve_type_expr(t))
                     .collect();
+                let view_params = param_types
+                    .iter()
+                    .map(|parameter| matches!(parameter, TypeExpr::View(_, _)))
+                    .collect();
                 let ret = self.resolve_type_expr(return_type);
                 self.interner.intern(Type::Function {
                     params,
+                    view_params,
                     return_type: ret,
                 })
             }
@@ -12576,13 +16973,14 @@ impl<'a> TypeChecker<'a> {
             _ if self.type_aliases.contains_key(&lookup_name) => {
                 self.resolve_type_alias(&lookup_name, span)
             }
-            // Capability types are recognised but opaque — no further type
-            // checking is performed on values of these types.
-            _ if capability::is_capability_type(name) => TypeInterner::ERROR,
-            _ => {
-                self.sink.emit(errors::unknown_type(name, span));
-                TypeInterner::ERROR
-            }
+            // Capabilities are opaque values, but retain exact nominal identity.
+            _ => match CapabilityKind::from_name(name) {
+                Some(kind) => TypeInterner::capability(kind),
+                None => {
+                    self.sink.emit(errors::unknown_type(name, span));
+                    TypeInterner::ERROR
+                }
+            },
         }
     }
 
@@ -12782,6 +17180,17 @@ impl<'a> TypeChecker<'a> {
             methods: Vec::new(),
         });
         let ty = self.interner.intern(Type::Struct(sid));
+        if self
+            .interner
+            .register_nominal_type_arguments(ty, type_args.to_vec())
+            .is_err()
+        {
+            self.sink.emit(errors::unknown_type(
+                "invalid canonical nominal type arguments",
+                span,
+            ));
+            return TypeInterner::ERROR;
+        }
         self.monomorphized_structs.insert(cache_key, ty);
 
         // Build substitution map: type param name → concrete TypeId.
@@ -13085,13 +17494,6 @@ fn comptime_type_variants_binding(expr: &Expr) -> Option<&TypeExpr> {
     type_args.first()
 }
 
-fn direct_reflected_loop_owner_type(expr: &Expr) -> Option<&TypeExpr> {
-    comptime_type_fields_binding(expr)
-        .or_else(|| comptime_type_variants_binding(expr))
-        .or_else(|| comptime_type_machine_states_binding(expr))
-        .or_else(|| comptime_type_machine_fields_binding(expr))
-}
-
 fn comptime_type_variant_value_binding(expr: &Expr) -> Option<&TypeExpr> {
     let Expr::GenericCall(callee, type_args, args, _) = expr else {
         return None;
@@ -13327,6 +17729,7 @@ mod tests {
                 scope_table: self.scope_table,
                 resolutions: self.resolutions,
                 namespace_aliases: HashMap::new(),
+                resource_kernels: jett_resolve::ResolvedResourceKernels::default(),
                 diagnostics: Vec::new(),
             }
         }
@@ -13373,6 +17776,1337 @@ mod tests {
             .into_iter()
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .collect()
+    }
+
+    const NATIVE_JSON_QUALIFIED_STATE_SCHEMA: &str = r#"namespace app
+machine Session:
+    states:
+        ready(count: int64)
+        cached(entries: map[int64, int64])
+    transitions:
+        ready to cached
+type Ready = Session at ready
+type Cached = Session at cached
+struct Snapshot:
+    current: Ready
+    history: list[Ready]
+"#;
+
+    #[test]
+    fn native_json_qualified_state_selectors_follow_the_public_payload_boundary() {
+        let parsed = parse(NATIVE_JSON_QUALIFIED_STATE_SCHEMA, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolve = jett_resolve::resolve(&parsed.module);
+        assert!(
+            resolve
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            resolve.diagnostics
+        );
+        let mut checker = TypeChecker::new(&resolve, CheckOptions::default());
+        checker.check_module(&parsed.module);
+        assert!(
+            checker
+                .sink
+                .diagnostics()
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            checker.sink.diagnostics()
+        );
+        let ready = checker.named_types["app.Ready"];
+        let cached = checker.named_types["app.Cached"];
+        let bare = checker.named_types["app.Session"];
+        let snapshot = checker.named_types["app.Snapshot"];
+        let ready_list = checker.interner.intern(Type::List(ready));
+        let ready_optional = checker.interner.intern(Type::Optional(ready));
+        let ready_map = checker
+            .interner
+            .intern(Type::Map(TypeInterner::STRING, ready));
+        let ready_result = checker
+            .interner
+            .intern(Type::Result(ready, TypeInterner::STRING));
+        let bare_list = checker.interner.intern(Type::List(bare));
+        for (ty, expected) in [
+            (ready, true),
+            (snapshot, true),
+            (ready_list, true),
+            (ready_optional, true),
+            (ready_map, true),
+            (ready_result, true),
+            (cached, false),
+            (bare, false),
+            (bare_list, false),
+        ] {
+            assert_eq!(
+                checker.native_json_source_supported(ty, &mut HashSet::new()),
+                expected,
+                "serializer for {}",
+                checker.type_name(ty)
+            );
+            assert_eq!(
+                checker.native_json_parse_source_supported(ty),
+                expected,
+                "parser for {}",
+                checker.type_name(ty)
+            );
+        }
+        assert!(checker.json_non_string_map_key_types(ready).is_empty());
+        assert!(checker.json_unsupported_parse_types(ready).is_empty());
+        assert!(checker.json_unsupported_serialize_types(ready).is_empty());
+        assert_eq!(checker.json_non_string_map_key_types(bare), ["int64"]);
+        assert_eq!(checker.json_non_string_map_key_types(cached), ["int64"]);
+        assert_eq!(
+            checker
+                .interner
+                .resolve_machine(match checker.interner.resolve(bare) {
+                    Type::Machine(machine) => *machine,
+                    _ => panic!("checked machine owner"),
+                })
+                .states
+                .len(),
+            2,
+            "qualification does not filter declared machine metadata"
+        );
+    }
+
+    #[test]
+    fn native_json_serializers_keep_inferred_uninhabited_slots_in_source_targets() {
+        for serializer in ["serialize", "serialize_public"] {
+            // These minimal trusted declarations isolate source-facade facts.
+            // Linked driver gates must exercise the actual reflected bodies.
+            let source = format!(
+                r#"namespace json
+export function serialize[T](view value: T) returns string:
+    return ""
+export function serialize_public[T](view value: T) returns string:
+    return ""
+namespace app
+function direct[T](view values: list[T]) returns string:
+    return json.{serializer}[list[T]](view values)
+function piped[T](view values: list[T]) returns string:
+    return view values into json.{serializer}[list[T]]()
+function main() returns nothing:
+    string inferred = direct(view list())
+    string pipeline = piped(view list())
+    string concrete = direct[int64](view list())
+    return nothing
+"#
+            );
+            let parsed = parse(&source, FileId::new(STDLIB_FILE_ID_START));
+            assert!(
+                parsed.errors.is_empty(),
+                "{serializer}: {:?}",
+                parsed.errors
+            );
+            let resolved = jett_resolve::resolve(&parsed.module);
+            assert!(
+                resolved
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+                "{serializer}: {:?}",
+                resolved.diagnostics
+            );
+            let checked = check(&parsed.module, &resolved);
+            assert!(
+                checked
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+                "{serializer}: {:?}",
+                checked.diagnostics
+            );
+            let mut targets = Vec::new();
+            for instance in &checked.generic_function_instantiations {
+                let name = resolved.scope_table.def(instance.definition).name.as_str();
+                if !matches!(name, "app.direct" | "app.piped") {
+                    continue;
+                }
+                let [element] = instance.concrete_args.as_slice() else {
+                    panic!("one inferred or declared element argument");
+                };
+                assert!(matches!(
+                    *element,
+                    TypeInterner::NEVER | TypeInterner::INT64
+                ));
+                let calls = instance
+                    .generic_calls
+                    .values()
+                    .filter(|call| {
+                        resolved.scope_table.def(call.definition).name
+                            == format!("json.{serializer}")
+                    })
+                    .collect::<Vec<_>>();
+                let [call] = calls.as_slice() else {
+                    panic!("{name}[{element:?}] selects exactly one checked JSON source facade");
+                };
+                let [target] = call.concrete_args.as_slice() else {
+                    panic!("one exact JSON target");
+                };
+                assert!(
+                    matches!(checked.interner.resolve(*target), Type::List(inner) if inner == element)
+                );
+                assert_eq!(instance.parameter_types, [*target]);
+                assert_eq!(instance.return_type, TypeInterner::STRING);
+                assert!(instance.intrinsic_ids.values().any(|id| {
+                    *id == if serializer == "serialize" {
+                        IntrinsicId::JsonSerialize
+                    } else {
+                        IntrinsicId::JsonSerializePublic
+                    }
+                }));
+                targets.push((name, *element));
+            }
+            assert_eq!(targets.len(), 3, "{serializer}: {targets:?}");
+            assert!(targets.contains(&("app.direct", TypeInterner::NEVER)));
+            assert!(targets.contains(&("app.piped", TypeInterner::NEVER)));
+            assert!(targets.contains(&("app.direct", TypeInterner::INT64)));
+
+            let unsupported = format!(
+                "namespace app\nfunction encode(view values: list[function() returns int64]) returns string:\n    return json.{serializer}[list[function() returns int64]](view values)\n"
+            );
+            let errors = check_source_errors(&unsupported);
+            assert!(
+                errors.iter().any(|error| error.code.code() == 347),
+                "{errors:?}"
+            );
+
+            // An empty iteration still cannot fabricate an inhabited Never.
+            let invalid_body = format!(
+                "namespace app\nfunction encode[T](view values: list[T]) returns string:\n    for item in view values:\n        T fabricated = 7\n    return json.{serializer}[list[T]](view values)\nfunction main() returns nothing:\n    string outcome = encode(view list())\n    return nothing\n"
+            );
+            let errors = check_source_errors(&invalid_body);
+            assert!(
+                errors.iter().any(|error| error.message.contains("<never>")),
+                "empty source bodies remain checked: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn qualified_machine_state_loops_check_all_declared_field_bodies_and_aliases() {
+        let source = r#"namespace app
+type Count = int64
+type Entries = map[int64, int64]
+type BackupCount = int64
+machine Session:
+    states:
+        empty
+        ready(count: Count)
+        cached(entries: Entries, backup: BackupCount)
+    transitions:
+        empty to ready
+        ready to cached
+type Ready = Session at ready
+type Empty = Session at empty
+function all_states() returns nothing:
+    for state in type.machine_states[Session at ready]():
+        for field in state.fields:
+            comptime type All = field.type_info:
+                string name = type.name[All]()
+    return nothing
+function all_empty_target_states() returns nothing:
+    for state in type.machine_states[Session at empty]():
+        for field in state.fields:
+            comptime type AllEmpty = field.type_info:
+                string name = type.name[AllEmpty]()
+    return nothing
+function selected(view value: Ready) returns nothing:
+    for field in type.machine_state_value[Session at ready](view value).fields:
+        comptime type Selected = field.type_info:
+            string name = type.name[Selected]()
+    return nothing
+function selected_empty(view value: Empty) returns nothing:
+    for field in type.machine_state_value[Session at empty](view value).fields:
+        comptime type SelectedEmpty = field.type_info:
+            string name = type.name[SelectedEmpty]()
+    return nothing
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        let bindings_for = |name: &str| {
+            let prefix = format!("comptime type {name} =");
+            result
+                .comptime_type_bindings
+                .iter()
+                .find_map(|(span, bindings)| {
+                    source[span.start as usize..span.end as usize]
+                        .starts_with(&prefix)
+                        .then_some(bindings)
+                })
+                .expect("checked source binding")
+        };
+        for name in ["All", "AllEmpty"] {
+            let bindings = bindings_for(name);
+            assert_eq!(bindings.len(), 3, "{name}");
+            assert_eq!(
+                bindings
+                    .iter()
+                    .map(|binding| binding.reflection.type_name.as_str())
+                    .collect::<Vec<_>>(),
+                ["app.Count", "app.Entries", "app.BackupCount"],
+                "{name}: source aliases follow declared field order"
+            );
+            assert_eq!(bindings[0].bound_type, TypeInterner::INT64);
+            assert!(matches!(
+                result.interner.resolve(bindings[1].bound_type),
+                Type::Map(key, value)
+                    if *key == TypeInterner::INT64 && *value == TypeInterner::INT64
+            ));
+            assert_eq!(bindings[2].bound_type, TypeInterner::INT64);
+            for (index, binding) in bindings.iter().enumerate() {
+                assert_eq!(
+                    binding.selection,
+                    CheckedComptimeTypeSelection::ReflectedIteration(index)
+                );
+                assert_eq!(
+                    binding
+                        .body
+                        .intrinsic_type_arguments
+                        .values()
+                        .collect::<Vec<_>>(),
+                    vec![&vec![binding.bound_type]],
+                    "{name}: each alias has its own checked type.name body"
+                );
+            }
+        }
+        let selected = bindings_for("Selected");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].reflection.type_name, "app.Count");
+        assert_eq!(selected[0].bound_type, TypeInterner::INT64);
+        assert!(bindings_for("SelectedEmpty").is_empty());
+    }
+
+    #[test]
+    fn native_json_parsers_keep_inferred_uninhabited_source_targets() {
+        for parser in ["parse", "parse_exact"] {
+            for (shape, params, carrier, seed, expected_args) in [
+                ("list", "T", "list[T]", "list()", vec![TypeInterner::NEVER]),
+                (
+                    "optional",
+                    "T",
+                    "optional[T]",
+                    "none",
+                    vec![TypeInterner::NEVER],
+                ),
+                (
+                    "missing_error",
+                    "Value, Failure",
+                    "result[Value, Failure]",
+                    "ok(7)",
+                    vec![TypeInterner::INT64, TypeInterner::NEVER],
+                ),
+                (
+                    "missing_success",
+                    "Value, Failure",
+                    "result[Value, Failure]",
+                    "fail(\"seed\")",
+                    vec![TypeInterner::NEVER, TypeInterner::STRING],
+                ),
+            ] {
+                // Trusted facades isolate checked target identity; the
+                // actual stdlib/link gates must prove occupied Never decoding fails.
+                let source = format!(
+                    r#"namespace json
+export function parse[T](raw: string) returns result[T, string]:
+    return fail(raw)
+export function parse_exact[T](raw: string) returns result[T, string]:
+    return fail(raw)
+namespace app
+function direct[{params}](view shape: {carrier}, raw: string) returns string:
+    {carrier} payload = json.{parser}[{carrier}](raw) handle error:
+        return error
+    return "selected"
+function piped[{params}](view shape: {carrier}, raw: string) returns string:
+    {carrier} payload = raw into json.{parser}[{carrier}]() handle error:
+        return error
+    return "selected"
+function main() returns nothing:
+    string direct_value = direct(view {seed}, "null")
+    string pipeline_value = piped(view {seed}, "null")
+    return nothing
+"#
+                );
+                let parsed = parse(&source, FileId::new(STDLIB_FILE_ID_START));
+                assert!(
+                    parsed.errors.is_empty(),
+                    "{parser}, {shape}: {:?}",
+                    parsed.errors
+                );
+                let resolved = jett_resolve::resolve(&parsed.module);
+                assert!(
+                    resolved.diagnostics.iter().all(|diagnostic| {
+                        diagnostic.severity != jett_diagnostics::Severity::Error
+                    }),
+                    "{parser}, {shape}: {:?}",
+                    resolved.diagnostics
+                );
+                let checked = check(&parsed.module, &resolved);
+                assert!(
+                    checked.diagnostics.iter().all(|diagnostic| {
+                        diagnostic.severity != jett_diagnostics::Severity::Error
+                    }),
+                    "{parser}, {shape}: {:?}",
+                    checked.diagnostics
+                );
+                let mut names = Vec::new();
+                for instance in &checked.generic_function_instantiations {
+                    let name = resolved.scope_table.def(instance.definition).name.as_str();
+                    if !matches!(name, "app.direct" | "app.piped") {
+                        continue;
+                    }
+                    assert_eq!(
+                        instance.concrete_args, expected_args,
+                        "{parser}, {shape}, {name}"
+                    );
+                    let calls = instance
+                        .generic_calls
+                        .values()
+                        .filter(|call| {
+                            resolved.scope_table.def(call.definition).name
+                                == format!("json.{parser}")
+                        })
+                        .collect::<Vec<_>>();
+                    let [call] = calls.as_slice() else {
+                        panic!("one exact parser source target: {parser}, {shape}, {name}");
+                    };
+                    let [target] = call.concrete_args.as_slice() else {
+                        panic!("one parser type argument");
+                    };
+                    let children = match checked.interner.resolve(*target) {
+                        Type::List(inner) | Type::Optional(inner) => vec![*inner],
+                        Type::Result(ok, error) => vec![*ok, *error],
+                        _ => panic!("exact inferred carrier target"),
+                    };
+                    assert_eq!(children, expected_args, "{parser}, {shape}, {name}");
+                    assert_eq!(instance.parameter_types, [*target, TypeInterner::STRING]);
+                    assert_eq!(instance.return_type, TypeInterner::STRING);
+                    assert!(instance.intrinsic_ids.values().any(|id| {
+                        *id == if parser == "parse" {
+                            IntrinsicId::JsonParse
+                        } else {
+                            IntrinsicId::JsonParseExact
+                        }
+                    }));
+                    names.push(name);
+                }
+                names.sort_unstable();
+                assert_eq!(names, ["app.direct", "app.piped"], "{parser}, {shape}");
+            }
+        }
+    }
+
+    #[test]
+    fn native_json_parser_pipelines_keep_checked_source_targets_and_owned_inputs() {
+        for parser in ["parse", "parse_exact"] {
+            // Minimal trusted facades isolate checker target selection. Actual
+            // stdlib execution is covered by the linked driver fixtures.
+            let source = format!(
+                r#"namespace json
+export function parse[T](raw: string) returns result[T, string]:
+    return fail(raw)
+export function parse_exact[T](raw: string) returns result[T, string]:
+    return fail(raw)
+namespace app
+machine Session:
+    states:
+        ready(count: int64)
+        cached(entries: map[int64, int64])
+    transitions:
+        ready to cached
+type Ready = Session at ready
+function direct(raw: string) returns result[Ready, string]:
+    return json.{parser}[Ready](raw)
+function piped(raw: string) returns result[Ready, string]:
+    return raw into json.{parser}[Ready]()
+function primitive(raw: string) returns result[int64, string]:
+    return raw into json.{parser}[int64]()
+function nested(raw: string) returns result[list[Ready], string]:
+    return raw into json.{parser}[list[Ready]]()
+function preserve(raw: string) returns string:
+    Ready value = clone raw into json.{parser}[Ready]() handle error:
+        return raw
+    return raw
+"#
+            );
+            let file_id = FileId::new(STDLIB_FILE_ID_START);
+            let parsed = parse(&source, file_id);
+            assert!(parsed.errors.is_empty(), "{parser}: {:?}", parsed.errors);
+            let resolve = jett_resolve::resolve(&parsed.module);
+            assert!(
+                resolve
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+                "{parser}: {:?}",
+                resolve.diagnostics
+            );
+            let checked = check(&parsed.module, &resolve);
+            assert!(
+                checked
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+                "{parser}: {:?}",
+                checked.diagnostics
+            );
+            let call_span = |name: &str| {
+                let function = parsed
+                    .module
+                    .items
+                    .iter()
+                    .find_map(|item| match item {
+                        Item::Function(function) if function.name.name == name => Some(function),
+                        _ => None,
+                    })
+                    .expect("source function");
+                let Stmt::Return(returned) = &function.body.stmts[0] else {
+                    panic!("source function returns its checked call");
+                };
+                match returned.value.as_ref().expect("returned expression") {
+                    Expr::GenericCall(_, _, _, span) => *span,
+                    Expr::Pipeline(_, steps, _) => {
+                        assert_eq!(steps.len(), 1);
+                        steps[0].span
+                    }
+                    _ => panic!("direct or pipeline JSON call"),
+                }
+            };
+            let direct = &checked.generic_calls[&call_span("direct")];
+            let piped = &checked.generic_calls[&call_span("piped")];
+            assert_eq!(piped, direct, "same concrete source target for {parser}");
+            assert_eq!(
+                resolve.scope_table.def(piped.definition).name,
+                format!("json.{parser}")
+            );
+            let primitive = &checked.generic_calls[&call_span("primitive")];
+            assert_eq!(primitive.definition, direct.definition);
+            assert_eq!(primitive.concrete_args, [TypeInterner::INT64]);
+            let nested = &checked.generic_calls[&call_span("nested")];
+            assert_eq!(nested.definition, direct.definition);
+            assert!(matches!(
+                checked.interner.resolve(nested.concrete_args[0]),
+                Type::List(inner) if direct.concrete_args == [*inner]
+            ));
+            for function in ["piped", "primitive", "nested"] {
+                let span = call_span(function);
+                assert_eq!(
+                    checked.intrinsic_ids[&span],
+                    if parser == "parse" {
+                        IntrinsicId::JsonParse
+                    } else {
+                        IntrinsicId::JsonParseExact
+                    }
+                );
+            }
+        }
+    }
+
+    fn binding_mode_named(
+        modes: &HashMap<Span, CheckedBindingMode>,
+        source: &str,
+        name: &str,
+    ) -> (Span, CheckedBindingMode) {
+        let mut matching = modes
+            .iter()
+            .filter(|(span, _)| &source[span.start as usize..span.end as usize] == name);
+        let (&span, &mode) = matching.next().expect("binding mode should be recorded");
+        assert!(
+            matching.next().is_none(),
+            "binding name must be unique in this body"
+        );
+        (span, mode)
+    }
+
+    #[test]
+    fn checked_binding_modes_borrowed_sum_projections_keep_exact_original_sources() {
+        let source = r#"function inspect(view optional_source: optional[list[int64]], view result_source: result[list[int64], string]) returns nothing:
+    list[int64] optional_alias = view((view optional_source) handle:
+        return nothing
+    )
+    list[int64] result_alias = view((view result_source) handle error:
+        return nothing
+    )
+    return nothing
+"#;
+        let parsed = parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        let checked = check(&parsed.module, &resolved);
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .chain(&checked.diagnostics)
+                .all(|error| { error.severity != jett_diagnostics::Severity::Error }),
+            "{:?}: {:?}",
+            resolved.diagnostics,
+            checked.diagnostics
+        );
+        for (alias, backing) in [
+            ("optional_alias", "optional_source"),
+            ("result_alias", "result_source"),
+        ] {
+            let (_, mode) = binding_mode_named(&checked.binding_modes, source, alias);
+            let CheckedBindingMode::View {
+                source: CheckedViewSource::Binding(definition),
+            } = mode
+            else {
+                panic!("expected stable borrowed sum projection: {mode:?}");
+            };
+            assert_eq!(resolved.scope_table.def(definition).name, backing);
+            assert_eq!(resolved.scope_table.def(definition).kind, DefKind::Param);
+        }
+    }
+
+    #[test]
+    fn checked_binding_modes_keep_immediate_sources_and_owned_copies() {
+        let source = r#"struct Holder:
+    items: list[int64]
+function temporary_holder() returns Holder:
+    return Holder(items: list(1))
+function inspect(view values: list[int64], view holder: Holder) returns nothing:
+    list[int64] borrowed = view values
+    list[int64] forwarded = ((borrowed))
+    list[int64] copied = clone forwarded
+    list[int64] projected = holder.items
+    list[int64] projected_view = view holder.items
+    list[int64] temporary = view list(1)
+    list[int64] temporary_projection = view temporary_holder().items
+    return nothing
+"#;
+        let parsed = parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            resolved.diagnostics
+        );
+        let checked = check(&parsed.module, &resolved);
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            checked.diagnostics
+        );
+        assert_eq!(checked.binding_modes.len(), 7);
+        let (borrowed_span, borrowed) =
+            binding_mode_named(&checked.binding_modes, source, "borrowed");
+        let CheckedBindingMode::View {
+            source: CheckedViewSource::Binding(parameter),
+        } = borrowed
+        else {
+            panic!("expected a direct binding view, got {borrowed:?}");
+        };
+        assert_eq!(resolved.scope_table.def(parameter).name, "values");
+        assert_eq!(resolved.scope_table.def(parameter).kind, DefKind::Param);
+        let (_, forwarded) = binding_mode_named(&checked.binding_modes, source, "forwarded");
+        let CheckedBindingMode::View {
+            source: CheckedViewSource::Binding(immediate_source),
+        } = forwarded
+        else {
+            panic!("expected a forwarded binding view, got {forwarded:?}");
+        };
+        assert_eq!(
+            resolved.scope_table.def(immediate_source).span,
+            borrowed_span
+        );
+        assert_ne!(immediate_source, parameter);
+        for name in ["copied", "projected"] {
+            assert_eq!(
+                binding_mode_named(&checked.binding_modes, source, name).1,
+                CheckedBindingMode::Owned,
+                "{name}"
+            );
+        }
+        let CheckedBindingMode::View {
+            source: CheckedViewSource::Binding(projected_root),
+        } = binding_mode_named(&checked.binding_modes, source, "projected_view").1
+        else {
+            panic!("expected a stable projected binding view");
+        };
+        assert_eq!(resolved.scope_table.def(projected_root).name, "holder");
+        assert_eq!(
+            resolved.scope_table.def(projected_root).kind,
+            DefKind::Param
+        );
+        for name in ["temporary", "temporary_projection"] {
+            assert_eq!(
+                binding_mode_named(&checked.binding_modes, source, name).1,
+                CheckedBindingMode::View {
+                    source: CheckedViewSource::Other
+                },
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn projected_local_view_aliases_remain_ineligible_for_closure_capture() {
+        let errors = check_source_errors(
+            r#"struct Packet:
+    data: list[int64]
+function inspect(view source: Packet) returns nothing:
+    list[int64] borrowed = view source.data
+    function() returns list[int64] callback = function() returns list[int64]: return clone borrowed
+    return nothing
+"#,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code.code(), 402);
+        assert!(errors[0].message.contains("borrowed"));
+    }
+
+    #[test]
+    fn checked_binding_modes_use_actual_copy_types_and_transparent_sources() {
+        for (parameter, output, initializer, owned) in [
+            ("int64", "int64", "view source", true),
+            ("string", "string", "view source", true),
+            ("Count", "int64", "coarsen (view source)", true),
+            ("secret[int64]", "int64", "declassify source", true),
+            ("Numbers", "list[int64]", "coarsen source", false),
+            ("Numbers", "list[int64]", "coarsen (view source)", false),
+            ("Numbers", "list[int64]", "coarsen clone source", true),
+            (
+                "secret[list[int64]]",
+                "list[int64]",
+                "declassify (view source)",
+                false,
+            ),
+            (
+                "secret[list[int64]]",
+                "list[int64]",
+                "declassify clone source",
+                true,
+            ),
+        ] {
+            let source = format!(
+                "type Count = int64 where true\ntype Numbers = list[int64] where true\nfunction inspect(view source: {parameter}) returns nothing:\n    {output} local = {initializer}\n    return nothing\n"
+            );
+            let checked = check_source_result(&source);
+            assert!(
+                checked
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+                "{source}\n{:?}",
+                checked.diagnostics
+            );
+            let (_, mode) = binding_mode_named(&checked.binding_modes, &source, "local");
+            if owned {
+                assert_eq!(mode, CheckedBindingMode::Owned, "{source}");
+            } else {
+                assert!(
+                    matches!(
+                        mode,
+                        CheckedBindingMode::View {
+                            source: CheckedViewSource::Binding(_)
+                        }
+                    ),
+                    "{source}\n{mode:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn checked_binding_modes_are_distinct_for_generic_copy_and_borrow_bodies() {
+        let source = r#"function inspect[T](view source: T) returns nothing:
+    T borrowed = view source
+    T forwarded = borrowed
+    T copied = clone forwarded
+    return nothing
+function main() returns nothing:
+    int64 number = 7
+    string text = "seven"
+    list[int64] values = list(7)
+    inspect[int64](view number)
+    inspect[list[int64]](view values)
+    inspect[string](view text)
+    return nothing
+"#;
+        let checked = check_source_result(source);
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            checked.diagnostics
+        );
+        assert_eq!(checked.generic_function_instantiations.len(), 3);
+        assert_eq!(checked.binding_modes.len(), 3);
+        let mut borrowed_count = 0;
+        for body in &checked.generic_function_instantiations {
+            assert_eq!(body.binding_modes.len(), 3);
+            let copies =
+                crate::ownership::is_implicitly_copyable(&checked.interner, body.concrete_args[0]);
+            for name in ["borrowed", "forwarded"] {
+                let (span, mode) = binding_mode_named(&body.binding_modes, source, name);
+                assert_eq!(body.type_map[&span], body.concrete_args[0]);
+                assert_eq!(mode == CheckedBindingMode::Owned, copies);
+                if !copies {
+                    assert!(matches!(
+                        mode,
+                        CheckedBindingMode::View {
+                            source: CheckedViewSource::Binding(_)
+                        }
+                    ));
+                    borrowed_count += 1;
+                }
+                assert!(!checked.binding_modes.contains_key(&span));
+            }
+            assert_eq!(
+                binding_mode_named(&body.binding_modes, source, "copied").1,
+                CheckedBindingMode::Owned
+            );
+        }
+        assert_eq!(borrowed_count, 2);
+    }
+
+    #[test]
+    fn checked_binding_modes_survive_recursive_reflected_body_snapshots() {
+        for (generic, owner, arguments) in [("", "Sample", ""), ("[T]", "T", "[Sample]")] {
+            let source = format!(
+                r#"struct Sample:
+    count: int64
+    items: list[int64]
+function inspect{generic}(view value: {owner}) returns nothing:
+    for field in type.fields[{owner}]():
+        comptime type Field = field.type_info:
+            Field original = type.field_value[{owner}, Field](view value, view field)
+            Field borrowed = view original
+            comptime type Again = type.info[Field]():
+                Again forwarded = borrowed
+    return nothing
+function main() returns nothing:
+    Sample sample = Sample(count: 7, items: list(7))
+    inspect{arguments}(view sample)
+    return nothing
+"#
+            );
+            let checked = check_source_result(&source);
+            assert!(
+                checked
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+                "{source}\n{:?}",
+                checked.diagnostics
+            );
+            let bodies = if generic.is_empty() {
+                &checked.comptime_type_bindings
+            } else {
+                &checked.generic_function_instantiations[0].comptime_type_bindings
+            };
+            let expansions = bodies
+                .values()
+                .find(|expansions| expansions.len() == 2)
+                .expect("each reflected field must retain a concrete body");
+            for expansion in expansions {
+                let copies = crate::ownership::is_implicitly_copyable(
+                    &checked.interner,
+                    expansion.bound_type,
+                );
+                let (span, mode) =
+                    binding_mode_named(&expansion.body.binding_modes, &source, "borrowed");
+                assert_eq!(expansion.body.type_map[&span], expansion.bound_type);
+                assert_eq!(mode == CheckedBindingMode::Owned, copies);
+                assert_eq!(
+                    binding_mode_named(&expansion.body.binding_modes, &source, "original").1,
+                    CheckedBindingMode::Owned
+                );
+                let nested = expansion
+                    .body
+                    .comptime_type_bindings
+                    .values()
+                    .next()
+                    .expect("nested comptime expansion must survive its parent snapshot");
+                assert_eq!(nested.len(), 1);
+                assert_eq!(nested[0].bound_type, expansion.bound_type);
+                let (nested_span, nested_mode) =
+                    binding_mode_named(&nested[0].body.binding_modes, &source, "forwarded");
+                assert_eq!(nested[0].body.type_map[&nested_span], expansion.bound_type);
+                assert_eq!(nested_mode == CheckedBindingMode::Owned, copies);
+                assert!(!nested[0].body.binding_modes.contains_key(&span));
+            }
+        }
+    }
+
+    #[test]
+    fn generic_body_checks_do_not_capture_the_callers_closure_scope() {
+        let source = r#"namespace test
+function duplicate[T](view value: T) returns T:
+    return clone value
+function make() returns function(view list[int64]) returns list[int64]:
+    return function(view items: list[int64]) returns list[int64]: return duplicate[list[int64]](view items)
+"#;
+        assert!(check_source_errors(source).is_empty());
+        let captured = r#"namespace test
+function duplicate[T](view value: T) returns T:
+    return clone value
+function make() returns function(view list[int64]) returns list[int64]:
+    list[int64] outer = list(1)
+    return function(view items: list[int64]) returns list[int64]:
+        list[int64] copied = duplicate[list[int64]](view items)
+        return clone outer
+"#;
+        let errors = check_source_errors(captured);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code.code(), 402);
+        assert!(errors[0].message.contains("outer"));
+    }
+
+    #[test]
+    fn function_expression_calls_enforce_capability_purity() {
+        for call in [
+            "(effect)(view authority.stdout)",
+            "(callback)(view authority.stdout)",
+            "factory()(view authority.stdout)",
+            "holder.callback(view authority.stdout)",
+            "(holder.callback)(view authority.stdout)",
+            "authority.stdout into view callback",
+        ] {
+            let source = format!(
+                r#"namespace test
+struct Authority:
+    stdout: Stdout
+struct Holder:
+    callback: function(view Stdout) returns int64
+function effect(view stdout: Stdout) returns int64:
+    return 1
+function factory() returns function(view Stdout) returns int64:
+    return effect
+function invoke(view authority: Authority, callback: function(view Stdout) returns int64, view holder: Holder) returns int64:
+    return {call}
+"#
+            );
+            let errors = check_source_errors(&source);
+            assert_eq!(errors.len(), 1, "{call}: {errors:?}");
+            assert_eq!(errors[0].code.code(), 500, "{call}: {errors:?}");
+            let authorized = source.replace(
+                "function invoke(view authority: Authority,",
+                "function invoke(view stdout: Stdout, view authority: Authority,",
+            );
+            assert!(check_source_errors(&authorized).is_empty(), "{call}");
+            let comptime = authorized.replace(
+                &format!("return {call}"),
+                &format!("return comptime ({call})"),
+            );
+            let errors = check_source_errors(&comptime);
+            assert!(
+                errors.iter().any(|error| error.code.code() == 504),
+                "{call}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn function_expression_calls_preserve_lifted_secret_return_types() {
+        for call in [
+            "factory()(value)",
+            "holder.callback(value)",
+            "(holder.callback)(value)",
+            "make_holder().callback(value)",
+            "value into (factory())",
+            "(function(input: int64) returns int64: return input + 1)(value)",
+        ] {
+            let source = format!(
+                r#"namespace test
+struct Holder:
+    callback: function(int64) returns int64
+function increment(input: int64) returns int64:
+    return input + 1
+function factory() returns function(int64) returns int64:
+    return increment
+function make_holder() returns Holder:
+    return Holder(callback: increment)
+function main() returns nothing:
+    secret[int64] value = 4
+    Holder holder = make_holder()
+    secret[int64] transformed = {call}
+    return nothing
+"#
+            );
+            let result = check_source_result(&source);
+            let errors = result
+                .diagnostics
+                .iter()
+                .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+                .collect::<Vec<_>>();
+            assert!(errors.is_empty(), "{call}: {errors:?}");
+            let start = source.rfind(call).unwrap() as u32;
+            let span = Span::new(FileId::new(0), start, start + call.len() as u32);
+            assert!(
+                matches!(result.interner.resolve(result.type_map[&span]), Type::Secret(inner) if *inner == TypeInterner::INT64),
+                "{call}"
+            );
+            let public = source.replace("secret[int64] transformed", "int64 transformed");
+            let errors = check_source_errors(&public);
+            assert!(
+                errors.iter().any(|error| error.code.code() == 311),
+                "{call}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn inline_function_bodies_obey_their_own_capability_signature() {
+        let prefix = r#"namespace test
+struct Authority:
+    stdout: Stdout
+function effect(view stdout: Stdout) returns int64:
+    return 1
+"#;
+        for body in [
+            "return effect(view argument.stdout)",
+            "return (effect)(view argument.stdout)",
+        ] {
+            let source = format!(
+                "{prefix}function make() returns function(view Authority) returns int64:\n    return function(view argument: Authority) returns int64: {body}\n"
+            );
+            let errors = check_source_errors(&source);
+            assert_eq!(errors.len(), 1, "{source}: {errors:?}");
+            assert_eq!(errors[0].code.code(), 500);
+            assert!(errors[0].message.contains("<inline function>"));
+        }
+
+        for comptime in ["", "comptime "] {
+            let closure = format!(
+                "{comptime}function(view stdout: Stdout) returns int64: return effect(view stdout)"
+            );
+            for declaration in [
+                format!(
+                    "function make() returns function(view Stdout) returns int64:\n    return {closure}\n"
+                ),
+                format!(
+                    "verify creation:\n    function(view Stdout) returns int64 callback = {closure}\n    assert true\n"
+                ),
+            ] {
+                let source = format!("{prefix}{declaration}");
+                let errors = check_source_errors(&source);
+                assert!(errors.is_empty(), "{source}: {errors:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn inline_function_invocation_restores_the_surrounding_effect_context() {
+        let source = r#"namespace test
+struct Authority:
+    stdout: Stdout
+function effect(view stdout: Stdout) returns int64:
+    return 1
+function invoke(view authority: Authority) returns int64:
+    return (function(view stdout: Stdout) returns int64: return effect(view stdout))(view authority.stdout)
+"#;
+        let errors = check_source_errors(source);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code.code(), 500);
+        assert!(errors[0].message.contains("invoke"), "{errors:?}");
+        assert!(!errors[0].message.contains("<inline function>"));
+        let authorized = source.replace(
+            "function invoke(view authority",
+            "function invoke(view permission: Stdout, view authority",
+        );
+        assert!(check_source_errors(&authorized).is_empty());
+        let comptime = authorized.replace("return (function", "return comptime (function");
+        let errors = check_source_errors(&comptime);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code.code(), 504);
+        let verify = r#"namespace test
+function effect(view stdout: Stdout) returns int64:
+    return 1
+verify invocation:
+    function(view Stdout) returns int64 callback = function(view stdout: Stdout) returns int64: return effect(view stdout)
+    callback()
+"#;
+        let errors = check_source_errors(verify);
+        assert!(
+            errors.iter().any(|error| error.code.code() == 501),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn callback_binding_names_do_not_inherit_namespace_declaration_policy() {
+        for call in ["effect(4)", "(effect)(4)", "4 into effect"] {
+            let source = format!(
+                "namespace test\nfunction effect(view stdout: Stdout) returns int64:\n    return 1\nfunction invoke(effect: function(int64) returns int64) returns int64:\n    return {call}\n"
+            );
+            let errors = check_source_errors(&source);
+            assert!(errors.is_empty(), "{source}: {errors:?}");
+        }
+    }
+
+    #[test]
+    fn parenthesized_declarations_preserve_named_argument_bindings() {
+        let source = r#"namespace test
+function subtract(left: int64, right: int64) returns int64:
+    return left - right
+function main() returns int64:
+    return (subtract)(right: 3, left: 10)
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        let call_offset = source.find("(subtract)(right:").unwrap() as u32;
+        let order = result
+            .call_argument_orders
+            .iter()
+            .find_map(|(span, order)| (span.start == call_offset).then_some(&order.source_indices));
+        assert_eq!(order, Some(&vec![1, 0]));
+    }
+
+    #[test]
+    fn function_expression_calls_reject_unbound_named_arguments() {
+        for call in [
+            "callback(right: 3, left: 10)",
+            "(callback)(right: 3, left: 10)",
+            "factory()(right: 3, left: 10)",
+            "holder.callback(unknown: 3, unknown: 10)",
+            "(function(left: int64, right: int64) returns int64: return left - right)(right: 3, left: 10)",
+        ] {
+            let source = format!(
+                r#"namespace test
+struct Holder:
+    callback: function(int64, int64) returns int64
+function subtract(left: int64, right: int64) returns int64:
+    return left - right
+function factory() returns function(int64, int64) returns int64:
+    return subtract
+function invoke(callback: function(int64, int64) returns int64, view holder: Holder) returns int64:
+    return {call}
+"#
+            );
+            let errors = check_source_errors(&source);
+            assert_eq!(errors.len(), 2, "{call}: {errors:?}");
+            assert!(
+                errors.iter().all(|error| error.code.code() == 368),
+                "{call}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn enum_constructor_arguments_preserve_declared_payload_names() {
+        for (prefix, owner, setup, imports) in [
+            ("", "Choice", "", ""),
+            ("namespace test\n", "Choice", "", ""),
+            (
+                "namespace models\n",
+                "models.Choice",
+                "namespace app\n",
+                "    use models\n",
+            ),
+            (
+                "namespace models\n",
+                "m.Choice",
+                "namespace app\n",
+                "    use models as m\n",
+            ),
+        ] {
+            for parenthesized in [false, true] {
+                let callee = format!("{owner}.item");
+                let callee = if parenthesized {
+                    format!("({callee})")
+                } else {
+                    callee
+                };
+                let source = format!(
+                    "{prefix}export enum Choice:\n    item(first: int64, second: string, third: bool)\n{setup}function make() returns nothing:\n{imports}    {owner} value = {callee}(third: true, first: 4, second: \"ok\")\n    return nothing\n"
+                );
+                let result = check_source_result(&source);
+                assert!(
+                    result
+                        .diagnostics
+                        .iter()
+                        .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+                    "{source}: {:?}",
+                    result.diagnostics
+                );
+                assert!(
+                    result
+                        .call_argument_orders
+                        .values()
+                        .any(|order| order.source_indices == vec![1, 2, 0]),
+                    "{source}: {:?}",
+                    result.call_argument_orders
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn enum_constructor_arguments_reject_unknown_and_duplicate_payload_names() {
+        for callee in ["Choice.item", "(Choice.item)"] {
+            for (arguments, expected_code) in
+                [("first: 4, other: 5", 368), ("first: 4, first: 5", 369)]
+            {
+                let source = format!(
+                    "namespace test\nenum Choice:\n    item(first: int64, second: int64)\nfunction make() returns Choice:\n    return {callee}({arguments})\n"
+                );
+                let errors = check_source_errors(&source);
+                assert!(
+                    errors
+                        .iter()
+                        .any(|error| error.code.code() == expected_code),
+                    "{source}: {errors:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_comptime_preserves_contextual_sum_types() {
+        let source = r#"namespace test
+function main() returns nothing:
+    result[int64, string] success = comptime ok(13)
+    result[int64, string] failure = comptime fail("bad")
+    optional[int64] absent = comptime none
+    return nothing
+"#;
+        let checked = check_source_result(source);
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            checked.diagnostics
+        );
+        for (text, expected) in [
+            ("comptime ok(13)", "result"),
+            ("comptime fail(\"bad\")", "result"),
+            ("comptime none", "optional"),
+        ] {
+            let start = source.find(text).expect("checked expression") as u32;
+            let span = Span::new(FileId::new(0), start, start + text.len() as u32);
+            let ty = checked.type_map[&span];
+            match (expected, checked.interner.resolve(ty)) {
+                ("result", Type::Result(ok, error)) => {
+                    assert_eq!(*ok, TypeInterner::INT64);
+                    assert_eq!(*error, TypeInterner::STRING);
+                }
+                ("optional", Type::Optional(inner)) => {
+                    assert_eq!(*inner, TypeInterner::INT64);
+                }
+                (_, actual) => panic!("unexpected contextual type: {actual:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn checked_builtin_calls_record_one_closed_intrinsic_identity() {
+        let source = r#"function intrinsic_calls(value: int64) returns int64:
+    println("audit")
+    for item in range(0):
+        println("{item}")
+    return value into math.abs
+
+function reflected_name[T]() returns string:
+    return type.name[T]()
+
+function main() returns string:
+    return reflected_name[int64]()
+"#;
+        let result = check_source_result(source);
+        let errors = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+
+        let recorded = result
+            .intrinsic_ids
+            .values()
+            .chain(
+                result
+                    .generic_function_instantiations
+                    .iter()
+                    .flat_map(|instantiation| instantiation.intrinsic_ids.values()),
+            )
+            .copied()
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            recorded,
+            HashSet::from([
+                IntrinsicId::MathAbs,
+                IntrinsicId::Println,
+                IntrinsicId::Range,
+                IntrinsicId::TypeName,
+            ])
+        );
+        for intrinsic in recorded {
+            assert_eq!(
+                IntrinsicId::from_canonical_name(intrinsic.canonical_name()),
+                Some(intrinsic)
+            );
+            assert_eq!(
+                IntrinsicId::ALL
+                    .iter()
+                    .filter(|candidate| candidate.canonical_name() == intrinsic.canonical_name())
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn compiler_reflection_enum_variants_have_concrete_expression_types() {
+        let source = r#"function matches(kind: TypeKind, primitive: TypePrimitive) returns bool:
+    return kind == TypeKind.alias_type and primitive == TypePrimitive.int8_type
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+
+        for expected_name in ["TypeKind", "TypePrimitive"] {
+            let expression = if expected_name == "TypeKind" {
+                "TypeKind.alias_type"
+            } else {
+                "TypePrimitive.int8_type"
+            };
+            let start = source.find(expression).unwrap() as u32;
+            let span = Span::new(FileId::new(0), start, start + expression.len() as u32);
+            let ty = *result
+                .type_map
+                .get(&span)
+                .expect("reflection enum variant should be typed");
+            let Type::Enum(enum_id) = *result.interner.resolve(ty) else {
+                panic!("reflection enum variant should have an enum type");
+            };
+            assert_eq!(result.interner.resolve_enum(enum_id).name, expected_name);
+        }
     }
 
     #[test]
@@ -14747,6 +20481,57 @@ function piped() returns optional[int64]:
     }
 
     #[test]
+    fn accepted_capability_parameters_have_distinct_concrete_types() {
+        let result = check_source_result(
+            r#"function main(stdout: Stdout, stderr: Stderr, stdin: Stdin, filesystem: Filesystem, network: Network, clock: Clock, random: Random, process: Process, environment: Environment, log: Log, graphics: Graphics) returns nothing:
+    return nothing
+"#,
+        );
+        let errors = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+
+        let expected = CapabilityKind::ALL.map(TypeInterner::capability).to_vec();
+        let checked_params = result
+            .definition_types
+            .values()
+            .find_map(|type_id| match result.interner.resolve(*type_id) {
+                Type::Function { params, .. } if params.len() == expected.len() => {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("checked main function type");
+
+        assert_eq!(checked_params, expected);
+        assert!(
+            checked_params
+                .iter()
+                .all(|type_id| *type_id != TypeInterner::ERROR)
+        );
+    }
+
+    #[test]
+    fn distinct_capabilities_do_not_unify_at_builtin_calls() {
+        let errors = check_source_errors(
+            r#"function misuse(view err: Stderr) returns nothing:
+    Stdout.write(view err, "wrong authority")
+    return nothing
+"#,
+        );
+
+        assert!(
+            errors
+                .iter()
+                .any(|diagnostic| diagnostic.code.code() == 304),
+            "expected capability argument mismatch, got: {errors:?}"
+        );
+    }
+
+    #[test]
     fn function_without_capability_params_is_pure() {
         // function add(a: int64, b: int64) returns nothing
         let fn_name_span = sp(0, 3);
@@ -15369,6 +21154,121 @@ export bitfield Header:
     }
 
     #[test]
+    fn reflection_operands_preserve_generic_aliases_without_replacing_canonical_metadata() {
+        let result = check_source_result(
+            r#"
+type Label = string
+struct Box[T]:
+    item: T
+function builder[T]() returns TypeConstruction:
+    comptime type Owner = type.info[Box[T]]():
+        return type.construct_start[Owner]()
+function main() returns nothing:
+    TypeConstruction value = builder[Label]()
+    return nothing
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        let metadata = &result.reflection_metadata;
+        let owner = metadata
+            .source_type_id_for_name("Box[Label]")
+            .expect("checked alias owner");
+        let source = metadata
+            .get_source_type_info("Box[Label]")
+            .expect("source reflection operand");
+        assert_eq!(source.args[0].kind, "alias");
+        assert_eq!(source.args[0].type_name, "Label");
+        let canonical = metadata
+            .get_type_info_for_id(owner)
+            .expect("canonical owner metadata");
+        assert_eq!(canonical.args[0].kind, "primitive");
+        assert_eq!(canonical.args[0].type_name, "string");
+        assert_eq!(
+            metadata.get_type_fields_for_id(owner).unwrap()[0].type_name,
+            "string"
+        );
+    }
+
+    #[test]
+    fn nominal_argument_ids_preserve_aliases_unused_parameters_and_canonical_owners() {
+        let result = check_source_result(
+            r#"
+namespace models
+export type Positive = int64 where value > 0
+export type Copy = Positive
+export struct Element:
+    value: Positive
+export struct Holder[T]:
+    value: T
+export struct Marker[T]:
+    value: int64
+namespace alternate
+export type Positive = int64 where value < 0
+namespace app
+function inspect(view element: models.Element, view used: models.Holder[models.Positive], view unused: models.Marker[models.Positive], view plain: models.Marker[int64], view shadow: models.Marker[alternate.Positive]) returns nothing:
+    return nothing
+function alias_metadata() returns TypeInfo:
+    use models as m
+    return type.info[m.Marker[m.Copy]]()
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        let types = &result.interner;
+        let metadata = &result.reflection_metadata;
+        let positive = metadata.type_id_for_name("models.Positive").unwrap();
+        let other = metadata.type_id_for_name("alternate.Positive").unwrap();
+        assert_ne!(positive, other);
+        for (name, expected) in [
+            ("models.Element", Vec::new()),
+            ("models.Holder[models.Positive]", vec![positive]),
+            ("models.Marker[models.Positive]", vec![positive]),
+            ("models.Marker[int64]", vec![TypeInterner::INT64]),
+            ("models.Marker[alternate.Positive]", vec![other]),
+        ] {
+            let ty = metadata.type_id_for_name(name).expect(name);
+            assert_eq!(
+                types.nominal_type_arguments(ty),
+                expected.as_slice(),
+                "{name}"
+            );
+        }
+        let marker = metadata
+            .type_id_for_name("models.Marker[models.Positive]")
+            .unwrap();
+        let Type::Struct(id) = types.resolve(marker) else {
+            panic!("marker");
+        };
+        assert_eq!(types.resolve_struct(*id).fields[0].1, TypeInterner::INT64);
+        let alias = result
+            .intrinsic_reflection_arguments
+            .values()
+            .flatten()
+            .find(|info| info.type_name == "models.Marker[models.Copy]")
+            .expect("source alias metadata");
+        assert_eq!(alias.args[0].type_name, "models.Copy");
+        assert!(
+            result
+                .intrinsic_type_arguments
+                .values()
+                .any(|args| args.as_slice() == [marker])
+        );
+    }
+
+    #[test]
     fn reflection_metadata_generic_type_info_args_are_type_id_backed() {
         let result = check_source_result(
             "\
@@ -15517,6 +21417,67 @@ function main() returns string:
     }
 
     #[test]
+    fn whole_sum_interface_compatibility_precedes_payload_handling() {
+        let errors = check_source_errors(
+            r#"
+interface Named:
+    function name(view self: Named) returns string
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "integer"
+implement Named for result[int64, string]:
+    function name(view self: result[int64, string]) returns string:
+        return "result"
+implement Named for optional[int64]:
+    function name(view self: optional[int64]) returns string:
+        return "optional"
+function consume(value: Named) returns nothing:
+    return nothing
+function main() returns nothing:
+    result[int64, string] outcome = ok(1)
+    optional[int64] maybe = some(2)
+    Named first = clone outcome
+    Named second = clone maybe
+    consume(outcome)
+    consume(maybe)
+    consume(first)
+    consume(second)
+    return nothing
+"#,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn interface_payload_membership_does_not_implicitly_unwrap_sums() {
+        let errors = check_source_errors(
+            r#"
+interface Named:
+    function name(view self: Named) returns string
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "integer"
+function consume(value: Named) returns nothing:
+    return nothing
+function main() returns nothing:
+    result[int64, string] outcome = ok(1)
+    optional[int64] maybe = some(2)
+    consume(outcome)
+    consume(maybe)
+    return nothing
+"#,
+        );
+        assert!(
+            errors.iter().any(|error| error.code.code() == 316),
+            "{errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| error.code.code() == 317),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
     fn result_handle_requires_error_keyword() {
         let errors = check_source_errors(
             "\
@@ -15628,6 +21589,751 @@ function main() returns string:
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .collect();
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn erased_interface_calls_keep_checked_slots_across_generic_specialization() {
+        let result = check_source_result(
+            "\
+interface Speaker:
+    function speak(view self: Speaker) returns string
+struct Dog:
+    name: string
+implement Speaker for Dog:
+    function speak(view self: Dog) returns string:
+        return self.name
+function describe(view value: Speaker) returns string:
+    return Speaker.speak(view value)
+function repeat[T](view value: Speaker, ignored: T) returns string:
+    return Speaker.speak(view value)
+function main() returns nothing:
+    Dog dog = Dog(name: \"woof\")
+    println(describe(view dog))
+    println(repeat[int64](view dog, 1))
+    println(repeat[string](view dog, \"x\"))
+    return nothing
+",
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.interface_calls.len(), 1);
+        assert!(result.method_values.is_empty());
+        let call = result.interface_calls.values().next().unwrap();
+        let Type::Interface(id) = result.interner.resolve(call.interface_type) else {
+            panic!("dispatch owner must be a checked interface");
+        };
+        assert_eq!(
+            result.interner.resolve_interface(*id).methods[call.method_index].name,
+            "speak"
+        );
+        let specialized = result
+            .generic_function_instantiations
+            .iter()
+            .filter(|body| !body.interface_calls.is_empty())
+            .collect::<Vec<_>>();
+        assert_eq!(specialized.len(), 2);
+        for body in specialized {
+            assert_eq!(body.interface_calls.len(), 1);
+            assert_eq!(body.interface_calls.values().next(), Some(call));
+            assert!(body.method_values.is_empty());
+        }
+    }
+
+    #[test]
+    fn namespaced_interface_alias_call_records_concrete_method_target() {
+        let result = check_source_result(
+            "\
+namespace contracts
+export interface Named:
+    function name(view self: contracts.Named) returns string
+namespace models
+export struct User:
+    name: string
+implement contracts.Named for models.User:
+    function name(view self: models.User) returns string:
+        return self.name
+namespace app
+function describe() returns string:
+    use contracts as c
+    use models as m
+    m.User user = m.User(name: \"Ada\")
+    return c.Named.name(view user)
+",
+        );
+
+        let errors = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+        assert_eq!(
+            result.method_calls.len(),
+            1,
+            "the alias-qualified interface call must retain its concrete implementation target"
+        );
+    }
+
+    #[test]
+    fn pending_sum_literals_retain_expected_payload_types() {
+        let source = r#"function values() returns nothing:
+    result[int64, string] success = run ok(17)
+    result[int64, string] failure = run fail("bad")
+    optional[int64] missing = run run none
+    list[int8] empty = run list()
+    int8 narrow = run 127
+    return nothing
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        for (expression, expected) in [
+            ("run ok(17)", "result[int64, string]"),
+            ("run fail(\"bad\")", "result[int64, string]"),
+            ("run run none", "optional[int64]"),
+            ("run list()", "list[int8]"),
+            ("run 127", "int8"),
+        ] {
+            let start = source.find(expression).unwrap();
+            let span = Span::new(
+                FileId::new(0),
+                start as u32,
+                (start + expression.len()) as u32,
+            );
+            assert_eq!(result.interner.type_name(result.type_map[&span]), expected);
+        }
+    }
+
+    #[test]
+    fn collection_alias_methods_export_call_and_value_targets() {
+        let source = r#"namespace app
+interface Named:
+    function name(view self: Named) returns string
+type Numbers = list[int64]
+implement Named for Numbers:
+    function name(view self: Numbers) returns string:
+        return "numbers"
+function read(view values: Numbers) returns string:
+    return Numbers.name(view values)
+function reader() returns function(view Numbers) returns string:
+    return Numbers.name
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.method_calls.len(), 1, "{:?}", result.method_calls);
+        assert_eq!(result.method_values.len(), 2, "{:?}", result.method_values);
+    }
+
+    #[test]
+    fn concrete_method_values_export_source_targets_and_view_signatures() {
+        let source = r#"namespace models
+export interface Reader:
+    function read(view self: Reader) returns int64
+export struct Point:
+    value: int64
+    function amount(view self: Point) returns int64:
+        return self.value
+implement Reader for Point:
+    function read(view self: Point) returns int64:
+        return self.value
+namespace app
+function reader() returns function(view models.Point) returns int64:
+    use models as m
+    return (m.Point.read)
+function invoke() returns int64:
+    use models as m
+    function(view m.Point) returns int64 callback = m.Point.amount
+    m.Point point = m.Point(value: 7)
+    return callback(view point)
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.method_values.len(), 2);
+        for (expression_span, target) in &result.method_values {
+            let CheckedMethodValue::Source { source_span } = target else {
+                panic!("concrete method value must select a source body");
+            };
+            let expression = &source[expression_span.start as usize..expression_span.end as usize];
+            let definition = result
+                .method_definitions
+                .iter()
+                .find(|method| method.source_span == *source_span)
+                .expect("method value must identify its checked source definition");
+            assert_eq!(definition.owner_name, "models.Point");
+            assert_eq!(
+                definition.interface_name.as_deref(),
+                match expression {
+                    "m.Point.read" => Some("models.Reader"),
+                    "m.Point.amount" => None,
+                    other => panic!("unexpected method expression: {other}"),
+                }
+            );
+            let Type::Function {
+                params,
+                view_params,
+                return_type,
+            } = result.interner.resolve(result.type_map[expression_span])
+            else {
+                panic!("method value must have a function type");
+            };
+            assert_eq!(params, &vec![definition.owner_type]);
+            assert_eq!(view_params, &vec![true]);
+            assert_eq!(*return_type, TypeInterner::INT64);
+        }
+    }
+
+    #[test]
+    fn interface_method_values_export_callback_only_slots_and_exact_signatures() {
+        let source = r#"namespace app
+interface Reader:
+    function read(view self: Reader) returns int64
+    function consume(self: Reader, flag: bool) returns string
+function reader() returns function(view Reader) returns int64:
+    return Reader.read
+function consumer() returns function(Reader, bool) returns string:
+    return Reader.consume
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(result.interface_calls.is_empty());
+        assert!(result.method_definitions.is_empty());
+        assert!(result.method_value_definitions.is_empty());
+        assert_eq!(result.method_values.len(), 2);
+        for (span, target) in &result.method_values {
+            let CheckedMethodValue::Interface {
+                interface_type,
+                method_index,
+            } = target
+            else {
+                panic!("interface method value must identify its dispatch slot");
+            };
+            let Type::Interface(id) = result.interner.resolve(*interface_type) else {
+                panic!("slot owner must remain the exact interface type");
+            };
+            let interface = result.interner.resolve_interface(*id);
+            assert_eq!(interface.name, "app.Reader");
+            let method = &interface.methods[*method_index];
+            let expression = &source[span.start as usize..span.end as usize];
+            let (index, params, views, output) = match expression {
+                "Reader.read" => (0, vec![*interface_type], vec![true], TypeInterner::INT64),
+                "Reader.consume" => (
+                    1,
+                    vec![*interface_type, TypeInterner::BOOL],
+                    vec![false, false],
+                    TypeInterner::STRING,
+                ),
+                other => panic!("unexpected method expression: {other}"),
+            };
+            assert_eq!(*method_index, index);
+            assert_eq!(expression.rsplit('.').next().unwrap(), method.name);
+            assert_eq!(
+                result.interner.resolve(result.type_map[span]),
+                &Type::Function {
+                    params,
+                    view_params: views,
+                    return_type: output,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn interface_method_values_share_alias_and_namespace_slots() {
+        let result = check_source_result(
+            r#"namespace contracts
+export interface Reader:
+    function read(view self: contracts.Reader) returns int64
+namespace app
+type Access = contracts.Reader
+function callbacks() returns nothing:
+    use contracts
+    use contracts as c
+    function(view contracts.Reader) returns int64 qualified = contracts.Reader.read
+    function(view c.Reader) returns int64 imported = (c.Reader.read)
+    function(view Access) returns int64 aliased = Access.read
+    return nothing
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.method_values.len(), 3);
+        let expected = result.method_values.values().next().unwrap();
+        let CheckedMethodValue::Interface {
+            interface_type,
+            method_index,
+        } = expected
+        else {
+            panic!("aliases must resolve to an interface slot");
+        };
+        assert_eq!(
+            result.interner.type_name(*interface_type),
+            "contracts.Reader"
+        );
+        assert_eq!(*method_index, 0);
+        for (span, target) in &result.method_values {
+            assert_eq!(target, expected);
+            let Type::Function {
+                params,
+                view_params,
+                return_type,
+            } = result.interner.resolve(result.type_map[span])
+            else {
+                panic!("method value must keep its declared function signature");
+            };
+            assert_eq!(params, &vec![*interface_type]);
+            assert_eq!(view_params, &vec![true]);
+            assert_eq!(*return_type, TypeInterner::INT64);
+        }
+        assert!(result.method_value_definitions.is_empty());
+    }
+
+    #[test]
+    fn interface_method_values_are_distinct_from_direct_call_targets() {
+        let source = r#"interface Reader:
+    function read(view self: Reader) returns int64
+struct Point:
+    value: int64
+implement Reader for Point:
+    function read(view self: Point) returns int64:
+        return self.value
+function observed(view value: Reader) returns int64:
+    function(view Reader) returns int64 callback = Reader.read
+    return Reader.read(view value) + callback(view value)
+function main() returns int64:
+    Point point = Point(value: 7)
+    return Reader.read(view point) + observed(view point)
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.interface_calls.len(), 1);
+        assert_eq!(result.method_calls.len(), 1);
+        assert_eq!(result.method_values.len(), 1);
+        let (span, target) = result.method_values.iter().next().unwrap();
+        assert!(matches!(
+            target,
+            CheckedMethodValue::Interface {
+                method_index: 0,
+                ..
+            }
+        ));
+        let value_start = source.find("Reader.read\n").unwrap();
+        assert_eq!(span.start as usize, value_start);
+        assert_eq!(span.end as usize, value_start + "Reader.read".len());
+        assert_eq!(result.method_value_definitions.len(), 1);
+        assert!(
+            result
+                .method_value_definitions
+                .contains(&result.method_definitions[0].source_span)
+        );
+    }
+
+    #[test]
+    fn interface_method_values_survive_generic_body_instantiation() {
+        let result = check_source_result(
+            r#"namespace sample
+interface Reader:
+    function read(view self: Reader) returns int64
+function reader[T](value: T) returns function(view Reader) returns int64:
+    return Reader.read
+function main() returns nothing:
+    function(view Reader) returns int64 first = reader[int64](1)
+    function(view Reader) returns int64 second = reader[string]("two")
+    return nothing
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.generic_function_instantiations.len(), 2);
+        let mut expected = None;
+        for instance in &result.generic_function_instantiations {
+            assert_eq!(instance.method_values.len(), 1);
+            let (span, target) = instance.method_values.iter().next().unwrap();
+            let CheckedMethodValue::Interface {
+                interface_type,
+                method_index,
+            } = target
+            else {
+                panic!("concrete generic body must retain its interface slot");
+            };
+            assert_eq!(result.interner.type_name(*interface_type), "sample.Reader");
+            assert_eq!(*method_index, 0);
+            assert!(instance.type_map.contains_key(span));
+            if let Some(expected) = expected {
+                assert_eq!(*target, expected);
+            } else {
+                expected = Some(*target);
+            }
+            assert!(instance.interface_calls.is_empty());
+        }
+        assert!(result.method_value_definitions.is_empty());
+    }
+
+    #[test]
+    fn interface_method_values_survive_comptime_body_fact_snapshots() {
+        let result = check_source_result(
+            r#"namespace sample
+interface Reader:
+    function read(view self: Reader) returns int64
+struct Pair:
+    name: string
+    count: int64
+function inspect[T](view value: T) returns nothing:
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            function(view Reader) returns int64 callback = Reader.read
+            string reflected_name = type.name[Field]()
+    return nothing
+function main() returns nothing:
+    Pair pair = Pair(name: "Ada", count: 42)
+    inspect[Pair](view pair)
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            result.diagnostics
+        );
+        let inspect = result
+            .generic_function_instantiations
+            .iter()
+            .find(|instance| !instance.comptime_type_bindings.is_empty())
+            .unwrap();
+        let bindings = inspect.comptime_type_bindings.values().next().unwrap();
+        assert_eq!(bindings.len(), 2);
+        for binding in bindings {
+            assert_eq!(binding.body.method_values.len(), 1);
+            let (span, target) = binding.body.method_values.iter().next().unwrap();
+            let CheckedMethodValue::Interface {
+                interface_type,
+                method_index,
+            } = target
+            else {
+                panic!("reflected body facts must retain their interface slot");
+            };
+            assert_eq!(result.interner.type_name(*interface_type), "sample.Reader");
+            assert_eq!(*method_index, 0);
+            assert!(binding.body.type_map.contains_key(span));
+            assert!(binding.body.interface_calls.is_empty());
+        }
+        assert!(result.method_value_definitions.is_empty());
+    }
+
+    #[test]
+    fn interface_method_values_keep_existing_signature_and_member_rejections() {
+        let prefix = "interface Reader:\n    function read(view self: Reader) returns int64\n";
+        for declaration in [
+            "function(Reader) returns int64 callback = Reader.read",
+            "function(view Reader, int64) returns int64 callback = Reader.read",
+            "function(view Reader) returns string callback = Reader.read",
+        ] {
+            let source = format!(
+                "{prefix}function callbacks() returns nothing:\n    {declaration}\n    return nothing\n"
+            );
+            let errors = check_source_errors(&source);
+            assert!(
+                errors.iter().any(|error| error.code.code() == 311),
+                "{declaration}: {errors:?}"
+            );
+        }
+        let source = format!(
+            "{prefix}function callbacks() returns nothing:\n    function(view Reader) returns int64 callback = Reader.missing\n    return nothing\n"
+        );
+        let result = check_source_result(&source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|error| error.code.code() == 329)
+        );
+        assert!(result.method_values.is_empty());
+    }
+
+    #[test]
+    fn callback_parameters_are_contravariant_and_returns_are_covariant() {
+        let prefix = r#"interface Named:
+    function name(view self: Named) returns string
+struct User:
+    label: string
+implement Named for User:
+    function name(view self: User) returns string:
+        return self.label
+function general(view item: Named) returns User:
+    return User(label: Named.name(view item))
+function narrow(view item: User) returns Named:
+    return clone item
+"#;
+        let safe = format!(
+            "{prefix}function main() returns nothing:\n    function(view User) returns Named callback = general\n    return nothing\n"
+        );
+        assert!(
+            check_source_errors(&safe).is_empty(),
+            "{:?}",
+            check_source_errors(&safe)
+        );
+        for declaration in [
+            "function(view Named) returns Named callback = narrow",
+            "function(view User) returns User callback = narrow",
+            "function(User) returns Named callback = general",
+        ] {
+            let source = format!(
+                "{prefix}function main() returns nothing:\n    {declaration}\n    return nothing\n"
+            );
+            let errors = check_source_errors(&source);
+            assert!(
+                errors.iter().any(|error| error.code.code() == 311),
+                "{declaration}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn concrete_method_values_survive_generic_body_instantiation() {
+        let result = check_source_result(
+            r#"namespace sample
+struct Point:
+    value: int64
+    function amount(view self: Point) returns int64:
+        return self.value
+function reader[T](value: T) returns function(view Point) returns int64:
+    return Point.amount
+function main() returns int64:
+    function(view Point) returns int64 first = reader[int64](1)
+    function(view Point) returns int64 second = reader[string]("two")
+    Point point = Point(value: 7)
+    return first(view point) + second(view point)
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.generic_function_instantiations.len(), 2);
+        let method = &result.method_definitions[0];
+        for instance in &result.generic_function_instantiations {
+            assert_eq!(instance.method_values.len(), 1);
+            let (expression_span, target) = instance.method_values.iter().next().unwrap();
+            assert_eq!(
+                target,
+                &CheckedMethodValue::Source {
+                    source_span: method.source_span,
+                }
+            );
+            assert!(instance.type_map.contains_key(expression_span));
+        }
+    }
+
+    #[test]
+    fn concrete_method_returning_a_function_is_not_a_struct_constructor() {
+        for (prefix, call) in [
+            ("", "Point.offsetter"),
+            ("namespace app\n", "models.Point.offsetter"),
+            ("namespace app\n", "alias.Point.offsetter"),
+        ] {
+            let source = format!(
+                r#"namespace models
+export struct Point:
+    value: int64
+    function offsetter(view self: Point) returns function(int64) returns int64:
+        int64 base = self.value
+        return function(input: int64) returns int64: return input + base
+{prefix}function invoke() returns int64:
+    use models
+    use models as alias
+    models.Point point = models.Point(value: 7)
+    function(int64) returns int64 callback = {call}(view point)
+    return callback(3)
+"#
+            );
+            let result = check_source_result(&source);
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+                "{source}: {:?}",
+                result.diagnostics
+            );
+            assert_eq!(result.struct_constructions.len(), 1);
+            assert_eq!(result.method_calls.len(), 1);
+        }
+    }
+
+    #[test]
+    fn concrete_method_values_select_the_same_inherent_body_as_the_signature() {
+        let result = check_source_result(
+            r#"namespace sample
+interface Reader:
+    function read(view self: Reader) returns int64
+struct Point:
+    value: int64
+    function read(view self: Point) returns int64:
+        return self.value
+implement Reader for Point:
+    function read(view self: Point) returns int64:
+        return self.value + 10
+function main() returns int64:
+    function(view Point) returns int64 callback = Point.read
+    Point point = Point(value: 7)
+    return callback(view point) + Point.read(view point) + Reader.read(view point)
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        let source_span = result
+            .method_values
+            .values()
+            .find_map(|target| match target {
+                CheckedMethodValue::Source { source_span } => Some(*source_span),
+                CheckedMethodValue::Interface { .. } => None,
+            })
+            .unwrap();
+        let definition = result
+            .method_definitions
+            .iter()
+            .find(|method| method.source_span == source_span)
+            .unwrap();
+        assert!(definition.interface_name.is_none());
+        assert!(
+            result
+                .method_value_definitions
+                .contains(&definition.source_span)
+        );
+        assert!(!result.method_definitions.iter().any(|method| {
+            method.interface_name.is_some()
+                && result
+                    .method_value_definitions
+                    .contains(&method.source_span)
+        }));
+        let mut targets = result
+            .method_calls
+            .values()
+            .map(|target| {
+                result
+                    .method_definitions
+                    .iter()
+                    .find(|method| method.source_span == target.source_span)
+                    .unwrap()
+                    .interface_name
+                    .is_some()
+            })
+            .collect::<Vec<_>>();
+        targets.sort_unstable();
+        assert_eq!(targets, vec![false, true]);
+    }
+
+    #[test]
+    fn concrete_method_values_survive_comptime_body_fact_snapshots() {
+        let result = check_source_result(
+            r#"namespace sample
+struct Point:
+    value: int64
+    function amount(view self: Point) returns int64:
+        return self.value
+struct Pair:
+    name: string
+    count: int64
+function inspect[T](view value: T) returns nothing:
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            function(view Point) returns int64 callback = Point.amount
+            string reflected_name = type.name[Field]()
+    return nothing
+function main() returns nothing:
+    Pair pair = Pair(name: "Ada", count: 42)
+    inspect[Pair](view pair)
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        let inspect = result
+            .generic_function_instantiations
+            .iter()
+            .find(|instance| !instance.comptime_type_bindings.is_empty())
+            .unwrap();
+        let bindings = inspect.comptime_type_bindings.values().next().unwrap();
+        assert_eq!(bindings.len(), 2);
+        for binding in bindings {
+            assert_eq!(binding.body.method_values.len(), 1);
+            let (expression_span, target) = binding.body.method_values.iter().next().unwrap();
+            assert_eq!(
+                target,
+                &CheckedMethodValue::Source {
+                    source_span: result.method_definitions[0].source_span,
+                }
+            );
+            assert!(binding.body.type_map.contains_key(expression_span));
+        }
     }
 
     #[test]
@@ -16500,6 +23206,41 @@ function main() returns int64:
     }
 
     #[test]
+    fn namespaced_bitfield_alias_calls_record_closed_intrinsic_identities() {
+        let result = check_source_result(
+            "\
+namespace packet
+export bitfield Header:
+    version: 8 bits
+namespace app
+function roundtrip() returns int64:
+    use packet as p
+    p.Header header = p.Header(version: 4)
+    bytes raw = p.Header.to_bytes(header)
+    p.Header decoded = p.Header.from_bytes(raw) handle error:
+        return 0
+    return decoded.version
+",
+        );
+
+        let errors = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+        let intrinsic_ids = result
+            .intrinsic_ids
+            .values()
+            .copied()
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            intrinsic_ids,
+            HashSet::from([IntrinsicId::BitfieldFromBytes, IntrinsicId::BitfieldToBytes,])
+        );
+    }
+
+    #[test]
     fn bitfield_from_bytes_requires_handle() {
         let errors = check_source_errors(
             "\
@@ -16609,6 +23350,505 @@ function main() returns nothing:
         );
     }
 
+    fn check_resource_payload_source_in_profile(source: &str, release: bool) -> CheckResult {
+        let parsed = parse(source, FileId::new(STDLIB_FILE_ID_START));
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = jett_resolve::resolve(&parsed.module);
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "resolve errors: {:?}",
+            resolved.diagnostics
+        );
+        assert!(resolved.resource_kernels.is_empty());
+        check_with_options(&parsed.module, &resolved, CheckOptions { release })
+    }
+
+    #[test]
+    fn resource_views_cannot_enter_owning_constructor_payloads() {
+        let prefix =
+            "namespace audit\nexport resource FileHandle\nstruct Holder:\n    token: FileHandle\n";
+        for body in [
+            "function reject(view token: FileHandle) returns optional[FileHandle]:\n    return some(view token)\n",
+            "function reject(view token: FileHandle) returns list[FileHandle]:\n    return list(view token)\n",
+            "function reject(view token: FileHandle) returns Holder:\n    return Holder(token: view token)\n",
+            "function reject(view token: FileHandle) returns result[FileHandle, string]:\n    return ok(view token)\n",
+            "function reject(view token: FileHandle) returns result[string, FileHandle]:\n    return fail(view token)\n",
+            "function reject(view token: FileHandle) returns optional[FileHandle]:\n    FileHandle alias = view token\n    FileHandle forwarded = alias\n    return some(forwarded)\n",
+            "function reject(view holder: Holder) returns list[Holder]:\n    Holder alias = view holder\n    return list(alias)\n",
+            "function reject(view token: FileHandle) returns list[FileHandle]:\n    FileHandle alias = view token\n    return list(alias)\n",
+            "function reject(view token: FileHandle) returns Holder:\n    FileHandle alias = view token\n    return Holder(token: alias)\n",
+            "function reject(first: FileHandle, view second: FileHandle) returns list[FileHandle]:\n    return list(first, view second)\n",
+            "function reject(view token: FileHandle) returns optional[FileHandle]:\n    return some((view token))\n",
+        ] {
+            let source = format!("{prefix}{body}");
+            for release in [false, true] {
+                let result = check_resource_payload_source_in_profile(&source, release);
+                let errors: Vec<_> = result
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                    .collect();
+                assert_eq!(errors.len(), 1, "release={release}, {body}: {errors:?}");
+                assert_eq!(errors[0].code.code(), 401, "{errors:?}");
+                assert!(errors[0].message.contains("resource view"), "{errors:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn resource_view_payload_guards_validate_inferred_unused_and_generic_bodies() {
+        let prefix =
+            "namespace audit\nexport resource FileHandle\nstruct Holder:\n    token: FileHandle\n";
+        for expression in [
+            "some(view token)",
+            "list(view token)",
+            "ok(view token)",
+            "fail(view token)",
+            "Holder(token: view token)",
+            "view some(view token)",
+            "view list(view token)",
+            "view Holder(token: view token)",
+        ] {
+            let view_argument = if expression.starts_with("view ") {
+                expression.to_owned()
+            } else {
+                format!("view {expression}")
+            };
+            let source = format!(
+                "{prefix}function observe[T](view value: T) returns nothing:\n    return nothing\nfunction unused(view token: FileHandle) returns nothing:\n    observe({view_argument})\n    return nothing\n"
+            );
+            for release in [false, true] {
+                let result = check_resource_payload_source_in_profile(&source, release);
+                let errors: Vec<_> = result
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                    .collect();
+                assert_eq!(errors.len(), 1, "{expression}: {errors:?}");
+                assert_eq!(errors[0].code.code(), 401, "{errors:?}");
+            }
+        }
+        let generic = r#"namespace audit
+export resource FileHandle
+function wrap[T](view token: T) returns optional[T]:
+    T alias = view token
+    return some(alias)
+function unused(view token: FileHandle) returns nothing:
+    optional[FileHandle] payload = wrap[FileHandle](view token)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = check_resource_payload_source_in_profile(generic, release);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect();
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert_eq!(errors[0].code.code(), 401, "{errors:?}");
+            let start = usize::try_from(errors[0].span.start).expect("source byte offset");
+            let end = usize::try_from(errors[0].span.end).expect("source byte offset");
+            assert_eq!(generic.get(start..end), Some("alias"));
+        }
+    }
+
+    #[test]
+    fn owned_resource_payloads_views_absence_and_nonresource_constructors_remain_valid() {
+        let source = r#"namespace audit
+export resource FileHandle
+struct Holder:
+    token: FileHandle
+    count: int64
+struct Phantom[T]:
+    count: int64
+function phantom(view item: Phantom[FileHandle]) returns optional[Phantom[FileHandle]]:
+    return some(view item)
+function own_optional(token: FileHandle) returns optional[FileHandle]:
+    return some(token)
+function own_list(token: FileHandle) returns list[FileHandle]:
+    return list(token)
+function own_result(token: FileHandle) returns result[FileHandle, string]:
+    return ok(token)
+function own_failure(token: FileHandle) returns result[string, FileHandle]:
+    return fail(token)
+function own_holder(token: FileHandle) returns Holder:
+    return Holder(token: token, count: 7)
+function borrow(view holder: Holder, view token: FileHandle) returns nothing:
+    FileHandle alias = view token
+    FileHandle forwarded = alias
+    trace forwarded
+    FileHandle field_alias = view holder.token
+    trace field_alias
+    int64 count = holder.count
+    optional[FileHandle] absent = none
+    list[FileHandle] empty = list()
+    return nothing
+function scalar(view count: int64) returns optional[int64]:
+    return some(view count)
+function unchanged(view values: list[int64]) returns optional[list[int64]]:
+    return some(view values)
+function type_name() returns string:
+    return type.name[FileHandle]()
+function type_kind() returns bool:
+    return type.kind_tag[FileHandle]() == TypeKind.resource_type
+function type_fields() returns list[TypeField]:
+    return type.fields[FileHandle]()
+"#;
+        for release in [false, true] {
+            let result = check_resource_payload_source_in_profile(source, release);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect();
+            assert!(errors.is_empty(), "release={release}: {errors:?}");
+        }
+    }
+
+    #[test]
+    fn resource_roots_reject_value_reflection_without_banning_aggregate_metadata() {
+        let forbidden = r#"namespace audit
+export resource FileHandle
+function opaque_variant(view token: FileHandle) returns TypeVariant:
+    return type.variant_value[FileHandle](view token)
+function opaque_state(view token: FileHandle) returns TypeMachineState:
+    return type.machine_state_value[FileHandle](view token)
+"#;
+        for release in [false, true] {
+            let result = check_resource_payload_source_in_profile(forbidden, release);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect();
+            assert_eq!(errors.len(), 2, "{errors:?}");
+            assert!(
+                errors
+                    .iter()
+                    .all(|diagnostic| diagnostic.code.code() == 300)
+            );
+            assert!(
+                errors.iter().all(|diagnostic| {
+                    diagnostic.message.contains("non-resource value for type.")
+                        && diagnostic.message.contains("audit.FileHandle")
+                }),
+                "{errors:?}"
+            );
+        }
+        let permitted = r#"namespace audit
+export resource FileHandle
+enum Slot:
+    empty
+    occupied(token: FileHandle)
+function aggregate_metadata(view slot: Slot) returns TypeVariant:
+    return type.variant_value[Slot](view slot)
+function resource_metadata() returns string:
+    return type.name[FileHandle]()
+"#;
+        for release in [false, true] {
+            let result = check_resource_payload_source_in_profile(permitted, release);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect();
+            assert!(errors.is_empty(), "{errors:?}");
+        }
+    }
+
+    #[test]
+    fn resource_root_print_refusal_keeps_release_policy_separate() {
+        let source = r#"namespace audit
+export resource FileHandle
+function forbidden_output(view token: FileHandle) returns nothing:
+    print(view token)
+    println(view token)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = check_resource_payload_source_in_profile(source, release);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect();
+            assert_eq!(errors.len(), if release { 4 } else { 2 }, "{errors:?}");
+            assert_eq!(
+                errors
+                    .iter()
+                    .filter(|diagnostic| {
+                        diagnostic.code.code() == 300
+                            && diagnostic.message.contains("ordinary printing")
+                    })
+                    .count(),
+                2,
+                "{errors:?}"
+            );
+            assert_eq!(
+                errors
+                    .iter()
+                    .filter(|diagnostic| { diagnostic.code.code() == 362 })
+                    .count(),
+                if release { 2 } else { 0 },
+                "{errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resource_root_print_guard_does_not_select_nested_or_absent_rendering() {
+        let source = r#"namespace audit
+export resource FileHandle
+struct Holder:
+    token: FileHandle
+struct Hidden:
+    token: secret[FileHandle]
+function nested(view holder: Holder, view hidden: Hidden) returns nothing:
+    println(view holder)
+    println(view hidden)
+    return nothing
+function absence() returns nothing:
+    optional[FileHandle] missing = none
+    list[FileHandle] empty = list()
+    println(view missing)
+    println(view empty)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = check_resource_payload_source_in_profile(source, release);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect();
+            assert_eq!(errors.len(), if release { 4 } else { 0 }, "{errors:?}");
+            assert!(
+                errors
+                    .iter()
+                    .all(|diagnostic| diagnostic.code.code() == 362)
+            );
+        }
+    }
+
+    #[test]
+    fn resource_map_views_cannot_become_owned_values_in_either_typing_route() {
+        let prefix = "namespace audit\nexport resource FileHandle\n";
+        for body in [
+            "function reject(view token: FileHandle) returns map[string, FileHandle]:\n    return map(\"one\": view token)\n",
+            "function reject(view token: FileHandle) returns map[string, FileHandle]:\n    FileHandle alias = view token\n    return map(\"one\": alias)\n",
+            "function reject(first: FileHandle, view token: FileHandle) returns map[string, FileHandle]:\n    return map(\"one\": first, \"two\": view token)\n",
+            "function inspect[T](view value: T) returns nothing:\n    return nothing\nfunction reject(view token: FileHandle) returns nothing:\n    inspect(view map(\"one\": view token))\n    return nothing\n",
+        ] {
+            let source = format!("{prefix}{body}");
+            for release in [false, true] {
+                let result = check_resource_payload_source_in_profile(&source, release);
+                let errors: Vec<_> = result
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                    .collect();
+                assert_eq!(errors.len(), 1, "release={release}: {errors:?}");
+                assert_eq!(errors[0].code.code(), 401, "{errors:?}");
+                assert!(errors[0].message.contains("resource view"), "{errors:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn resource_machine_payloads_and_viewed_owned_sources_are_rejected() {
+        let prefix = r#"namespace audit
+export resource FileHandle
+machine Envelope:
+    states:
+        empty
+        holding(token: FileHandle)
+    transitions:
+        empty to holding
+        holding to empty
+"#;
+        for (body, expected_code) in [
+            (
+                "function reject(view token: FileHandle) returns Envelope at holding:\n    return Envelope(holding, view token)\n",
+                401,
+            ),
+            (
+                "function reject(view token: FileHandle) returns Envelope at holding:\n    FileHandle alias = view token\n    return Envelope(holding, alias)\n",
+                401,
+            ),
+            (
+                "function reject(view token: FileHandle) returns Envelope at holding:\n    return Envelope.transition(Envelope(empty), holding, view token)\n",
+                401,
+            ),
+            (
+                "function reject(view token: FileHandle) returns Envelope at holding:\n    FileHandle alias = view token\n    return Envelope.transition(Envelope(empty), holding, alias)\n",
+                401,
+            ),
+            (
+                "function reject(view source: Envelope at holding) returns Envelope at empty:\n    return Envelope.transition(view source, empty)\n",
+                375,
+            ),
+            (
+                "function reject(view source: Envelope at holding) returns Envelope at empty:\n    return Envelope.transition(source, empty)\n",
+                401,
+            ),
+            (
+                "function reject(view source: Envelope at holding) returns Envelope at empty:\n    Envelope at holding alias = view source\n    return Envelope.transition(alias, empty)\n",
+                401,
+            ),
+        ] {
+            let source = format!("{prefix}{body}");
+            for release in [false, true] {
+                let result = check_resource_payload_source_in_profile(&source, release);
+                let errors: Vec<_> = result
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                    .collect();
+                assert_eq!(errors.len(), 1, "release={release}, {body}: {errors:?}");
+                assert_eq!(errors[0].code.code(), expected_code, "{errors:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn resource_owned_map_machine_and_existing_enum_boundaries_are_preserved() {
+        let source = r#"namespace audit
+export resource FileHandle
+enum Packet:
+    empty
+    holding(token: FileHandle)
+machine Envelope:
+    states:
+        empty
+        holding(token: FileHandle)
+    transitions:
+        empty to holding
+        holding to empty
+function map_owned(token: FileHandle) returns map[string, FileHandle]:
+    return map("one": token)
+function map_absent() returns map[string, FileHandle]:
+    return map()
+function machine_owned(token: FileHandle) returns Envelope at holding:
+    return Envelope(holding, token)
+function machine_absent() returns Envelope at empty:
+    return Envelope(empty)
+function transition_owned(source: Envelope at holding) returns Envelope at empty:
+    return Envelope.transition(source, empty)
+function target_owned(source: Envelope at empty, token: FileHandle) returns Envelope at holding:
+    return Envelope.transition(source, holding, token)
+function unchanged(view source: Envelope at empty, token: FileHandle) returns Envelope at holding:
+    return Envelope.transition(view source, holding, token)
+function enum_owned(token: FileHandle) returns Packet:
+    return Packet.holding(token)
+"#;
+        for release in [false, true] {
+            let result = check_resource_payload_source_in_profile(source, release);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect();
+            assert!(errors.is_empty(), "release={release}: {errors:?}");
+        }
+        let prefix = "namespace audit\nexport resource FileHandle\nenum Packet:\n    empty\n    holding(token: FileHandle)\n";
+        for (body, expected_code) in [
+            (
+                "function reject(view token: FileHandle) returns Packet:\n    return Packet.holding(view token)\n",
+                375,
+            ),
+            (
+                "function reject(view token: FileHandle) returns Packet:\n    FileHandle alias = view token\n    return Packet.holding(alias)\n",
+                401,
+            ),
+        ] {
+            let source = format!("{prefix}{body}");
+            for release in [false, true] {
+                let result = check_resource_payload_source_in_profile(&source, release);
+                let errors: Vec<_> = result
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                    .collect();
+                assert_eq!(errors.len(), 1, "{errors:?}");
+                assert_eq!(errors[0].code.code(), expected_code, "{errors:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn resource_payload_diagnostics_replace_only_the_exact_legacy_counterpart() {
+        let bare = r#"namespace audit
+export resource FileHandle
+struct Holder:
+    token: FileHandle
+function reject(view holder: Holder) returns list[Holder]:
+    return list(holder)
+"#;
+        let independent = r#"namespace audit
+export resource FileHandle
+function consume(token: FileHandle) returns nothing:
+    return nothing
+function reject(view viewed: FileHandle, owned: FileHandle) returns nothing:
+    some(viewed)
+    consume(owned)
+    consume(owned)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = check_resource_payload_source_in_profile(bare, release);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect();
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert_eq!(errors[0].code.code(), 401);
+            assert!(errors[0].message.contains("resource view"), "{errors:?}");
+
+            let result = check_resource_payload_source_in_profile(independent, release);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect();
+            assert_eq!(errors.len(), 3, "{errors:?}");
+            assert_eq!(
+                errors
+                    .iter()
+                    .filter(|diagnostic| diagnostic.code.code() == 342)
+                    .count(),
+                1,
+                "{errors:?}"
+            );
+            assert_eq!(
+                errors
+                    .iter()
+                    .filter(|diagnostic| {
+                        diagnostic.code.code() == 401
+                            && diagnostic.message.contains("resource view")
+                    })
+                    .count(),
+                1,
+                "{errors:?}"
+            );
+            assert_eq!(
+                errors
+                    .iter()
+                    .filter(|diagnostic| { diagnostic.code.code() == 400 })
+                    .count(),
+                1,
+                "{errors:?}"
+            );
+        }
+    }
+
     #[test]
     fn stdlib_resource_is_nominal_and_reflected_as_resource() {
         let result = check_source_result_with_file_id(
@@ -16645,6 +23885,29 @@ function main() returns nothing:
                 .is_none(),
             "resources must not expose aggregate fields"
         );
+    }
+
+    #[test]
+    fn stdlib_resource_kind_tag_is_a_checked_enum_variant() {
+        let result = check_source_result_with_file_id(
+            r#"namespace io
+export resource FileHandle
+type HandleAlias = FileHandle
+function resource_kind_matches() returns bool:
+    return type.kind_tag[FileHandle]() == TypeKind.resource_type
+function resource_info_matches() returns bool:
+    return type.info[FileHandle]().kind_tag == TypeKind.resource_type
+function alias_kind_matches() returns bool:
+    return type.kind_tag[HandleAlias]() == TypeKind.alias_type
+"#,
+            FileId::new(STDLIB_FILE_ID_START),
+        );
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
     }
 
     #[test]
@@ -16733,5 +23996,4397 @@ function main() returns nothing:
         assert_eq!(nested_call.definition, inner.definition);
         assert_eq!(nested_call.concrete_args, vec![TypeInterner::INT64]);
         assert_eq!(result.generic_calls.len(), 2);
+    }
+
+    #[test]
+    fn generic_closure_factories_export_concrete_instantiations() {
+        let result = check_source_result(
+            r#"function make_constant[T](value: T) returns function() returns T:
+    return function() returns T: return value
+function make_identity[T]() returns function(T) returns T:
+    return function(value: T) returns T: return value
+function make_optional[T]() returns function(T) returns optional[T]:
+    return function(value: T) returns optional[T]: return some(value)
+function main() returns int64:
+    function() returns int64 constant = make_constant[int64](9)
+    function(int64) returns int64 identity = make_identity[int64]()
+    function(int64) returns optional[int64] wrap = make_optional[int64]()
+    optional[int64] wrapped = wrap(3)
+    return constant() + identity(4)
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.generic_calls.len(), 3);
+        assert_eq!(result.generic_function_instantiations.len(), 3);
+        for call in result.generic_calls.values() {
+            let instance = result
+                .generic_function_instantiations
+                .iter()
+                .find(|instance| {
+                    instance.definition == call.definition
+                        && instance.concrete_args == call.concrete_args
+                        && instance.specialization == call.specialization
+                })
+                .expect("every factory call needs a checked concrete body");
+            assert_eq!(instance.concrete_args, [TypeInterner::INT64]);
+            let Type::Function {
+                params,
+                return_type,
+                ..
+            } = result.interner.resolve(instance.return_type)
+            else {
+                panic!("factory must return a concrete function type");
+            };
+            assert!(params.iter().all(|param| *param == TypeInterner::INT64));
+            assert!(
+                *return_type == TypeInterner::INT64
+                    || matches!(
+                        result.interner.resolve(*return_type),
+                        Type::Optional(inner) if *inner == TypeInterner::INT64
+                    )
+            );
+            assert!(
+                instance
+                    .type_map
+                    .values()
+                    .any(|ty| *ty == instance.return_type)
+            );
+        }
+    }
+
+    #[test]
+    fn generic_closure_reflection_detection_uses_the_body() {
+        let source = r#"function make_identity[T]() returns function(T) returns T:
+    return function(value: T) returns T: return value
+function make_name[T]() returns function() returns string:
+    return function() returns string: return type.name[T]()
+function make_nested_name[T]() returns function() returns function() returns string:
+    return function() returns function() returns string: return function() returns string: return type.name[list[T]]()
+"#;
+        let parsed = parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolve = jett_resolve::resolve(&parsed.module);
+        let checker = TypeChecker::new(&resolve, CheckOptions::default());
+        let reflection = parsed
+            .module
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Function(function) => {
+                    Some(checker.generic_function_uses_type_param_reflection(function))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reflection, [false, true, true]);
+    }
+
+    #[test]
+    fn generic_closure_factory_rejects_move_only_capture() {
+        let errors = check_source_errors(
+            r#"function make_constant[T](value: T) returns function() returns T:
+    return function() returns T: return value
+function main() returns nothing:
+    function() returns list[int64] callback = make_constant[list[int64]](list(1))
+"#,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code.code(), 402);
+        assert!(errors[0].message.contains("value"));
+    }
+
+    #[test]
+    fn generic_instantiations_export_checker_owned_static_selections() {
+        let result = check_source_result(
+            r#"struct User:
+    value: int64
+function classify[T]() returns string:
+    if type.kind_tag[T]() == TypeKind.list_type:
+        return "list"
+    else if type.kind_tag[T]() == TypeKind.primitive_type:
+        return "primitive"
+    else:
+        return "other"
+function maybe_list[T]() returns string:
+    if type.kind_tag[T]() == TypeKind.list_type:
+        return "list"
+    return "none"
+function classify_match[T]() returns string:
+    match type.kind_tag[T]():
+        primitive_type:
+            return "primitive"
+        other:
+            return "other"
+function main() returns nothing:
+    string list_label = classify[list[int64]]()
+    string primitive_label = classify[int64]()
+    string other_label = classify[User]()
+    string absent_label = maybe_list[string]()
+    string match_label = classify_match[int64]()
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+
+        let selections = result
+            .generic_function_instantiations
+            .iter()
+            .flat_map(|instantiation| instantiation.static_selections.values().copied())
+            .collect::<Vec<_>>();
+        assert!(selections.contains(&CheckedStaticSelection::IfThen));
+        assert!(selections.contains(&CheckedStaticSelection::IfElseIf(0)));
+        assert!(selections.contains(&CheckedStaticSelection::IfElse));
+        assert!(selections.contains(&CheckedStaticSelection::IfNoBranch));
+        assert!(selections.contains(&CheckedStaticSelection::MatchArm(0)));
+    }
+
+    #[test]
+    fn generic_type_name_literal_equality_selects_a_checked_branch() {
+        let result = check_source_result(
+            r#"function classify[T]() returns string:
+    if "a" == "b":
+        return "unrelated"
+    if type.name[T]() == "int64":
+        return "integer"
+    else:
+        return "other"
+function main() returns nothing:
+    string integer = classify[int64]()
+    string other = classify[string]()
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+        let selections = result
+            .generic_function_instantiations
+            .iter()
+            .flat_map(|instantiation| instantiation.static_selections.values().copied())
+            .collect::<Vec<_>>();
+        assert!(selections.contains(&CheckedStaticSelection::IfThen));
+        assert!(selections.contains(&CheckedStaticSelection::IfElse));
+        assert_eq!(selections.len(), 2);
+    }
+
+    #[test]
+    fn generic_has_secret_selects_a_checked_branch() {
+        let result = check_source_result(
+            r#"function classify[T]() returns string:
+    if type.has_secret[T]():
+        return "secret"
+    else:
+        return "public"
+function main() returns nothing:
+    string secret_label = classify[secret[string]]()
+    string public_label = classify[string]()
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+        let selections = result
+            .generic_function_instantiations
+            .iter()
+            .flat_map(|instantiation| instantiation.static_selections.values().copied())
+            .collect::<Vec<_>>();
+        assert!(selections.contains(&CheckedStaticSelection::IfThen));
+        assert!(selections.contains(&CheckedStaticSelection::IfElse));
+    }
+
+    #[test]
+    fn alias_and_underlying_type_keep_distinct_branch_and_match_specializations() {
+        let result = check_source_result(
+            r#"type Names = list[string]
+function classify_branch[T]() returns string:
+    if type.kind_tag[T]() == TypeKind.alias_type:
+        return "alias"
+    else:
+        return "list"
+function classify_match[T]() returns string:
+    match type.kind_tag[T]():
+        alias_type:
+            return "alias"
+        other:
+            return "list"
+function main() returns nothing:
+    string branch_alias = classify_branch[Names]()
+    string branch_list = classify_branch[list[string]]()
+    string match_alias = classify_match[Names]()
+    string match_list = classify_match[list[string]]()
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+
+        let mut by_definition: HashMap<DefId, Vec<&CheckedGenericFunctionInstantiation>> =
+            HashMap::new();
+        for instantiation in &result.generic_function_instantiations {
+            by_definition
+                .entry(instantiation.definition)
+                .or_default()
+                .push(instantiation);
+        }
+        assert_eq!(by_definition.len(), 2);
+        for instantiations in by_definition.values() {
+            assert_eq!(instantiations.len(), 2);
+            assert_eq!(
+                instantiations[0].concrete_args,
+                instantiations[1].concrete_args
+            );
+            assert_ne!(
+                instantiations[0].specialization,
+                instantiations[1].specialization
+            );
+            let kind_tags = instantiations
+                .iter()
+                .map(|instantiation| instantiation.specialization.type_argument_kinds[0].as_str())
+                .collect::<HashSet<_>>();
+            assert_eq!(kind_tags, HashSet::from(["alias_type", "list_type"]));
+            assert_ne!(
+                instantiations[0].static_selections,
+                instantiations[1].static_selections
+            );
+        }
+        assert_eq!(result.generic_calls.len(), 4);
+        assert!(result.generic_calls.values().all(|call| {
+            result
+                .generic_function_instantiations
+                .iter()
+                .any(|instantiation| {
+                    instantiation.definition == call.definition
+                        && instantiation.concrete_args == call.concrete_args
+                        && instantiation.specialization == call.specialization
+                })
+        }));
+    }
+
+    #[test]
+    fn comptime_type_argument_alias_keeps_its_kind_in_generic_calls() {
+        let result = check_source_result(
+            r#"type Names = list[string]
+function classify[T]() returns string:
+    if type.kind_tag[T]() == TypeKind.alias_type:
+        return "alias"
+    return "other"
+function inspect[T]() returns string:
+    comptime type Element = type.arg[T](0):
+        return classify[Element]()
+function main() returns nothing:
+    string label = inspect[optional[Names]]()
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result
+                .generic_function_instantiations
+                .iter()
+                .any(|instance| {
+                    instance
+                        .specialization
+                        .type_argument_reflections
+                        .first()
+                        .is_some_and(|info| info.type_name == "Names")
+                        && instance.specialization.type_argument_kinds == ["alias_type"]
+                })
+        );
+    }
+
+    #[test]
+    fn differing_static_selections_conflict_for_one_canonical_instantiation() {
+        let span = sp(10, 20);
+        let mut selections = HashMap::from([(span, CheckedStaticSelection::IfThen)]);
+        let conflicts = merge_static_selections(
+            &mut selections,
+            HashMap::from([(span, CheckedStaticSelection::IfElse)]),
+        );
+
+        assert_eq!(conflicts, vec![span]);
+        assert_eq!(selections.get(&span), Some(&CheckedStaticSelection::IfThen));
+    }
+
+    #[test]
+    fn runtime_type_name_generic_exports_manifest_and_intrinsic_operand() {
+        let result = check_source_result(
+            r#"function describe[T]() returns string:
+    return type.name[T]()
+function main() returns string:
+    return describe[int64]()
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+
+        let [instantiation] = result.generic_function_instantiations.as_slice() else {
+            panic!("describe[int64] should have one checked manifest entry");
+        };
+        assert_eq!(instantiation.concrete_args, vec![TypeInterner::INT64]);
+        assert_eq!(instantiation.intrinsic_type_arguments.len(), 1);
+        assert_eq!(
+            instantiation
+                .intrinsic_type_arguments
+                .values()
+                .next()
+                .unwrap(),
+            &vec![TypeInterner::INT64]
+        );
+    }
+
+    #[test]
+    fn runtime_field_reflection_exports_concrete_intrinsic_operands() {
+        let result = check_source_result(
+            r#"struct User:
+    name: string
+function first_string_field[T](view value: T) returns string:
+    list[TypeField] fields = type.fields[T]()
+    mutable string found = "missing"
+    for field in fields:
+        if field.type_name == "string":
+            string item = type.field_value[T, string](view value, view field)
+            found = item
+    return found
+function main() returns string:
+    User user = User(name: "Ada")
+    return first_string_field[User](view user)
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+
+        let [instantiation] = result.generic_function_instantiations.as_slice() else {
+            panic!("first_string_field[User] should have one checked manifest entry");
+        };
+        let owner = instantiation.concrete_args[0];
+        let mut operands = instantiation
+            .intrinsic_type_arguments
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        operands.sort_by_key(Vec::len);
+        assert_eq!(
+            operands,
+            vec![vec![owner], vec![owner, TypeInterner::STRING]]
+        );
+    }
+
+    #[test]
+    fn comptime_field_bindings_export_distinct_recursive_body_facts() {
+        let result = check_source_result(
+            r#"struct User:
+    name: string
+    age: int64
+    active: bool
+function inspect[T](view value: T) returns nothing:
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            string reflected_name = type.name[Field]()
+    return nothing
+function main() returns nothing:
+    User user = User(name: "Ada", age: 42, active: true)
+    inspect[User](view user)
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+
+        let inspect = result
+            .generic_function_instantiations
+            .iter()
+            .find(|instantiation| !instantiation.comptime_type_bindings.is_empty())
+            .expect("inspect[User] should export its comptime field expansions");
+        let bindings = inspect
+            .comptime_type_bindings
+            .values()
+            .next()
+            .expect("comptime binding should be keyed by its statement span");
+        assert_eq!(bindings.len(), 3);
+        assert_eq!(
+            bindings
+                .iter()
+                .map(|binding| binding.selection)
+                .collect::<Vec<_>>(),
+            vec![
+                CheckedComptimeTypeSelection::ReflectedIteration(0),
+                CheckedComptimeTypeSelection::ReflectedIteration(1),
+                CheckedComptimeTypeSelection::ReflectedIteration(2),
+            ]
+        );
+        assert_eq!(
+            bindings
+                .iter()
+                .map(|binding| binding.bound_type)
+                .collect::<Vec<_>>(),
+            vec![
+                TypeInterner::STRING,
+                TypeInterner::INT64,
+                TypeInterner::BOOL,
+            ]
+        );
+        for binding in bindings {
+            assert_eq!(binding.body.intrinsic_type_arguments.len(), 1);
+            assert_eq!(
+                binding
+                    .body
+                    .intrinsic_type_arguments
+                    .values()
+                    .next()
+                    .unwrap(),
+                &vec![binding.bound_type]
+            );
+        }
+    }
+
+    #[test]
+    fn unconstrained_empty_list_inference_uses_uninhabited_type_not_error() {
+        let result = check_source_result(
+            r#"function is_empty[T](view items: list[T]) returns bool:
+    return true
+function main() returns bool:
+    return is_empty(list())
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+        let [instantiation] = result.generic_function_instantiations.as_slice() else {
+            panic!("is_empty[<never>] should have one checked manifest entry");
+        };
+        assert_eq!(instantiation.concrete_args, vec![TypeInterner::NEVER]);
+        assert_ne!(instantiation.concrete_args[0], TypeInterner::ERROR);
+    }
+
+    #[test]
+    fn expected_result_specializes_empty_generic_argument_without_overriding_values() {
+        let source = r#"function wrap[T](items: list[T]) returns list[list[T]]:
+    return list(items)
+function main() returns list[list[int64]]:
+    list[list[int64]] wrapped = wrap(list())
+    return wrapped
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+        let [instantiation] = result.generic_function_instantiations.as_slice() else {
+            panic!("wrap[int64] should have one checked manifest entry");
+        };
+        assert_eq!(instantiation.concrete_args, vec![TypeInterner::INT64]);
+        let start = source.rfind("list()").expect("empty argument") as u32;
+        let argument_type = result
+            .type_map
+            .get(&Span::new(FileId::new(0), start, start + 6))
+            .copied()
+            .expect("contextual argument type");
+        assert_eq!(
+            result.interner.resolve(argument_type),
+            &Type::List(TypeInterner::INT64)
+        );
+
+        let mismatch = check_source_result(
+            r#"function wrap[T](items: list[T]) returns list[list[T]]:
+    return list(items)
+function main() returns nothing:
+    list[list[string]] wrapped = wrap(list(1))
+"#,
+        );
+        assert!(
+            mismatch
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error),
+            "value-bearing int64 inference must not be replaced by string context"
+        );
+
+        let unknown = check_source_result(
+            r#"function empty[T]() returns list[T]:
+    return list()
+function main() returns list[int64]:
+    return empty()
+"#,
+        );
+        assert!(
+            unknown
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error),
+            "result context must not infer a type argument absent from all inputs"
+        );
+    }
+
+    #[test]
+    fn rejects_mutable_namespace_values_but_preserves_local_mutability() {
+        let errors = check_source_errors(
+            "namespace first\nmutable int64 count = 0\nfunction read_count() returns int64:\n    return count\nnamespace second\nmutable string label = \"global\"\nfunction read_label() returns string:\n    return label\n",
+        );
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors.iter().all(|error| error.code.code() == 377));
+        assert!(errors[0].message.contains("count"));
+        assert!(errors[1].message.contains("label"));
+
+        let errors = check_source_errors(
+            "namespace app\nint64 answer = 42\nfunction read_answer() returns int64:\n    mutable int64 local = answer\n    local = local + 1\n    return local\n",
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn namespace_constants_reject_rebinding_and_projected_writes() {
+        let source = r#"namespace app
+struct Inner:
+    value: int64
+struct Record:
+    child: Inner
+int64 answer = 42
+Record record = comptime Record(child: Inner(value: 1))
+function example() returns nothing:
+    answer = 43
+    answer = answer + 1
+    (answer) = 44
+    record.child.value = 2
+"#;
+        let errors = check_source_errors(source);
+        assert_eq!(errors.len(), 4, "{errors:?}");
+        let targets = errors
+            .iter()
+            .map(|diagnostic| {
+                assert_eq!(diagnostic.code.code(), 404, "{diagnostic:?}");
+                &source[diagnostic.span.start as usize..diagnostic.span.end as usize]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(targets, ["answer", "answer", "answer", "record"]);
+    }
+
+    #[test]
+    fn namespace_constants_reject_rebinding_in_methods_and_inline_functions() {
+        let errors = check_source_errors(
+            r#"namespace app
+int64 answer = 42
+struct Record:
+    value: int64
+    function change(view self: Record) returns nothing:
+        answer = 43
+function callback() returns function() returns nothing:
+    return function() returns nothing:
+        answer = answer + 1
+"#,
+        );
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(
+            errors
+                .iter()
+                .all(|diagnostic| diagnostic.code.code() == 404)
+        );
+    }
+
+    #[test]
+    fn namespace_constants_reject_rebinding_in_actor_and_test_bodies() {
+        let errors = check_source_errors(
+            r#"namespace app
+int64 answer = 42
+actor Counter:
+    mutable int64 count = 0
+    receive change:
+        answer = 43
+        count = count + 1
+verify immutable_constant:
+    answer = answer + 1
+property immutable_reads:
+    given value: int64
+    answer = value
+"#,
+        );
+        assert_eq!(errors.len(), 3, "{errors:?}");
+        assert!(
+            errors
+                .iter()
+                .all(|diagnostic| diagnostic.code.code() == 404)
+        );
+    }
+
+    #[test]
+    fn namespace_constants_preserve_mutable_local_and_actor_bindings() {
+        let errors = check_source_errors(
+            r#"namespace app
+int64 answer = 42
+function local() returns nothing:
+    mutable int64 answer = 1
+    answer = answer + 1
+actor Counter:
+    mutable int64 answer = 0
+    receive change:
+        answer = answer + 1
+property local_binding:
+    given answer: int64
+    assert answer == answer
+namespace other
+int64 answer = 7
+function local() returns nothing:
+    mutable int64 answer = 1
+    answer = answer + 1
+"#,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn projected_assignment_rejects_immutable_and_view_bindings() {
+        let errors = check_source_errors(
+            r#"struct Inner:
+    value: int64
+struct Record:
+    child: Inner
+function immutable(item: Record) returns nothing:
+    item.child.value = 2
+function borrowed(view mutable item: Record) returns nothing:
+    item.child.value = 2
+function annotated(mutable item: view Record) returns nothing:
+    item.child.value = 2
+function local(view item: Record) returns nothing:
+    Record fixed = clone view item
+    fixed.child.value = 2
+    mutable Record viewed_local = (view item)
+    viewed_local.child.value = 2
+    mutable view Record typed_local = clone view item
+    typed_local.child.value = 2
+"#,
+        );
+        let codes = errors
+            .iter()
+            .map(|diagnostic| diagnostic.code.code())
+            .collect::<Vec<_>>();
+        assert_eq!(codes, [404, 401, 401, 404, 401, 401], "{errors:?}");
+        assert!(
+            errors
+                .iter()
+                .filter(|diagnostic| diagnostic.code.code() == 401)
+                .all(|diagnostic| diagnostic.message.contains("views are read-only"))
+        );
+    }
+
+    #[test]
+    fn projected_assignment_rejects_temporary_and_transformed_places() {
+        let errors = check_source_errors(
+            r#"struct Inner:
+    value: int64
+struct Record:
+    child: Inner
+type Wrapped = Record where true
+function make() returns Record:
+    return Record(child: Inner(value: 1))
+function temporary(view item: Record) returns nothing:
+    make().child.value = 2
+    Record(child: Inner(value: 1)).child.value = 2
+    (clone view item).child.value = 2
+    (view item).child.value = 2
+function transformed(mutable item: Wrapped) returns nothing:
+    (coarsen item).child.value = 2
+function transformed_view(view mutable item: Wrapped) returns nothing:
+    (coarsen item).child.value = 2
+function borrowed_initializer(view item: Wrapped) returns nothing:
+    mutable Record borrowed = coarsen (view item)
+    borrowed.child.value = 2
+"#,
+        );
+        let codes = errors
+            .iter()
+            .map(|diagnostic| diagnostic.code.code())
+            .collect::<Vec<_>>();
+        assert_eq!(codes, [404, 404, 404, 401, 404, 401, 401], "{errors:?}");
+        assert!(
+            errors
+                .iter()
+                .filter(|diagnostic| diagnostic.code.code() == 404)
+                .all(|diagnostic| diagnostic.message.contains("owned mutable binding"))
+        );
+    }
+
+    #[test]
+    fn projected_assignment_preserves_owned_roots_and_field_copies() {
+        // These bodies pin only the selected assignment-root prerequisites.
+        // Execution of projected updates remains an unresolved language rule.
+        let errors = check_source_errors(
+            r#"namespace app
+struct Inner:
+    value: int64
+struct Record:
+    child: Inner
+function make() returns Record:
+    return Record(child: Inner(value: 1))
+function owned(mutable item: Record) returns nothing:
+    item.child.value = 2
+    (item.child).value = 3
+function copied(view item: Record) returns int64:
+    mutable Inner first = item.child
+    first.value = 2
+    mutable Inner second = (view item).child
+    second.value = 3
+    mutable Inner third = clone view item.child
+    third.value = 4
+    mutable Record fourth = clone view item
+    fourth.child.value = 5
+    int64 read = make().child.value
+    return read + item.child.value
+function callback() returns function(Record) returns nothing:
+    return function(mutable item: Record) returns nothing:
+        item.child.value = 2
+actor Store:
+    mutable app.Record item = app.Record(child: app.Inner(value: 1))
+    receive replace(mutable supplied: app.Record):
+        item.child.value = 2
+        supplied.child.value = 3
+"#,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn projected_assignment_uses_lexical_declaration_identity() {
+        let source = r#"namespace app
+struct Inner:
+    value: int64
+struct Record:
+    child: Inner
+function example() returns nothing:
+    if true:
+        mutable Record item = Record(child: Inner(value: 1))
+        item.child.value = 2
+    Record item = Record(child: Inner(value: 1))
+    item.child.value = 3
+function owned(mutable item: Record) returns nothing:
+    item.child.value = 4
+function readonly(view item: Record) returns nothing:
+    item.child.value = 5
+namespace other
+struct Record:
+    value: int64
+function example(mutable item: Record) returns nothing:
+    item.value = 6
+"#;
+        let errors = check_source_errors(source);
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert_eq!(errors[0].code.code(), 404, "{errors:?}");
+        assert_eq!(errors[1].code.code(), 401, "{errors:?}");
+        assert_eq!(
+            &source[errors[0].span.start as usize..errors[0].span.end as usize],
+            "item"
+        );
+    }
+
+    #[test]
+    fn projected_assignment_preserves_view_facts_in_actor_aliases() {
+        let errors = check_source_errors(
+            r#"namespace app
+struct Inner:
+    value: int64
+struct Record:
+    child: Inner
+actor Store:
+    receive borrowed(view item: app.Record):
+        mutable app.Record alias = item
+        alias.child.value = 2
+"#,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code.code(), 401, "{errors:?}");
+        assert!(errors[0].message.contains("views are read-only"));
+    }
+
+    #[test]
+    fn owned_rebinding_rejects_move_only_views_without_changing_root_facts() {
+        let source = r#"namespace app
+struct Inner:
+    value: int64
+struct Record:
+    child: Inner
+function make() returns Record:
+    return Record(child: Inner(value: 1))
+function direct(view source: Record) returns nothing:
+    mutable Record alias = make()
+    alias = view source
+    alias.child.value = 9
+function conditional(view source: Record) returns nothing:
+    mutable Record alias = make()
+    if true:
+        alias = view source
+    alias.child.value = 9
+function known_alias(view source: Record) returns nothing:
+    Record borrowed = source
+    mutable Record alias = make()
+    alias = borrowed
+    alias.child.value = 9
+actor Store:
+    mutable app.Record saved = make()
+    receive explicit(view source: app.Record):
+        saved = view source
+        saved.child.value = 9
+    receive bare(view source: app.Record):
+        saved = source
+        saved.child.value = 9
+"#;
+        let errors = check_source_errors(source);
+        assert_eq!(errors.len(), 5, "{errors:?}");
+        for diagnostic in &errors {
+            assert_eq!(diagnostic.code.code(), 401, "{diagnostic:?}");
+            assert_eq!(
+                diagnostic.message,
+                "cannot rebind an owned value from a view; clone the value instead"
+            );
+        }
+        let values = errors
+            .iter()
+            .map(|diagnostic| &source[diagnostic.span.start as usize..diagnostic.span.end as usize])
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            [
+                "view source",
+                "view source",
+                "borrowed",
+                "view source",
+                "source"
+            ]
+        );
+    }
+
+    #[test]
+    fn owned_rebinding_preserves_clones_scalars_and_field_copies() {
+        let errors = check_source_errors(
+            r#"namespace app
+struct Inner:
+    value: int64
+struct Record:
+    child: Inner
+function make() returns Record:
+    return Record(child: Inner(value: 1))
+function copies(view source: Record, view number: int64) returns nothing:
+    mutable Record alias = make()
+    alias = clone view source
+    alias.child.value = 2
+    mutable Inner copied = make().child
+    copied = source.child
+    copied = (view source).child
+    copied = clone view source.child
+    copied.value = 3
+    mutable int64 scalar = 0
+    scalar = view number
+    scalar = number
+actor Store:
+    mutable app.Record saved = make()
+    receive replace(view source: app.Record):
+        saved = clone view source
+        saved.child.value = 4
+"#,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn owned_rebinding_rejects_views_with_parenthesized_identifier_targets() {
+        let errors = check_source_errors(
+            r#"struct Record:
+    value: int64
+function replace(view source: Record) returns nothing:
+    mutable Record alias = Record(value: 1)
+    (alias) = view source
+    ((alias)) = view source
+"#,
+        );
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        for diagnostic in &errors {
+            assert_eq!(diagnostic.code.code(), 401, "{diagnostic:?}");
+            assert_eq!(
+                diagnostic.message,
+                "cannot rebind an owned value from a view; clone the value instead"
+            );
+        }
+    }
+
+    #[test]
+    fn owned_rebinding_preserves_immutable_target_diagnostics() {
+        let errors = check_source_errors(
+            r#"namespace app
+struct Record:
+    value: int64
+Record constant = comptime Record(value: 1)
+function local(view source: Record) returns nothing:
+    Record fixed = Record(value: 1)
+    fixed = view source
+    constant = view source
+"#,
+        );
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(
+            errors
+                .iter()
+                .all(|diagnostic| diagnostic.code.code() == 404)
+        );
+    }
+
+    #[test]
+    fn written_view_return_annotations_reject_headers_and_callable_results() {
+        for (source, count) in [
+            (
+                "function copy(view values: list[int64]) returns view list[int64]:\n    return clone values\n",
+                1,
+            ),
+            (
+                "function unused[T](value: T) returns view T:\n    return value\n",
+                1,
+            ),
+            (
+                "mutual:\n    function value(number: int64) returns view int64\nfunction value(number: int64) returns view int64:\n    return number\n",
+                2,
+            ),
+            (
+                "struct Item:\n    value: int64\n    function read(view self: Item) returns view int64:\n        return self.value\n",
+                1,
+            ),
+            (
+                "interface Reader:\n    function read(view self: Reader) returns view int64\nstruct Item:\n    value: int64\nimplement Reader for Item:\n    function read(view self: Item) returns view int64:\n        return self.value\n",
+                2,
+            ),
+            (
+                "function callback() returns nothing:\n    function() returns int64 value = function() returns view int64:\n        return 1\n",
+                1,
+            ),
+            (
+                "function callback() returns nothing:\n    mutable function() returns view int64 selected = function() returns int64:\n        return 1\n",
+                1,
+            ),
+            (
+                "function unused[T](value: T, callback: function() returns view T) returns nothing:\n    return nothing\n",
+                1,
+            ),
+            (
+                "struct Unused[T]:\n    callback: function() returns view T\n",
+                1,
+            ),
+            (
+                "function factory() returns function() returns view int64:\n    return function() returns int64:\n        return 1\n",
+                1,
+            ),
+        ] {
+            let errors = check_source_errors(source);
+            assert_eq!(errors.len(), count, "{source}\n{errors:?}");
+            for error in errors {
+                assert_eq!(error.code.code(), 401, "{error:?}");
+                assert_eq!(
+                    error.message,
+                    "function return type cannot be a view; return an owned value instead"
+                );
+                assert!(
+                    source[error.span.start as usize..error.span.end as usize].starts_with("view ")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn written_view_return_annotations_are_reported_once_per_source_span() {
+        let errors = check_source_errors(
+            r#"function identity[T](value: T) returns view T:
+    return value
+function main() returns nothing:
+    int64 first = identity[int64](1)
+    int64 second = identity[int64](2)
+    string third = identity[string]("three")
+"#,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].message.contains("return type cannot be a view"));
+
+        let errors = check_source_errors(
+            "function escape(view values: list[int64]) returns view list[int64]:\n    return values\n",
+        );
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors[0].message.contains("return type cannot be a view"));
+        assert!(errors[1].message.contains("cannot return a view"));
+        assert_ne!(errors[0].span, errors[1].span);
+    }
+
+    #[test]
+    fn owned_returns_reject_known_views_and_forwarded_aliases() {
+        for (parameter, returned) in [
+            ("view values: list[int64]", "values"),
+            ("values: view list[int64]", "values"),
+            ("view values: list[int64]", "((values))"),
+            ("view values: list[int64]", "view values"),
+            ("view values: list[int64]", "(view values)"),
+            ("view values: list[int64]", "forwarded"),
+        ] {
+            let source = format!(
+                "function escape({parameter}) returns list[int64]:\n    list[int64] borrowed = view values\n    list[int64] forwarded = borrowed\n    return {returned}\n"
+            );
+            let errors = check_source_errors(&source);
+            assert_eq!(errors.len(), 1, "{source}\n{errors:?}");
+            assert_eq!(errors[0].code.code(), 401, "{errors:?}");
+            assert_eq!(
+                errors[0].message,
+                "cannot return a view; clone the value or take ownership instead"
+            );
+            assert_eq!(
+                &source[errors[0].span.start as usize..errors[0].span.end as usize],
+                returned
+            );
+        }
+    }
+
+    #[test]
+    fn owned_returns_check_inline_and_instantiated_generic_bodies() {
+        for source in [
+            r#"function make() returns function(view list[int64]) returns list[int64]:
+    return function(view values: list[int64]) returns list[int64]:
+        return values
+"#,
+            r#"function escape[T](view value: T) returns T:
+    return value
+function main() returns nothing:
+    list[int64] source = list(7)
+    list[int64] escaped = escape[list[int64]](view source)
+"#,
+        ] {
+            let errors = check_source_errors(source);
+            assert_eq!(errors.len(), 1, "{source}\n{errors:?}");
+            assert_eq!(errors[0].code.code(), 401, "{errors:?}");
+            assert!(errors[0].message.contains("cannot return a view"));
+        }
+    }
+
+    #[test]
+    fn owned_call_boundaries_reject_views_across_call_forms_once() {
+        let prefix = r#"function consume(values: list[int64]) returns nothing:
+    return nothing
+function generic[T](values: T) returns nothing:
+    return nothing
+"#;
+        for call in [
+            "consume(values)",
+            "consume((values))",
+            "consume(forwarded)",
+            "(consume)(forwarded)",
+            "generic[list[int64]](forwarded)",
+            "generic(forwarded)",
+            "callback(forwarded)",
+        ] {
+            let source = format!(
+                "{prefix}function reject(view values: list[int64], callback: function(list[int64]) returns nothing) returns nothing:\n    list[int64] borrowed = view values\n    list[int64] forwarded = borrowed\n    {call}\n"
+            );
+            let errors = check_source_errors(&source);
+            assert_eq!(errors.len(), 1, "{call}: {errors:?}");
+            assert_eq!(errors[0].code.code(), 401, "{call}: {errors:?}");
+            assert_eq!(
+                errors[0].message,
+                "cannot pass a view to an owned parameter; clone the value or take ownership instead"
+            );
+        }
+
+        let errors = check_source_errors(
+            r#"struct Item:
+    value: int64
+    function consume(self: Item) returns nothing:
+        return nothing
+function reject(view source: Item) returns nothing:
+    Item borrowed = source
+    Item.consume(borrowed)
+"#,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code.code(), 401, "{errors:?}");
+        assert!(errors[0].message.contains("owned parameter"));
+    }
+
+    #[test]
+    fn owned_view_call_diagnostics_do_not_hide_other_view_errors() {
+        let errors = check_source_errors(
+            r#"struct Record:
+    value: int64
+function consume(item: Record) returns nothing:
+    return nothing
+function reject(view item: Record) returns nothing:
+    consume(item)
+    item.value = 2
+"#,
+        );
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors[0].message.contains("owned parameter"));
+        assert!(errors[1].message.contains("views are read-only"));
+        assert!(errors.iter().all(|error| error.code.code() == 401));
+    }
+
+    #[test]
+    fn owned_pipeline_boundaries_check_initial_values_and_extra_arguments() {
+        let prefix = r#"function consume(values: list[int64]) returns nothing:
+    return nothing
+function second(number: int64, values: list[int64]) returns nothing:
+    return nothing
+function generic[T](values: T) returns nothing:
+    return nothing
+function generic_second[T](number: int64, values: T) returns nothing:
+    return nothing
+"#;
+        for call in [
+            "values into consume()",
+            "borrowed into consume()",
+            "borrowed into generic[list[int64]]()",
+            "borrowed into generic()",
+            "borrowed into callback()",
+            "1 into second(borrowed)",
+            "1 into generic_second[list[int64]](borrowed)",
+            "1 into generic_second(borrowed)",
+        ] {
+            let source = format!(
+                "{prefix}function reject(view values: list[int64], callback: function(list[int64]) returns nothing) returns nothing:\n    list[int64] borrowed = view values\n    {call}\n"
+            );
+            let errors = check_source_errors(&source);
+            assert_eq!(errors.len(), 1, "{call}: {errors:?}");
+            assert_eq!(errors[0].code.code(), 401, "{call}: {errors:?}");
+            assert!(errors[0].message.contains("owned parameter"));
+            let reported = &source[errors[0].span.start as usize..errors[0].span.end as usize];
+            assert!(matches!(reported, "values" | "borrowed"), "{reported}");
+        }
+    }
+
+    #[test]
+    fn owned_view_boundaries_preserve_explicit_view_call_diagnostics() {
+        for call in [
+            "consume(view values)",
+            "consume((view values))",
+            "generic[list[int64]](view values)",
+            "generic(view values)",
+            "callback(view values)",
+            "values into view consume()",
+            "(view values) into consume()",
+            "values into view generic[list[int64]]()",
+            "values into view generic()",
+        ] {
+            let source = format!(
+                "function consume(values: list[int64]) returns nothing:\n    return nothing\nfunction generic[T](values: T) returns nothing:\n    return nothing\nfunction reject(view values: list[int64], callback: function(list[int64]) returns nothing) returns nothing:\n    {call}\n"
+            );
+            let errors = check_source_errors(&source);
+            assert_eq!(errors.len(), 1, "{call}: {errors:?}");
+            assert_eq!(errors[0].code.code(), 375, "{call}: {errors:?}");
+        }
+    }
+
+    #[test]
+    fn owned_view_boundaries_follow_transparent_wrappers_but_not_type_errors() {
+        let prefix = r#"type Numbers = list[int64] where true
+function consume(values: list[int64]) returns nothing:
+    return nothing
+"#;
+        for (parameter, value, explicit_view) in [
+            ("view values: Numbers", "coarsen values", false),
+            ("view values: Numbers", "coarsen (view values)", true),
+            (
+                "view values: secret[list[int64]]",
+                "declassify values",
+                false,
+            ),
+            (
+                "view values: secret[list[int64]]",
+                "declassify (view values)",
+                true,
+            ),
+        ] {
+            for (body, expected_code) in [
+                (format!("    return {value}\n"), 401),
+                (
+                    format!("    consume({value})\n    return list()\n"),
+                    if explicit_view { 375 } else { 401 },
+                ),
+            ] {
+                let source =
+                    format!("{prefix}function reject({parameter}) returns list[int64]:\n{body}");
+                let errors = check_source_errors(&source);
+                assert_eq!(errors.len(), 1, "{source}\n{errors:?}");
+                assert_eq!(errors[0].code.code(), expected_code, "{errors:?}");
+            }
+        }
+        for body in [
+            "    return declassify values\n",
+            "    consume(declassify values)\n    return list()\n",
+        ] {
+            let source = format!(
+                "{prefix}function invalid(view values: list[int64]) returns list[int64]:\n{body}"
+            );
+            let errors = check_source_errors(&source);
+            assert_eq!(errors.len(), 1, "{source}\n{errors:?}");
+            assert!(errors[0].message.contains("declassify"), "{errors:?}");
+            assert_ne!(errors[0].code.code(), 401, "{errors:?}");
+        }
+    }
+
+    #[test]
+    fn owned_view_boundaries_apply_to_actor_verify_and_property_bodies() {
+        let errors = check_source_errors(
+            r#"namespace app
+function consume(values: list[int64]) returns int64:
+    return 1
+actor Store:
+    receive borrowed(view values: list[int64]):
+        list[int64] alias = view values
+        int64 count = consume(alias)
+        trace count
+verify borrowed_alias:
+    list[int64] source = list(7)
+    list[int64] alias = view source
+    list[int64] forwarded = alias
+    assert consume(forwarded) == 1
+property borrowed_property_alias:
+    given source: list[int64]
+    list[int64] alias = view source
+    list[int64] forwarded = alias
+    assert consume(forwarded) == 1
+"#,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        for error in errors {
+            assert_eq!(error.code.code(), 401, "{error:?}");
+            assert!(error.message.contains("owned parameter"));
+        }
+    }
+
+    #[test]
+    fn owned_view_boundaries_preserve_copies_clones_fields_and_call_results() {
+        let errors = check_source_errors(
+            r#"struct Record:
+    values: list[int64]
+function consume(values: list[int64]) returns nothing:
+    return nothing
+function copy(view values: list[int64]) returns list[int64]:
+    list[int64] borrowed = view values
+    list[int64] forwarded = borrowed
+    return clone forwarded
+function scalar(view value: int64) returns int64:
+    int64 copied = value
+    return copied
+function text(view value: string) returns string:
+    return value
+function field(view record: Record) returns list[int64]:
+    return record.values
+function copies(view values: list[int64], view record: Record) returns nothing:
+    consume(clone values)
+    consume(clone (view values))
+    consume(record.values)
+    consume(copy(view values))
+    values into view copy() into consume()
+    if true:
+        list[int64] alias = view values
+        consume(clone alias)
+    list[int64] alias = list(7)
+    consume(alias)
+"#,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn owned_view_boundaries_preserve_copyable_transformation_results() {
+        let errors = check_source_errors(
+            r#"type Count = int64 where true
+function consume(value: int64) returns nothing:
+    return nothing
+function refined(view value: Count) returns int64:
+    return coarsen value
+function classified(view value: secret[int64]) returns int64:
+    return declassify value
+function copies(view count: Count, view hidden: secret[int64]) returns nothing:
+    consume(coarsen count)
+    consume(declassify hidden)
+"#,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+
+        let errors = check_source_errors(
+            "function explicit(view value: int64) returns int64:\n    return view value\n",
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].message.contains("cannot return a view"));
+    }
+
+    #[test]
+    fn handle_default_is_rechecked_with_its_concrete_success_type() {
+        let source = r#"function fallback(value: optional[list[int64]]) returns list[int64]:
+    return value handle:
+        default list()
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+        let start = source.rfind("list()").expect("default list") as u32;
+        let span = Span::new(FileId::new(0), start, start + 6);
+        let default_ty = *result
+            .type_map
+            .get(&span)
+            .expect("default list should retain its contextual type");
+        assert_eq!(
+            result.interner.resolve(default_ty),
+            &Type::List(TypeInterner::INT64)
+        );
+    }
+
+    #[test]
+    fn never_assignment_compatibility_is_directional_through_value_shapes() {
+        let resolve = TestEnv::new().into_resolve_result();
+        let mut checker = TypeChecker::new(&resolve, CheckOptions::default());
+        let absent = [
+            Type::Never,
+            Type::List(TypeInterner::NEVER),
+            Type::Set(TypeInterner::NEVER),
+            Type::Optional(TypeInterner::NEVER),
+            Type::Secret(TypeInterner::NEVER),
+            Type::Map(TypeInterner::STRING, TypeInterner::NEVER),
+            Type::Result(TypeInterner::NEVER, TypeInterner::STRING),
+            Type::Result(TypeInterner::STRING, TypeInterner::NEVER),
+        ];
+        let inhabited = [
+            Type::Int64,
+            Type::List(TypeInterner::INT64),
+            Type::Set(TypeInterner::INT64),
+            Type::Optional(TypeInterner::INT64),
+            Type::Secret(TypeInterner::INT64),
+            Type::Map(TypeInterner::STRING, TypeInterner::INT64),
+            Type::Result(TypeInterner::INT64, TypeInterner::STRING),
+            Type::Result(TypeInterner::STRING, TypeInterner::INT64),
+        ];
+        for (absent, inhabited) in absent.into_iter().zip(inhabited) {
+            let absent = checker.interner.intern(absent);
+            let inhabited = checker.interner.intern(inhabited);
+            assert!(!checker.types_compatible(absent, inhabited));
+            assert!(checker.types_compatible(inhabited, absent));
+        }
+        let bottom_input = checker.interner.intern(Type::Function {
+            params: vec![TypeInterner::NEVER],
+            view_params: vec![false],
+            return_type: TypeInterner::INT64,
+        });
+        let concrete = checker.interner.intern(Type::Function {
+            params: vec![TypeInterner::INT64],
+            view_params: vec![false],
+            return_type: TypeInterner::INT64,
+        });
+        assert!(checker.types_compatible(bottom_input, concrete));
+        assert!(!checker.types_compatible(concrete, bottom_input));
+        assert_eq!(
+            checker.merge_inferred_never(bottom_input, concrete, false),
+            Some(bottom_input)
+        );
+        assert_eq!(
+            checker.merge_inferred_never(TypeInterner::INT8, TypeInterner::INT64, false),
+            None
+        );
+        let secret = checker.interner.intern(Type::Secret(TypeInterner::NEVER));
+        assert_eq!(
+            checker.merge_inferred_never(secret, TypeInterner::INT64, false),
+            None
+        );
+    }
+
+    #[test]
+    fn generic_never_places_reject_concrete_payloads_at_every_construction_boundary() {
+        let cases = [
+            ("list[T]", "    T item = 7\n    return list(item)", 311),
+            (
+                "list[T]",
+                "    T item = none handle:\n        default 7\n    return list(item)",
+                300,
+            ),
+            (
+                "list[T]",
+                "    mutable T item = none handle: return list()\n    item = 7\n    return list(item)",
+                312,
+            ),
+            ("T", "    return 7", 305),
+            ("list[T]", "    return list(7)", 300),
+            ("list[T]", "    return append[T](list(), 7)", 300),
+            ("optional[T]", "    return some(7)", 300),
+            ("result[T, string]", "    return ok(7)", 300),
+            ("result[string, T]", "    return fail(7)", 300),
+            ("map[string, T]", "    return map(\"key\": 7)", 300),
+            (
+                "nothing",
+                "    for item in items:\n        T forged = 7\n        trace forged\n    return nothing",
+                311,
+            ),
+        ];
+        for (result_type, body, expected_code) in cases {
+            for comptime in ["", "comptime "] {
+                let source = format!(
+                    "function append[T](values: list[T], value: T) returns list[T]:\n    return list(value)\nfunction manufacture[T](view items: list[T]) returns {result_type}:\n{body}\nfunction main() returns nothing:\n    println({comptime}manufacture(list()))\n    return nothing\n"
+                );
+                let errors = check_source_errors(&source);
+                assert!(
+                    errors
+                        .iter()
+                        .any(|error| error.code.code() == expected_code),
+                    "{source}\n{errors:?}"
+                );
+                assert!(
+                    errors.iter().any(|error| error.message.contains("<never>")),
+                    "{source}\n{errors:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inferred_literals_fill_only_never_slots_in_both_element_orders() {
+        let cases = [
+            ("list(none, some(7))", "list[optional[int64]]"),
+            ("list(some(7), none)", "list[optional[int64]]"),
+            ("list(ok(7), fail(\"bad\"))", "list[result[int64, string]]"),
+            ("list(fail(\"bad\"), ok(7))", "list[result[int64, string]]"),
+            ("list(list(), list(7))", "list[list[int64]]"),
+            ("list(list(7), list())", "list[list[int64]]"),
+            (
+                "list(some(list()), some(list(7)))",
+                "list[optional[list[int64]]]",
+            ),
+            (
+                "list(some(list(7)), some(list()))",
+                "list[optional[list[int64]]]",
+            ),
+            (
+                "map(\"a\": none, \"b\": some(7))",
+                "map[string, optional[int64]]",
+            ),
+            (
+                "map(\"a\": some(7), \"b\": none)",
+                "map[string, optional[int64]]",
+            ),
+            ("list(map(), map(\"key\": 7))", "list[map[string, int64]]"),
+            ("list(map(\"key\": 7), map())", "list[map[string, int64]]"),
+            ("list(none, some(small))", "list[optional[int8]]"),
+            ("list(some(small), none)", "list[optional[int8]]"),
+        ];
+        for (literal, expected) in cases {
+            let map_binding = if literal.starts_with("map(") {
+                "key, value"
+            } else {
+                "value"
+            };
+            let source = format!(
+                "type Tiny = int8\nfunction main() returns nothing:\n    Tiny small = 7\n    for {map_binding} in {literal}:\n        trace value\n    return nothing\n"
+            );
+            let result = check_source_result(&source);
+            let errors = result
+                .diagnostics
+                .iter()
+                .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+                .collect::<Vec<_>>();
+            assert!(errors.is_empty(), "{source}\n{errors:?}");
+            let start = source.find(literal).unwrap() as u32;
+            let span = sp(start, start + literal.len() as u32);
+            let ty = result.type_map[&span];
+            assert_eq!(result.interner.type_name(ty), expected, "{literal}");
+        }
+    }
+
+    #[test]
+    fn contextual_absent_defaults_and_generic_returns_keep_concrete_success_types() {
+        let source = r#"function identity[T](values: list[T]) returns list[T]:
+    return values
+function fallback[T](view items: list[T], value: T) returns T:
+    return none handle:
+        default value
+function main() returns nothing:
+    int64 absent = none handle:
+        default 7
+    int64 failure = fail("bad") handle error:
+        trace error
+        default 8
+    list[int64] empty = identity(list())
+    int64 generic = fallback(list(), 9)
+    int64 baked = comptime (none handle: default 10)
+    trace absent
+    trace failure
+    trace empty
+    trace generic
+    trace baked
+    return nothing
+"#;
+        let errors = check_source_errors(source);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn inferred_callback_return_sums_use_a_concrete_common_signature() {
+        for callbacks in [
+            "list(make_absent(list()), present)",
+            "list(present, make_absent(list()))",
+        ] {
+            let source = format!(
+                r#"function make_absent[T](view items: list[T]) returns function() returns optional[T]:
+    return function() returns optional[T]: return none
+function present() returns optional[int64]:
+    return some(7)
+function main() returns nothing:
+    for callback in {callbacks}:
+        optional[int64] value = callback()
+        trace value
+    return nothing
+"#
+            );
+            let result = check_source_result(&source);
+            let errors = result
+                .diagnostics
+                .iter()
+                .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+                .collect::<Vec<_>>();
+            assert!(errors.is_empty(), "{source}\n{errors:?}");
+            let start = source.find(callbacks).unwrap() as u32;
+            let ty = result.type_map[&sp(start, start + callbacks.len() as u32)];
+            assert_eq!(
+                result.interner.type_name(ty),
+                "list[function() returns optional[int64]]"
+            );
+        }
+    }
+
+    #[test]
+    fn mapped_callback_inference_uses_joined_absent_and_present_elements() {
+        for values in ["list(none, some(7))", "list(some(7), none)"] {
+            let source = format!(
+                r#"function append[T](values: list[T], value: T) returns list[T]:
+    return list(value)
+function mapped[A, B](values: list[A], callback: function(A) returns B) returns list[B]:
+    mutable list[B] output = list()
+    for value in values:
+        output = append[B](output, callback(value))
+    return output
+function unwrap(value: optional[int64]) returns int64:
+    return value handle: default 0
+function main() returns nothing:
+    for value in mapped({values}, unwrap):
+        trace value
+    return nothing
+"#
+            );
+            let result = check_source_result(&source);
+            let errors = result
+                .diagnostics
+                .iter()
+                .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+                .collect::<Vec<_>>();
+            assert!(errors.is_empty(), "{source}\n{errors:?}");
+            let call = format!("mapped({values}, unwrap)");
+            let start = source.find(&call).unwrap() as u32;
+            let ty = result.type_map[&sp(start, start + call.len() as u32)];
+            assert_eq!(result.interner.type_name(ty), "list[int64]");
+        }
+    }
+
+    #[test]
+    fn filling_inferred_never_does_not_merge_existing_primitive_widths() {
+        let errors = check_source_errors(
+            r#"type Tiny = int8
+function main() returns nothing:
+    Tiny small = 7
+    for value in list(none, some(small), some(7)):
+        trace value
+    return nothing
+"#,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code.code(), 300);
+        assert!(errors[0].message.contains("optional[int8]"));
+        assert!(errors[0].message.contains("optional[int64]"));
+    }
+
+    #[test]
+    fn reverse_literal_compatibility_cannot_hide_a_never_callable_input() {
+        for callbacks in ["list(broad, narrow(list()))", "list(narrow(list()), broad)"] {
+            let source = format!(
+                r#"function broad(value: optional[int64]) returns int64:
+    return 0
+function narrow[T](view items: list[T]) returns function(optional[T]) returns secret[int64]:
+    return function(value: optional[T]) returns secret[int64]: return 7
+function main() returns nothing:
+    for callback in {callbacks}:
+        trace callback
+    return nothing
+"#
+            );
+            let result = check_source_result(&source);
+            let errors = result
+                .diagnostics
+                .iter()
+                .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+                .collect::<Vec<_>>();
+            if callbacks.starts_with("list(broad,") {
+                assert!(
+                    errors.iter().any(|error| error.code.code() == 300),
+                    "{source}\n{errors:?}"
+                );
+            } else {
+                assert!(errors.is_empty(), "{source}\n{errors:?}");
+                let start = source.find(callbacks).unwrap() as u32;
+                let ty = result.type_map[&sp(start, start + callbacks.len() as u32)];
+                assert_eq!(
+                    result.interner.type_name(ty),
+                    "list[function(optional[<never>]) returns secret[int64]]"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_generic_arguments_fill_nested_never_slots_in_both_orders() {
+        for (first, second, expected) in [
+            ("none", "some(7)", "optional[int64]"),
+            ("ok(7)", "fail(\"bad\")", "result[int64, string]"),
+            ("list()", "list(\"ready\")", "list[string]"),
+            ("map()", "map(\"key\": 7)", "map[string, int64]"),
+            (
+                "some(list())",
+                "some(list(\"ready\"))",
+                "optional[list[string]]",
+            ),
+        ] {
+            for (first, second) in [(first, second), (second, first)] {
+                let call = format!("second({first}, {second})");
+                let source = format!(
+                    "function second[T](first: T, last: T) returns T:\n    return last\nfunction main() returns nothing:\n    println({call})\n    return nothing\n"
+                );
+                let result = check_source_result(&source);
+                let errors = result
+                    .diagnostics
+                    .iter()
+                    .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+                    .collect::<Vec<_>>();
+                assert!(errors.is_empty(), "{source}\n{errors:?}");
+                let start = source.find(&call).unwrap() as u32;
+                let ty = result.type_map[&sp(start, start + call.len() as u32)];
+                assert_eq!(result.interner.type_name(ty), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn generic_return_context_fills_nested_empty_and_absent_slots() {
+        assert!(
+            check_source_errors(
+                r#"function identity[T](value: T) returns T:
+    return value
+function main() returns nothing:
+    list[string] values = identity(list())
+    optional[list[string]] absent = identity(none)
+    result[list[string], string] success = identity(ok(list()))
+    trace values
+    trace absent
+    trace success
+    return nothing
+"#,
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn inferred_generic_witnesses_peel_root_aliases_and_preserve_nested_aliases() {
+        for (parameter, setup, argument, expected_name, expected_kind) in [
+            (
+                "T",
+                "    Count value = 7\n",
+                "value",
+                "int64",
+                "primitive_type",
+            ),
+            (
+                "result[T, string]",
+                "    result[Count, string] value = ok(7)\n",
+                "value",
+                "app.Count",
+                "alias_type",
+            ),
+            (
+                "list[T]",
+                "    list[Count] value = list(7)\n",
+                "value",
+                "app.Count",
+                "alias_type",
+            ),
+            (
+                "result[T, string]",
+                "    Wrapped value = ok(7)\n",
+                "value",
+                "app.Count",
+                "alias_type",
+            ),
+            (
+                "function() returns T",
+                "",
+                "count_callback",
+                "app.Count",
+                "alias_type",
+            ),
+            (
+                "T",
+                "",
+                "count_callback",
+                "function() returns app.Count",
+                "function_type",
+            ),
+            (
+                "function(view T) returns T",
+                "",
+                "view_callback",
+                "app.Count",
+                "alias_type",
+            ),
+        ] {
+            let source = format!(
+                r#"namespace app
+type Count = int64
+type Wrapped = result[Count, string]
+function count_callback() returns Count:
+    return 7
+function view_callback(view value: Count) returns Count:
+    return value
+function choose[T](input: {parameter}) returns string:
+    return type.name[T]()
+function main() returns string:
+{setup}    return choose({argument})
+"#
+            );
+            let result = check_source_result(&source);
+            let errors = result
+                .diagnostics
+                .iter()
+                .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+                .collect::<Vec<_>>();
+            assert!(errors.is_empty(), "{source}\n{errors:?}");
+            let call = result
+                .generic_calls
+                .values()
+                .next()
+                .expect("inferred choose call");
+            assert_eq!(
+                call.specialization.type_argument_reflections[0].type_name, expected_name,
+                "{source}"
+            );
+            assert_eq!(
+                call.specialization.type_argument_kinds,
+                [expected_kind],
+                "{source}"
+            );
+            assert_eq!(
+                call.concrete_args[0],
+                if parameter == "T" && argument == "count_callback" {
+                    result.generic_function_instantiations[0].parameter_types[0]
+                } else {
+                    TypeInterner::INT64
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn inferred_alias_witnesses_are_unchanged_by_view_and_parentheses() {
+        for (parameter, setup, value, expected_name, expected_kind) in [
+            (
+                "T",
+                "    Count value = 7\n",
+                "value",
+                "int64",
+                "primitive_type",
+            ),
+            (
+                "optional[T]",
+                "    optional[Count] value = some(7)\n",
+                "value",
+                "app.Count",
+                "alias_type",
+            ),
+            (
+                "T",
+                "    list[Count] value = list(7)\n",
+                "value",
+                "list[app.Count]",
+                "list_type",
+            ),
+            (
+                "function() returns T",
+                "",
+                "count_callback",
+                "app.Count",
+                "alias_type",
+            ),
+        ] {
+            for argument in [
+                value.to_string(),
+                format!("({value})"),
+                format!("view {value}"),
+                format!("(view ({value}))"),
+            ] {
+                let source = format!(
+                    r#"namespace app
+type Count = int64
+function count_callback() returns Count:
+    return 7
+function choose[T](view input: {parameter}) returns string:
+    return type.name[T]()
+function main() returns string:
+{setup}    return choose({argument})
+"#
+                );
+                let result = check_source_result(&source);
+                let errors = result
+                    .diagnostics
+                    .iter()
+                    .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+                    .collect::<Vec<_>>();
+                assert!(errors.is_empty(), "{source}\n{errors:?}");
+                let call = result
+                    .generic_calls
+                    .values()
+                    .next()
+                    .expect("inferred choose call");
+                assert_eq!(
+                    call.specialization.type_argument_reflections[0].type_name, expected_name,
+                    "{source}"
+                );
+                assert_eq!(
+                    call.specialization.type_argument_kinds,
+                    [expected_kind],
+                    "{source}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn deep_inferred_alias_witnesses_have_distinct_checked_specializations() {
+        let source = r#"namespace app
+type Count = int64
+function inspect[T](input: T) returns string:
+    return type.name[T]()
+function main() returns string:
+    optional[Count] counted = some(7)
+    optional[int64] plain = some(7)
+    string first = inspect(counted)
+    string second = inspect(plain)
+    return "{first}:{second}"
+"#;
+        let result = check_source_result(source);
+        let errors = result
+            .diagnostics
+            .iter()
+            .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "{errors:?}");
+        let [counted, plain] = result.generic_function_instantiations.as_slice() else {
+            panic!("expected distinct source-aware instances");
+        };
+        assert_eq!(counted.concrete_args, plain.concrete_args);
+        assert_eq!(
+            counted.specialization.type_argument_kinds,
+            plain.specialization.type_argument_kinds
+        );
+        assert_eq!(
+            counted.specialization.type_argument_reflections[0].type_name,
+            "optional[app.Count]"
+        );
+        assert_eq!(
+            plain.specialization.type_argument_reflections[0].type_name,
+            "optional[int64]"
+        );
+        assert_ne!(counted.specialization, plain.specialization);
+    }
+
+    #[test]
+    fn inferred_alias_witnesses_follow_declaration_argument_order() {
+        let source = r#"namespace app
+type Count = int64
+type Other = int64
+function choose[T](first: list[T], second: list[T]) returns string:
+    return type.name[T]()
+function main() returns string:
+    list[Count] counted = list(7)
+    list[Other] others = list(8)
+    return choose(second: others, first: counted)
+"#;
+        let result = check_source_result(source);
+        let errors = result
+            .diagnostics
+            .iter()
+            .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "{errors:?}");
+        let call = result.generic_calls.values().next().unwrap();
+        assert_eq!(
+            call.specialization.type_argument_reflections[0].type_name,
+            "app.Count"
+        );
+        assert_eq!(call.specialization.type_argument_kinds, ["alias_type"]);
+    }
+
+    #[test]
+    fn inferred_never_witness_merging_preserves_known_alias_siblings() {
+        let source = r#"namespace app
+type Count = int64
+function describe[T](first: T, second: T) returns string:
+    return type.name[T]()
+function outer[E](view empty: list[E]) returns string:
+    result[Count, E] partial = ok(7)
+    result[int64, string] full = fail("bad")
+    return describe(partial, full)
+function main() returns string:
+    return outer(list())
+"#;
+        let result = check_source_result(source);
+        let errors = result
+            .diagnostics
+            .iter()
+            .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "{errors:?}");
+        let instance = result
+            .generic_function_instantiations
+            .iter()
+            .find(|instance| {
+                instance.specialization.type_argument_reflections[0].type_name
+                    == "result[app.Count, string]"
+            })
+            .expect("filled result with preserved Count witness");
+        assert_eq!(instance.specialization.type_argument_kinds, ["result_type"]);
+        let Type::Result(ok, error) = result.interner.resolve(instance.concrete_args[0]) else {
+            panic!("expected result");
+        };
+        assert_eq!((*ok, *error), (TypeInterner::INT64, TypeInterner::STRING));
+    }
+
+    #[test]
+    fn inferred_alias_kind_and_info_select_the_same_reflection_branch() {
+        let source = r#"namespace app
+type Count = int64
+function inspect[T](input: list[T]) returns string:
+    if type.kind_tag[T]() == TypeKind.alias_type:
+        return type.name[T]()
+    else:
+        return "primitive"
+function main() returns string:
+    list[Count] values = list(7)
+    return inspect(values)
+"#;
+        let result = check_source_result(source);
+        let errors = result
+            .diagnostics
+            .iter()
+            .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "{errors:?}");
+        let instance = result.generic_function_instantiations.first().unwrap();
+        assert_eq!(instance.specialization.type_argument_kinds, ["alias_type"]);
+        assert_eq!(
+            instance.specialization.type_argument_reflections[0].type_name,
+            "app.Count"
+        );
+        assert!(
+            instance
+                .static_selections
+                .values()
+                .any(|selection| *selection == CheckedStaticSelection::IfThen)
+        );
+    }
+}
+
+#[cfg(test)]
+mod resource_hook_span_tests {
+    use super::*;
+    use jett_common::{STDLIB_FILE_ID_START, SourceOrigin};
+    use jett_resolve::{ResourceKernelSpec, resolve_with_resource_kernels};
+    use jett_types::ResourceKernelRecipe;
+
+    #[test]
+    fn synthetic_resource_functions_do_not_replace_source_declaration_fallback() {
+        let file = FileId::new(STDLIB_FILE_ID_START);
+        let parsed = jett_parser::parse("namespace resource_probe\nresource TestHandle\n", file);
+        assert!(parsed.errors.is_empty());
+        let Item::Resource(resource) = &parsed.module.items[1] else {
+            panic!("missing resource")
+        };
+        let specs = [ResourceKernelSpec {
+            resource_declaration: resource.name.span,
+            member: "kernel_close".into(),
+            recipe: ResourceKernelRecipe::Finalize,
+        }];
+        let resolved = resolve_with_resource_kernels(
+            &parsed.module,
+            &HashMap::from([(file, SourceOrigin::Stdlib)]),
+            &specs,
+        )
+        .unwrap();
+        let resource_definition = resolved.resolutions[&resource.name.span];
+        let kernel_definition = resolved.resource_kernels.iter().next().unwrap().definition;
+        assert_eq!(
+            resolved.scope_table.def(resource_definition).span,
+            resolved.scope_table.def(kernel_definition).span
+        );
+        let checker = TypeChecker::new(&resolved, CheckOptions::default());
+        assert_eq!(
+            checker.decl_defs.get(&resource.name.span),
+            Some(&resource_definition)
+        );
+    }
+}
+
+#[cfg(test)]
+mod caller_ownership_source_tests {
+    use super::*;
+    use jett_common::STDLIB_FILE_ID_START;
+
+    fn checked(source: &str, release: bool, stdlib: bool) -> CheckResult {
+        let parsed = jett_parser::parse(
+            source,
+            FileId::new(if stdlib { STDLIB_FILE_ID_START } else { 0 }),
+        );
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "resolve: {:?}",
+            resolved.diagnostics
+        );
+        check_with_options(&parsed.module, &resolved, CheckOptions { release })
+    }
+
+    fn errors(checked: &CheckResult) -> Vec<&Diagnostic> {
+        checked
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+            .collect()
+    }
+
+    const OBSERVER: &str =
+        "namespace app\nfunction inspect(view values: list[int64]) returns int64:\n    return 7\n";
+
+    #[test]
+    fn caller_facts_bare_view_formals_consume_exact_source_bindings() {
+        for invocation in [
+            "inspect(values)",
+            "app.inspect(values)",
+            "(inspect)(values)",
+        ] {
+            let source = format!(
+                "{OBSERVER}function test(values: list[int64]) returns list[int64]:\n    int64 number = {invocation}\n    return values\n"
+            );
+            for release in [false, true] {
+                let result = checked(&source, release, false);
+                let failures = errors(&result);
+                assert_eq!(failures.len(), 1, "{invocation}: {failures:?}");
+                assert_eq!(failures[0].code.code(), 400);
+                let packet = result
+                    .call_ownership
+                    .values()
+                    .next()
+                    .expect("checked source call");
+                let [argument] = packet.arguments.as_slice() else {
+                    panic!("one source operand");
+                };
+                assert_eq!(argument.syntax, CheckedCallerSyntax::Bare);
+                assert_eq!(argument.callee_access, CheckedCalleeAccess::View);
+                assert_eq!(argument.effect, CheckedCallerEffect::RelinquishOwned);
+                let CheckedCallerOrigin::Binding(binding) = &argument.origin else {
+                    panic!("exact binding origin");
+                };
+                assert_eq!(binding.ty, argument.actual_type);
+                assert_eq!(binding.mode, CheckedBindingMode::Owned);
+                assert!(
+                    result
+                        .binding_facts
+                        .values()
+                        .any(|fact| fact.definition == binding.definition
+                            && fact.declaration_span == binding.declaration_span)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_written_views_retain_owners_but_cannot_supply_owned_formals() {
+        let source = format!(
+            "{OBSERVER}function test(values: list[int64]) returns list[int64]:\n    int64 number = inspect(view values)\n    return values\n"
+        );
+        for release in [false, true] {
+            let result = checked(&source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let argument = &result.call_ownership.values().next().unwrap().arguments[0];
+            assert_eq!(argument.syntax, CheckedCallerSyntax::WrittenView);
+            assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+            let result = checked(
+                "function consume(values: list[int64]) returns nothing:\n    return nothing\nfunction test(view values: list[int64]) returns nothing:\n    consume(view values)\n",
+                release,
+                false,
+            );
+            let failures = errors(&result);
+            assert_eq!(failures.len(), 1, "{failures:?}");
+            assert_eq!(failures[0].code.code(), 375);
+        }
+    }
+
+    #[test]
+    fn caller_facts_known_borrowed_bare_arguments_have_one_precise_error() {
+        for body in [
+            "    int64 number = inspect(values)\n",
+            "    list[int64] borrowed = view values\n    list[int64] forwarded = borrowed\n    int64 number = inspect(forwarded)\n",
+        ] {
+            let source = format!(
+                "{OBSERVER}function test(view values: list[int64]) returns nothing:\n{body}    return nothing\n"
+            );
+            for release in [false, true] {
+                let result = checked(&source, release, false);
+                let failures = errors(&result);
+                assert_eq!(failures.len(), 1, "{failures:?}");
+                assert_eq!(failures[0].code.code(), 401);
+                assert!(failures[0].message.contains("borrowed value bare"));
+                assert!(result.binding_facts.values().any(|fact| matches!(
+                    fact.mode,
+                    CheckedBindingMode::View {
+                        source: CheckedViewSource::Other
+                    }
+                )));
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_named_calls_join_formals_without_reordering_sources() {
+        let source = "function choose(view first: list[int64], view second: list[int64]) returns int64:\n    return 1\nfunction test(left: list[int64], right: list[int64]) returns int64:\n    return choose(second: right, first: left)\n";
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let packet = result.call_ownership.values().next().unwrap();
+            assert_eq!(
+                packet
+                    .arguments
+                    .iter()
+                    .map(|argument| (argument.source_index, argument.parameter_index))
+                    .collect::<Vec<_>>(),
+                [(0, 1), (1, 0)]
+            );
+            assert!(
+                packet
+                    .arguments
+                    .iter()
+                    .all(|argument| argument.effect == CheckedCallerEffect::RelinquishOwned)
+            );
+            let source_text = packet
+                .arguments
+                .iter()
+                .map(|argument| {
+                    &source[argument.source_span.start as usize..argument.source_span.end as usize]
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                source_text[0].contains("right") && source_text[1].contains("left"),
+                "{source_text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_pipeline_source_zero_keeps_its_written_view_witness() {
+        for (step, expected) in [
+            ("into inspect()", CheckedCallerEffect::RelinquishOwned),
+            ("into view inspect()", CheckedCallerEffect::RetainBorrow),
+        ] {
+            let source = format!(
+                "{OBSERVER}function test(values: list[int64]) returns int64:\n    return values {step}\n"
+            );
+            for release in [false, true] {
+                let result = checked(&source, release, false);
+                assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+                let packet = result.call_ownership.values().next().unwrap();
+                assert_eq!(packet.arguments[0].source_index, 0);
+                assert_eq!(packet.arguments[0].parameter_index, 0);
+                assert_eq!(packet.arguments[0].effect, expected);
+                assert_eq!(
+                    packet.arguments[0].syntax == CheckedCallerSyntax::WrittenView,
+                    expected == CheckedCallerEffect::RetainBorrow
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_generic_bodies_keep_concrete_types_and_lexical_contexts() {
+        let source = "function terminal[T](view value: T) returns int64:\n    return 7\nfunction inspect[T](view value: T) returns int64:\n    return terminal[T](view value)\nfunction ordinary(values: list[int64]) returns int64:\n    int64 scalar = inspect[int64](3)\n    return inspect[list[int64]](values)\nverify observations:\n    list[int64] values = list(7)\n    assert inspect[list[int64]](values) == 7\n    assert inspect[list[int64]](values) == 7\n";
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let observed = result
+                .call_ownership
+                .values()
+                .filter(|packet| packet.context == CheckedOwnershipContext::Verify)
+                .collect::<Vec<_>>();
+            assert_eq!(observed.len(), 2);
+            assert!(observed.iter().all(|packet| packet.arguments[0].effect
+                == CheckedCallerEffect::ObserveData
+                && packet.arguments[0].syntax == CheckedCallerSyntax::Bare));
+            let inner = result
+                .generic_function_instantiations
+                .iter()
+                .flat_map(|body| body.call_ownership.values())
+                .collect::<Vec<_>>();
+            assert_eq!(inner.len(), 2);
+            assert!(
+                inner
+                    .iter()
+                    .all(|packet| packet.context == CheckedOwnershipContext::Ordinary)
+            );
+            assert!(inner.iter().any(|packet| packet.arguments[0].effect
+                == CheckedCallerEffect::Copy
+                && packet.arguments[0].actual_type == TypeInterner::INT64));
+            assert!(inner.iter().any(|packet| packet.arguments[0].effect
+                == CheckedCallerEffect::RetainBorrow
+                && matches!(
+                    result.interner.resolve(packet.arguments[0].actual_type),
+                    Type::List(_)
+                )));
+        }
+    }
+
+    #[test]
+    fn caller_facts_reflected_body_packets_do_not_flatten_field_types() {
+        let source = "struct Sample:\n    count: int64\n    values: list[int64]\nfunction probe[T](view value: T) returns nothing:\n    return nothing\nfunction inspect[T](view value: T) returns nothing:\n    for field in type.fields[T]():\n        comptime type Field = field.type_info:\n            Field original = type.field_value[T, Field](view value, view field)\n            probe[Field](view original)\n    return nothing\nfunction main() returns nothing:\n    Sample sample = Sample(count: 1, values: list(2))\n    inspect[Sample](view sample)\n";
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let bodies = result
+                .generic_function_instantiations
+                .iter()
+                .flat_map(|body| body.comptime_type_bindings.values())
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(bodies.len(), 2);
+            let arguments = bodies
+                .iter()
+                .flat_map(|body| body.body.call_ownership.values())
+                .filter(|packet| matches!(packet.target, CheckedInvocationTarget::Generic(_)))
+                .map(|packet| &packet.arguments[0])
+                .collect::<Vec<_>>();
+            assert_eq!(arguments.len(), 2);
+            assert!(
+                arguments
+                    .iter()
+                    .any(|argument| argument.actual_type == TypeInterner::INT64
+                        && argument.effect == CheckedCallerEffect::Copy)
+            );
+            assert!(arguments.iter().any(|argument| matches!(
+                result.interner.resolve(argument.actual_type),
+                Type::List(_)
+            ) && argument.effect
+                == CheckedCallerEffect::RetainBorrow));
+            assert!(
+                bodies
+                    .iter()
+                    .all(|body| !body.body.binding_facts.is_empty())
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_resource_parameters_use_same_source_rule_without_runtime_authority() {
+        let prefix = "namespace audit\nresource Token\nfunction observe(view token: Token) returns int64:\n    return 1\n";
+        for release in [false, true] {
+            let result = checked(
+                &format!(
+                    "{prefix}function last(token: Token) returns int64:\n    return observe(token)\n"
+                ),
+                release,
+                true,
+            );
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            assert!(result.resource_hooks.is_empty());
+            let packet = result.call_ownership.values().next().unwrap();
+            assert_eq!(
+                packet.arguments[0].effect,
+                CheckedCallerEffect::RelinquishOwned
+            );
+            let result = checked(
+                &format!(
+                    "{prefix}function reject(token: Token) returns Token:\n    int64 number = observe(token)\n    return token\n"
+                ),
+                release,
+                true,
+            );
+            let failures = errors(&result);
+            assert_eq!(failures.len(), 1, "{failures:?}");
+            assert_eq!(failures[0].code.code(), 400);
+            let result = checked(
+                &format!(
+                    "{prefix}function retain(token: Token) returns Token:\n    int64 number = observe(view token)\n    return token\n"
+                ),
+                release,
+                true,
+            );
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+        }
+    }
+
+    #[test]
+    fn caller_facts_closed_variadic_print_records_each_source_occurrence() {
+        let source = "function sample(values: list[int64]) returns list[int64]:\n    println(1, view values, \"tail\")\n    return values\n";
+        let result = checked(source, false, false);
+        assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+        let packet = result.call_ownership.values().next().unwrap();
+        assert_eq!(
+            packet.target,
+            CheckedInvocationTarget::Intrinsic(IntrinsicId::Println)
+        );
+        let CheckedInvocationShape::Intrinsic { operands, .. } = &packet.shape else {
+            panic!("closed variadic shape");
+        };
+        assert_eq!(operands.len(), 3);
+        assert!(
+            operands
+                .iter()
+                .all(|role| matches!(role, CheckedIntrinsicOperandRole::PrintArgument { .. }))
+        );
+        assert_eq!(
+            packet
+                .arguments
+                .iter()
+                .map(|argument| argument.effect)
+                .collect::<Vec<_>>(),
+            [
+                CheckedCallerEffect::Copy,
+                CheckedCallerEffect::RetainBorrow,
+                CheckedCallerEffect::Copy
+            ]
+        );
+    }
+    #[test]
+    fn caller_facts_owned_mode_preserves_run_pending_initialization() {
+        let source = "function main() returns nothing:\n    int64 task = run 7\n    cancel task\n    return nothing\n";
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+        }
+    }
+    #[test]
+    fn caller_facts_observation_context_does_not_supply_owned_intrinsic_access() {
+        let source = "verify invalid_source_access:\n    int64 count = 3\n    list[int64] generated = range(view count)\n    assert true\n";
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            let failures = errors(&result);
+            assert_eq!(failures.len(), 1, "{failures:?}");
+            assert_eq!(failures[0].code.code(), 375);
+        }
+    }
+
+    #[test]
+    fn caller_facts_scoped_calls_keep_only_exact_referenced_capture_roots() {
+        let source = r#"namespace app
+struct Sample:
+    count: int64
+    values: list[int64]
+function probe[T](view value: T) returns nothing:
+    return nothing
+function probe_count(value: int64) returns int64:
+    return value
+function inspect[T](view value: T, size: int64, spare: int64) returns nothing:
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            probe[T](view value)
+            probe[list[int64]](view value.values)
+            int64 count = probe_count(value.count)
+            function() returns int64 read = function() returns int64:
+                return probe_count(size)
+            int64 captured = read()
+    return nothing
+function main() returns nothing:
+    Sample sample = Sample(count: 1, values: list(2))
+    inspect[Sample](view sample, 3, 4)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let bodies = result
+                .generic_function_instantiations
+                .iter()
+                .flat_map(|body| body.comptime_type_bindings.values())
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(bodies.len(), 2);
+            for body in bodies {
+                let facts = &body.body.binding_facts;
+                assert!(facts.values().any(|fact| &source
+                    [fact.declaration_span.start as usize..fact.declaration_span.end as usize]
+                    == "size"));
+                assert!(!facts.values().any(|fact| &source
+                    [fact.declaration_span.start as usize..fact.declaration_span.end as usize]
+                    == "spare"));
+                let mut direct = false;
+                let mut projected = false;
+                let mut copied = false;
+                for packet in body.body.call_ownership.values() {
+                    for argument in &packet.arguments {
+                        match &argument.origin {
+                            CheckedCallerOrigin::Binding(fact) => {
+                                assert_eq!(facts.get(&fact.declaration_span), Some(fact));
+                                direct = true;
+                            }
+                            CheckedCallerOrigin::BorrowedProjection {
+                                source: CheckedViewSource::Binding(definition),
+                            } => {
+                                assert!(facts.values().any(|fact| fact.definition == *definition));
+                                projected = true;
+                            }
+                            CheckedCallerOrigin::OwnedFieldCopy {
+                                parent: CheckedViewSource::Binding(definition),
+                            } => {
+                                assert!(facts.values().any(|fact| fact.definition == *definition));
+                                copied = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                assert!(direct && projected && copied);
+            }
+        }
+    }
+
+    #[test]
+    fn scoped_local_views_retain_exact_transitive_outer_binding_facts() {
+        let source = r#"namespace app
+struct Packet:
+    values: list[int64]
+function inspect(mutable source: Packet, spare: Packet) returns nothing:
+    Packet borrowed = view source
+    Packet forwarded = borrowed
+    comptime type Outer = type.info[int64]():
+        comptime type Inner = type.info[string]():
+            list[int64] alias = view forwarded.values
+            trace alias
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let outer = result
+                .comptime_type_bindings
+                .values()
+                .flatten()
+                .find(|body| !body.body.comptime_type_bindings.is_empty())
+                .unwrap();
+            let inner = outer
+                .body
+                .comptime_type_bindings
+                .values()
+                .flatten()
+                .next()
+                .unwrap();
+            for body in [&outer.body, &inner.body] {
+                let fact = |name| {
+                    body.binding_facts
+                        .values()
+                        .find(|fact| {
+                            &source[fact.declaration_span.start as usize
+                                ..fact.declaration_span.end as usize]
+                                == name
+                        })
+                        .copied()
+                        .expect("retained exact binding dependency")
+                };
+                let owner = fact("source");
+                let borrowed = fact("borrowed");
+                let forwarded = fact("forwarded");
+                let alias = fact("alias");
+                assert!(owner.mutable);
+                assert_eq!(owner.mode, CheckedBindingMode::Owned);
+                for (view, dependency) in
+                    [(borrowed, owner), (forwarded, borrowed), (alias, forwarded)]
+                {
+                    assert!(!view.mutable);
+                    assert_eq!(
+                        view.mode,
+                        CheckedBindingMode::View {
+                            source: CheckedViewSource::Binding(dependency.definition)
+                        }
+                    );
+                    assert_eq!(
+                        body.binding_facts.get(&dependency.declaration_span),
+                        Some(&dependency)
+                    );
+                }
+                assert!(!body.binding_facts.values().any(|fact| &source
+                    [fact.declaration_span.start as usize..fact.declaration_span.end as usize]
+                    == "spare"));
+            }
+        }
+    }
+
+    #[test]
+    fn scoped_local_views_keep_generic_copy_and_reflected_view_contexts_distinct() {
+        let source = r#"namespace app
+struct Metadata:
+    first: int64
+    second: string
+struct Holder[T]:
+    value: T
+function inspect[T](mutable source: Holder[T], spare: Holder[T]) returns nothing:
+    for field in type.fields[Metadata]():
+        comptime type Field = field.type_info:
+            T alias = view source.value
+            trace alias
+    return nothing
+function main() returns nothing:
+    inspect[int64](Holder[int64](value: 7), Holder[int64](value: 8))
+    inspect[list[int64]](Holder[list[int64]](value: list(1)), Holder[list[int64]](value: list(2)))
+    return nothing
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error)
+        );
+        for release in [false, true] {
+            let result = check_with_options(&parsed.module, &resolved, CheckOptions { release });
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            assert_eq!(result.generic_function_instantiations.len(), 2);
+            let mut copies = 0;
+            let mut views = 0;
+            for instance in &result.generic_function_instantiations {
+                let bodies = instance
+                    .comptime_type_bindings
+                    .values()
+                    .flatten()
+                    .collect::<Vec<_>>();
+                assert_eq!(bodies.len(), 2);
+                for (index, body) in bodies.iter().enumerate() {
+                    assert_eq!(
+                        body.selection,
+                        CheckedComptimeTypeSelection::ReflectedIteration(index)
+                    );
+                    let fact = |name| {
+                        body.body
+                            .binding_facts
+                            .values()
+                            .find(|fact| {
+                                &source[fact.declaration_span.start as usize
+                                    ..fact.declaration_span.end as usize]
+                                    == name
+                            })
+                            .copied()
+                    };
+                    let alias = fact("alias").unwrap();
+                    assert!(!alias.mutable);
+                    assert_eq!(alias.ty, instance.concrete_args[0]);
+                    assert!(fact("spare").is_none());
+                    if alias.ty == TypeInterner::INT64 {
+                        copies += 1;
+                        assert_eq!(alias.mode, CheckedBindingMode::Owned);
+                        assert!(fact("source").is_none());
+                    } else {
+                        views += 1;
+                        assert!(
+                            matches!(result.interner.resolve(alias.ty), Type::List(inner) if *inner == TypeInterner::INT64)
+                        );
+                        let owner = fact("source").unwrap();
+                        assert!(owner.mutable);
+                        assert_eq!(owner.ty, instance.parameter_types[0]);
+                        assert_eq!(owner.mode, CheckedBindingMode::Owned);
+                        assert_eq!(
+                            alias.mode,
+                            CheckedBindingMode::View {
+                                source: CheckedViewSource::Binding(owner.definition)
+                            }
+                        );
+                        assert_eq!(
+                            body.body.binding_facts.get(&owner.declaration_span),
+                            instance.binding_facts.get(&owner.declaration_span)
+                        );
+                    }
+                }
+            }
+            assert_eq!((copies, views), (2, 2));
+            let copy_context = result
+                .generic_function_instantiations
+                .iter()
+                .find(|instance| instance.concrete_args == [TypeInterner::INT64])
+                .unwrap();
+            let view_context = result
+                .generic_function_instantiations
+                .iter()
+                .find(|instance| instance.concrete_args != [TypeInterner::INT64])
+                .unwrap();
+            assert_ne!(
+                copy_context.parameter_types[0],
+                view_context.parameter_types[0]
+            );
+            let copy_body = &copy_context
+                .comptime_type_bindings
+                .values()
+                .flatten()
+                .next()
+                .unwrap()
+                .body;
+            let view_body = &view_context
+                .comptime_type_bindings
+                .values()
+                .flatten()
+                .next()
+                .unwrap()
+                .body;
+            let alias = view_body
+                .binding_facts
+                .values()
+                .find(|fact| {
+                    &source
+                        [fact.declaration_span.start as usize..fact.declaration_span.end as usize]
+                        == "alias"
+                })
+                .copied()
+                .unwrap();
+            let mut checker = TypeChecker::new(&resolved, CheckOptions { release });
+            // Same Source spans and DefIds in another generic context do not
+            // authorize filling a selected copy body's absent view capture.
+            checker.binding_facts = view_context.binding_facts.clone();
+            let mut retained = HashMap::from([(alias.declaration_span, alias)]);
+            checker.retain_local_view_dependencies(&copy_body.binding_facts, &mut retained);
+            assert_eq!(retained, HashMap::from([(alias.declaration_span, alias)]));
+        }
+    }
+
+    #[test]
+    fn scoped_local_view_dependency_retention_never_falls_back_or_invents_ownership() {
+        let source = r#"namespace app
+function inspect(mutable source: list[int64], spare: list[int64]) returns nothing:
+    comptime type Inner = type.info[int64]():
+        list[int64] alias = view source
+        trace alias
+    return nothing
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error)
+        );
+        let result = check(&parsed.module, &resolved);
+        assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+        let body = &result
+            .comptime_type_bindings
+            .values()
+            .flatten()
+            .next()
+            .unwrap()
+            .body;
+        let named = |name| {
+            result
+                .binding_facts
+                .values()
+                .find(|fact| {
+                    &source
+                        [fact.declaration_span.start as usize..fact.declaration_span.end as usize]
+                        == name
+                })
+                .copied()
+                .unwrap()
+        };
+        let owner = named("source");
+        let spare = named("spare");
+        let alias = named("alias");
+        let mut checker = TypeChecker::new(&resolved, CheckOptions::default());
+        // The valid flat root must not rescue an absent selected dependency.
+        checker.binding_facts = result.binding_facts.clone();
+        for invalid in ["missing", "definition", "declaration", "foreign"] {
+            let mut selected = body.binding_facts.clone();
+            selected.remove(&owner.declaration_span);
+            if invalid != "missing" {
+                let mut changed = owner;
+                match invalid {
+                    "definition" => changed.definition = spare.definition,
+                    "declaration" => changed.declaration_span = spare.declaration_span,
+                    "foreign" => changed.definition = DefId::new(u32::MAX),
+                    _ => unreachable!(),
+                }
+                selected.insert(owner.declaration_span, changed);
+            }
+            let mut retained = HashMap::from([(alias.declaration_span, alias)]);
+            checker.retain_local_view_dependencies(&selected, &mut retained);
+            assert_eq!(
+                retained,
+                HashMap::from([(alias.declaration_span, alias)]),
+                "{invalid}"
+            );
+        }
+        let foreign_alias = CheckedBindingFact {
+            mode: CheckedBindingMode::View {
+                source: CheckedViewSource::Binding(DefId::new(u32::MAX)),
+            },
+            ..alias
+        };
+        let mut retained = HashMap::from([(foreign_alias.declaration_span, foreign_alias)]);
+        checker.retain_local_view_dependencies(&body.binding_facts, &mut retained);
+        assert_eq!(retained.len(), 1);
+        for mode in [
+            CheckedBindingMode::View {
+                source: CheckedViewSource::Other,
+            },
+            CheckedBindingMode::View {
+                source: CheckedViewSource::Binding(alias.definition),
+            },
+        ] {
+            let mut selected = body.binding_facts.clone();
+            let changed = CheckedBindingFact { mode, ..owner };
+            selected.insert(owner.declaration_span, changed);
+            let mut retained = HashMap::from([(alias.declaration_span, alias)]);
+            checker.retain_local_view_dependencies(&selected, &mut retained);
+            assert_eq!(retained.get(&owner.declaration_span), Some(&changed));
+            assert_eq!(retained.get(&alias.declaration_span), Some(&alias));
+            assert_eq!(retained.len(), 2);
+        }
+    }
+
+    #[test]
+    fn caller_facts_named_descriptors_and_baked_constants_are_producers() {
+        let source = r#"namespace app
+int64 answer = 7
+function identity(value: int64) returns int64:
+    return value
+function accept(callback: function(int64) returns int64, count: int64) returns nothing:
+    return nothing
+function main() returns nothing:
+    accept(identity, answer)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let packet = result
+                .call_ownership
+                .values()
+                .next()
+                .expect("one source call");
+            assert_eq!(packet.arguments.len(), 2);
+            assert!(
+                packet
+                    .arguments
+                    .iter()
+                    .all(|argument| argument.origin == CheckedCallerOrigin::OwnedExpression)
+            );
+            assert_eq!(
+                packet.arguments[0].effect,
+                CheckedCallerEffect::TransferOwned
+            );
+            assert_eq!(packet.arguments[1].effect, CheckedCallerEffect::Copy);
+        }
+    }
+
+    #[test]
+    fn caller_facts_local_descriptors_keep_their_exact_binding_identity() {
+        let source = r#"namespace app
+function identity(value: int64) returns int64:
+    return value
+function inspect(view callback: function(int64) returns int64) returns nothing:
+    return nothing
+function main() returns nothing:
+    function(int64) returns int64 stored = identity
+    inspect(view stored)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let argument = &result
+                .call_ownership
+                .values()
+                .next()
+                .expect("one source call")
+                .arguments[0];
+            let CheckedCallerOrigin::Binding(fact) = &argument.origin else {
+                panic!("local descriptor binding");
+            };
+            assert_eq!(
+                &source[fact.declaration_span.start as usize..fact.declaration_span.end as usize],
+                "stored"
+            );
+            assert_eq!(result.binding_facts.get(&fact.declaration_span), Some(fact));
+            assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+        }
+    }
+
+    #[test]
+    fn caller_facts_pipeline_sources_keep_each_preceding_output_span() {
+        let source = r#"namespace app
+function identity(view values: list[int64]) returns list[int64]:
+    return clone values
+function main(values: list[int64]) returns list[int64]:
+    return values into view identity() into identity()
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut calls = result.call_ownership.iter().collect::<Vec<_>>();
+            calls.sort_by_key(|(span, _)| span.start);
+            assert_eq!(calls.len(), 2);
+            assert_eq!(
+                &source[calls[0].1.arguments[0].source_span.start as usize
+                    ..calls[0].1.arguments[0].source_span.end as usize],
+                "values"
+            );
+            assert_eq!(
+                calls[0].1.arguments[0].effect,
+                CheckedCallerEffect::RetainBorrow
+            );
+            assert_eq!(calls[1].1.arguments[0].source_span, *calls[0].0);
+            assert_eq!(
+                calls[1].1.arguments[0].origin,
+                CheckedCallerOrigin::OwnedExpression
+            );
+            assert_eq!(
+                calls[1].1.arguments[0].effect,
+                CheckedCallerEffect::RelinquishOwned
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_interface_qualified_concrete_calls_use_the_selected_body_signature() {
+        let source = r#"namespace app
+interface Scored:
+    function score(view self: Scored, bonus: int64) returns int64
+struct User:
+    points: int64
+implement Scored for User:
+    function score(view self: User, bonus: int64) returns int64:
+        return self.points + bonus
+function main() returns int64:
+    User user = User(points: 7)
+    return Scored.score(bonus: 5, self: view user)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let packet = result
+                .call_ownership
+                .values()
+                .next()
+                .expect("selected method source call");
+            let CheckedInvocationTarget::Method(call) = &packet.target else {
+                panic!("concrete source method");
+            };
+            let definition = result
+                .method_definitions
+                .iter()
+                .find(|definition| definition.source_span == call.source_span)
+                .unwrap();
+            let CheckedInvocationShape::Function { signature_type } = &packet.shape else {
+                panic!("function shape");
+            };
+            let Type::Function {
+                params,
+                view_params,
+                return_type,
+            } = result.interner.resolve(*signature_type)
+            else {
+                panic!("function signature");
+            };
+            assert_eq!(params, &definition.parameter_types);
+            assert_eq!(*return_type, definition.return_type);
+            assert_eq!(view_params, &[true, false]);
+            assert_eq!(params[0], definition.owner_type);
+            assert!(matches!(
+                result.interner.resolve(params[0]),
+                Type::Struct(_)
+            ));
+            assert_eq!(
+                packet
+                    .arguments
+                    .iter()
+                    .map(|argument| (argument.source_index, argument.parameter_index))
+                    .collect::<Vec<_>>(),
+                [(0, 1), (1, 0)]
+            );
+            assert_eq!(packet.arguments[1].callee_access, CheckedCalleeAccess::View);
+        }
+    }
+
+    #[test]
+    fn caller_facts_inherent_calls_keep_registered_source_formal_modes() {
+        let source = r#"namespace app
+struct User:
+    points: int64
+    function score(view self: User, view values: list[int64]) returns int64:
+        return self.points
+function main() returns int64:
+    User user = User(points: 7)
+    list[int64] values = list(5)
+    return User.score(view user, values)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let packet = result
+                .call_ownership
+                .values()
+                .next()
+                .expect("selected inherent source call");
+            let CheckedInvocationTarget::Method(call) = &packet.target else {
+                panic!("source method");
+            };
+            let definition = result
+                .method_definitions
+                .iter()
+                .find(|definition| definition.source_span == call.source_span)
+                .unwrap();
+            let CheckedInvocationShape::Function { signature_type } = &packet.shape else {
+                panic!("function shape");
+            };
+            let Type::Function {
+                params,
+                view_params,
+                return_type,
+            } = result.interner.resolve(*signature_type)
+            else {
+                panic!("function signature");
+            };
+            assert_eq!(params, &definition.parameter_types);
+            assert_eq!(*return_type, definition.return_type);
+            assert_eq!(view_params, &[true, true]);
+            assert_eq!(
+                packet.arguments[0].effect,
+                CheckedCallerEffect::RetainBorrow
+            );
+            assert_eq!(
+                packet.arguments[1].effect,
+                CheckedCallerEffect::RelinquishOwned
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_erased_calls_keep_the_selected_interface_slot_signature() {
+        let source = r#"namespace app
+interface Scored:
+    function score(view self: Scored, bonus: int64) returns int64
+struct User:
+    points: int64
+implement Scored for User:
+    function score(view self: User, bonus: int64) returns int64:
+        return self.points + bonus
+function inspect(view item: Scored) returns int64:
+    return Scored.score(view item, 5)
+function main() returns int64:
+    User user = User(points: 7)
+    return inspect(view user)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let packet = result
+                .call_ownership
+                .values()
+                .find(|packet| matches!(packet.target, CheckedInvocationTarget::Interface(_)))
+                .expect("selected interface source call");
+            let CheckedInvocationTarget::Interface(call) = &packet.target else {
+                unreachable!();
+            };
+            let Type::Interface(id) = result.interner.resolve(call.interface_type) else {
+                panic!("interface owner");
+            };
+            let slot = &result.interner.resolve_interface(*id).methods[call.method_index];
+            let CheckedInvocationShape::Function { signature_type } = &packet.shape else {
+                panic!("function shape");
+            };
+            let Type::Function {
+                params,
+                view_params,
+                return_type,
+            } = result.interner.resolve(*signature_type)
+            else {
+                panic!("function signature");
+            };
+            assert_eq!(
+                params,
+                &slot.params.iter().map(|(_, ty, _)| *ty).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                view_params,
+                &slot
+                    .params
+                    .iter()
+                    .map(|(_, _, view)| *view)
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(*return_type, slot.return_type);
+            assert_eq!(params[0], call.interface_type);
+            assert_eq!(
+                packet.arguments[0].effect,
+                CheckedCallerEffect::RetainBorrow
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_source_actual_types_survive_binding_field_and_producer_promotion() {
+        let source = r#"namespace app
+struct Holder:
+    values: list[int64]
+function inspect(view values: secret[list[int64]]) returns nothing:
+    return nothing
+function produce() returns list[int64]:
+    return list(7)
+function main() returns nothing:
+    list[int64] values = list(7)
+    inspect(view values)
+    inspect(view produce())
+    Holder holder = Holder(values: list(8))
+    inspect(view holder.values)
+    secret[list[int64]] classified = clone values
+    inspect(view classified)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut calls = result
+                .call_ownership
+                .iter()
+                .filter(|(_, packet)| packet.arguments.len() == 1)
+                .collect::<Vec<_>>();
+            calls.sort_by_key(|(span, _)| span.start);
+            assert_eq!(calls.len(), 4);
+            for (index, (_, packet)) in calls.iter().enumerate() {
+                let argument = &packet.arguments[0];
+                assert_eq!(
+                    result.source_type_map.get(&argument.source_span),
+                    Some(&argument.actual_type)
+                );
+                assert_eq!(
+                    result.type_map.get(&argument.source_span),
+                    Some(&argument.parameter_type)
+                );
+                assert!(matches!(
+                    result.interner.resolve(argument.parameter_type),
+                    Type::Secret(_)
+                ));
+                if index < 3 {
+                    assert!(matches!(
+                        result.interner.resolve(argument.actual_type),
+                        Type::List(_)
+                    ));
+                    assert_ne!(argument.actual_type, argument.parameter_type);
+                } else {
+                    assert_eq!(argument.actual_type, argument.parameter_type);
+                }
+                assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+            }
+            let CheckedCallerOrigin::Binding(binding) = calls[0].1.arguments[0].origin else {
+                panic!("ordinary binding");
+            };
+            assert_eq!(binding.ty, calls[0].1.arguments[0].actual_type);
+            assert_eq!(
+                calls[1].1.arguments[0].origin,
+                CheckedCallerOrigin::OwnedExpression
+            );
+            assert!(matches!(
+                calls[2].1.arguments[0].origin,
+                CheckedCallerOrigin::BorrowedProjection { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn caller_facts_source_actual_types_keep_contextual_width_and_container_inference() {
+        let source = r#"namespace app
+function scalar(view value: secret[int8]) returns nothing:
+    return nothing
+function sequence(view values: secret[list[int8]]) returns nothing:
+    return nothing
+function optional_value(view value: secret[optional[int8]]) returns nothing:
+    return nothing
+function result_value(view value: secret[result[int8, string]]) returns nothing:
+    return nothing
+function mapped(view values: secret[map[string, int8]]) returns nothing:
+    return nothing
+function main() returns nothing:
+    scalar(7)
+    sequence(list())
+    optional_value(some(7))
+    optional_value(none)
+    result_value(ok(7))
+    result_value(fail("error"))
+    mapped(map("one": 7))
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut calls = result.call_ownership.iter().collect::<Vec<_>>();
+            calls.sort_by_key(|(span, _)| span.start);
+            assert_eq!(calls.len(), 7);
+            let expected = [
+                "scalar",
+                "sequence",
+                "optional_value",
+                "optional_value",
+                "result_value",
+                "result_value",
+                "mapped",
+            ];
+            for ((_, packet), name) in calls.iter().zip(expected) {
+                let [argument] = packet.arguments.as_slice() else {
+                    panic!("one source occurrence");
+                };
+                let Type::Secret(inner) = result.interner.resolve(argument.parameter_type) else {
+                    panic!("outer Secret formal for {name}");
+                };
+                assert_eq!(argument.actual_type, *inner, "{name}");
+                assert_eq!(
+                    result.source_type_map.get(&argument.source_span),
+                    Some(inner)
+                );
+                assert_eq!(
+                    result.type_map.get(&argument.source_span),
+                    Some(&argument.parameter_type)
+                );
+            }
+            assert_eq!(calls[0].1.arguments[0].actual_type, TypeInterner::INT8);
+            assert!(
+                matches!(result.interner.resolve(calls[1].1.arguments[0].actual_type), Type::List(inner) if *inner == TypeInterner::INT8)
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_source_actual_types_are_concrete_in_generic_and_reflected_frames() {
+        let source = r#"namespace app
+struct Sample:
+    count: int64
+    values: list[int64]
+function observe[T](view value: secret[T]) returns nothing:
+    return nothing
+function forward[T](view value: T) returns nothing:
+    observe[T](view value)
+function reflected[T](view value: T) returns nothing:
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            Field original = type.field_value[T, Field](view value, view field)
+            observe[Field](view original)
+function main() returns nothing:
+    list[int64] values = list(7)
+    forward[int64](1)
+    forward[list[int64]](view values)
+    Sample sample = Sample(count: 2, values: list(3))
+    reflected[Sample](view sample)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let direct = result
+                .generic_function_instantiations
+                .iter()
+                .filter(|body| body.comptime_type_bindings.is_empty())
+                .flat_map(|body| {
+                    body.call_ownership
+                        .values()
+                        .filter(|packet| {
+                            matches!(packet.target, CheckedInvocationTarget::Generic(_))
+                        })
+                        .map(move |packet| (body, packet))
+                })
+                .collect::<Vec<_>>();
+            // Reflected calls live only in the two exact scoped body snapshots.
+            assert_eq!(direct.len(), 2);
+            for (body, packet) in direct {
+                let argument = &packet.arguments[0];
+                assert_eq!(
+                    body.source_type_map.get(&argument.source_span),
+                    Some(&argument.actual_type)
+                );
+                assert_eq!(
+                    body.type_map.get(&argument.source_span),
+                    Some(&argument.parameter_type)
+                );
+                assert!(!result.source_type_map.contains_key(&argument.source_span));
+            }
+            let scoped = result
+                .generic_function_instantiations
+                .iter()
+                .flat_map(|body| body.comptime_type_bindings.values())
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(scoped.len(), 2);
+            let mut actuals = Vec::new();
+            for scope in scoped {
+                let packet = scope
+                    .body
+                    .call_ownership
+                    .values()
+                    .find(|packet| matches!(packet.target, CheckedInvocationTarget::Generic(_)))
+                    .unwrap();
+                let argument = &packet.arguments[0];
+                assert_eq!(
+                    scope.body.source_type_map.get(&argument.source_span),
+                    Some(&argument.actual_type)
+                );
+                assert_eq!(
+                    scope.body.type_map.get(&argument.source_span),
+                    Some(&argument.parameter_type)
+                );
+                actuals.push(argument.actual_type);
+            }
+            assert!(actuals.contains(&TypeInterner::INT64));
+            assert!(
+                actuals
+                    .iter()
+                    .any(|ty| matches!(result.interner.resolve(*ty), Type::List(_)))
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_source_actual_types_preserve_secret_children_and_binary_taint() {
+        let source = r#"namespace app
+function sequence(view values: secret[list[secret[int8]]]) returns nothing:
+    return nothing
+function optional_value(view value: secret[optional[secret[int8]]]) returns nothing:
+    return nothing
+function result_value(view value: secret[result[secret[int8], string]]) returns nothing:
+    return nothing
+function scalar(view value: secret[int8]) returns nothing:
+    return nothing
+function main() returns nothing:
+    secret[int8] sequence_child = 7
+    secret[int8] optional_child = 8
+    secret[int8] result_child = 9
+    secret[int8] hidden = 10
+    sequence(list(sequence_child))
+    optional_value(some(optional_child))
+    result_value(ok(result_child))
+    scalar(1 + 2)
+    scalar(hidden + 2)
+    scalar(2 + hidden)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut calls = result.call_ownership.iter().collect::<Vec<_>>();
+            calls.sort_by_key(|(span, _)| span.start);
+            assert_eq!(calls.len(), 6);
+            for (_, packet) in &calls {
+                let [argument] = packet.arguments.as_slice() else {
+                    panic!("one source occurrence");
+                };
+                assert_eq!(
+                    result.source_type_map.get(&argument.source_span),
+                    Some(&argument.actual_type)
+                );
+                assert_eq!(
+                    result.type_map.get(&argument.source_span),
+                    Some(&argument.parameter_type)
+                );
+            }
+            let raw_payload = |index: usize| {
+                let actual = calls[index].1.arguments[0].actual_type;
+                let payload = match result.interner.resolve(actual) {
+                    Type::List(payload) | Type::Optional(payload) | Type::Result(payload, _) => {
+                        *payload
+                    }
+                    other => panic!("inner container or sum, got {other:?}"),
+                };
+                assert!(
+                    matches!(result.interner.resolve(payload), Type::Secret(inner) if *inner == TypeInterner::INT8)
+                );
+                let Type::Secret(expected_inner) = result
+                    .interner
+                    .resolve(calls[index].1.arguments[0].parameter_type)
+                else {
+                    panic!("outer Secret formal");
+                };
+                assert_eq!(*expected_inner, actual);
+            };
+            for index in 0..3 {
+                raw_payload(index);
+            }
+            assert_eq!(calls[3].1.arguments[0].actual_type, TypeInterner::INT8);
+            for (_, packet) in &calls[4..] {
+                let argument = &packet.arguments[0];
+                assert_eq!(argument.actual_type, argument.parameter_type);
+                assert!(
+                    matches!(result.interner.resolve(argument.actual_type), Type::Secret(inner) if *inner == TypeInterner::INT8)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_pipeline_inputs_survive_indirect_field_callee_spans() {
+        let source = r#"namespace app
+enum Choice:
+    chosen(value: int64)
+    other(value: int64)
+function choose(value: int64) returns Choice:
+    return Choice.chosen(value)
+function increment(value: int64) returns int64:
+    return value + 1
+struct ChoiceHolder:
+    item: function(int64) returns Choice
+struct NumberHolder:
+    item: function(int64) returns int64
+function direct() returns Choice:
+    ChoiceHolder holder = ChoiceHolder(item: choose)
+    return 4 into holder.item
+function chained() returns int64:
+    NumberHolder holder = NumberHolder(item: increment)
+    return 4 into holder.item into holder.item
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut inputs = result.pipeline_step_input_types.iter().collect::<Vec<_>>();
+            inputs.sort_by_key(|(span, _)| span.start);
+            assert_eq!(inputs.len(), 3);
+            for (&span, &input) in inputs.iter().copied() {
+                assert_eq!(input, TypeInterner::INT64);
+                assert!(matches!(
+                    result.interner.resolve(result.type_map[&span]),
+                    Type::Function { .. }
+                ));
+                let packet = &result.call_ownership[&span];
+                assert!(matches!(
+                    packet.target,
+                    CheckedInvocationTarget::Indirect(_)
+                ));
+                assert_eq!(packet.arguments[0].actual_type, input);
+                assert_eq!(packet.arguments[0].parameter_type, input);
+                assert_eq!(
+                    result.source_type_map[&span],
+                    result.pipeline_step_call_types[&span]
+                );
+            }
+            assert!(matches!(
+                result.interner.resolve(result.source_type_map[inputs[0].0]),
+                Type::Enum(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn caller_facts_pipeline_inputs_distinguish_handled_output_and_reject_bad_inputs() {
+        let prefix = r#"namespace app
+function parse(value: string) returns result[int64, string]:
+    return fail("bad")
+function increment(value: int64) returns int64:
+    return value + 1
+struct Holder:
+    parse: function(string) returns result[int64, string]
+    finish: function(int64) returns int64
+"#;
+        let source = format!(
+            "{prefix}function main() returns int64:\n    Holder holder = Holder(parse: parse, finish: increment)\n    return \"x\"\n        into holder.parse handle error:\n            default 7\n        into holder.finish\n"
+        );
+        let invalid = format!(
+            "{prefix}function invalid() returns result[int64, string]:\n    Holder holder = Holder(parse: parse, finish: increment)\n    return 4 into holder.parse\n"
+        );
+        for release in [false, true] {
+            let result = checked(&source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut inputs = result.pipeline_step_input_types.iter().collect::<Vec<_>>();
+            inputs.sort_by_key(|(span, _)| span.start);
+            assert_eq!(inputs.len(), 2);
+            assert_eq!(*inputs[0].1, TypeInterner::STRING);
+            assert_eq!(*inputs[1].1, TypeInterner::INT64);
+            let first = *inputs[0].0;
+            assert!(
+                matches!(result.interner.resolve(result.pipeline_step_call_types[&first]), Type::Result(value, error) if *value == TypeInterner::INT64 && *error == TypeInterner::STRING)
+            );
+            assert_eq!(result.source_type_map[&first], TypeInterner::INT64);
+            assert_eq!(
+                result.call_ownership[inputs[1].0].arguments[0].source_span,
+                first
+            );
+            // The handle extends the first step span; only the following
+            // unhandled field target shares its complete occurrence span.
+            assert_eq!(result.type_map[&first], TypeInterner::STRING);
+            assert!(matches!(
+                result.interner.resolve(result.type_map[inputs[1].0]),
+                Type::Function { .. }
+            ));
+            let rejected = checked(&invalid, release, false);
+            assert!(
+                !errors(&rejected).is_empty(),
+                "invalid indirect input was admitted"
+            );
+            assert_eq!(
+                rejected
+                    .pipeline_step_input_types
+                    .values()
+                    .copied()
+                    .collect::<Vec<_>>(),
+                vec![TypeInterner::INT64]
+            );
+            assert!(
+                errors(&rejected)
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains("string")
+                        && diagnostic.message.contains("int64"))
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_pipeline_inputs_stay_in_exact_generic_and_reflected_frames() {
+        let source = r#"namespace app
+struct Sample:
+    count: int64
+    values: list[int64]
+function scalar(value: int64) returns int64:
+    return value
+function text(value: string) returns string:
+    return value
+function apply[T](value: T, mapper: function(T) returns T) returns T:
+    return value into mapper
+function inspect[T](view value: T) returns nothing:
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            Field original = type.field_value[T, Field](view value, view field)
+            function(Field) returns Field mapper = function(item: Field) returns Field:
+                return item
+            Field copied = original into mapper
+    return nothing
+function main() returns nothing:
+    int64 count = apply[int64](7, scalar)
+    string label = apply[string]("x", text)
+    Sample sample = Sample(count: 1, values: list(2))
+    inspect[Sample](view sample)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            assert!(result.pipeline_step_input_types.is_empty());
+            let direct = result
+                .generic_function_instantiations
+                .iter()
+                .filter(|body| body.comptime_type_bindings.is_empty())
+                .flat_map(|body| {
+                    body.pipeline_step_input_types
+                        .iter()
+                        .map(move |(span, input)| (body, span, input))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(direct.len(), 2);
+            let mut direct_types = Vec::new();
+            for (body, span, input) in direct {
+                let packet = &body.call_ownership[span];
+                assert_eq!(packet.arguments[0].actual_type, *input);
+                assert!(matches!(
+                    result.interner.resolve(body.type_map[span]),
+                    Type::Function { .. }
+                ));
+                assert!(!result.pipeline_step_input_types.contains_key(span));
+                direct_types.push(*input);
+            }
+            assert!(direct_types.contains(&TypeInterner::INT64));
+            assert!(direct_types.contains(&TypeInterner::STRING));
+            let scopes = result
+                .generic_function_instantiations
+                .iter()
+                .flat_map(|body| body.comptime_type_bindings.values())
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(scopes.len(), 2);
+            let mut scoped_types = Vec::new();
+            for scope in scopes {
+                assert_eq!(scope.body.pipeline_step_input_types.len(), 1);
+                let (&span, &input) = scope.body.pipeline_step_input_types.iter().next().unwrap();
+                assert_eq!(
+                    scope.body.call_ownership[&span].arguments[0].actual_type,
+                    input
+                );
+                assert!(matches!(
+                    result.interner.resolve(scope.body.type_map[&span]),
+                    Type::Function { .. }
+                ));
+                scoped_types.push(input);
+            }
+            assert!(scoped_types.contains(&TypeInterner::INT64));
+            assert!(scoped_types.iter().any(|input| matches!(result.interner.resolve(*input), Type::List(element) if *element == TypeInterner::INT64)));
+        }
+    }
+
+    #[test]
+    fn caller_facts_transformed_explicit_views_retain_borrows_across_call_forms() {
+        let source = r#"namespace app
+type Numbers = list[int64] where true
+function inspect(view values: list[int64]) returns nothing:
+    return nothing
+function generic[T](view value: T) returns nothing:
+    return nothing
+function retained(view numbers: Numbers, view hidden: secret[list[int64]], callback: function(view list[int64]) returns nothing) returns nothing:
+    inspect(coarsen (view numbers))
+    generic[list[int64]](declassify (view hidden))
+    callback((coarsen ((view numbers))))
+    (declassify (view hidden)) into inspect
+    list[int64] first_copy = clone (coarsen numbers)
+    list[int64] second_copy = clone (declassify hidden)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            assert_eq!(result.call_ownership.len(), 4);
+            for packet in result.call_ownership.values() {
+                let [argument] = packet.arguments.as_slice() else {
+                    panic!("one source argument");
+                };
+                assert_eq!(argument.syntax, CheckedCallerSyntax::WrittenView);
+                assert_eq!(argument.callee_access, CheckedCalleeAccess::View);
+                assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+                assert!(matches!(argument.origin, CheckedCallerOrigin::Binding(_)));
+                assert!(
+                    matches!(result.interner.resolve(argument.actual_type), Type::List(element) if *element == TypeInterner::INT64)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_transformed_views_keep_explicit_and_bare_diagnostics_distinct() {
+        let prefix = r#"namespace app
+type Numbers = list[int64] where true
+function consume(values: list[int64]) returns nothing:
+    return nothing
+function inspect(view values: list[int64]) returns nothing:
+    return nothing
+"#;
+        for (parameter, call, expected_code) in [
+            (
+                "view values: Numbers",
+                "consume(coarsen (view values))",
+                375,
+            ),
+            (
+                "view values: secret[list[int64]]",
+                "consume(declassify (view values))",
+                375,
+            ),
+            ("view values: Numbers", "consume(coarsen values)", 401),
+            (
+                "view values: secret[list[int64]]",
+                "consume(declassify values)",
+                401,
+            ),
+            ("view values: Numbers", "inspect(coarsen values)", 401),
+            (
+                "view values: secret[list[int64]]",
+                "inspect(declassify values)",
+                401,
+            ),
+        ] {
+            let source = format!(
+                "{prefix}function rejected({parameter}) returns nothing:\n    {call}\n    return nothing\n"
+            );
+            for release in [false, true] {
+                let result = checked(&source, release, false);
+                let failures = errors(&result);
+                assert_eq!(failures.len(), 1, "{source}: {failures:?}");
+                assert_eq!(
+                    failures[0].code.code(),
+                    expected_code,
+                    "{source}: {failures:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_transparent_view_syntax_stops_at_clones_and_copied_fields() {
+        let source = r#"namespace app
+type Numbers = list[int64] where true
+struct Holder:
+    values: list[int64]
+    numbers: Numbers
+    hidden: secret[list[int64]]
+function consume(values: list[int64]) returns nothing:
+    return nothing
+function acquired(view numbers: Numbers, view hidden: secret[list[int64]], view holder: Holder) returns nothing:
+    consume(coarsen (clone (view numbers)))
+    consume(declassify (clone (view hidden)))
+    consume((view holder).values)
+    consume(coarsen ((view holder).numbers))
+    consume(declassify ((view holder).hidden))
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut packets = result.call_ownership.iter().collect::<Vec<_>>();
+            packets.sort_by_key(|(span, _)| span.start);
+            assert_eq!(packets.len(), 5);
+            for (index, (_, packet)) in packets.iter().enumerate() {
+                let [argument] = packet.arguments.as_slice() else {
+                    panic!("one source argument");
+                };
+                assert_eq!(argument.syntax, CheckedCallerSyntax::Bare);
+                assert_eq!(argument.callee_access, CheckedCalleeAccess::Owned);
+                assert_eq!(argument.effect, CheckedCallerEffect::TransferOwned);
+                if index < 2 {
+                    assert_eq!(argument.origin, CheckedCallerOrigin::OwnedExpression);
+                } else {
+                    assert!(matches!(
+                        argument.origin,
+                        CheckedCallerOrigin::OwnedFieldCopy { .. }
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_invalid_calls_preserve_dependency_ownership_diagnostics() {
+        let take = "function take(values: list[int64]) returns int64:\n    return 1\n";
+        let cases = [
+            (format!("{OBSERVER}function test(values: list[int64]) returns list[int64]:\n    int64 ignored = inspect[int64](values)\n    return values\n"), vec![309], false),
+            (format!("{OBSERVER}{take}function test(values: list[int64]) returns list[int64]:\n    int64 ignored = inspect[int64](take(values))\n    return values\n"), vec![309, 400], false),
+            (format!("{OBSERVER}{take}function test(view values: list[int64]) returns int64:\n    return inspect[int64](take(values))\n"), vec![309, 401], false),
+            (format!("{OBSERVER}{take}function test(values: list[int64]) returns int64:\n    int64 consumed = take(values)\n    return inspect[int64](values)\n"), vec![309, 400], false),
+            ("namespace app\nfunction test(view values: bytes) returns string:\n    return bytes.__to_hex[string](values)\n".to_string(), vec![309], true),
+            ("namespace app\nfunction test() returns string:\n    return bytes.__to_hex[string](1)\n".to_string(), vec![304, 309], true),
+            ("namespace app\nfunction test(view values: bytes) returns string:\n    return bytes.__to_hex(values)\n".to_string(), vec![401], true),
+            ("namespace app\nfunction test(view values: bytes) returns string:\n    return bytes.__to_hex(view values)\n".to_string(), vec![], true),
+        ];
+        for (source, expected, stdlib) in cases {
+            for release in [false, true] {
+                let result = checked(&source, release, stdlib);
+                let mut codes = errors(&result)
+                    .iter()
+                    .map(|error| error.code.code())
+                    .collect::<Vec<_>>();
+                codes.sort_unstable();
+                assert_eq!(
+                    codes, expected,
+                    "release={release}: {:?}",
+                    result.diagnostics
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_qualified_descriptors_keep_source_order_and_written_views() {
+        let source = r#"namespace app
+function identity(value: int64) returns int64:
+    return value
+function inspect(view callback: function(int64) returns int64, marker: int64) returns int64:
+    return marker
+function exercise() returns int64:
+    int64 direct = inspect(marker: 1, callback: app.identity)
+    int64 retained = inspect(view app.identity, 2)
+    return app.identity into view inspect(3)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut packets = result.call_ownership.iter().collect::<Vec<_>>();
+            packets.sort_by_key(|(span, _)| span.start);
+            assert_eq!(packets.len(), 3);
+            for (index, (_, packet)) in packets.iter().enumerate() {
+                let argument = packet
+                    .arguments
+                    .iter()
+                    .find(|argument| argument.parameter_index == 0)
+                    .expect("descriptor formal");
+                assert_eq!(argument.origin, CheckedCallerOrigin::OwnedExpression);
+                assert_eq!(argument.callee_access, CheckedCalleeAccess::View);
+                assert_eq!(
+                    argument.effect,
+                    if index == 0 {
+                        CheckedCallerEffect::RelinquishOwned
+                    } else {
+                        CheckedCallerEffect::RetainBorrow
+                    }
+                );
+                assert_eq!(
+                    argument.syntax,
+                    if index == 0 {
+                        CheckedCallerSyntax::Bare
+                    } else {
+                        CheckedCallerSyntax::WrittenView
+                    }
+                );
+            }
+            assert_eq!(
+                packets[0]
+                    .1
+                    .arguments
+                    .iter()
+                    .map(|argument| (argument.source_index, argument.parameter_index))
+                    .collect::<Vec<_>>(),
+                [(0, 1), (1, 0)]
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_method_descriptor_producers_use_exact_concrete_frames() {
+        let source = r#"namespace models
+export struct Point:
+    value: int64
+    function amount(view self: Point) returns int64:
+        return self.value
+namespace app
+function inspect(view callback: function(view models.Point) returns int64) returns nothing:
+    return nothing
+function forward[T](seed: T) returns nothing:
+    use models as m
+    inspect(m.Point.amount)
+    return nothing
+function exercise() returns nothing:
+    use models as m
+    inspect(view m.Point.amount)
+    forward[int64](1)
+    forward[string]("two")
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let root = result
+                .call_ownership
+                .values()
+                .find(|packet| {
+                    packet.arguments.first().is_some_and(|argument| {
+                        matches!(
+                            result.interner.resolve(argument.actual_type),
+                            Type::Function { .. }
+                        )
+                    })
+                })
+                .expect("root method descriptor call");
+            assert_eq!(
+                root.arguments[0].origin,
+                CheckedCallerOrigin::OwnedExpression
+            );
+            assert_eq!(root.arguments[0].effect, CheckedCallerEffect::RetainBorrow);
+            assert_eq!(result.generic_function_instantiations.len(), 2);
+            for body in &result.generic_function_instantiations {
+                assert_eq!(body.method_values.len(), 1);
+                assert_eq!(body.call_ownership.len(), 1);
+                let argument = &body.call_ownership.values().next().unwrap().arguments[0];
+                assert_eq!(argument.origin, CheckedCallerOrigin::OwnedExpression);
+                assert_eq!(argument.effect, CheckedCallerEffect::RelinquishOwned);
+                assert!(body.method_values.contains_key(&argument.source_span));
+                assert!(!result.method_values.contains_key(&argument.source_span));
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_function_value_fields_and_locals_remain_value_origins() {
+        let source = r#"namespace app
+struct Holder:
+    callback: function(int64) returns int64
+function identity(value: int64) returns int64:
+    return value
+function inspect(view callback: function(int64) returns int64) returns nothing:
+    return nothing
+function exercise(view holder: Holder) returns nothing:
+    function(int64) returns int64 stored = identity
+    inspect(view stored)
+    inspect(holder.callback)
+    inspect(view holder.callback)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut packets = result.call_ownership.iter().collect::<Vec<_>>();
+            packets.sort_by_key(|(span, _)| span.start);
+            assert_eq!(packets.len(), 3);
+            assert!(matches!(
+                packets[0].1.arguments[0].origin,
+                CheckedCallerOrigin::Binding(_)
+            ));
+            assert!(matches!(
+                packets[1].1.arguments[0].origin,
+                CheckedCallerOrigin::OwnedFieldCopy {
+                    parent: CheckedViewSource::Binding(_)
+                }
+            ));
+            assert!(matches!(
+                packets[2].1.arguments[0].origin,
+                CheckedCallerOrigin::BorrowedProjection {
+                    source: CheckedViewSource::Binding(_)
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn caller_facts_generic_mutual_forwarding_joins_resolved_definition_not_body_span() {
+        let source = r#"namespace sample
+mutual:
+    function leaf[T](view value: T) returns int64
+    function forward[T](view value: T) returns int64
+function leaf[T](view value: T) returns int64:
+    return 7
+function forward[T](view value: T) returns int64:
+    return leaf[T](view value)
+function exercise(values: list[int64]) returns int64:
+    int64 retained = forward[list[int64]](view values)
+    return forward[list[int64]](values) + retained
+"#;
+        for release in [false, true] {
+            let file = FileId::new(0);
+            let parsed = jett_parser::parse(source, file);
+            assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+            let resolved = jett_resolve::resolve(&parsed.module);
+            assert!(
+                resolved
+                    .diagnostics
+                    .iter()
+                    .all(|d| d.severity != jett_diagnostics::Severity::Error),
+                "{:?}",
+                resolved.diagnostics
+            );
+            let result = check_with_options(&parsed.module, &resolved, CheckOptions { release });
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let forward = parsed
+                .module
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::Function(function) if function.name.name == "forward" => Some(function),
+                    _ => None,
+                })
+                .expect("actual mutual function body");
+            let definition = resolved.resolutions[&forward.name.span];
+            assert_ne!(resolved.scope_table.def(definition).span, forward.name.span);
+            let mut root = result.call_ownership.iter().collect::<Vec<_>>();
+            root.sort_by_key(|(span, _)| span.start);
+            assert_eq!(root.len(), 2, "both selected source calls require packets");
+            for (index, (_, packet)) in root.iter().enumerate() {
+                let CheckedInvocationTarget::Generic(target) = &packet.target else {
+                    panic!("exact generic source target");
+                };
+                assert_eq!(target.definition, definition);
+                assert_eq!(
+                    packet.arguments[0].syntax,
+                    if index == 0 {
+                        CheckedCallerSyntax::WrittenView
+                    } else {
+                        CheckedCallerSyntax::Bare
+                    }
+                );
+                assert_eq!(packet.arguments[0].callee_access, CheckedCalleeAccess::View);
+                assert_eq!(
+                    packet.arguments[0].effect,
+                    if index == 0 {
+                        CheckedCallerEffect::RetainBorrow
+                    } else {
+                        CheckedCallerEffect::RelinquishOwned
+                    }
+                );
+                assert_eq!(
+                    result.source_type_map.get(&packet.arguments[0].source_span),
+                    Some(&packet.arguments[0].actual_type)
+                );
+            }
+            let body = result
+                .generic_function_instantiations
+                .iter()
+                .find(|body| body.definition == definition)
+                .expect("concrete forward body");
+            assert_eq!(body.call_ownership.len(), 1);
+            let nested = body.call_ownership.values().next().unwrap();
+            let argument = &nested.arguments[0];
+            assert_eq!(argument.syntax, CheckedCallerSyntax::WrittenView);
+            assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+            assert_eq!(
+                body.source_type_map.get(&argument.source_span),
+                Some(&argument.actual_type)
+            );
+            assert!(
+                !result
+                    .call_ownership
+                    .contains_key(body.call_ownership.keys().next().unwrap())
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_mutual_generic_same_leaf_names_keep_exact_modes_and_targets() {
+        let source = r#"namespace left
+mutual:
+    export function inspect[T](view value: T) returns int64
+export function inspect[T](view value: T) returns int64:
+    return 1
+namespace right
+mutual:
+    export function inspect[T](value: T) returns int64
+export function inspect[T](value: T) returns int64:
+    return 2
+namespace app
+function exercise(first: list[int64], second: list[int64]) returns int64:
+    use left
+    use right
+    int64 observed = left.inspect[list[int64]](view first)
+    return right.inspect[list[int64]](second) + observed
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut calls = result.call_ownership.iter().collect::<Vec<_>>();
+            calls.sort_by_key(|(span, _)| span.start);
+            assert_eq!(calls.len(), 2);
+            let CheckedInvocationTarget::Generic(left) = &calls[0].1.target else {
+                panic!("left");
+            };
+            let CheckedInvocationTarget::Generic(right) = &calls[1].1.target else {
+                panic!("right");
+            };
+            assert_ne!(left.definition, right.definition);
+            assert_eq!(
+                calls[0].1.arguments[0].callee_access,
+                CheckedCalleeAccess::View
+            );
+            assert_eq!(
+                calls[0].1.arguments[0].effect,
+                CheckedCallerEffect::RetainBorrow
+            );
+            assert_eq!(
+                calls[1].1.arguments[0].callee_access,
+                CheckedCalleeAccess::Owned
+            );
+            assert_eq!(
+                calls[1].1.arguments[0].effect,
+                CheckedCallerEffect::TransferOwned
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_machine_state_forwarded_views_preserve_immediate_bindings() {
+        let source = r#"namespace app
+machine Packet:
+    states:
+        ready(values: list[int64])
+struct Envelope:
+    packet: Packet at ready
+function inspect(view packet: Packet at ready) returns nothing:
+    return nothing
+function exercise(view envelope: Envelope) returns nothing:
+    Packet at ready borrowed = view envelope.packet
+    Packet at ready forwarded = borrowed
+    inspect(view forwarded)
+    inspect(view borrowed)
+    inspect(view envelope.packet)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let fact = |name| {
+                result
+                    .binding_facts
+                    .values()
+                    .find(|fact| {
+                        &source[fact.declaration_span.start as usize
+                            ..fact.declaration_span.end as usize]
+                            == name
+                    })
+                    .expect("exact checked binding")
+            };
+            let borrowed = fact("borrowed");
+            let forwarded = fact("forwarded");
+            assert_eq!(
+                forwarded.mode,
+                CheckedBindingMode::View {
+                    source: CheckedViewSource::Binding(borrowed.definition),
+                }
+            );
+            assert_eq!(forwarded.ty, borrowed.ty);
+            assert!(matches!(
+                result.interner.resolve(forwarded.ty),
+                Type::MachineState { .. }
+            ));
+            assert_eq!(result.call_ownership.len(), 3);
+            assert!(
+                result
+                    .call_ownership
+                    .values()
+                    .all(|packet| packet.arguments[0].effect == CheckedCallerEffect::RetainBorrow)
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_machine_view_forwarding_stays_in_each_concrete_generic_body() {
+        let source = r#"namespace app
+machine Packet:
+    states:
+        ready(values: list[int64])
+struct Envelope[T]:
+    packet: Packet at ready
+    extra: T
+function inspect(view packet: Packet at ready) returns nothing:
+    return nothing
+function forward[T](view envelope: Envelope[T]) returns nothing:
+    Packet at ready borrowed = view envelope.packet
+    Packet at ready forwarded = borrowed
+    inspect(view forwarded)
+    inspect(view envelope.packet)
+    return nothing
+function exercise(first: Envelope[int64], second: Envelope[list[int64]]) returns nothing:
+    forward[int64](view first)
+    forward[list[int64]](view second)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            assert_eq!(result.generic_function_instantiations.len(), 2);
+            for body in &result.generic_function_instantiations {
+                let fact = |name| {
+                    body.binding_facts
+                        .values()
+                        .find(|fact| {
+                            &source[fact.declaration_span.start as usize
+                                ..fact.declaration_span.end as usize]
+                                == name
+                        })
+                        .expect("concrete body binding")
+                };
+                let borrowed = fact("borrowed");
+                let forwarded = fact("forwarded");
+                assert_eq!(
+                    forwarded.mode,
+                    CheckedBindingMode::View {
+                        source: CheckedViewSource::Binding(borrowed.definition),
+                    }
+                );
+                assert_eq!(body.call_ownership.len(), 2);
+                assert!(
+                    body.call_ownership
+                        .values()
+                        .all(|packet| packet.arguments[0].effect
+                            == CheckedCallerEffect::RetainBorrow)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_machine_forwarding_does_not_relax_owned_erasure_or_bare_views() {
+        let prefix = "namespace app\nmachine Packet:\n    states:\n        ready(values: list[int64])\nfunction inspect(view packet: Packet at ready) returns nothing:\n    return nothing\n";
+        let cases = [
+            (
+                "function exercise(packet: Packet at ready) returns nothing:\n    Packet erased = packet\n    inspect(view packet)\n    return nothing\n",
+                vec![400],
+            ),
+            (
+                "function exercise(packet: Packet at ready) returns nothing:\n    Packet erased = clone packet\n    inspect(view packet)\n    return nothing\n",
+                vec![],
+            ),
+            (
+                "function exercise(view packet: Packet at ready) returns nothing:\n    inspect(packet)\n    return nothing\n",
+                vec![401],
+            ),
+            (
+                "function exercise(view packet: Packet at ready) returns Packet at ready:\n    Packet at ready forwarded = packet\n    return forwarded\n",
+                vec![401],
+            ),
+        ];
+        for (body, expected) in cases {
+            for release in [false, true] {
+                let result = checked(&format!("{prefix}{body}"), release, false);
+                let codes = errors(&result)
+                    .iter()
+                    .map(|error| error.code.code())
+                    .collect::<Vec<_>>();
+                assert_eq!(codes, expected, "{body}: {:?}", result.diagnostics);
+            }
+        }
+    }
+
+    #[test]
+    fn caller_facts_qualified_unit_enums_keep_named_order_and_pipeline_syntax() {
+        let source = r#"namespace models
+export enum Choice:
+    empty
+    full(value: int64)
+namespace app
+function inspect(view choice: models.Choice, marker: int64) returns int64:
+    return marker
+function exercise() returns int64:
+    use models as m
+    int64 first = inspect(marker: 1, choice: m.Choice.empty)
+    int64 second = inspect(view m.Choice.empty, 2)
+    return m.Choice.empty into view inspect(3)
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut packets = result.call_ownership.iter().collect::<Vec<_>>();
+            packets.sort_by_key(|(span, _)| span.start);
+            assert_eq!(packets.len(), 3);
+            for (index, (_, packet)) in packets.iter().enumerate() {
+                let argument = packet
+                    .arguments
+                    .iter()
+                    .find(|argument| argument.parameter_index == 0)
+                    .expect("unit enum actual");
+                assert_eq!(argument.origin, CheckedCallerOrigin::OwnedExpression);
+                assert_eq!(argument.callee_access, CheckedCalleeAccess::View);
+                assert_eq!(
+                    argument.effect,
+                    if index == 0 {
+                        CheckedCallerEffect::RelinquishOwned
+                    } else {
+                        CheckedCallerEffect::RetainBorrow
+                    }
+                );
+                assert_eq!(
+                    argument.syntax,
+                    if index == 0 {
+                        CheckedCallerSyntax::Bare
+                    } else {
+                        CheckedCallerSyntax::WrittenView
+                    }
+                );
+                assert_eq!(
+                    result.source_type_map.get(&argument.source_span),
+                    Some(&argument.actual_type)
+                );
+                let Type::Enum(id) = result.interner.resolve(argument.actual_type) else {
+                    panic!("exact nominal enum source type");
+                };
+                assert_eq!(result.interner.resolve_enum(*id).name, "models.Choice");
+            }
+            assert_eq!(
+                packets[0]
+                    .1
+                    .arguments
+                    .iter()
+                    .map(|argument| (argument.source_index, argument.parameter_index))
+                    .collect::<Vec<_>>(),
+                [(0, 1), (1, 0)]
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_qualified_unit_enums_use_concrete_and_reflected_source_maps() {
+        let source = r#"namespace models
+export enum Choice:
+    empty
+    full(value: int64)
+namespace app
+struct First:
+    count: int64
+    text: string
+struct Second:
+    count: int64
+function inspect(view choice: models.Choice) returns nothing:
+    return nothing
+function forward[T](view seed: T) returns nothing:
+    use models
+    inspect(models.Choice.empty)
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            inspect(view models.Choice.empty)
+    return nothing
+function exercise(first: First, second: Second) returns nothing:
+    forward[First](view first)
+    forward[Second](view second)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            assert_eq!(result.generic_function_instantiations.len(), 2);
+            let mut scoped_count = 0;
+            for body in &result.generic_function_instantiations {
+                let packet = body
+                    .call_ownership
+                    .values()
+                    .find(|packet| {
+                        packet.arguments.first().is_some_and(|argument| {
+                            &source[argument.source_span.start as usize
+                                ..argument.source_span.end as usize]
+                                == "models.Choice.empty"
+                        })
+                    })
+                    .expect("outside reflected scope");
+                let argument = &packet.arguments[0];
+                assert_eq!(argument.origin, CheckedCallerOrigin::OwnedExpression);
+                assert_eq!(argument.effect, CheckedCallerEffect::RelinquishOwned);
+                assert_eq!(
+                    body.source_type_map.get(&argument.source_span),
+                    Some(&argument.actual_type)
+                );
+                assert!(!result.source_type_map.contains_key(&argument.source_span));
+                for scoped in body.comptime_type_bindings.values().flatten() {
+                    scoped_count += 1;
+                    let packet = scoped
+                        .body
+                        .call_ownership
+                        .values()
+                        .find(|packet| {
+                            packet.arguments.first().is_some_and(|argument| {
+                                source[argument.source_span.start as usize
+                                    ..argument.source_span.end as usize]
+                                    .contains("models.Choice.empty")
+                            })
+                        })
+                        .expect("reflected scope packet");
+                    let argument = &packet.arguments[0];
+                    assert_eq!(argument.origin, CheckedCallerOrigin::OwnedExpression);
+                    assert_eq!(argument.syntax, CheckedCallerSyntax::WrittenView);
+                    assert_eq!(argument.effect, CheckedCallerEffect::RetainBorrow);
+                    assert_eq!(
+                        scoped.body.source_type_map.get(&argument.source_span),
+                        Some(&argument.actual_type)
+                    );
+                    assert_eq!(
+                        body.source_type_map.get(&argument.source_span),
+                        Some(&argument.actual_type)
+                    );
+                    assert!(!result.source_type_map.contains_key(&argument.source_span));
+                }
+            }
+            assert_eq!(
+                scoped_count, 3,
+                "one exact body per declared reflected field"
+            );
+        }
+    }
+
+    #[test]
+    fn caller_facts_enum_valued_bindings_and_real_fields_remain_value_origins() {
+        let source = r#"namespace models
+export enum Choice:
+    empty
+    full(value: int64)
+namespace app
+struct Holder:
+    choice: models.Choice
+function inspect(view choice: models.Choice, marker: int64) returns nothing:
+    return nothing
+function exercise(view holder: Holder, view stored: models.Choice) returns nothing:
+    use models
+    inspect(view stored, 1)
+    inspect(holder.choice, 2)
+    inspect(view holder.choice, 3)
+    inspect(Holder(choice: models.Choice.empty).choice, 4)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = checked(source, release, false);
+            assert!(errors(&result).is_empty(), "{:?}", result.diagnostics);
+            let mut packets = result.call_ownership.iter().collect::<Vec<_>>();
+            packets.sort_by_key(|(span, _)| span.start);
+            assert_eq!(packets.len(), 4);
+            assert!(matches!(
+                packets[0].1.arguments[0].origin,
+                CheckedCallerOrigin::Binding(_)
+            ));
+            assert!(matches!(
+                packets[1].1.arguments[0].origin,
+                CheckedCallerOrigin::OwnedFieldCopy {
+                    parent: CheckedViewSource::Binding(_)
+                }
+            ));
+            assert!(matches!(
+                packets[2].1.arguments[0].origin,
+                CheckedCallerOrigin::BorrowedProjection {
+                    source: CheckedViewSource::Binding(_)
+                }
+            ));
+            assert_eq!(
+                packets[3].1.arguments[0].origin,
+                CheckedCallerOrigin::OwnedFieldCopy {
+                    parent: CheckedViewSource::Other,
+                }
+            );
+            assert!(
+                packets
+                    .iter()
+                    .all(|(_, packet)| packet.arguments[0].actual_type
+                        == packets[0].1.arguments[0].actual_type)
+            );
+        }
     }
 }

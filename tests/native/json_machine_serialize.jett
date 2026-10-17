@@ -1,0 +1,35 @@
+namespace app
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string, display_name: string serialize "displayName")
+    transitions:
+        guest to logged_in
+machine TokenLifecycle:
+    states:
+        issued(token: secret[string], public_id: string serialize "publicId")
+        revoked
+    transitions:
+        issued to revoked
+struct SessionBox:
+    current: Session at logged_in
+    history: list[Session]
+function serialize_bare() returns string:
+    Session session = Session.transition(Session(guest), logged_in, "user-1", "Ada")
+    return json.serialize[Session](view session)
+function serialize_state() returns string:
+    Session at logged_in session = Session(logged_in, "user-2", "Lin")
+    return json.serialize[Session at logged_in](view session)
+function serialize_nested() returns string:
+    Session at logged_in active = Session.transition(Session(guest), logged_in, "user-3", "Bea")
+    Session logged = clone active
+    SessionBox box = SessionBox(current: active, history: list(Session(guest), logged))
+    return json.serialize[SessionBox](view box)
+function serialize_public_secret() returns string:
+    TokenLifecycle token = TokenLifecycle(issued, "secret-token", "tok-1")
+    return json.serialize_public[TokenLifecycle](view token)
+function main() returns nothing:
+    println(serialize_bare())
+    println(serialize_state())
+    println(serialize_nested())
+    println(serialize_public_secret())

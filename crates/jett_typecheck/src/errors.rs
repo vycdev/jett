@@ -947,6 +947,66 @@ pub fn unspecialized_generic_function_value(name: &str, span: Span) -> Diagnosti
     )
 }
 
+/// E0374: One canonical generic instantiation cannot have two static bodies.
+pub fn conflicting_generic_static_selection(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        374,
+        "generic instantiation has conflicting compile-time control-flow selections".to_string(),
+        span,
+    )
+}
+
+/// E0375: A borrowed argument cannot satisfy an owning function parameter.
+pub fn view_argument_requires_view_parameter(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        375,
+        "`view` argument requires a `view` function parameter".to_string(),
+        span,
+    )
+}
+
+/// E0376: Collections and built-in sums have no direct equality operation.
+pub fn direct_collection_equality(type_name: &str, op: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        376,
+        format!(
+            "operator `{op}` is not defined for `{type_name}`; compare its contents explicitly"
+        ),
+        span,
+    )
+}
+
+/// E0376: Erasing a concrete type does not provide a dynamic equality contract.
+pub fn erased_interface_equality(type_name: &str, op: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        376,
+        format!(
+            "operator `{op}` is not defined for interface-typed values of `{type_name}`; compare before erasure or call an explicit comparison method"
+        ),
+        span,
+    )
+}
+
+/// E0377: Namespace-level declarations cannot introduce mutable global state.
+pub fn mutable_global(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        377,
+        format!(
+            "namespace-level binding `{name}` cannot be mutable; global declarations must be immutable compile-time constants"
+        ),
+        span,
+    )
+}
+
+/// E0378: Required value computation in a constant must be explicit.
+pub fn constant_initializer(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        378,
+        "global constant initializer must use a literal, an earlier constant, or `comptime expression` for required evaluation",
+        span,
+    )
+}
+
 /// E0800: Function body exceeds the statement count limit.
 pub fn function_statement_limit(
     function_name: &str,

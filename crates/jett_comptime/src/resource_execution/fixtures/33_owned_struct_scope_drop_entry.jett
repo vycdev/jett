@@ -1,0 +1,13 @@
+namespace app
+struct OwnedEnvelope:
+    token: resource_probe.TestHandle
+    marker: int64
+function retire_owned(token: resource_probe.TestHandle) returns nothing:
+    OwnedEnvelope held = OwnedEnvelope(token: token, marker: 17)
+    return nothing
+export function main(net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle token = resource_probe.create(view net, 1001) handle error:
+        return nothing
+    retire_owned(token)
+    return nothing

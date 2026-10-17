@@ -1,0 +1,64 @@
+namespace app
+struct User:
+    age: int64
+    active: bool
+    ratio: float64
+enum Message:
+    number(value: int64)
+    empty
+machine Session:
+    states:
+        active(count: int64)
+        closed
+    transitions:
+        active to closed
+function check_struct() returns nothing:
+    User user = User(age: run run 7, active: run true, ratio: run 1.25)
+    TypeField field = list.get[TypeField](type.fields[User](), 0) handle:
+        return nothing
+    int64 copied = type.field_value[User, int64](view user, view field)
+    trace copied
+    int64 once = join copied handle error:
+        return nothing
+    int64 twice = join once handle error:
+        return nothing
+    println(twice)
+    TypeField active_field = list.get[TypeField](type.fields[User](), 1) handle:
+        return nothing
+    bool active = type.field_value[User, bool](view user, view active_field)
+    trace active
+    bool joined_active = join active handle error:
+        return nothing
+    println(joined_active)
+    TypeField ratio_field = list.get[TypeField](type.fields[User](), 2) handle:
+        return nothing
+    float64 ratio = type.field_value[User, float64](view user, view ratio_field)
+    trace ratio
+    float64 joined_ratio = join ratio handle error:
+        return nothing
+    println(joined_ratio)
+function check_enum() returns nothing:
+    Message message = Message.number(run 8)
+    TypeVariant variant = type.variant_value[Message](view message)
+    TypeField field = list.get[TypeField](variant.fields, 0) handle:
+        return nothing
+    int64 copied = type.variant_field_value[Message, int64](view message, view field)
+    trace copied
+    int64 joined = join copied handle error:
+        return nothing
+    println(joined)
+function check_machine() returns nothing:
+    Session session = Session(active, run 9)
+    TypeMachineState state = type.machine_state_value[Session](view session)
+    TypeField field = list.get[TypeField](state.fields, 0) handle:
+        return nothing
+    int64 copied = type.machine_field_value[Session, int64](view session, view field)
+    trace copied
+    int64 joined = join copied handle error:
+        return nothing
+    println(joined)
+function main() returns nothing:
+    check_struct()
+    check_enum()
+    check_machine()
+    return nothing

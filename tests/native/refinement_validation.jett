@@ -1,0 +1,18 @@
+namespace app
+type Positive = int64 where value > 0
+type AboveTen = Positive where value > 10
+type NonEmpty = string where value != ""
+function describe(raw: int64) returns string:
+    AboveTen checked = raw handle error:
+        return error
+    return "{coarsen checked}"
+function describe_name(raw: string) returns string:
+    NonEmpty checked = raw handle error:
+        return error
+    return coarsen checked
+function main() returns nothing:
+    println(describe(-1))
+    println(describe(5))
+    println(describe(12))
+    println(describe_name(""))
+    println(describe_name("Ada"))

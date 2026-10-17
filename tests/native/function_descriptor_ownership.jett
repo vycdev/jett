@@ -1,0 +1,24 @@
+namespace app
+struct Callbacks:
+    primary: function(int64) returns int64
+    secondary: function(int64) returns int64
+function increment(value: int64) returns int64:
+    return value + 1
+function double(value: int64) returns int64:
+    return value * 2
+function choose(first: bool) returns function(int64) returns int64:
+    if first:
+        return increment
+    return double
+function main() returns nothing:
+    Callbacks callbacks = Callbacks(primary: choose(true), secondary: choose(false))
+    function(int64) returns int64 selected = callbacks.primary
+    function(int64) returns int64 fallback = callbacks.secondary
+    println(selected(4), fallback(4))
+    list[function(int64) returns int64] many = list(increment, double)
+    function(int64) returns int64 from_list = list.get[function(int64) returns int64](view many, 1) handle:
+        default increment
+    println(from_list(5))
+    map[string, function(int64) returns int64] named = map("inc": increment, "double": double)
+    function(int64) returns int64 from_map = map.get_or[string, function(int64) returns int64](named, "double", increment)
+    println(from_map(6))

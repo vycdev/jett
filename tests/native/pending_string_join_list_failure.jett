@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    list[string] parts = run list("a", "b")
+    string joined = string.join(parts, ",")
+    trace joined
+    return nothing

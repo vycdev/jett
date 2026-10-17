@@ -182,8 +182,12 @@ fn project_tests_preserve_logical_source_symlink_order() {
     std::os::unix::fs::symlink("../target/z_core.jett", &linked_source)
         .expect("create in-root source symlink");
     #[cfg(windows)]
-    if let Err(error) = std::os::windows::fs::symlink_file("../target/z_core.jett", &linked_source)
-    {
+    if let Err(error) = std::os::windows::fs::symlink_file(
+        std::path::Path::new("..")
+            .join("target")
+            .join("z_core.jett"),
+        &linked_source,
+    ) {
         if error.kind() == std::io::ErrorKind::PermissionDenied
             || error.raw_os_error() == Some(1314)
         {

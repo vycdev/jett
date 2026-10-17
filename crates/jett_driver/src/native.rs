@@ -1,0 +1,2336 @@
+//! Host-native object emission and executable publication.
+//!
+//! Native compilation is deliberately split into an object stage and a link
+//! stage. The object stage consumes the exact checked program-entry identity
+//! published by [`crate::BackendLoweringResult`]. The Windows MSVC and Linux GNU
+//! link stages accept explicit launcher metadata and invoke tools without a shell,
+//! and publishes an executable only after a successful bounded link.
+
+#[path = "native_property_runner.rs"]
+mod property_runner;
+pub use property_runner::{
+    NativePropertyFailure, NativePropertyOptions, NativePropertyRunError,
+    NativePropertySuiteResult, run_host_property_suite,
+};
+
+use std::ffi::{OsStr, OsString};
+use std::fmt;
+use std::fs;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use jett_codegen_cranelift::{CodegenError, emit_host_object};
+use jett_hir::FunctionId;
+
+use crate::{
+    BackendLoweringError, BackendLoweringResult, lower_file_for_native_property_suite,
+    lower_file_for_native_property_suite_with_options, lower_file_for_native_tests,
+    lower_file_for_native_verify_suite_with_options,
+};
+
+/// The sole target accepted by the version 1 native Windows linker.
+pub const WINDOWS_MSVC_NATIVE_TARGET: &str = "x86_64-pc-windows-msvc";
+
+/// Supported Linux GNU host; this is not a cross-linking contract.
+pub const LINUX_GNU_NATIVE_TARGET: &str = "x86_64-unknown-linux-gnu";
+
+const SUPPORTED_NATIVE_HOSTS: &str = "x86_64-pc-windows-msvc, x86_64-unknown-linux-gnu";
+
+/// System libraries required by the GNU dynamic-CRT launcher archive.
+pub const LINUX_GNU_V1_NATIVE_LIBRARIES: &[&str] = &[
+    "-lgcc_s",
+    "-lutil",
+    "-lrt",
+    "-lpthread",
+    "-lm",
+    "-ldl",
+    "-lc",
+];
+
+/// The runtime ABI expected by the version 1 native launcher.
+pub const NATIVE_RUNTIME_ABI_VERSION_V1: u32 = 1;
+
+/// Maximum wall-clock time allowed for one native linker invocation.
+pub const DEFAULT_NATIVE_LINK_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Canonical ordered native-link inputs required by the static-CRT launcher.
+pub const WINDOWS_MSVC_STATIC_V1_NATIVE_LIBRARIES: &[&str] = &[
+    "advapi32.lib",
+    "bcrypt.lib",
+    "gdi32.lib",
+    "kernel32.lib",
+    "msimg32.lib",
+    "opengl32.lib",
+    "user32.lib",
+    "winspool.lib",
+    "kernel32.lib",
+    "ntdll.lib",
+    "userenv.lib",
+    "ws2_32.lib",
+    "dbghelp.lib",
+    "/defaultlib:libcmt",
+];
+
+/// C runtime linkage used to build a launcher archive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeCrtMode {
+    Static,
+    Dynamic,
+}
+
+impl fmt::Display for NativeCrtMode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Static => formatter.write_str("static"),
+            Self::Dynamic => formatter.write_str("dynamic"),
+        }
+    }
+}
+
+/// Explicit metadata for one native launcher archive.
+///
+/// Keeping this record separate from the archive path prevents the driver from
+/// guessing ABI, CRT, target, or transitive native-library requirements. The
+/// installed launcher manifest is validated before constructing this shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeLauncherBundle {
+    pub archive_path: PathBuf,
+    pub target: String,
+    pub runtime_abi_version: u32,
+    pub crt_mode: NativeCrtMode,
+    pub native_library_args: Vec<OsString>,
+}
+
+impl NativeLauncherBundle {
+    /// Load explicit installed runtime metadata; paths are relative to the manifest.
+    pub fn from_manifest(path: &Path, release: bool) -> Result<Self, String> {
+        let text = fs::read_to_string(path).map_err(|error| format!("cannot read native runtime bundle `{}`: {error}; install the matching runtime or use --runtime-bundle", path.display()))?;
+        let manifest: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
+            format!(
+                "invalid native runtime manifest `{}`: {error}",
+                path.display()
+            )
+        })?;
+        let field = |name: &str| {
+            manifest
+                .get(name)
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| format!("native runtime manifest requires string `{name}`"))
+        };
+        if manifest
+            .get("manifest_version")
+            .and_then(serde_json::Value::as_u64)
+            != Some(1)
+        {
+            return Err("unsupported native runtime manifest version (expected 1)".into());
+        }
+        if field("compiler_version")? != env!("CARGO_PKG_VERSION") {
+            return Err(format!(
+                "native runtime compiler version must be {}",
+                env!("CARGO_PKG_VERSION")
+            ));
+        }
+        let profile = if release { "release" } else { "debug" };
+        if field("profile")? != profile {
+            return Err(format!(
+                "native runtime profile mismatch: expected {profile}"
+            ));
+        }
+        let archive = Path::new(field("archive")?);
+        if archive.components().count() != 1
+            || !matches!(
+                archive.components().next(),
+                Some(std::path::Component::Normal(_))
+            )
+        {
+            return Err("native runtime archive must be a filename beside its manifest".into());
+        }
+        let abi = manifest
+            .get("runtime_abi_version")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or("native runtime manifest requires a runtime_abi_version integer")?;
+        let libraries = manifest
+            .get("native_library_args")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("native runtime manifest requires native_library_args")?
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(OsString::from)
+                    .ok_or("native library arguments must be strings")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let bundle = Self {
+            archive_path: path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(archive),
+            target: field("target")?.to_owned(),
+            runtime_abi_version: abi,
+            crt_mode: match field("crt_mode")? {
+                "static" => NativeCrtMode::Static,
+                "dynamic" => NativeCrtMode::Dynamic,
+                _ => return Err("native runtime CRT mode must be static or dynamic".into()),
+            },
+            native_library_args: libraries,
+        };
+        validate_host_launcher(&bundle).map_err(|error| error.to_string())?;
+        validate_regular_file(
+            &bundle.archive_path,
+            NativePathRole::LauncherArchive,
+            Some(if bundle.target == LINUX_GNU_NATIVE_TARGET {
+                "a"
+            } else {
+                "lib"
+            }),
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(bundle)
+    }
+
+    /// Describe a Linux GNU launcher archive built for the compiler host.
+    pub fn linux_gnu_v1(archive_path: impl Into<PathBuf>) -> Self {
+        Self {
+            archive_path: archive_path.into(),
+            target: LINUX_GNU_NATIVE_TARGET.to_string(),
+            runtime_abi_version: NATIVE_RUNTIME_ABI_VERSION_V1,
+            crt_mode: NativeCrtMode::Dynamic,
+            native_library_args: LINUX_GNU_V1_NATIVE_LIBRARIES
+                .iter()
+                .map(OsString::from)
+                .collect(),
+        }
+    }
+
+    /// Describe the canonical version 1 static-CRT launcher for Windows MSVC.
+    pub fn windows_msvc_static_v1(archive_path: impl Into<PathBuf>) -> Self {
+        Self {
+            archive_path: archive_path.into(),
+            target: WINDOWS_MSVC_NATIVE_TARGET.to_string(),
+            runtime_abi_version: NATIVE_RUNTIME_ABI_VERSION_V1,
+            crt_mode: NativeCrtMode::Static,
+            native_library_args: WINDOWS_MSVC_STATIC_V1_NATIVE_LIBRARIES
+                .iter()
+                .map(OsString::from)
+                .collect(),
+        }
+    }
+}
+
+/// A checked Jett program lowered through the production Cranelift backend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeObjectArtifact {
+    target: String,
+    symbols: Vec<String>,
+    bytes: Vec<u8>,
+    debug_observations: Vec<crate::DebugObservation>,
+}
+
+impl NativeObjectArtifact {
+    pub fn debug_observations(&self) -> &[crate::DebugObservation] {
+        &self.debug_observations
+    }
+
+    pub fn target(&self) -> &str {
+        &self.target
+    }
+
+    pub fn symbols(&self) -> &[String] {
+        &self.symbols
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+/// Native object containing the exported launcher entry wrapper.
+#[derive(Debug, Clone)]
+pub struct NativeProgramObjectArtifact {
+    object: NativeObjectArtifact,
+    program_entry: FunctionId,
+    diagnostics: Vec<jett_diagnostics::Diagnostic>,
+    source: String,
+}
+
+impl NativeProgramObjectArtifact {
+    pub fn debug_observations(&self) -> &[crate::DebugObservation] {
+        self.object.debug_observations()
+    }
+
+    pub fn diagnostics(&self) -> &[jett_diagnostics::Diagnostic] {
+        &self.diagnostics
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    pub fn target(&self) -> &str {
+        self.object.target()
+    }
+
+    pub fn program_entry(&self) -> FunctionId {
+        self.program_entry
+    }
+
+    pub fn symbols(&self) -> &[String] {
+        self.object.symbols()
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        self.object.bytes()
+    }
+}
+
+/// A successfully linked and atomically published native executable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeExecutableArtifact {
+    pub path: PathBuf,
+    pub target: String,
+    pub program_entry: FunctionId,
+    pub symbols: Vec<String>,
+    pub debug_observations: Vec<crate::DebugObservation>,
+}
+
+/// Filesystem role used in actionable native-build diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativePathRole {
+    Source,
+    LauncherArchive,
+    Output,
+    OutputDirectory,
+    TemporaryBuildDirectory,
+    Object,
+    LinkedExecutable,
+}
+
+impl fmt::Display for NativePathRole {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Source => formatter.write_str("source file"),
+            Self::LauncherArchive => formatter.write_str("launcher archive"),
+            Self::Output => formatter.write_str("output executable"),
+            Self::OutputDirectory => formatter.write_str("output directory"),
+            Self::TemporaryBuildDirectory => formatter.write_str("temporary build directory"),
+            Self::Object => formatter.write_str("generated object"),
+            Self::LinkedExecutable => formatter.write_str("linked executable"),
+        }
+    }
+}
+
+/// Failure while emitting, linking, or publishing a native executable.
+#[derive(Debug)]
+pub enum NativeBuildError {
+    /// A later backend/link failure with the actual frontend observations.
+    Captured {
+        source: Box<NativeBuildError>,
+        debug_observations: Vec<crate::DebugObservation>,
+    },
+    InspectPath {
+        role: NativePathRole,
+        path: PathBuf,
+        source: io::Error,
+    },
+    ExpectedRegularFile {
+        role: NativePathRole,
+        path: PathBuf,
+    },
+    ExpectedDirectory {
+        role: NativePathRole,
+        path: PathBuf,
+    },
+    InvalidExtension {
+        role: NativePathRole,
+        path: PathBuf,
+        expected: &'static str,
+    },
+    ResolveCurrentDirectory(io::Error),
+    Lowering {
+        source_path: PathBuf,
+        source: Box<BackendLoweringError>,
+    },
+    MissingProgramEntry {
+        source_path: PathBuf,
+    },
+    MissingVerifyBodies {
+        source_path: PathBuf,
+    },
+    MissingPropertyBodies {
+        source_path: PathBuf,
+    },
+    Codegen {
+        source_path: PathBuf,
+        source: CodegenError,
+    },
+    EmptyObject,
+    UnsupportedHost {
+        actual: String,
+        supported: &'static str,
+    },
+    ObjectTargetMismatch {
+        object_target: String,
+        host_target: String,
+    },
+    LauncherTargetMismatch {
+        actual: String,
+        expected: &'static str,
+    },
+    LauncherRuntimeAbiMismatch {
+        actual: u32,
+        expected: u32,
+    },
+    LauncherCrtMismatch {
+        actual: NativeCrtMode,
+        expected: NativeCrtMode,
+    },
+    LauncherNativeLibrariesMismatch {
+        actual: Vec<OsString>,
+    },
+    CreateTemporaryDirectory {
+        parent: PathBuf,
+        source: io::Error,
+    },
+    WriteObject {
+        path: PathBuf,
+        source: io::Error,
+    },
+    LinkerNotFound {
+        target: &'static str,
+    },
+    WindowsSdkNotFound {
+        architecture: &'static str,
+    },
+    SpawnLinker {
+        linker: PathBuf,
+        source: io::Error,
+    },
+    PollLinker {
+        linker: PathBuf,
+        source: io::Error,
+    },
+    TerminateLinker {
+        linker: PathBuf,
+        source: io::Error,
+    },
+    CaptureLinkerOutput {
+        stream: &'static str,
+        source: io::Error,
+    },
+    SpawnLinkerOutputThread {
+        stream: &'static str,
+        source: io::Error,
+    },
+    LinkerOutputThreadPanicked {
+        stream: &'static str,
+    },
+    LinkTimedOut {
+        linker: PathBuf,
+        timeout: Duration,
+        stdout: String,
+        stderr: String,
+    },
+    LinkFailed {
+        linker: PathBuf,
+        status: ExitStatus,
+        stdout: String,
+        stderr: String,
+    },
+    MissingLinkedExecutable {
+        path: PathBuf,
+    },
+    PublishExecutable {
+        from: PathBuf,
+        to: PathBuf,
+        source: io::Error,
+    },
+}
+
+impl NativeBuildError {
+    pub fn debug_observations(&self) -> &[crate::DebugObservation] {
+        match self {
+            Self::Captured {
+                debug_observations, ..
+            } => debug_observations,
+            Self::Lowering { source, .. } => source.debug_observations(),
+            _ => &[],
+        }
+    }
+
+    pub fn build_result(&self) -> Option<&crate::BuildResult> {
+        match self {
+            Self::Captured { source, .. } => source.build_result(),
+            Self::Lowering { source, .. } => source.build_result(),
+            _ => None,
+        }
+    }
+
+    fn with_debug_observations(self, observations: &[crate::DebugObservation]) -> Self {
+        if observations.is_empty() || !self.debug_observations().is_empty() {
+            self
+        } else {
+            Self::Captured {
+                source: Box::new(self),
+                debug_observations: observations.to_vec(),
+            }
+        }
+    }
+}
+
+impl fmt::Display for NativeBuildError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Captured { source, .. } => fmt::Display::fmt(source, formatter),
+            Self::InspectPath { role, path, source } => {
+                write!(
+                    formatter,
+                    "cannot inspect {role} `{}`: {source}",
+                    path.display()
+                )
+            }
+            Self::ExpectedRegularFile { role, path } => write!(
+                formatter,
+                "{role} `{}` must be an existing regular file",
+                path.display()
+            ),
+            Self::ExpectedDirectory { role, path } => write!(
+                formatter,
+                "{role} `{}` must be an existing directory",
+                path.display()
+            ),
+            Self::InvalidExtension {
+                role,
+                path,
+                expected,
+            } => write!(
+                formatter,
+                "{role} `{}` must use the `{expected}` extension",
+                path.display()
+            ),
+            Self::ResolveCurrentDirectory(source) => {
+                write!(formatter, "cannot resolve the current directory: {source}")
+            }
+            Self::Lowering {
+                source_path,
+                source,
+            } => write!(
+                formatter,
+                "cannot lower native source `{}`: {source}",
+                source_path.display()
+            ),
+            Self::MissingProgramEntry { source_path } => write!(
+                formatter,
+                "native source `{}` has no checked primary `main` program entry",
+                source_path.display()
+            ),
+            Self::MissingVerifyBodies { source_path } => write!(
+                formatter,
+                "native source `{}` has no checked `verify` bodies in the primary file",
+                source_path.display()
+            ),
+            Self::MissingPropertyBodies { source_path } => write!(
+                formatter,
+                "native source `{}` has no checked `property` bodies in the primary file",
+                source_path.display()
+            ),
+            Self::Codegen {
+                source_path,
+                source,
+            } => write!(
+                formatter,
+                "cannot emit native object for `{}`: {source}",
+                source_path.display()
+            ),
+            Self::EmptyObject => {
+                formatter.write_str("native code generation produced an empty object")
+            }
+            Self::UnsupportedHost { actual, supported } => write!(
+                formatter,
+                "native executable linking is unsupported on host `{actual}`; supported hosts: {supported}"
+            ),
+            Self::ObjectTargetMismatch {
+                object_target,
+                host_target,
+            } => write!(
+                formatter,
+                "native object target `{object_target}` does not match linker host `{host_target}`"
+            ),
+            Self::LauncherTargetMismatch { actual, expected } => write!(
+                formatter,
+                "launcher target `{actual}` does not match required target `{expected}`"
+            ),
+            Self::LauncherRuntimeAbiMismatch { actual, expected } => write!(
+                formatter,
+                "launcher runtime ABI version {actual} does not match required version {expected}"
+            ),
+            Self::LauncherCrtMismatch { actual, expected } => write!(
+                formatter,
+                "launcher CRT mode `{actual}` does not match required mode `{expected}`"
+            ),
+            Self::LauncherNativeLibrariesMismatch { actual } => write!(
+                formatter,
+                "launcher native-library arguments {:?} do not match the canonical target-specific version 1 contract",
+                actual
+            ),
+            Self::CreateTemporaryDirectory { parent, source } => write!(
+                formatter,
+                "cannot create a unique native build directory under `{}`: {source}",
+                parent.display()
+            ),
+            Self::WriteObject { path, source } => write!(
+                formatter,
+                "cannot write generated object `{}`: {source}",
+                path.display()
+            ),
+            Self::LinkerNotFound { target } => write!(
+                formatter,
+                "cannot find MSVC `link.exe` and its SDK environment for target `{target}`"
+            ),
+            Self::WindowsSdkNotFound { architecture } => write!(
+                formatter,
+                "cannot find a Windows SDK for MSVC architecture `{architecture}`"
+            ),
+            Self::SpawnLinker { linker, source } => write!(
+                formatter,
+                "cannot start native linker `{}`: {source}",
+                linker.display()
+            ),
+            Self::PollLinker { linker, source } => write!(
+                formatter,
+                "cannot wait for native linker `{}`: {source}",
+                linker.display()
+            ),
+            Self::TerminateLinker { linker, source } => write!(
+                formatter,
+                "cannot terminate timed-out native linker `{}`: {source}",
+                linker.display()
+            ),
+            Self::CaptureLinkerOutput { stream, source } => {
+                write!(formatter, "cannot capture native linker {stream}: {source}")
+            }
+            Self::SpawnLinkerOutputThread { stream, source } => {
+                write!(
+                    formatter,
+                    "cannot start native linker {stream} reader: {source}"
+                )
+            }
+            Self::LinkerOutputThreadPanicked { stream } => {
+                write!(formatter, "native linker {stream} reader panicked")
+            }
+            Self::LinkTimedOut {
+                linker,
+                timeout,
+                stdout,
+                stderr,
+            } => write!(
+                formatter,
+                "native linker `{}` exceeded its {:?} deadline\nstdout:\n{}\nstderr:\n{}",
+                linker.display(),
+                timeout,
+                stdout,
+                stderr
+            ),
+            Self::LinkFailed {
+                linker,
+                status,
+                stdout,
+                stderr,
+            } => write!(
+                formatter,
+                "native linker `{}` failed with {status}\nstdout:\n{}\nstderr:\n{}",
+                linker.display(),
+                stdout,
+                stderr
+            ),
+            Self::MissingLinkedExecutable { path } => write!(
+                formatter,
+                "native linker reported success but did not create `{}`",
+                path.display()
+            ),
+            Self::PublishExecutable { from, to, source } => write!(
+                formatter,
+                "cannot atomically publish linked executable from `{}` to `{}`: {source}",
+                from.display(),
+                to.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for NativeBuildError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InspectPath { source, .. }
+            | Self::CreateTemporaryDirectory { source, .. }
+            | Self::WriteObject { source, .. }
+            | Self::SpawnLinker { source, .. }
+            | Self::PollLinker { source, .. }
+            | Self::TerminateLinker { source, .. }
+            | Self::CaptureLinkerOutput { source, .. }
+            | Self::SpawnLinkerOutputThread { source, .. }
+            | Self::PublishExecutable { source, .. } => Some(source),
+            Self::ResolveCurrentDirectory(source) => Some(source),
+            Self::Lowering { source, .. } => Some(source),
+            Self::Captured { source, .. } => Some(source.as_ref()),
+            Self::Codegen { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
+
+/// Return the exact Cranelift target used by host object emission.
+pub fn host_target() -> String {
+    jett_codegen_cranelift::host_target().to_string()
+}
+
+/// Lower a source file and emit an ordinary reachable host object, including
+/// checked `verify` and `property` bodies as callable native test symbols.
+///
+/// This stage does not require a source `main` and does not add the launcher
+/// entry wrapper. Executable publication always uses the distinct program
+/// object API below.
+pub fn emit_host_object_for_file(
+    source_path: &Path,
+) -> Result<NativeObjectArtifact, NativeBuildError> {
+    validate_regular_file(source_path, NativePathRole::Source, Some("jett"))?;
+    let lowered =
+        lower_file_for_native_tests(source_path).map_err(|source| NativeBuildError::Lowering {
+            source_path: source_path.to_path_buf(),
+            source: Box::new(source),
+        })?;
+    let object = emit_host_object(&lowered.mir, &lowered.interner).map_err(|source| {
+        NativeBuildError::Codegen {
+            source_path: source_path.to_path_buf(),
+            source,
+        }
+        .with_debug_observations(&lowered.debug_observations)
+    })?;
+    let mut object = native_object(object.target, object.symbols, object.bytes)
+        .map_err(|error| error.with_debug_observations(&lowered.debug_observations))?;
+    object.debug_observations = lowered.debug_observations;
+    Ok(object)
+}
+
+/// Lower a source file and emit a host object using its exact checked entry ID.
+pub fn emit_host_program_object_for_file(
+    source_path: &Path,
+) -> Result<NativeProgramObjectArtifact, NativeBuildError> {
+    emit_host_program_object_for_file_with_options(source_path, crate::BuildOptions::default())
+}
+
+pub fn emit_host_program_object_for_file_with_options(
+    source_path: &Path,
+    options: crate::BuildOptions,
+) -> Result<NativeProgramObjectArtifact, NativeBuildError> {
+    validate_regular_file(source_path, NativePathRole::Source, Some("jett"))?;
+    let lowered =
+        crate::lower_file_for_backend_with_options(source_path, options).map_err(|source| {
+            NativeBuildError::Lowering {
+                source_path: source_path.to_path_buf(),
+                source: Box::new(source),
+            }
+        })?;
+    let program_entry = lowered.program_entry.ok_or_else(|| {
+        NativeBuildError::MissingProgramEntry {
+            source_path: source_path.to_path_buf(),
+        }
+        .with_debug_observations(&lowered.debug_observations)
+    })?;
+    emit_program_object_from_lowering(source_path, lowered, program_entry, options.release)
+}
+
+/// Emit one launcher-compatible object that calls every checked `verify` body
+/// in the primary source file, in declaration order.
+pub fn emit_host_verify_suite_object_for_file(
+    source_path: &Path,
+) -> Result<NativeProgramObjectArtifact, NativeBuildError> {
+    emit_host_verify_suite_object_for_file_with_options(source_path, crate::BuildOptions::default())
+}
+
+/// Apply source build policy and optimization to the native verify suite.
+pub fn emit_host_verify_suite_object_for_file_with_options(
+    source_path: &Path,
+    options: crate::BuildOptions,
+) -> Result<NativeProgramObjectArtifact, NativeBuildError> {
+    validate_regular_file(source_path, NativePathRole::Source, Some("jett"))?;
+    let lowered = lower_file_for_native_verify_suite_with_options(source_path, options).map_err(
+        |source| NativeBuildError::Lowering {
+            source_path: source_path.to_path_buf(),
+            source: Box::new(source),
+        },
+    )?;
+    let entry = lowered.native_verify_entry.ok_or_else(|| {
+        NativeBuildError::MissingVerifyBodies {
+            source_path: source_path.to_path_buf(),
+        }
+        .with_debug_observations(&lowered.debug_observations)
+    })?;
+    emit_program_object_from_lowering(source_path, lowered, entry, options.release)
+}
+
+/// Emit one launcher-compatible object that calls each checked property body
+/// with the deterministic inputs used by the interpreter's property runner.
+pub fn emit_host_property_suite_object_for_file(
+    source_path: &Path,
+) -> Result<NativeProgramObjectArtifact, NativeBuildError> {
+    emit_host_property_suite_object_for_file_with_options(
+        source_path,
+        crate::BuildOptions::default(),
+    )
+}
+
+/// Apply source build policy and optimization to the native property suite.
+pub fn emit_host_property_suite_object_for_file_with_options(
+    source_path: &Path,
+    options: crate::BuildOptions,
+) -> Result<NativeProgramObjectArtifact, NativeBuildError> {
+    validate_regular_file(source_path, NativePathRole::Source, Some("jett"))?;
+    let lowered = lower_file_for_native_property_suite_with_options(source_path, options).map_err(
+        |source| NativeBuildError::Lowering {
+            source_path: source_path.to_path_buf(),
+            source: Box::new(source),
+        },
+    )?;
+    let entry = lowered.native_property_entry.ok_or_else(|| {
+        NativeBuildError::MissingPropertyBodies {
+            source_path: source_path.to_path_buf(),
+        }
+        .with_debug_observations(&lowered.debug_observations)
+    })?;
+    emit_program_object_from_lowering(source_path, lowered, entry, options.release)
+}
+
+fn emit_program_object_from_lowering(
+    source_path: &Path,
+    lowered: BackendLoweringResult,
+    program_entry: FunctionId,
+    optimize: bool,
+) -> Result<NativeProgramObjectArtifact, NativeBuildError> {
+    let object = jett_codegen_cranelift::emit_host_program_object_with_options(
+        &lowered.mir,
+        &lowered.interner,
+        program_entry,
+        jett_codegen_cranelift::CodegenOptions { optimize },
+    )
+    .map_err(|source| {
+        NativeBuildError::Codegen {
+            source_path: source_path.to_path_buf(),
+            source,
+        }
+        .with_debug_observations(&lowered.debug_observations)
+    })?;
+    let mut object = native_object(object.target, object.symbols, object.bytes)
+        .map_err(|error| error.with_debug_observations(&lowered.debug_observations))?;
+    object.debug_observations = lowered.debug_observations;
+    Ok(NativeProgramObjectArtifact {
+        object,
+        program_entry,
+        diagnostics: lowered.diagnostics,
+        source: lowered.source,
+    })
+}
+
+fn native_object(
+    target: String,
+    symbols: Vec<String>,
+    bytes: Vec<u8>,
+) -> Result<NativeObjectArtifact, NativeBuildError> {
+    if bytes.is_empty() {
+        return Err(NativeBuildError::EmptyObject);
+    }
+    Ok(NativeObjectArtifact {
+        target,
+        symbols,
+        bytes,
+        debug_observations: Vec::new(),
+    })
+}
+
+/// Compile, link, and atomically publish one native executable.
+///
+/// The launcher archive is supplied by the caller; this function never starts
+/// Cargo or attempts to discover build-tree artifacts.
+pub fn build_host_executable(
+    source_path: &Path,
+    launcher: &NativeLauncherBundle,
+    output_path: &Path,
+) -> Result<NativeExecutableArtifact, NativeBuildError> {
+    build_host_executable_with_options(
+        source_path,
+        launcher,
+        output_path,
+        crate::BuildOptions::default(),
+    )
+}
+
+/// Apply source release policy and backend optimization before atomic linking.
+pub fn build_host_executable_with_options(
+    source_path: &Path,
+    launcher: &NativeLauncherBundle,
+    output_path: &Path,
+    options: crate::BuildOptions,
+) -> Result<NativeExecutableArtifact, NativeBuildError> {
+    let object = emit_host_program_object_for_file_with_options(source_path, options)?;
+    link_host_object(&object, launcher, output_path)
+}
+
+/// Compile and link the primary file's checked `verify` bodies as one native
+/// executable. The launcher reports the first terminal assertion failure.
+pub fn build_host_verify_suite_executable(
+    source_path: &Path,
+    launcher: &NativeLauncherBundle,
+    output_path: &Path,
+) -> Result<NativeExecutableArtifact, NativeBuildError> {
+    build_host_verify_suite_executable_with_options(
+        source_path,
+        launcher,
+        output_path,
+        crate::BuildOptions::default(),
+    )
+}
+
+/// Apply source policy and optimization before linking the native verify suite.
+pub fn build_host_verify_suite_executable_with_options(
+    source_path: &Path,
+    launcher: &NativeLauncherBundle,
+    output_path: &Path,
+    options: crate::BuildOptions,
+) -> Result<NativeExecutableArtifact, NativeBuildError> {
+    let object = emit_host_verify_suite_object_for_file_with_options(source_path, options)?;
+    link_host_object(&object, launcher, output_path)
+}
+
+/// Compile and link the checked property trials for one primary source file.
+pub fn build_host_property_suite_executable(
+    source_path: &Path,
+    launcher: &NativeLauncherBundle,
+    output_path: &Path,
+) -> Result<NativeExecutableArtifact, NativeBuildError> {
+    build_host_property_suite_executable_with_options(
+        source_path,
+        launcher,
+        output_path,
+        crate::BuildOptions::default(),
+    )
+}
+
+/// Apply source policy and optimization before linking the native property suite.
+pub fn build_host_property_suite_executable_with_options(
+    source_path: &Path,
+    launcher: &NativeLauncherBundle,
+    output_path: &Path,
+    options: crate::BuildOptions,
+) -> Result<NativeExecutableArtifact, NativeBuildError> {
+    let object = emit_host_property_suite_object_for_file_with_options(source_path, options)?;
+    link_host_object(&object, launcher, output_path)
+}
+
+/// Link a production object with an explicit launcher bundle and publish it.
+pub fn link_host_object(
+    object: &NativeProgramObjectArtifact,
+    launcher: &NativeLauncherBundle,
+    output_path: &Path,
+) -> Result<NativeExecutableArtifact, NativeBuildError> {
+    link_host_object_with_timeout(object, launcher, output_path, DEFAULT_NATIVE_LINK_TIMEOUT)
+}
+
+fn link_host_object_with_timeout(
+    object: &NativeProgramObjectArtifact,
+    launcher: &NativeLauncherBundle,
+    output_path: &Path,
+    timeout: Duration,
+) -> Result<NativeExecutableArtifact, NativeBuildError> {
+    link_host_object_inner(object, launcher, output_path, timeout)
+        .map_err(|error| error.with_debug_observations(object.debug_observations()))
+}
+
+fn link_host_object_inner(
+    object: &NativeProgramObjectArtifact,
+    launcher: &NativeLauncherBundle,
+    output_path: &Path,
+    timeout: Duration,
+) -> Result<NativeExecutableArtifact, NativeBuildError> {
+    validate_link_host(object)?;
+    validate_host_launcher(launcher)?;
+    validate_regular_file(
+        &launcher.archive_path,
+        NativePathRole::LauncherArchive,
+        Some(if launcher.target == LINUX_GNU_NATIVE_TARGET {
+            "a"
+        } else {
+            "lib"
+        }),
+    )?;
+    // Linking runs in a temporary directory, so relative archive inputs must
+    // be resolved against the callers current directory first.
+    let mut launcher = launcher.clone();
+    launcher.archive_path = absolute_output_path(&launcher.archive_path)?;
+    let output_path = absolute_output_path(output_path)?;
+    validate_output_path(&output_path)?;
+
+    let output_parent =
+        output_path
+            .parent()
+            .ok_or_else(|| NativeBuildError::ExpectedDirectory {
+                role: NativePathRole::OutputDirectory,
+                path: output_path.clone(),
+            })?;
+    let build_directory = tempfile::Builder::new()
+        .prefix(".jett-native-")
+        .tempdir_in(output_parent)
+        .map_err(|source| NativeBuildError::CreateTemporaryDirectory {
+            parent: output_parent.to_path_buf(),
+            source,
+        })?;
+    let object_path = build_directory.path().join("program.obj");
+    let linked_executable = build_directory.path().join("program.exe");
+    let linked_pdb = build_directory.path().join("program.pdb");
+    fs::write(&object_path, object.bytes()).map_err(|source| NativeBuildError::WriteObject {
+        path: object_path.clone(),
+        source,
+    })?;
+
+    if launcher.target == LINUX_GNU_NATIVE_TARGET {
+        link_linux_gnu(
+            &object_path,
+            &launcher,
+            &linked_executable,
+            build_directory.path(),
+            timeout,
+        )?;
+    } else {
+        link_windows_msvc(
+            &object_path,
+            &launcher,
+            &linked_executable,
+            &linked_pdb,
+            build_directory.path(),
+            timeout,
+        )?;
+    }
+    let linked_metadata = fs::metadata(&linked_executable).map_err(|source| {
+        if source.kind() == io::ErrorKind::NotFound {
+            NativeBuildError::MissingLinkedExecutable {
+                path: linked_executable.clone(),
+            }
+        } else {
+            NativeBuildError::InspectPath {
+                role: NativePathRole::LinkedExecutable,
+                path: linked_executable.clone(),
+                source,
+            }
+        }
+    })?;
+    if !linked_metadata.is_file() {
+        return Err(NativeBuildError::ExpectedRegularFile {
+            role: NativePathRole::LinkedExecutable,
+            path: linked_executable,
+        });
+    }
+
+    publish_executable(&linked_executable, &output_path)?;
+    Ok(NativeExecutableArtifact {
+        path: output_path,
+        target: object.target().to_string(),
+        program_entry: object.program_entry,
+        symbols: object.symbols().to_vec(),
+        debug_observations: object.debug_observations().to_vec(),
+    })
+}
+
+fn validate_link_host(object: &NativeProgramObjectArtifact) -> Result<(), NativeBuildError> {
+    validate_link_host_for(object, jett_codegen_cranelift::host_target().to_string())
+}
+
+fn validate_link_host_for(
+    object: &NativeProgramObjectArtifact,
+    host_target: String,
+) -> Result<(), NativeBuildError> {
+    let supported = (cfg!(all(target_os = "windows", target_env = "msvc"))
+        && host_target == WINDOWS_MSVC_NATIVE_TARGET)
+        || (cfg!(all(target_os = "linux", target_env = "gnu"))
+            && host_target == LINUX_GNU_NATIVE_TARGET);
+    if !supported {
+        return Err(NativeBuildError::UnsupportedHost {
+            actual: host_target,
+            supported: SUPPORTED_NATIVE_HOSTS,
+        });
+    }
+    if object.target() != host_target {
+        return Err(NativeBuildError::ObjectTargetMismatch {
+            object_target: object.target().to_string(),
+            host_target,
+        });
+    }
+    if object.bytes().is_empty() {
+        return Err(NativeBuildError::EmptyObject);
+    }
+    Ok(())
+}
+
+fn validate_host_launcher(launcher: &NativeLauncherBundle) -> Result<(), NativeBuildError> {
+    if cfg!(all(
+        target_os = "linux",
+        target_env = "gnu",
+        target_arch = "x86_64"
+    )) {
+        validate_launcher_contract(
+            launcher,
+            LINUX_GNU_NATIVE_TARGET,
+            NativeCrtMode::Dynamic,
+            LINUX_GNU_V1_NATIVE_LIBRARIES,
+        )
+    } else {
+        validate_launcher(launcher)
+    }
+}
+
+fn validate_launcher(launcher: &NativeLauncherBundle) -> Result<(), NativeBuildError> {
+    validate_launcher_contract(
+        launcher,
+        WINDOWS_MSVC_NATIVE_TARGET,
+        NativeCrtMode::Static,
+        WINDOWS_MSVC_STATIC_V1_NATIVE_LIBRARIES,
+    )
+}
+
+fn validate_launcher_contract(
+    launcher: &NativeLauncherBundle,
+    target: &'static str,
+    crt: NativeCrtMode,
+    libraries: &[&str],
+) -> Result<(), NativeBuildError> {
+    if launcher.target != target {
+        return Err(NativeBuildError::LauncherTargetMismatch {
+            actual: launcher.target.clone(),
+            expected: target,
+        });
+    }
+    if launcher.runtime_abi_version != NATIVE_RUNTIME_ABI_VERSION_V1 {
+        return Err(NativeBuildError::LauncherRuntimeAbiMismatch {
+            actual: launcher.runtime_abi_version,
+            expected: NATIVE_RUNTIME_ABI_VERSION_V1,
+        });
+    }
+    if launcher.crt_mode != crt {
+        return Err(NativeBuildError::LauncherCrtMismatch {
+            actual: launcher.crt_mode,
+            expected: crt,
+        });
+    }
+    let expected: Vec<OsString> = libraries.iter().map(OsString::from).collect();
+    if launcher.native_library_args != expected {
+        return Err(NativeBuildError::LauncherNativeLibrariesMismatch {
+            actual: launcher.native_library_args.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_regular_file(
+    path: &Path,
+    role: NativePathRole,
+    extension: Option<&'static str>,
+) -> Result<(), NativeBuildError> {
+    let metadata = fs::metadata(path).map_err(|source| NativeBuildError::InspectPath {
+        role,
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.is_file() {
+        return Err(NativeBuildError::ExpectedRegularFile {
+            role,
+            path: path.to_path_buf(),
+        });
+    }
+    if let Some(expected) = extension
+        && !has_ascii_case_insensitive_extension(path, expected)
+    {
+        return Err(NativeBuildError::InvalidExtension {
+            role,
+            path: path.to_path_buf(),
+            expected,
+        });
+    }
+    Ok(())
+}
+
+fn validate_output_path(path: &Path) -> Result<(), NativeBuildError> {
+    if cfg!(windows) && !has_ascii_case_insensitive_extension(path, "exe") {
+        return Err(NativeBuildError::InvalidExtension {
+            role: NativePathRole::Output,
+            path: path.to_path_buf(),
+            expected: "exe",
+        });
+    }
+    let Some(parent) = path.parent() else {
+        return Err(NativeBuildError::ExpectedDirectory {
+            role: NativePathRole::OutputDirectory,
+            path: path.to_path_buf(),
+        });
+    };
+    let parent_metadata = fs::metadata(parent).map_err(|source| NativeBuildError::InspectPath {
+        role: NativePathRole::OutputDirectory,
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    if !parent_metadata.is_dir() {
+        return Err(NativeBuildError::ExpectedDirectory {
+            role: NativePathRole::OutputDirectory,
+            path: parent.to_path_buf(),
+        });
+    }
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(()),
+        Ok(_) => Err(NativeBuildError::ExpectedRegularFile {
+            role: NativePathRole::Output,
+            path: path.to_path_buf(),
+        }),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(NativeBuildError::InspectPath {
+            role: NativePathRole::Output,
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+fn has_ascii_case_insensitive_extension(path: &Path, expected: &str) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(expected))
+}
+
+fn absolute_output_path(path: &Path) -> Result<PathBuf, NativeBuildError> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    std::env::current_dir()
+        .map(|current| current.join(path))
+        .map_err(NativeBuildError::ResolveCurrentDirectory)
+}
+
+fn link_linux_gnu(
+    object: &Path,
+    launcher: &NativeLauncherBundle,
+    executable: &Path,
+    working_directory: &Path,
+    timeout: Duration,
+) -> Result<(), NativeBuildError> {
+    // One literal executable path, never shell text or space-split flags.
+    // Resolve Linux paths containing a separator against the caller's cwd,
+    // before the child moves into the build directory. Bare names use PATH.
+    let linker =
+        PathBuf::from(std::env::var_os("JETT_NATIVE_CC").unwrap_or_else(|| OsString::from("cc")));
+    let linker = if linker.is_relative() && linker.as_os_str().as_encoded_bytes().contains(&b'/') {
+        absolute_output_path(&linker)?
+    } else {
+        linker
+    };
+    let mut command = Command::new(&linker);
+    command
+        .current_dir(working_directory)
+        .arg("-no-pie")
+        .arg("-o")
+        .arg(executable)
+        .arg(object)
+        .arg(&launcher.archive_path)
+        .args(&launcher.native_library_args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_command_with_timeout(command, &linker, timeout)?;
+    if !output.status.success() {
+        return Err(NativeBuildError::LinkFailed {
+            linker,
+            status: output.status,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn link_windows_msvc(
+    object_path: &Path,
+    launcher: &NativeLauncherBundle,
+    executable_path: &Path,
+    pdb_path: &Path,
+    working_directory: &Path,
+    timeout: Duration,
+) -> Result<(), NativeBuildError> {
+    find_msvc_tools::find_windows_sdk("x86_64").ok_or(NativeBuildError::WindowsSdkNotFound {
+        architecture: "x86_64",
+    })?;
+    let tool = find_msvc_tools::find_tool(WINDOWS_MSVC_NATIVE_TARGET, "link.exe").ok_or(
+        NativeBuildError::LinkerNotFound {
+            target: WINDOWS_MSVC_NATIVE_TARGET,
+        },
+    )?;
+    let linker_path = tool.path().to_path_buf();
+    let mut command = tool.to_command();
+    command
+        .current_dir(working_directory)
+        .args(linker_arguments(
+            object_path,
+            launcher,
+            executable_path,
+            pdb_path,
+        ))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_command_with_timeout(command, &linker_path, timeout)?;
+    if !output.status.success() {
+        return Err(NativeBuildError::LinkFailed {
+            linker: linker_path,
+            status: output.status,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn link_windows_msvc(
+    _object_path: &Path,
+    _launcher: &NativeLauncherBundle,
+    _executable_path: &Path,
+    _pdb_path: &Path,
+    _working_directory: &Path,
+    _timeout: Duration,
+) -> Result<(), NativeBuildError> {
+    Err(NativeBuildError::UnsupportedHost {
+        actual: jett_codegen_cranelift::host_target().to_string(),
+        supported: SUPPORTED_NATIVE_HOSTS,
+    })
+}
+
+#[cfg(any(windows, test))]
+fn linker_arguments(
+    object_path: &Path,
+    launcher: &NativeLauncherBundle,
+    executable_path: &Path,
+    pdb_path: &Path,
+) -> Vec<OsString> {
+    let mut arguments = vec![
+        OsString::from("/NOLOGO"),
+        OsString::from("/MACHINE:X64"),
+        OsString::from("/SUBSYSTEM:CONSOLE"),
+        OsString::from("/INCREMENTAL:NO"),
+        OsString::from("/MANIFEST:EMBED"),
+        prefixed_path_argument("/OUT:", executable_path),
+        prefixed_path_argument("/PDB:", pdb_path),
+        object_path.as_os_str().to_owned(),
+        launcher.archive_path.as_os_str().to_owned(),
+    ];
+    arguments.extend(launcher.native_library_args.iter().cloned());
+    arguments
+}
+
+#[cfg(any(windows, test))]
+fn prefixed_path_argument(prefix: &str, path: &Path) -> OsString {
+    let mut argument = OsString::from(prefix);
+    argument.push(path.as_os_str());
+    argument
+}
+
+#[derive(Debug)]
+struct CommandOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+fn run_command_with_timeout(
+    mut command: Command,
+    program: &Path,
+    timeout: Duration,
+) -> Result<CommandOutput, NativeBuildError> {
+    // Retained files do not require EOF from inherited descendant handles.
+    // Duplicate append-only handles; positioned reads keep a bounded snapshot.
+    let stdout = capture_file("stdout")?;
+    let stderr = capture_file("stderr")?;
+    command
+        .stdout(capture_writer(stdout.as_file(), "stdout")?)
+        .stderr(capture_writer(stderr.as_file(), "stderr")?);
+    let child = command
+        .spawn()
+        .map_err(|source| NativeBuildError::SpawnLinker {
+            linker: program.to_path_buf(),
+            source,
+        })?;
+    // Every return path either observes a reaped child or terminates/reaps it.
+    let mut child = ManagedChild::new(child);
+    let start = Instant::now();
+
+    let (status, timed_out) = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break (status, false),
+            Ok(None) if start.elapsed() >= timeout => {
+                let status = child.terminate_and_wait(program)?;
+                break (status, true);
+            }
+            Ok(None) => {
+                let remaining = timeout.saturating_sub(start.elapsed());
+                thread::sleep(remaining.min(Duration::from_millis(10)));
+            }
+            Err(source) => {
+                return Err(NativeBuildError::PollLinker {
+                    linker: program.to_path_buf(),
+                    source,
+                });
+            }
+        }
+    };
+
+    let stdout = read_output_snapshot(stdout.as_file(), "stdout")?;
+    let stderr = read_output_snapshot(stderr.as_file(), "stderr")?;
+    if timed_out {
+        return Err(NativeBuildError::LinkTimedOut {
+            linker: program.to_path_buf(),
+            timeout,
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        });
+    }
+    Ok(CommandOutput {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+struct ManagedChild {
+    child: Child,
+    reaped: bool,
+}
+
+impl ManagedChild {
+    fn new(child: Child) -> Self {
+        Self {
+            child,
+            reaped: false,
+        }
+    }
+
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        let status = self.child.try_wait()?;
+        if status.is_some() {
+            self.reaped = true;
+        }
+        Ok(status)
+    }
+
+    fn terminate_and_wait(&mut self, program: &Path) -> Result<ExitStatus, NativeBuildError> {
+        self.child
+            .kill()
+            .map_err(|source| NativeBuildError::TerminateLinker {
+                linker: program.to_path_buf(),
+                source,
+            })?;
+        let status = self
+            .child
+            .wait()
+            .map_err(|source| NativeBuildError::PollLinker {
+                linker: program.to_path_buf(),
+                source,
+            })?;
+        self.reaped = true;
+        Ok(status)
+    }
+}
+
+impl Drop for ManagedChild {
+    fn drop(&mut self) {
+        if !self.reaped {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CaptureStage {
+    Create,
+    Duplicate,
+    Snapshot,
+}
+
+#[derive(Debug)]
+struct CaptureIoError {
+    stage: CaptureStage,
+    source: io::Error,
+}
+
+impl fmt::Display for CaptureIoError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let stage = match self.stage {
+            CaptureStage::Create => "create",
+            CaptureStage::Duplicate => "duplicate",
+            CaptureStage::Snapshot => "snapshot",
+        };
+        write!(formatter, "{stage} capture: {}", self.source)
+    }
+}
+
+impl std::error::Error for CaptureIoError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+fn capture_error(stream: &'static str, stage: CaptureStage, source: io::Error) -> NativeBuildError {
+    NativeBuildError::CaptureLinkerOutput {
+        stream,
+        source: io::Error::new(source.kind(), CaptureIoError { stage, source }),
+    }
+}
+
+fn capture_file(stream: &'static str) -> Result<tempfile::NamedTempFile, NativeBuildError> {
+    // Windows positioned reads update the shared cursor. Append-only writes
+    // still target EOF when a surviving descendant writes during a snapshot.
+    tempfile::Builder::new()
+        .append(true)
+        .tempfile()
+        .map_err(|source| capture_error(stream, CaptureStage::Create, source))
+}
+
+fn capture_writer(file: &fs::File, stream: &'static str) -> Result<fs::File, NativeBuildError> {
+    file.try_clone()
+        .map_err(|source| capture_error(stream, CaptureStage::Duplicate, source))
+}
+
+struct CaptureSnapshot<'a> {
+    file: &'a fs::File,
+    offset: u64,
+}
+
+impl Read for CaptureSnapshot<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let count = read_capture_at(self.file, buffer, self.offset)?;
+        let advance = u64::try_from(count).map_err(io::Error::other)?;
+        self.offset = self.offset.checked_add(advance).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "capture snapshot offset overflow",
+            )
+        })?;
+        Ok(count)
+    }
+}
+
+#[cfg(unix)]
+fn read_capture_at(file: &fs::File, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
+    use std::os::unix::fs::FileExt;
+    file.read_at(buffer, offset)
+}
+
+#[cfg(windows)]
+fn read_capture_at(file: &fs::File, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
+    use std::os::windows::fs::FileExt;
+    file.seek_read(buffer, offset)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn read_capture_at(_file: &fs::File, _buffer: &mut [u8], _offset: u64) -> io::Result<usize> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "positioned native capture is unavailable on this host",
+    ))
+}
+
+fn read_output_snapshot(
+    file: &fs::File,
+    stream: &'static str,
+) -> Result<Vec<u8>, NativeBuildError> {
+    let read = || -> io::Result<Vec<u8>> {
+        let length = file.metadata()?.len();
+        let mut bytes = Vec::new();
+        CaptureSnapshot { file, offset: 0 }
+            .take(length)
+            .read_to_end(&mut bytes)?;
+        Ok(bytes)
+    };
+    read().map_err(|source| capture_error(stream, CaptureStage::Snapshot, source))
+}
+
+#[cfg(windows)]
+fn publish_executable(from: &Path, to: &Path) -> Result<(), NativeBuildError> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+
+    let from_wide: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+    let to_wide: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: both buffers are live, immutable, NUL-terminated UTF-16 paths
+    // for the duration of the call. The destination was validated as either
+    // absent or a regular file, and REPLACE_EXISTING preserves it if the move
+    // itself fails.
+    let published = unsafe {
+        MoveFileExW(
+            from_wide.as_ptr(),
+            to_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if published == 0 {
+        return Err(NativeBuildError::PublishExecutable {
+            from: from.to_path_buf(),
+            to: to.to_path_buf(),
+            source: io::Error::last_os_error(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn publish_executable(from: &Path, to: &Path) -> Result<(), NativeBuildError> {
+    fs::rename(from, to).map_err(|source| NativeBuildError::PublishExecutable {
+        from: from.to_path_buf(),
+        to: to.to_path_buf(),
+        source,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn compile_observer_source(body: &str) -> String {
+        format!(
+            "namespace app\nfunction observe() returns int64:\n    print(\"compile:\")\n    return 7\n{body}\nverify checking:\n    println(\"verify\")\n    assert true\n"
+        )
+    }
+
+    fn compile_observer_oracle() -> Vec<crate::DebugObservation> {
+        vec![
+            crate::DebugObservation {
+                phase: crate::DebugPhase::Comptime,
+                event: crate::DebugEvent {
+                    kind: crate::DebugEventKind::Print,
+                    text: "compile:".into(),
+                },
+            },
+            crate::DebugObservation {
+                phase: crate::DebugPhase::FrontendVerify,
+                event: crate::DebugEvent {
+                    kind: crate::DebugEventKind::Println,
+                    text: "verify\n".into(),
+                },
+            },
+        ]
+    }
+
+    #[test]
+    fn native_object_and_link_setup_failure_retain_completed_frontend_events() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("main.jett");
+        fs::write(
+            &source,
+            compile_observer_source(
+                "function main() returns nothing:\n    int64 baked = comptime observe()",
+            ),
+        )
+        .unwrap();
+        let object = emit_host_program_object_for_file(&source).unwrap();
+        assert_eq!(object.debug_observations(), compile_observer_oracle());
+        let ordinary = emit_host_object_for_file(&source).unwrap();
+        assert_eq!(ordinary.debug_observations(), compile_observer_oracle());
+        let launcher = match host_target().as_str() {
+            WINDOWS_MSVC_NATIVE_TARGET => {
+                NativeLauncherBundle::windows_msvc_static_v1(directory.path().join("missing.lib"))
+            }
+            LINUX_GNU_NATIVE_TARGET => {
+                NativeLauncherBundle::linux_gnu_v1(directory.path().join("missing.a"))
+            }
+            _ => return,
+        };
+        let output = directory.path().join("preserved.exe");
+        fs::write(&output, b"existing publication").unwrap();
+        let error = link_host_object(&object, &launcher, &output).unwrap_err();
+        assert_eq!(error.debug_observations(), compile_observer_oracle());
+        assert!(error.to_string().contains("missing."), "{error}");
+        assert!(std::error::Error::source(&error).is_some());
+        assert_eq!(fs::read(&output).unwrap(), b"existing publication");
+    }
+
+    #[test]
+    fn native_entry_refusal_keeps_events_and_sum_domain_rejection_prevents_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("main.jett");
+        fs::write(
+            &source,
+            compile_observer_source("int64 baked = comptime observe()"),
+        )
+        .unwrap();
+        let error = emit_host_program_object_for_file(&source).unwrap_err();
+        assert_eq!(error.debug_observations(), compile_observer_oracle());
+        let NativeBuildError::Captured { source: inner, .. } = error else {
+            panic!("entry refusal should retain captures");
+        };
+        assert!(matches!(
+            *inner,
+            NativeBuildError::MissingProgramEntry { .. }
+        ));
+        fs::write(
+            &source,
+            r#"namespace app
+function observe() returns int64:
+    print("compile:")
+    return 7
+type Positive = int64 where value > 0
+function main() returns nothing:
+    int64 baked = comptime observe()
+    list[Positive] values = list()
+    Positive total = list.sum[Positive](view values)
+verify checking:
+    println("verify")
+    assert true
+"#,
+        )
+        .unwrap();
+        let error = emit_host_program_object_for_file(&source).unwrap_err();
+        assert!(error.debug_observations().is_empty());
+        let NativeBuildError::Lowering { source, .. } = error else {
+            panic!("sum domain must be rejected before frontend evaluation: {error:?}");
+        };
+        let built = source
+            .build_result()
+            .expect("sum-domain type checking failure");
+        assert!(built.diagnostics.iter().any(|error| {
+            error.code.code() == 300 && error.message.contains("numeric primitive for list.sum")
+        }));
+    }
+
+    #[test]
+    fn installed_launcher_manifest_validates_identity_profile_and_archive_location() {
+        let directory = tempfile::tempdir().unwrap();
+        let host = host_target();
+        let bundle = match host.as_str() {
+            LINUX_GNU_NATIVE_TARGET => {
+                NativeLauncherBundle::linux_gnu_v1(directory.path().join("launcher.a"))
+            }
+            WINDOWS_MSVC_NATIVE_TARGET => {
+                NativeLauncherBundle::windows_msvc_static_v1(directory.path().join("launcher.lib"))
+            }
+            _ => return,
+        };
+        fs::write(&bundle.archive_path, b"test archive placeholder").unwrap();
+        let manifest = directory.path().join("launcher.json");
+        let value = serde_json::json!({
+            "manifest_version": 1,
+            "compiler_version": env!("CARGO_PKG_VERSION"),
+            "target": bundle.target,
+            "runtime_abi_version": bundle.runtime_abi_version,
+            "crt_mode": bundle.crt_mode.to_string(),
+            "profile": "debug",
+            "archive": bundle.archive_path.file_name().unwrap().to_str().unwrap(),
+            "native_library_args": bundle.native_library_args.iter().map(|arg| arg.to_str().unwrap()).collect::<Vec<_>>(),
+        });
+        fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(
+            NativeLauncherBundle::from_manifest(&manifest, false).unwrap(),
+            bundle
+        );
+        assert!(
+            NativeLauncherBundle::from_manifest(&manifest, true)
+                .unwrap_err()
+                .contains("profile mismatch")
+        );
+        for (field, invalid) in [
+            ("manifest_version", serde_json::json!(99)),
+            ("compiler_version", serde_json::json!("incompatible")),
+            ("target", serde_json::json!("wasm32-unknown-unknown")),
+            ("runtime_abi_version", serde_json::json!(99)),
+            ("crt_mode", serde_json::json!("unknown")),
+            ("native_library_args", serde_json::json!([])),
+            ("archive", serde_json::json!("../outside.a")),
+        ] {
+            let mut changed = value.clone();
+            changed[field] = invalid;
+            fs::write(&manifest, serde_json::to_vec(&changed).unwrap()).unwrap();
+            assert!(
+                NativeLauncherBundle::from_manifest(&manifest, false).is_err(),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_host_diagnostic_names_both_native_hosts() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("main.jett");
+        fs::write(
+            &source,
+            "function main() returns nothing:\n    return nothing\n",
+        )
+        .unwrap();
+        let object = emit_host_program_object_for_file(&source).unwrap();
+        let error = validate_link_host_for(&object, "aarch64-unknown-linux-gnu".to_owned())
+            .expect_err("unsupported hosts must not silently cross-link");
+        assert!(matches!(error, NativeBuildError::UnsupportedHost { .. }));
+        let diagnostic = error.to_string();
+        assert!(
+            diagnostic.contains("aarch64-unknown-linux-gnu"),
+            "{diagnostic}"
+        );
+        assert!(
+            diagnostic.contains(WINDOWS_MSVC_NATIVE_TARGET),
+            "{diagnostic}"
+        );
+        assert!(diagnostic.contains(LINUX_GNU_NATIVE_TARGET), "{diagnostic}");
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
+    #[test]
+    fn linux_cc_override_child() {
+        let Some(directory) = std::env::var_os("JETT_TEST_CC_DIRECTORY") else {
+            return;
+        };
+        let directory = PathBuf::from(directory);
+        let result = link_linux_gnu(
+            &directory.join("main.o"),
+            &NativeLauncherBundle::linux_gnu_v1(directory.join("support.o")),
+            &directory.join("program"),
+            &directory.join("build directory"),
+            Duration::from_secs(10),
+        );
+        if std::env::var_os("JETT_TEST_CC_MISSING").is_some() {
+            assert!(
+                matches!(result, Err(NativeBuildError::SpawnLinker { source, .. })
+                if source.kind() == io::ErrorKind::NotFound)
+            );
+        } else {
+            result.expect("literal compiler path must link from a different cwd");
+            assert_eq!(
+                Command::new(directory.join("program"))
+                    .status()
+                    .unwrap()
+                    .code(),
+                Some(42)
+            );
+        }
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
+    #[test]
+    fn linux_cc_overrides_are_literal_and_relative_to_the_caller() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::create_dir(root.join("tool chain")).unwrap();
+        fs::create_dir(root.join("build directory")).unwrap();
+        let cc = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|path| path.join("cc"))
+            .find(|path| path.is_file())
+            .expect("host C compiler");
+        let cc = fs::canonicalize(cc).unwrap();
+        let compiler = root.join("tool chain/cc literal");
+        std::os::unix::fs::symlink(&cc, &compiler).unwrap();
+        std::os::unix::fs::symlink(&cc, root.join("tool chain/cc")).unwrap();
+        for (name, source) in [
+            (
+                "main",
+                "extern int answer(void); int main(void) { return answer(); }",
+            ),
+            ("support", "int answer(void) { return 42; }"),
+        ] {
+            fs::write(root.join(format!("{name}.c")), source).unwrap();
+            assert!(
+                Command::new(&cc)
+                    .arg("-c")
+                    .arg(root.join(format!("{name}.c")))
+                    .arg("-o")
+                    .arg(root.join(format!("{name}.o")))
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let path = std::env::join_paths(
+            std::iter::once(root.join("tool chain"))
+                .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        for (compiler, missing) in [
+            (compiler, false),
+            (PathBuf::from("cc"), false),
+            (PathBuf::from("./tool chain/missing compiler"), true),
+            (PathBuf::from("./tool chain/cc literal"), false),
+        ] {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "native::tests::linux_cc_override_child",
+                    "--nocapture",
+                ])
+                .current_dir(root)
+                .env("JETT_NATIVE_CC", &compiler)
+                .env("JETT_TEST_CC_DIRECTORY", root)
+                .env("PATH", &path)
+                .env_remove("JETT_TEST_CC_MISSING");
+            if missing {
+                command.env("JETT_TEST_CC_MISSING", "1");
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "compiler {}: {output:?}",
+                compiler.display()
+            );
+        }
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
+    #[test]
+    fn linux_launcher_contract_rejects_incompatible_metadata() {
+        let canonical = NativeLauncherBundle::linux_gnu_v1("launcher.a");
+        assert!(validate_host_launcher(&canonical).is_ok());
+        let mut wrong = canonical.clone();
+        wrong.target = WINDOWS_MSVC_NATIVE_TARGET.to_owned();
+        assert!(matches!(
+            validate_host_launcher(&wrong),
+            Err(NativeBuildError::LauncherTargetMismatch { .. })
+        ));
+        wrong = canonical.clone();
+        wrong.runtime_abi_version += 1;
+        assert!(matches!(
+            validate_host_launcher(&wrong),
+            Err(NativeBuildError::LauncherRuntimeAbiMismatch { .. })
+        ));
+        wrong = canonical.clone();
+        wrong.crt_mode = NativeCrtMode::Static;
+        assert!(matches!(
+            validate_host_launcher(&wrong),
+            Err(NativeBuildError::LauncherCrtMismatch { .. })
+        ));
+        wrong = canonical;
+        wrong.native_library_args.pop();
+        assert!(matches!(
+            validate_host_launcher(&wrong),
+            Err(NativeBuildError::LauncherNativeLibrariesMismatch { .. })
+        ));
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn capture_snapshots_retain_handle_identity_and_append_after_cursor_changes() {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let capture = capture_file("stdout").unwrap();
+        let mut writer = capture_writer(capture.as_file(), "stdout").unwrap();
+        assert!(
+            read_output_snapshot(capture.as_file(), "stdout")
+                .unwrap()
+                .is_empty()
+        );
+        writer.write_all(b"prefix").unwrap();
+        assert_eq!(
+            read_output_snapshot(capture.as_file(), "stdout").unwrap(),
+            b"prefix"
+        );
+        // A duplicate writer must remain append-only after the parent moves
+        // their shared cursor. No reopen is used to restore an independent one.
+        capture.as_file().seek(SeekFrom::Start(1)).unwrap();
+        writer.write_all(b"-suffix").unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                read_output_snapshot(capture.as_file(), "stdout").unwrap(),
+                b"prefix-suffix"
+            );
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn capture_snapshot_bounds_multichunk_reads_despite_interleaved_appends() {
+        use std::io::Write;
+
+        let capture = capture_file("stderr").unwrap();
+        let mut writer = capture_writer(capture.as_file(), "stderr").unwrap();
+        let prefix = b"0123456789abcdef".repeat(8 * 1024);
+        let suffix = b"later-output".repeat(1024);
+        writer.write_all(&prefix).unwrap();
+        let sampled_length = capture.as_file().metadata().unwrap().len();
+        let mut snapshot = CaptureSnapshot {
+            file: capture.as_file(),
+            offset: 0,
+        }
+        .take(sampled_length);
+        let mut first = [0; 17];
+        snapshot.read_exact(&mut first).unwrap();
+        // On Windows this append moves the shared cursor to EOF. The next
+        // snapshot read must still use its own offset and the original bound.
+        writer.write_all(&suffix).unwrap();
+        let mut captured = first.to_vec();
+        snapshot.read_to_end(&mut captured).unwrap();
+        assert_eq!(captured, prefix);
+        let mut all_output = prefix;
+        all_output.extend_from_slice(&suffix);
+        assert_eq!(
+            read_output_snapshot(capture.as_file(), "stderr").unwrap(),
+            all_output
+        );
+
+        // Short EOF remains valid if the file is shorter than a sampled bound.
+        let mut short = Vec::new();
+        CaptureSnapshot {
+            file: capture.as_file(),
+            offset: 0,
+        }
+        .take(u64::try_from(all_output.len()).unwrap() + 1)
+        .read_to_end(&mut short)
+        .unwrap();
+        assert_eq!(short, all_output);
+    }
+
+    #[test]
+    fn capture_error_context_preserves_stream_kind_and_original_os_error() {
+        for stage in [
+            CaptureStage::Create,
+            CaptureStage::Duplicate,
+            CaptureStage::Snapshot,
+        ] {
+            let original = io::Error::from_raw_os_error(5);
+            let kind = original.kind();
+            let NativeBuildError::CaptureLinkerOutput { stream, source } =
+                capture_error("stderr", stage, original)
+            else {
+                panic!("capture context changed the public error variant");
+            };
+            assert_eq!(stream, "stderr");
+            assert_eq!(source.kind(), kind);
+            let detail = source
+                .get_ref()
+                .unwrap()
+                .downcast_ref::<CaptureIoError>()
+                .unwrap();
+            assert_eq!(detail.stage, stage);
+            assert_eq!(detail.source.raw_os_error(), Some(5));
+            let nested = std::error::Error::source(detail).unwrap();
+            assert_eq!(
+                nested.downcast_ref::<io::Error>().unwrap().raw_os_error(),
+                Some(5)
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn command_runner_captures_windows_streams_and_nonzero_status() {
+        use std::os::windows::process::CommandExt;
+
+        let mut command = Command::new("cmd.exe");
+        command
+            .args(["/d", "/s", "/c"])
+            .raw_arg(r#"<nul set /p "=captured"&<nul set /p "=diagnostic" 1>&2&exit /b 7"#)
+            .stdin(Stdio::null());
+        let output =
+            run_command_with_timeout(command, Path::new("cmd.exe"), Duration::from_secs(5))
+                .unwrap();
+        assert_eq!(output.status.code(), Some(7));
+        assert_eq!(output.stdout, b"captured");
+        assert_eq!(output.stderr, b"diagnostic");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn command_windows_deadline_does_not_wait_for_inherited_capture_handles() {
+        use std::os::windows::process::CommandExt;
+
+        let mut command = Command::new("cmd.exe");
+        command
+            .args(["/d", "/s", "/c"])
+            .raw_arg(r#"<nul set /p "=captured"&<nul set /p "=diagnostic" 1>&2&start "" /b cmd.exe /d /c "ping.exe -n 6 127.0.0.1 >nul"&ping.exe -n 6 127.0.0.1 >nul"#)
+            .stdin(Stdio::null());
+        let start = Instant::now();
+        let error =
+            run_command_with_timeout(command, Path::new("cmd.exe"), Duration::from_millis(500))
+                .expect_err("parent must time out while a descendant retains the captures");
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "inherited handles defeated the deadline"
+        );
+        match error {
+            NativeBuildError::LinkTimedOut { stdout, stderr, .. } => {
+                assert_eq!(stdout, "captured");
+                assert_eq!(stderr, "diagnostic");
+            }
+            error => panic!("unexpected error: {error}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_runner_captures_large_streams_and_failure_status() {
+        let stdout = "o".repeat(96 * 1024);
+        let stderr = "e".repeat(96 * 1024);
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "printf '%s' \"$1\"; printf '%s' \"$2\" >&2; exit 7",
+                "sh",
+                &stdout,
+                &stderr,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let output =
+            run_command_with_timeout(command, Path::new("sh"), Duration::from_secs(3)).unwrap();
+        assert_eq!(output.status.code(), Some(7));
+        assert_eq!(output.stdout, stdout.as_bytes());
+        assert_eq!(output.stderr, stderr.as_bytes());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_deadline_does_not_wait_for_inherited_output_pipes() {
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "printf captured; printf diagnostic >&2; sleep 4 & wait",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let start = Instant::now();
+        let error = run_command_with_timeout(command, Path::new("sh"), Duration::from_millis(100))
+            .expect_err("shell must time out even when its child retains output handles");
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "inherited pipes defeated the deadline"
+        );
+        match error {
+            NativeBuildError::LinkTimedOut { stdout, stderr, .. } => {
+                assert_eq!(stdout, "captured");
+                assert_eq!(stderr, "diagnostic");
+            }
+            error => panic!("unexpected error: {error}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_runner_enforces_unix_deadline_and_reaps_child() {
+        let mut command = Command::new("sleep");
+        command
+            .arg("10")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let start = Instant::now();
+        assert!(matches!(
+            run_command_with_timeout(command, Path::new("sleep"), Duration::from_millis(25)),
+            Err(NativeBuildError::LinkTimedOut { .. })
+        ));
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn canonical_launcher_metadata_is_complete_and_static() {
+        let bundle = NativeLauncherBundle::windows_msvc_static_v1("launcher.lib");
+
+        assert_eq!(bundle.target, WINDOWS_MSVC_NATIVE_TARGET);
+        assert_eq!(bundle.runtime_abi_version, NATIVE_RUNTIME_ABI_VERSION_V1);
+        assert_eq!(bundle.crt_mode, NativeCrtMode::Static);
+        assert_eq!(
+            bundle.native_library_args,
+            WINDOWS_MSVC_STATIC_V1_NATIVE_LIBRARIES
+                .iter()
+                .map(OsString::from)
+                .collect::<Vec<_>>()
+        );
+        assert!(validate_launcher(&bundle).is_ok());
+    }
+
+    #[test]
+    fn launcher_contract_rejects_each_incompatible_dimension() {
+        let canonical = NativeLauncherBundle::windows_msvc_static_v1("launcher.lib");
+
+        let mut target = canonical.clone();
+        target.target = "aarch64-pc-windows-msvc".to_string();
+        assert!(matches!(
+            validate_launcher(&target),
+            Err(NativeBuildError::LauncherTargetMismatch { .. })
+        ));
+
+        let mut abi = canonical.clone();
+        abi.runtime_abi_version += 1;
+        assert!(matches!(
+            validate_launcher(&abi),
+            Err(NativeBuildError::LauncherRuntimeAbiMismatch { .. })
+        ));
+
+        let mut crt = canonical.clone();
+        crt.crt_mode = NativeCrtMode::Dynamic;
+        assert!(matches!(
+            validate_launcher(&crt),
+            Err(NativeBuildError::LauncherCrtMismatch { .. })
+        ));
+
+        let mut libraries = canonical;
+        libraries.native_library_args.pop();
+        assert!(matches!(
+            validate_launcher(&libraries),
+            Err(NativeBuildError::LauncherNativeLibrariesMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn linker_paths_with_spaces_remain_single_arguments() {
+        let bundle =
+            NativeLauncherBundle::windows_msvc_static_v1(r"C:\launcher bundle\jett launcher.lib");
+        let arguments = linker_arguments(
+            Path::new(r"C:\build area\program.obj"),
+            &bundle,
+            Path::new(r"C:\build area\program.exe"),
+            Path::new(r"C:\build area\program.pdb"),
+        );
+
+        assert!(arguments.contains(&OsString::from(r"C:\build area\program.obj")));
+        assert!(arguments.contains(&OsString::from(r"C:\launcher bundle\jett launcher.lib")));
+        assert!(arguments.contains(&OsString::from(r"/OUT:C:\build area\program.exe")));
+        assert!(arguments.contains(&OsString::from(r"/PDB:C:\build area\program.pdb")));
+        assert!(arguments.contains(&OsString::from("/MACHINE:X64")));
+        assert!(!arguments.iter().any(|argument| argument == "cmd.exe"));
+    }
+
+    #[test]
+    fn program_object_uses_the_checked_entry_and_exports_only_its_wrapper_variant() {
+        let directory = tempfile::tempdir().expect("temporary source directory");
+        let source_path = directory.path().join("entry.jett");
+        fs::write(
+            &source_path,
+            "function main() returns nothing:\n    int64 answer = 42\n",
+        )
+        .expect("write native source");
+
+        let program = emit_host_program_object_for_file(&source_path)
+            .expect("program object should lower and emit");
+        assert_eq!(
+            program.symbols().last().map(String::as_str),
+            Some(jett_codegen_cranelift::JETT_AOT_ENTRY_SYMBOL_V1)
+        );
+
+        let ordinary =
+            emit_host_object_for_file(&source_path).expect("ordinary object should emit");
+        assert!(
+            !ordinary
+                .symbols()
+                .iter()
+                .any(|symbol| symbol == jett_codegen_cranelift::JETT_AOT_ENTRY_SYMBOL_V1)
+        );
+    }
+
+    #[test]
+    fn program_object_does_not_invent_an_entry_for_a_verification_only_file() {
+        let source_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/run_pass/simple.jett");
+
+        assert!(matches!(
+            emit_host_program_object_for_file(&source_path),
+            Err(NativeBuildError::MissingProgramEntry { .. })
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn command_runner_enforces_its_deadline_and_reaps_the_process() {
+        let mut command = Command::new("ping.exe");
+        command
+            .args(["-n", "6", "127.0.0.1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let error =
+            run_command_with_timeout(command, Path::new("ping.exe"), Duration::from_millis(25))
+                .expect_err("the long-running child must time out");
+        assert!(matches!(error, NativeBuildError::LinkTimedOut { .. }));
+    }
+
+    #[test]
+    fn publication_atomically_replaces_an_existing_executable() {
+        let directory = tempfile::tempdir().expect("temporary publication directory");
+        let linked = directory.path().join("linked.exe");
+        let output = directory.path().join("published.exe");
+        fs::write(&linked, b"new executable").expect("write linked executable");
+        fs::write(&output, b"old executable").expect("write existing executable");
+
+        publish_executable(&linked, &output).expect("publish executable");
+
+        assert_eq!(
+            fs::read(&output).expect("read published executable"),
+            b"new executable"
+        );
+        assert!(!linked.exists());
+    }
+
+    #[test]
+    fn failed_publication_preserves_an_existing_executable() {
+        let directory = tempfile::tempdir().expect("temporary publication directory");
+        let missing = directory.path().join("missing.exe");
+        let output = directory.path().join("published.exe");
+        fs::write(&output, b"old executable").expect("write existing executable");
+
+        assert!(matches!(
+            publish_executable(&missing, &output),
+            Err(NativeBuildError::PublishExecutable { .. })
+        ));
+        assert_eq!(
+            fs::read(&output).expect("read preserved executable"),
+            b"old executable"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn output_validation_rejects_a_non_executable_extension_before_linking() {
+        let path = std::env::current_dir()
+            .expect("current directory")
+            .join("native-output.txt");
+
+        assert!(matches!(
+            validate_output_path(&path),
+            Err(NativeBuildError::InvalidExtension {
+                role: NativePathRole::Output,
+                expected: "exe",
+                ..
+            })
+        ));
+    }
+}
+
+#[cfg(all(
+    test,
+    target_arch = "x86_64",
+    any(
+        all(target_os = "windows", target_env = "msvc"),
+        all(target_os = "linux", target_env = "gnu")
+    )
+))]
+#[path = "native_property_tests.rs"]
+mod property_tests;
+
+#[cfg(all(
+    test,
+    target_arch = "x86_64",
+    any(
+        all(target_os = "windows", target_env = "msvc"),
+        all(target_os = "linux", target_env = "gnu")
+    )
+))]
+#[path = "native/actor_graph_hooks_tests.rs"]
+mod actor_graph_hooks_tests;

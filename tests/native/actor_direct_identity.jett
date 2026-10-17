@@ -1,0 +1,18 @@
+namespace app
+actor Counter:
+    mutable int64 count = 1
+    receive add(amount: int64):
+        count = count + amount
+    receive read responds int64:
+        respond count
+type CounterAlias = Counter
+function same(view first: Counter, view second: Counter) returns bool:
+    return first == second
+function main() returns nothing:
+    Counter worker = spawn Counter()
+    CounterAlias alias = clone worker
+    Counter distinct = spawn Counter()
+    println(worker == alias, worker != alias, worker == distinct, worker != distinct)
+    send worker.add(9)
+    println(same(view worker, view alias), same(view worker, view distinct))
+    return nothing

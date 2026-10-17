@@ -1,0 +1,11 @@
+namespace test
+function answer() returns int64:
+    return 41
+function explosive_message() returns string:
+    return string.repeat("overflow", 9223372036854775807)
+verify answer:
+    assert true "this message must not be evaluated: {explosive_message()}"
+    assert answer() == 41 "expected 42, got {answer()}"
+property same_value:
+    given value: int64
+    assert value == value "expected {value} to equal itself"

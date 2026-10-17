@@ -1,0 +1,16 @@
+namespace app
+struct User:
+    name: string
+function finish_pending() returns string:
+    TypeConstruction builder = type.construct_start[User]()
+    TypeField field = list.get[TypeField](type.fields[User](), 0) handle:
+        return "missing field"
+    TypeConstruction filled = type.construct_put[User, string](builder, view field, "Ada") handle error:
+        return error
+    TypeConstruction pending = run filled
+    User user = type.construct_finish[User](pending) handle error:
+        return error
+    return user.name
+function main() returns nothing:
+    println(finish_pending())
+    return nothing
