@@ -74,3 +74,6 @@ cranelift-object = { version = "=0.132.3", default-features = false }
 target-lexicon = "=0.13.3"
 find-msvc-tools = "=0.1.12"
 tempfile = "=3.27.0"
+
+[profile.test]
+opt-level = 1
