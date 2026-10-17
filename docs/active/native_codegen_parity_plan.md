@@ -1,9 +1,10 @@
 # Native Code Generation Parity Plan
 
-Status: accepted implementation strategy; the native pipeline and fixture gates
-are implemented, with semantic and release acceptance work still open. The
-[acceptance audit](native_acceptance_audit.md) records current obligations;
-historical progress estimates below are not measured completion percentages.
+Status: consolidated Windows MSVC (`x86_64-pc-windows-msvc`) landing. Native
+parity means the five fixture gates in `tests/native_parity.json`; the final
+`codex/native-codegen` SHA and six-command result are recorded in its draft PR.
+Whole-language parity and percentage tracking below are retired. Linux,
+installed-package, relocation and source-deleted gates are outside this landing.
 
 This plan defines when Jett may claim native-code parity with the current
 interpreter-backed language. It fixes the initial backend, the prerequisite IR

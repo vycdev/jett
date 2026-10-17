@@ -1,10 +1,10 @@
 # Native parity acceptance audit
 
-Full native parity is not established. This audit maps the requirements in
-[the accepted plan](native_codegen_parity_plan.md) to executable evidence and
-records the obligations that fixture success does not resolve. A release claim
-must use passing results for the actual release revision, not an earlier green
-checkpoint or a worktree modified during a long test run.
+Status: consolidated Windows MSVC (`x86_64-pc-windows-msvc`) landing. Native
+parity means the five fixture gates in `tests/native_parity.json`; the final
+`codex/native-codegen` SHA and six-command result are recorded in its draft PR.
+Whole-language parity and percentage tracking below are retired. Linux,
+installed-package, relocation and source-deleted gates are outside this landing.
 
 ## Inventory gates
 
