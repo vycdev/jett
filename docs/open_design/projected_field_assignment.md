@@ -1,8 +1,8 @@
 # Projected field assignment: selected local owner updates
 
-Status: decided on 2026-10-15 after the user delegated language choices to fit Jett's philosophy. Checked updates through owned mutable values are selected. Implementation and verified acceptance are tracked in the [native acceptance audit](../active/native_acceptance_audit.md); this selection alone is not evidence that either backend executes projected writes.
+Status: decided on 2026-10-15 after the user delegated language choices to fit Jett's philosophy. Checked updates through owned mutable values are selected. Implementation and verified acceptance are tracked in the [native acceptance audit](../completed/native_codegen/native_acceptance_audit.md); this selection alone is not evidence that either backend executes projected writes.
 
-Jett's imperative/local-mutability and small logical diff goals favor `record.field = value` for an exact live mutable owner, rather than rebuilding every unrelated constructor field for a one-field repair. Immutable defaults, explicit consuming transforms and read-only views remain. The full selected contract and implementation obligations live in [owned mutable field updates](../active/owned_mutable_field_updates.md).
+Jett's imperative/local-mutability and small logical diff goals favor `record.field = value` for an exact live mutable owner, rather than rebuilding every unrelated constructor field for a one-field repair. Immutable defaults, explicit consuming transforms and read-only views remain. The full selected contract and implementation obligations live in [owned mutable field updates](../completed/native_codegen/owned_mutable_field_updates.md).
 
 The eligible place is a finite checked field path with exact resolved binding, nominal/generic owners and field types. Existing state qualification or checked narrowing may supply an exact machine field; no state transition is implied. No view, mutable reference, temporary, consumed owner or outstanding dependent loan authorizes a write. No qualifier peeling or structural field match supplies ownership proof.
 

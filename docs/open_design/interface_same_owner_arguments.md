@@ -57,7 +57,7 @@ replace an earlier failure. Native unboxing and handle checks remain mandatory.
 This decision does not define equality operators on erased interfaces.
 
 The reference/native implementation and local MSVC Debug/Release gates are
-recorded in [exact concrete argument verification](../active/native_erased_same_owner_arguments.md).
+recorded in [exact concrete argument verification](../completed/native_codegen/native_erased_same_owner_arguments.md).
 That bounded acceptance includes optimized production matching/mismatched calls;
 full refinement/pending Source, GNU, installed and coherent native parity remain
 open. No recursive Self substitution or interface equality rule is introduced.

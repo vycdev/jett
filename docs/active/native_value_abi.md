@@ -482,7 +482,7 @@ uses checked formal view modes and stages independent snapshots when needed;
 it resolves an indirect callback after its arguments. Mutable and temporary
 alias origins, allocating conversions, and later root consumption or rebinding
 remain explicit implementation limits, described in
-[the local alias note](native_local_view_aliases.md).
+[the local alias note](../completed/native_codegen/native_local_view_aliases.md).
 Function-valued callee expressions use the same descriptor ABI as named local
 callbacks. Argument temporaries remain owned while a returned, projected, or
 handled callee expression is evaluated; a callee failure or handler return

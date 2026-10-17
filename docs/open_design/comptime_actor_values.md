@@ -63,4 +63,4 @@ These bounded results do not establish whole-language native parity. Wider
 admitted graph compositions, complete workspace and exact-revision supported-host
 CI, GNU and installed-distribution acceptance retain their separate obligations.
 Future asynchronous mailbox/task freezing remains a separate design. See
-[the graph integration note](../active/native_comptime_actor_graph.md).
+[the graph integration note](../completed/native_codegen/native_comptime_actor_graph.md).

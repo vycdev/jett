@@ -1220,7 +1220,7 @@ mutable int64 x = 5
 x = transform(x)    # transform consumes x, returns new value, x is rebound
 ```
 
-An owned mutable local may also replace a checked field with `record.field = value`, including finite nested paths. This is an explicit local owner update, not mutation through a shared reference. Whole-name and field assignments are the only statements that can change that local value; calls receiving views cannot do so. See [owned mutable field updates](active/owned_mutable_field_updates.md).
+An owned mutable local may also replace a checked field with `record.field = value`, including finite nested paths. This is an explicit local owner update, not mutation through a shared reference. Whole-name and field assignments are the only statements that can change that local value; calls receiving views cannot do so. See [owned mutable field updates](completed/native_codegen/owned_mutable_field_updates.md).
 
 ### Rule Set 7: Syntactically Enforced Modularity (Chunking)
 
@@ -2226,7 +2226,7 @@ through the exact checked aggregate shape; it grants no cleanup obligation or
 provider authority. Ordinary refinement predicates remain required even when
 another field is an absent Resource container. The checked boundary and current
 reference evidence are recorded in the
-[active resource-hook note](active/native_resource_hook_identity.md).
+[active resource-hook note](completed/native_codegen/native_resource_hook_identity.md).
 
 Generated For element/map-value and Match payload bindings can retain a checked
 inactive Resource-bearing shape without acquiring cleanup ownership. Reference
@@ -2239,7 +2239,7 @@ predicate shortcut or native aggregate execution. All 554 comptime tests pass,
 including the unchanged Source17 replay and 60 focused entry observations.
 The bounded contract and
 acceptance record are in the
-[generated-binding note](active/native_resource_absent_generated_bindings.md).
+[generated-binding note](completed/native_codegen/native_resource_absent_generated_bindings.md).
 
 The compiler can retain one immutable checked resource program by owning the
 parsed source and deriving its resolution and checking internally. Parse,
@@ -2254,8 +2254,8 @@ reread or rediscover modules after preparation. Earlier warnings remain ordered
 observations when a later source phase rejects the program. The public build
 result stays unchanged, and required comptime/verification failures still
 prevent execution. This is a compiler handoff, not live Resource authority.
-The [checked-program handoff](active/native_resource_checked_program.md) and
-[reference preparation note](active/native_prepared_reference_driver.md) record
+The [checked-program handoff](completed/native_codegen/native_resource_checked_program.md) and
+[reference preparation note](completed/native_codegen/native_prepared_reference_driver.md) record
 the bounded implementation and remaining runtime prerequisites.
 
 The checker refuses copying a Resource-bearing field into ownership, including
@@ -2269,7 +2269,7 @@ preserve owned transfers, empty containers and type-only metadata; they do not
 install a runtime carrier or provider. Exact Resource roots cannot be ordinarily
 printed or reflected as a value. Nested printing remains a separate boundary,
 including hidden secrets, known absence and omitted values. See the
-[implemented ownership boundaries](active/native_resource_ownership_boundaries.md).
+[implemented ownership boundaries](completed/native_codegen/native_resource_ownership_boundaries.md).
 
 Reference Resource execution retains the same successful checked program,
 exact declaration and concrete body facts through argument evaluation. Caller
@@ -2323,7 +2323,7 @@ signature and exact physical operation frame. Pure helper dependencies retain
 their ordinary ABI. The local native/reference corpus passes all 46 scenarios
 in both profiles; dynamic, captured, scoped/generic, required/comptime and
 returned named callbacks remain separate work. See the
-[returned hook implementation](active/native_returned_resource_hooks.md).
+[returned hook implementation](completed/native_codegen/native_returned_resource_hooks.md).
 
 The private native runtime custody core separately tracks non-cloneable owned
 and borrowed tokens, checked frame destinations and reverse acquisition
@@ -2443,7 +2443,7 @@ local. The no-shadowing rule also applies to message parameters and state names.
 A `respond` at the end of a Handle block exits the receive handler; it does not
 supply a fallback value or commit an interrupted field assignment. The current
 implementation and unresolved response-exit cases are tracked in
-[checked actor handler field updates](active/actor_handler_field_updates.md).
+[checked actor handler field updates](completed/native_codegen/actor_handler_field_updates.md).
 
 **How actors receive capabilities:**
 
@@ -5789,7 +5789,7 @@ A `list[uint8]` field captures everything after the fixed-size fields as a raw b
 | `memcpy(&header, buffer, sizeof(header))` | `Header.from_bytes(buffer)` |
 | `0x1F`, `0b00011111`, `31` | A field width: `field: 5 bits` |
 
-Bitfield updates use construction and whole-value rebinding. For ordinary records, the selected [owned mutable field-update contract](active/owned_mutable_field_updates.md) permits checked finite field paths rooted in a live mutable owned binding. Immutable/temporary/view roots remain rejected, as do paths through an enclosing nominal refinement. Checked reference, required-comptime and native execution implement ordinary-record and exact-state machine updates under that contract. Checked actor-handler updates to ordinary owned state retain original handler identity and persistent-state ownership, with bounded MSVC acceptance recorded in the native audit. Resource-bearing updates remain a separate obligation.
+Bitfield updates use construction and whole-value rebinding. For ordinary records, the selected [owned mutable field-update contract](completed/native_codegen/owned_mutable_field_updates.md) permits checked finite field paths rooted in a live mutable owned binding. Immutable/temporary/view roots remain rejected, as do paths through an enclosing nominal refinement. Checked reference, required-comptime and native execution implement ordinary-record and exact-state machine updates under that contract. Checked actor-handler updates to ordinary owned state retain original handler identity and persistent-state ownership, with bounded MSVC acceptance recorded in the native audit. Resource-bearing updates remain a separate obligation.
 
 Compiler-produced reflection metadata retains its inspect-and-pass contract.
 Projected writes cannot enter the exact builtin metadata record identities to
@@ -5981,7 +5981,7 @@ field copies that do not contain Resource data, and owned call results remain
 valid. A Resource-bearing field cannot be acquired by copying its owner or view;
 use an explicit nonowning field view or a genuine owned transfer instead.
 
-Field assignment through a known view reports E0401 even when its binding is marked `mutable`; an immutable or temporary root reports E0404. Checked finite field paths through a live mutable owned record, or an already exact-state-qualified machine owner, use the selected [local replacement contract](active/owned_mutable_field_updates.md). Outstanding dependent views, consumed roots, paths through enclosing nominal refinements and bitfield writes are rejected. An update preserves exact owner/state/field metadata and does not change a machine's state. Pending ancestors retain the existing typed runtime inspection refusal before RHS effects; no implicit join or blanket new pending-transport Source restriction is introduced. Ordinary-record, exact-state machine and checked actor-handler updates to ordinary owned state have bounded reference and native acceptance. Actor updates retain original handler identity and persistent-state ownership; Resource-bearing updates remain open. See the [acceptance audit](active/native_acceptance_audit.md#checked-actor-handler-field-updates-bounded-msvc-acceptance).
+Field assignment through a known view reports E0401 even when its binding is marked `mutable`; an immutable or temporary root reports E0404. Checked finite field paths through a live mutable owned record, or an already exact-state-qualified machine owner, use the selected [local replacement contract](completed/native_codegen/owned_mutable_field_updates.md). Outstanding dependent views, consumed roots, paths through enclosing nominal refinements and bitfield writes are rejected. An update preserves exact owner/state/field metadata and does not change a machine's state. Pending ancestors retain the existing typed runtime inspection refusal before RHS effects; no implicit join or blanket new pending-transport Source restriction is introduced. Ordinary-record, exact-state machine and checked actor-handler updates to ordinary owned state have bounded reference and native acceptance. Actor updates retain original handler identity and persistent-state ownership; Resource-bearing updates remain open. See the [acceptance audit](completed/native_codegen/native_acceptance_audit.md#checked-actor-handler-field-updates-bounded-msvc-acceptance).
 Move-only enum payloads extracted by matching a view retain their borrowed,
 read-only origin. Forwarded payload aliases, parentheses, explicit `coarsen`
 and `declassify` do not acquire ownership. Matching an owned enum retains owned
@@ -6022,7 +6022,7 @@ identity, then preserves the declared semantic field type. This includes the
 existing final `list[uint8]` payload; numeric fields retain their implicit-copy
 behavior. Ordinary structs, bitfields and exact-state machines can be
 intermediate owners. This adds no payload shape, hidden owner, implicit clone
-or lifetime rule; see the [bitfield contract](active/native_bitfield_projected_local_views.md).
+or lifetime rule; see the [bitfield contract](completed/native_codegen/native_bitfield_projected_local_views.md).
 
 The native path proof also retains the existing directly secret-qualified
 aggregate field rule. A receiver can carry one direct `secret[Owner]` layer,
@@ -6032,7 +6032,7 @@ nominal refinement over secret data; other fields gain exactly one outer secret
 layer. The actual qualified receiver remains in the path. No multiple-layer
 owner peeling, implicit declassification or nominal substitution establishes a
 view. Explicit borrowed `declassify` and `coarsen` retain their existing proof
-and owner dependency; see the [secret-owner contract](active/native_secret_owner_projected_local_views.md).
+and owner dependency; see the [secret-owner contract](completed/native_codegen/native_secret_owner_projected_local_views.md).
 
 The original owner remains live for dependent reads; projected and forwarded
 aliases are non-owning and carry no cleanup obligation. Explicit clones acquire
@@ -6054,8 +6054,8 @@ in the local-view note. Borrowed-sum Handle aliases retain their separate
 checked backing receipt described below. These implementation limits do not establish
 general loan expiry, change the checker rules above, or claim every projected
 owner kind is supported; see the
-[local view implementation note](active/native_local_view_aliases.md) and
-[typed stable-field contract](active/native_stable_projected_local_views.md).
+[local view implementation note](completed/native_codegen/native_local_view_aliases.md) and
+[typed stable-field contract](completed/native_codegen/native_stable_projected_local_views.md).
 
 For an immutable local alias of an ordinary owned temporary, the selected
 lifetime rule evaluates the whole exact producer once and retains it in
@@ -6078,9 +6078,9 @@ compiler/reference controls and paired Source-deleted native Debug/Release
 execution pass for unchanged Source09 and the new Source13. Physical cleanup
 measurements and broader-context gates remain pending. These bounds add no
 checker bans and do not narrow the selected lifetime rule; see the
-[temporary local-view contract](active/native_temporary_local_views.md).
+[temporary local-view contract](completed/native_codegen/native_temporary_local_views.md).
 
-The bounded [temporary List transport](active/native_temporary_list_views.md)
+The bounded [temporary List transport](completed/native_codegen/native_temporary_list_views.md)
 uses that same lexical whole-owner rule and existing list operations. Its
 checked reference adapter retains exact generic observer instances, nonowning
 List tickets, copyable element observations and explicit whole-List cloning.
@@ -6111,7 +6111,7 @@ checked conversion and temporary backing. An interface boxing conversion may
 read that proved concrete input borrowed while producing an independently owned
 box; its runtime implementation may copy the payload. These bounded paths make
 no zero-runtime-copy claim; see the
-[call-view implementation](active/native_scoped_call_view_staging.md).
+[call-view implementation](completed/native_codegen/native_scoped_call_view_staging.md).
 
 An explicitly viewed handled optional/result payload follows the same
 borrowing rule when it retains one stable sum binding. Immutable owners and
@@ -6145,12 +6145,12 @@ facts, temporary-backed Handle aliases, loan expiry and erased Resource-bearing
 payload identity remain outside this proof. Copy destinations keep their Owned
 mode and can outlive a later shell replacement; move-only aliases retain the
 existing persistent owner-change prohibition, including after their last read.
-The [mutable-owned sum note](active/native_mutable_borrowed_sum_backings.md) records
+The [mutable-owned sum note](completed/native_codegen/native_mutable_borrowed_sum_backings.md) records
 its bounded MSVC acceptance and remaining proof and implementation limits.
-The [ordinary borrowed-sum implementation](active/native_ordinary_borrowed_sum_codegen.md)
+The [ordinary borrowed-sum implementation](completed/native_codegen/native_ordinary_borrowed_sum_codegen.md)
 is separate from the
-[Resource borrowed-sum contract](active/native_resource_borrowed_sums.md) and
-[verified nested Resource contract](active/native_resource_nested_sums.md).
+[Resource borrowed-sum contract](completed/native_codegen/native_resource_borrowed_sums.md) and
+[verified nested Resource contract](completed/native_codegen/native_resource_nested_sums.md).
 
 **Rule 2: A view cannot be sent to another thread.**
 
@@ -6479,7 +6479,7 @@ selected contents contain no live Resource. Potential Resource paths remain in
 the original checked type graph; their absence does not grant a provider or make
 an impure function eligible. The native implementation must retain the same
 checked program, required cache and generated case identities through its
-canonical suite entry. The [native Resource suite protocol](active/native_resource_suites.md)
+canonical suite entry. The [native Resource suite protocol](completed/native_codegen/native_resource_suites.md)
 records the compiler transport and outstanding acceptance for this case.
 
 Inside these original checked bodies, an ordinary-typed direct call can still
@@ -8428,6 +8428,8 @@ the completed [reflection predicate fact contract](completed/reflection_predicat
 
 ### Native Linux executable seed
 
+Status: [native-codegen campaign handoff](completed/native_codegen/README.md).
+
 The Cranelift scalar AOT path can link on the exact x86-64 Linux GNU host as
 well as the existing Windows MSVC target. An explicit, target-matched launcher
 bundle supplies ABI version, CRT mode, archive and system libraries. Linux uses
@@ -8436,7 +8438,7 @@ Windows retains MSVC SDK discovery and the static-CRT contract. Both publish
 only a successfully linked executable. The Linux scalar seed runs under an
 automated deadline without source-tree or compiler environment dependencies.
 Full language/runtime parity and clean Windows execution are still release
-gates, not claims made by this seed. See `active/native_codegen_parity_plan.md`.
+gates, not claims made by this seed. See `completed/native_codegen/native_codegen_parity_plan.md`.
 
 Explicit `comptime` results are imported into typed HIR before MIR lowering,
 retaining their checked type and span. Supported namespace constant reads use
@@ -8557,7 +8559,7 @@ explicit comptime evaluation. Reflection-valued parameters also remain part
 of a comptime closure's specialization identity, so callbacks with identical
 signatures and type arguments still select their own checked bodies. Other reflection
 specialization keys and parity edges remain open; see
-`active/native_interface_values.md` for the remaining gates.
+`completed/native_codegen/native_interface_values.md` for the remaining gates.
 Explicit comptime interface values materialize from unambiguous checked concrete
 payload types; secret fields and pending wrappers remain part of the typed value.
 Explicit comptime construction builders preserve their owner, selected variant
@@ -8604,10 +8606,10 @@ Actor constructor parameters are retained before state initializers run; an
 initializer consuming its working parameter does not consume the actor's capture.
 
 The full native parity gate is still incomplete: the current object count is
-recorded in `active/native_codegen_parity_plan.md`, alongside 30/30 main
+recorded in `completed/native_codegen/native_codegen_parity_plan.md`, alongside 30/30 main
 outcomes and 25/25 runtime contracts, with 182/182 typed lowering. See
 `active/native_value_abi.md` for ABI ownership and failure contracts and
-`active/native_codegen_parity_plan.md` for the remaining gates. In particular,
+`completed/native_codegen/native_codegen_parity_plan.md` for the remaining gates. In particular,
 remaining reflection/JSON shapes, actors and full task scheduling, other capabilities, and clean
 Windows release verification are not established by this slice.
 The native JSON source path handles top-level refinements over supported bases,
@@ -8700,11 +8702,11 @@ Exact declaration identity and certified child-before-parent lexical loan ends
 preserve backing ownership; Return operands run before retirement. Broader
 For/Match forms, reflected bodies, alternate Default lifetimes and native Resource
 semantics remain separate work. Ordinary borrowed data sums have their
-[separate implementation](active/native_ordinary_borrowed_sum_codegen.md).
+[separate implementation](completed/native_codegen/native_ordinary_borrowed_sum_codegen.md).
 This local test slice keeps production Resource providers disabled. See the
-[nested borrowed-sum contract](active/native_resource_nested_sums.md).
+[nested borrowed-sum contract](completed/native_codegen/native_resource_nested_sums.md).
 
-The separate [Resource control-flow transport](active/native_resource_control_flow.md)
+The separate [Resource control-flow transport](completed/native_codegen/native_resource_control_flow.md)
 now preserves checked custody through consuming Resource-free list iteration and
 ordinary Resource-free enum selection. Exact constructor-owned normalization and
 independent original/current proofs keep backing ownership and strict joins intact.
@@ -8718,7 +8720,7 @@ Native plain Resource replacement validates both exact live owners, active runti
 
 Native plain Resource assignment now retains the evaluated RHS while the old owner remains live. Successful replacement retires old and installs RHS once; failed RHS evaluation preserves old for its handler or scope cleanup. Exact plain occupied Resource self-assignment moves and reseats the same local without a runtime transfer or finalizer. Assignment after close transfers into the vacant local. Conditional, aggregate and projected native replacement remain pending.
 
-The selected same-local extension admits direct `optional[R]` and `result[R, E]` shells at every checked occupancy. The evaluated RHS and mutable destination must identify the exact same owned local, with the original Source, complete nominal Resource and failure type, local slot, containing scope, current activation and existing loan checks preserved. A live absent shell remains owned. Reseating itself adds no runtime replacement, transfer, finalizer or implicit clone; ordinary scope cleanup still applies. Generic, aggregate and projected carriers receive no new admission. The core MIR admission and object-emission checks now pass for the original direct-sum witnesses. Linked native execution and additional occupancy/refusal evidence remain separate obligations; see [the active reseating note](active/native_resource_same_local_reseating.md).
+The selected same-local extension admits direct `optional[R]` and `result[R, E]` shells at every checked occupancy. The evaluated RHS and mutable destination must identify the exact same owned local, with the original Source, complete nominal Resource and failure type, local slot, containing scope, current activation and existing loan checks preserved. A live absent shell remains owned. Reseating itself adds no runtime replacement, transfer, finalizer or implicit clone; ordinary scope cleanup still applies. Generic, aggregate and projected carriers receive no new admission. The core MIR admission and object-emission checks now pass for the original direct-sum witnesses. Linked native execution and additional occupancy/refusal evidence remain separate obligations; see [the active reseating note](completed/native_codegen/native_resource_same_local_reseating.md).
 
 Native required Resource values retain their compile-time authority separately
 from the public span/context cache. Only a successful required evaluation in the
@@ -8758,7 +8760,7 @@ obligations in the checked Resource path. Original Source06 additionally passes
 process exits remain exact after READY on the retained Session/provider/grant.
 Explicit derived Return/Break/Continue/Default native controls and broader aggregate
 custody remain separate acceptance obligations under existing Source semantics. See the
-[reflected-field execution contract](active/native_resource_reflected_fields.md).
+[reflected-field execution contract](completed/native_codegen/native_resource_reflected_fields.md).
 
 
 Typed Resource aggregate transport is being implemented through a separate
@@ -8770,7 +8772,7 @@ existing Source ownership and cleanup. Wire v3 retains strict v1/v2 compatibilit
 Bounded typed absence transport and its v21 local MSVC regression have actual
 native acceptance; the ordinary-error successor's twelve-gate regression also
 passes at v24. Live aggregate custody and replacement remain follow-ons. See the
-[typed aggregate plan](active/native_resource_aggregate_carriers.md).
+[typed aggregate plan](completed/native_codegen/native_resource_aggregate_carriers.md).
 
 ### Native ordinary entries in Resource programs
 
@@ -8782,7 +8784,7 @@ Network-only/Nothing entry, including an entry with no parameters. Initial check
 lowering retains its own original Source provenance and full-body graph proof;
 mutable MIR cannot manufacture this authority afterward. This native metadata
 changes neither Source execution-family membership nor purity/comptime rules.
-See [the ordinary entry plan](active/native_resource_ordinary_entry.md) for the
+See [the ordinary entry plan](completed/native_codegen/native_resource_ordinary_entry.md) for the
 bounded implementation and pending acceptance gates.
 
 The selected normal startup prerequisite makes the generated Resource object
@@ -8791,7 +8793,7 @@ It preserves the ordinary entry ABI, retained first-error/cleanup outcomes and
 Runtime-only authority. The normal provider remains Disabled and grants no
 Network authority; actual TCP/OS providers, public driver/catalog wiring, mixed
 entry capabilities and shipped-host execution remain required. The separate
-[generated startup note](active/native_resource_generated_startup.md) records the
+[generated startup note](completed/native_codegen/native_resource_generated_startup.md) records the
 internal ABI choice, private-runner compatibility and current bounded validation.
 Current local MSVC controls pass all 68 Python helper, eight Runtime startup,
 four codegen and 11 existing launcher lifecycle controls, plus 2,371 workspace
@@ -8826,7 +8828,7 @@ all fifteen raw-probe Sources remain preserved. Baseline collection supplies no
 desired Source oracle, ordinary public-Main context-retirement observations or
 feature credit. Occupied aggregates, broader lifetimes, wider ordinary parity
 and fixes, and exact successor CI remain obligations. See the
-[ordinary terminal-error lifetime note](active/native_resource_ordinary_error_reentry.md).
+[ordinary terminal-error lifetime note](completed/native_codegen/native_resource_ordinary_error_reentry.md).
 
 ### Actor handle identity equality
 
@@ -8843,7 +8845,7 @@ the same base instance at ready depth. Ready cloned aliases remain ready when
 another handle is wrapped. Recursive actor payload equality compares instance
 identity and per-handle pending depth. Direct pending comparisons retain their
 unsupported binary-operation error. Context retirement releases actor state
-once. See [the implementation and verification note](active/actor_identity_equality.md).
+once. See [the implementation and verification note](completed/native_codegen/actor_identity_equality.md).
 
 ### Occupied Resource struct constructor checkpoint
 
@@ -8862,7 +8864,7 @@ and control-flow subset gates pass 106 / 106 against the same independently
 measured private archives. All sixteen gates pass 754 executions / 900 entries. Recursive and generic aggregates, collections,
 projection, extraction, replacement, reflection and captured aggregate lifetimes
 remain full native-codegen obligations. This checkpoint adds no Source policy
-exclusion. See the [occupied struct note](active/native_resource_occupied_structs.md).
+exclusion. See the [occupied struct note](completed/native_codegen/native_resource_occupied_structs.md).
 
 ### Selected erased-interface concrete argument contract
 
@@ -8875,7 +8877,7 @@ precedence, ordinary view semantics and argument cleanup, and supplies no clone
 or ownership authority. The reference evaluator and native backend implement this
 contract. Local MSVC Debug/Release gates pass, including optimized production
 matching/mismatched calls after Source deletion. See
-[exact concrete argument verification](active/native_erased_same_owner_arguments.md)
+[exact concrete argument verification](completed/native_codegen/native_erased_same_owner_arguments.md)
 for measured scope and remaining work. Interface-typed equality operators are
 rejected by the frontend; explicit domain comparison methods remain available.
 
@@ -8997,7 +8999,7 @@ Ordinary actor/interface wrappers also retain their authenticated original
 entry-Scope metadata through canonical collection iteration without gaining
 Resource custody. Graph transport and real Resource execution still require
 their separate exact proofs.
-See [the graph integration note](active/native_comptime_actor_graph.md).
+See [the graph integration note](completed/native_codegen/native_comptime_actor_graph.md).
 
 
 ### Occupied Resource struct primitive companions
@@ -9019,7 +9021,7 @@ Focused checks and bounded linked MSVC acceptance pass against fresh
 58-export runtimes, including both new scalar gates and all sixteen predecessor
 Resource gates. Full inventory, workspace and supported-host acceptance remain
 pending; see
-[primitive companion work](active/native_resource_primitive_companions.md).
+[primitive companion work](completed/native_codegen/native_resource_primitive_companions.md).
 
 
 ### Ordinary failure classification through Resource scopes
@@ -9039,7 +9041,7 @@ bytes for ordinary-only Bounds failures are superseded as the current message
 oracle. This correction changes no Source, ordinary diagnostic, body or cleanup
 status, process exit, custody, retirement or reentry requirement. Corrected
 native gates must pass before new acceptance is recorded. See the
-[ordinary terminal-error lifetime note](active/native_resource_ordinary_error_reentry.md).
+[ordinary terminal-error lifetime note](completed/native_codegen/native_resource_ordinary_error_reentry.md).
 
 ### Required expressions in inline bodies and refinement predicates
 
@@ -9066,4 +9068,4 @@ or mutable current table grants no replacement authority. Failed completion
 publishes no partially converted Program or renewed archive. These compiler
 invariants change no Source admission, equality, purity, ownership or comptime
 rule. Verification remains recorded separately in the
-[canonical conversion note](active/native_canonical_value_conversions.md).
+[canonical conversion note](completed/native_codegen/native_canonical_value_conversions.md).

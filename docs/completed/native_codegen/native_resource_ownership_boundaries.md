@@ -13,7 +13,7 @@ obligations, 464 supplemental cases and the whole-language 100% goal are unchang
 
 ## Selected source contract
 
-The [opaque resource contract](../completed/opaque_runtime_resource_contract.md)
+The [opaque resource contract](../opaque_runtime_resource_contract.md)
 requires one owner and one cleanup obligation. Resource views cannot acquire
 ownership by copying or be hidden in an owned payload. This does not ban owning
 aggregates containing Resource data, safe nonowning field inspection or type-only

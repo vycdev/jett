@@ -8,7 +8,7 @@ Historical receipts below do not establish that extension or complete native cov
 
 ## Settled behavior and current gap
 
-[Rule Set 24](../design.md#rule-set-24-read-only-views-solving-the-memory-borrowing-problem)
+[Rule Set 24](../../design.md#rule-set-24-read-only-views-solving-the-memory-borrowing-problem)
 makes views read-only borrows: they can be read, passed as views, and explicitly
 cloned into ownership. They cannot be consumed or escape their scope. For example:
 
@@ -293,7 +293,7 @@ The independent projected interface/handler repair remains unapplied.
 
 ## Boundaries requiring a contract
 
-The selected [projected assignment contract](../open_design/projected_field_assignment.md)
+The selected [projected assignment contract](../../open_design/projected_field_assignment.md)
 rejects writes through views or with outstanding dependent loans. Declaration
 facts alone are not complete borrow-provenance analysis. Keep these remaining
 lifetime questions explicit before extending the first domain:

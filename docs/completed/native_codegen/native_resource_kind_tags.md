@@ -8,7 +8,7 @@ The broad coverage estimate remains about 85%.
 
 ## Selected contract and correction
 
-The [opaque resource contract](../completed/opaque_runtime_resource_contract.md)
+The [opaque resource contract](../opaque_runtime_resource_contract.md)
 already selects a nominal type name plus `TypeKind.resource_type`, no primitive
 tag and empty field, variant and machine-state metadata. Type aliases retain
 their existing `alias_type` tag. The pre-Rust correction was captured in

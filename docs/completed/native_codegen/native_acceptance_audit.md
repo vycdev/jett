@@ -71,11 +71,11 @@ implementation evidence retains its revision and scope; remaining implementation
 coherent-workspace and supported-host gates still prevent a full parity claim.
 
 - [Comptime actor graph materialization](native_comptime_actor_graph.md) implements the selected frozen-graph contract. Current bounded MSVC acceptance passes 32 Source-deleted executions; wider admitted compositions and coherent-revision release gates remain required. Actor closure capture remains rejected with E0402.
-- [Erased interface equality](../open_design/interface_value_equality.md): **selected and implemented.** Interface-typed `==` and `!=` report E0376 before evaluation or lowering; concrete equality and explicit domain comparisons remain available. Recorded frontend, publication-refusal and Source-deleted positive-comparison controls cover this contract. Final-revision workspace and platform acceptance remain separate.
+- [Erased interface equality](../../open_design/interface_value_equality.md): **selected and implemented.** Interface-typed `==` and `!=` report E0376 before evaluation or lowering; concrete equality and explicit domain comparisons remain available. Recorded frontend, publication-refusal and Source-deleted positive-comparison controls cover this contract. Final-revision workspace and platform acceptance remain separate.
 - [Secrets hidden in debug print values](hidden_secret_debug_print.md): **selected and implemented.** Accepted non-release Print/Println values use recursive typed redaction for secrets hidden by interfaces, aggregates and builders. Direct-secret and Source release restrictions remain unchanged. The recorded nine-program/eighteen-execution gate is bounded acceptance; pending-sum and pipeline terminal diagnostics have separate bounded acceptance below.
 - [Owned mutable field updates](owned_mutable_field_updates.md): **selected contract.** Checked updates through live mutable owners retain the selected ownership, readiness, replacement and Resource-custody rules. Native implementation and execution acceptance are tracked separately from policy selection; frontend publication refusals do not supply execution evidence.
-- [List summation types](../open_design/list_sum_type_contract.md): **selected and implemented.** `list.sum` and trusted `list.__sum` admit exactly the ten numeric primitives and their transparent aliases. Refinements, secret wrappers and nonnumeric elements report E0300 during checking, including empty and explicit-comptime calls. Checked width, typed zero, borrowing and pending behavior remain unchanged. Recorded focused controls retain their scope; final-revision acceptance is separate.
-- [Reflected field request compatibility](../open_design/reflected_field_request_compatibility.md):
+- [List summation types](../../open_design/list_sum_type_contract.md): **selected and implemented.** `list.sum` and trusted `list.__sum` admit exactly the ten numeric primitives and their transparent aliases. Refinements, secret wrappers and nonnumeric elements report E0300 during checking, including empty and explicit-comptime calls. Checked width, typed zero, borrowing and pending behavior remain unchanged. Recorded focused controls retain their scope; final-revision acceptance is separate.
+- [Reflected field request compatibility](../../open_design/reflected_field_request_compatibility.md):
   current checks admit some refinement/base requests with matching carriers and
   secrecy. Preserving the actual owner on an admitted interface read does not
   select the broader requested-type contract or authorize arbitrary nominal casts.
@@ -134,7 +134,7 @@ boundary for both execution paths, not missing positive native support.
 executes the admitted values and suites after Source removal, while driver
 constant tests pin aggregate and hidden-pending rejection before publication.
 Revalidate those gates at the final revision. The
-[broader constant ownership note](../open_design/global_constant_execution.md)
+[broader constant ownership note](../../open_design/global_constant_execution.md)
 records a possible extension and does not authorize runtime globals.
 
 Current task/actor execution is sequential: eager `run`, one-level `join`,
@@ -167,12 +167,12 @@ and driver-library checks pass; coherent full workspace and current platform
 acceptance remain required. The current rough feature estimate is about 87%,
 with the fixed inventory denominators unchanged and the full 100% objective open.
 
-[Direct collection and sum equality](../completed/direct_collection_equality.md)
+[Direct collection and sum equality](../direct_collection_equality.md)
 is settled: both operators now report E0376 before comptime evaluation or native
 lowering, including wrapped and concretely instantiated types. Frontend fixture
 coverage and native debug/release publication checks pin this contract.
 
-[User structs nested inside enum payloads](../completed/enum_payload_struct_equality.md)
+[User structs nested inside enum payloads](../enum_payload_struct_equality.md)
 now invoke exact explicit `Equatable.equals` implementations. Recursive frontend
 validation, interpreter/comptime dispatch, and typed native cursor calls are
 implemented. Linked debug/release coverage includes generic owners, containers,
@@ -889,7 +889,7 @@ Pending secret receiver errors intentionally retain native typed redaction.
 Depth-one, depth-two, and partially joined receiver regressions pin the raw
 reference error separately from native `[redacted]`, with exact output and
 cleanup in both profiles. Those tests do not claim diagnostic parity or resolve
-the [hidden-secret observation policy](../open_design/debug_print_hidden_secrets.md).
+the [hidden-secret observation policy](../../open_design/debug_print_hidden_secrets.md).
 
 A separate accepted-source probe still exposes direct contextual secret
 bitfield construction: `secret[Header] hidden = Header(value: 7)` runs and
@@ -1236,7 +1236,7 @@ supplemental tests; the fixed inventory denominator is unchanged. Full workspace
 and supported-host distribution gates remain required for this later revision.
 
 The admitted alias-as-constructor spelling also remains an unresolved source
-contract; see [type alias constructor calls](../open_design/type_alias_constructor_calls.md).
+contract; see [type alias constructor calls](../../open_design/type_alias_constructor_calls.md).
 Supplemental cases do not change the inventory denominator. Full workspace and
 supported-host distribution validation remain obligations for the final revision.
 
@@ -1395,7 +1395,7 @@ state's unsupported map payload instead returns an unsupported-key failure
 when its field decoder is reached, before the eventual qualified builder
 mismatch. Required-field lookup and exact validation retain their order.
 This bounded diagnostic-precedence tradeoff is recorded in the
-[machine JSON contract](../open_design/state_machine_json_contract.md);
+[machine JSON contract](../../open_design/state_machine_json_contract.md);
 it introduces no key cast, dummy value, early state gate, or global builder
 change. Fresh reference characterization pins the actual first wrapped
 error for empty and nonempty cached-state maps as
@@ -1680,7 +1680,7 @@ All seven linked cases pass together (2.82 seconds, 432 filtered) in
 source-deleted execution. Six pin successful outcome parity. The pending case
 separately pins the raw reference message and native `[redacted]` error, matching
 `before:secret\n`, status 71 and cleanup. This preserves the already recorded
-[open observation boundary](../open_design/debug_print_hidden_secrets.md);
+[open observation boundary](../../open_design/debug_print_hidden_secrets.md);
 it neither weakens native redaction nor claims diagnostic parity.
 The initial six-pass/one-failure attempt (4.56 seconds) is retained in
 `target/native-secret-owner-local-view-linked-initial-mismatch.log`. Its mistaken

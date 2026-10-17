@@ -57,7 +57,7 @@ after-binding marker nor a later observation. The original reference error
 contains the underlying aggregate. Its normal CLI `error: ` reporting prefix
 is separate from `RunFailure.message`. Native retains its existing checked
 `[redacted]` receiver rendering. This exact difference is already recorded in
-[the open observation note](../open_design/debug_print_hidden_secrets.md);
+[the open observation note](../../open_design/debug_print_hidden_secrets.md);
 qualified-field admission preserved native redaction. Those original raw
 reference observations remain historical; the direct-field diagnostic successor
 below applies existing non-disclosure to this same checked source.

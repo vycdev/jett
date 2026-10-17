@@ -81,17 +81,17 @@ This does **not** close the full interface gate. Still required:
 - Verify the selected rejection of equality operators on erased interface
   values and the retained explicit domain-comparison path in coherent-revision
   native gates. See
-  [interface value equality](../open_design/interface_value_equality.md).
+  [interface value equality](../../open_design/interface_value_equality.md).
 - Resolve erased calls whose non-receiver arguments require the implementation's
   concrete owner. See
-  [same-owner arguments](../open_design/interface_same_owner_arguments.md).
+  [same-owner arguments](../../open_design/interface_same_owner_arguments.md).
 - Audit interpreter source instances of compiler-owned facades that use
   different native helpers and lack checked source bodies.
 - Audit remaining comptime combinations; reflected interface fields and lists
   now have record, enum, and machine round-trip coverage.
 - Resolve actor handles escaping comptime evaluation; a saved interpreter actor
   ID currently has no corresponding runtime instance. See
-  [comptime actor values](../open_design/comptime_actor_values.md).
+  [comptime actor values](../../open_design/comptime_actor_values.md).
 - Audit refinement compositions beyond the covered primitive, list, map, set,
   optional, result, record, enum, machine, bitfield, function, builder, and
   capability bases.

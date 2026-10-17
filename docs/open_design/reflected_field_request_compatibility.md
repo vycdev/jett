@@ -141,7 +141,7 @@ proved type relation without a new pending inspection or predicate.
 
 Those isolated results retain their original candidate and scope. The later
 managed eighteen-Source callback integration is recorded in the
-[native coverage plan](../active/native_codegen_parity_plan.md#selected-lazy-reflected-callable-return-validation).
+[native coverage plan](../completed/native_codegen/native_codegen_parity_plan.md#selected-lazy-reflected-callable-return-validation).
 The generated-suite implementation below has separate bounded local acceptance;
 its focused/replay and coherent-revision gates are not yet complete. New
 nominal/secret proof establishment, protected secret observation,
@@ -177,7 +177,7 @@ return-validation contract, not new reflected request admission. Original
 Sources19/20 and their permanent oracles remain exact. All three controls pass:
 both reference reports record 100 Property trials, six standalone objects emit,
 and six separately emitted Source-deleted objects pass twelve normal MSVC
-Debug/Release launches. The [bounded audit](../active/native_acceptance_audit.md#generated-reflected-callback-suites-bounded-msvc-acceptance)
+Debug/Release launches. The [bounded audit](../completed/native_codegen/native_acceptance_audit.md#generated-reflected-callback-suites-bounded-msvc-acceptance)
 records exact current compiler/Source and reused-archive guards. No ordinary
 context-retirement observation is available. Both six-test Comptime/HIR groups,
 all eight native Property controls and all 1,664 affected compiler-library tests

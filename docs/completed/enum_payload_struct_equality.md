@@ -60,4 +60,4 @@ method failure retire cursors and shells. Pending method results fail with
   Compiler phase suites and all 589 frontend fixtures pass.
 
 Full native inventory and platform CI remain separate acceptance gates in
-`docs/active/native_acceptance_audit.md`.
+`docs/completed/native_codegen/native_acceptance_audit.md`.

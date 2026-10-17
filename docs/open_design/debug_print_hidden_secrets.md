@@ -66,7 +66,7 @@ all twelve source cases and 24 Source-deleted native executions with exact publi
 messages. Source policy stays at its default independently of runtime profile
 for the new secret controls. These bounded results do not establish every other
 terminal diagnostic or full workspace/platform acceptance; see the
-[native audit](../active/native_acceptance_audit.md#typed-pending-sum-terminal-diagnostics).
+[native audit](../completed/native_codegen/native_acceptance_audit.md#typed-pending-sum-terminal-diagnostics).
 
 Direct field reads from a pending `secret[Struct]` previously exposed raw
 reference data after stripping the typed wrapper, while native field readiness

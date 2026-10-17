@@ -1,6 +1,6 @@
 # Actor handle equality
 
-Decision status: live instance identity implemented in the reference evaluator and native backend; local Debug/Release native acceptance passes. See [the active selected contract](../active/actor_identity_equality.md). The observations and alternatives below record the prior unresolved state.
+Decision status: live instance identity implemented in the reference evaluator and native backend; local Debug/Release native acceptance passes. See [the active selected contract](../completed/native_codegen/actor_identity_equality.md). The observations and alternatives below record the prior unresolved state.
 
 ## Historical divergence and alternatives
 
@@ -27,4 +27,4 @@ handle, distinct spawned actors, nested enum and list payloads, and `!=`.
 
 ## Selected contract
 
-Actor equality now selects live instance identity. Exact checked nominal actor types must match; runtime IDs must belong to the owning context. Cloning preserves identity, distinct spawns remain unequal even with equal state, and != negates the same comparison. State is never structurally compared. See [the selected implementation note](../active/actor_identity_equality.md). Escaping comptime actor graph import remains a separate contract.
+Actor equality now selects live instance identity. Exact checked nominal actor types must match; runtime IDs must belong to the owning context. Cloning preserves identity, distinct spawns remain unequal even with equal state, and != negates the same comparison. State is never structurally compared. See [the selected implementation note](../completed/native_codegen/actor_identity_equality.md). Escaping comptime actor graph import remains a separate contract.

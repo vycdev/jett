@@ -13,7 +13,7 @@ keeps local, reference and platform evidence separate.
 
 ## Selected boundary before Rust
 
-The [opaque resource contract](../completed/opaque_runtime_resource_contract.md)
+The [opaque resource contract](../opaque_runtime_resource_contract.md)
 requires an owned resource to come from an associated private trusted operation.
 Authority follows loader origin, resolved declaration identity and complete
 checked ownership modes. A callable name or matching runtime layout cannot

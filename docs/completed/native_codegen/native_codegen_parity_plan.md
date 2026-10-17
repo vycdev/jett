@@ -340,7 +340,7 @@ change preserves the checker's whole-parameter substitution: declared erased
 children such as `list[Pairable]` retain their contract, and recursive Self
 substitution is not introduced. The separate erased-interface equality contract
 rejects implicit operators at compile time and retains explicit domain comparison
-calls; see [the decision](../open_design/interface_value_equality.md).
+calls; see [the decision](../../open_design/interface_value_equality.md).
 These bounded gates do not change the rough 87% planning estimate, fixed
 207-fixture/182-object inventory or whole-language completion requirement.
 
@@ -1261,7 +1261,7 @@ semantics; Equatable comparisons carry exact checker-selected method identities
 into compiled calls. One emitted object is tested with four real process inputs.
 The full workspace checkpoint passed 1763 tests; complete remains false. Enum
 payloads, refinement-validating construction and projected-owner escapes remain
-continuation work. See `native_value_abi.md` for the precise supported boundary.
+continuation work. See `../../active/native_value_abi.md` for the precise supported boundary.
 
 The September 2026 actor slice gives spawn expressions a checked constructor
 identity and message expressions a checked handler identity in HIR and MIR.
@@ -1698,7 +1698,7 @@ child. Differential tests cover five debug fixture families, argument evaluation
 order, borrowed values across handlers, and cleanup without partial output after
 a later argument fails. Release rejection remains unchanged. Hidden-secret
 printing is a separate unresolved policy, recorded in
-`../open_design/debug_print_hidden_secrets.md`.
+`../../open_design/debug_print_hidden_secrets.md`.
 
 ### Direct collection comparison audit
 
@@ -1709,7 +1709,7 @@ now report E0376 before evaluation or lowering, including aliases, refinements,
 secrets, generic instantiations, and explicit comptime expressions. Native
 debug/release builds preserve existing artifacts on rejection. The settled
 contract is recorded in
-[direct collection equality](../completed/direct_collection_equality.md).
+[direct collection equality](../direct_collection_equality.md).
 
 ### Deep recursive debug values
 
@@ -2092,7 +2092,7 @@ immutable-loan, pending and non-owning cleanup contracts are unchanged.
 Three focused HIR tests, all 954 crossed compiler library tests and all seven
 linked cases pass. Six cases pin successful outcome parity; the pending receiver
 pins raw reference error and existing native redaction separately under the
-[open observation policy](../open_design/debug_print_hidden_secrets.md), with
+[open observation policy](../../open_design/debug_print_hidden_secrets.md), with
 matching partial stdout/status and preserved cleanup. It does not establish
 diagnostic parity or select new policy. All 83 driver library tests, 598 frontend
 fixtures and seven source-format checks pass. The exact clean `cb617ecf`

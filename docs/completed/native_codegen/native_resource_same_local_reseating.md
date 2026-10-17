@@ -77,4 +77,4 @@ certification are separate follow-up work and do not expand the frozen
 implementation coverage goal. Historical broader acceptance flags remain false;
 CI stays disabled.
 
-See [the design](../design.md) and [architecture](../architecture.md).
+See [the design](../../design.md) and [architecture](../../architecture.md).

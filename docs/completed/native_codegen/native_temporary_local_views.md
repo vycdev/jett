@@ -18,7 +18,7 @@ creates nonowning aliases to the same backing; it does not duplicate the owner
 or extend the originating scope. Even an unused alias or one read only early in
 the scope keeps that backing until scope exit.
 
-Scope-based freeing in [Rule Set 10](../design.md) and Rule 24's lexical escape
+Scope-based freeing in [Rule Set 10](../../design.md) and Rule 24's lexical escape
 bound support this choice. Previously, the local-view note left both temporary
 extension and last-use expiry unresolved. Lexical retention keeps cleanup local
 and explicit without introducing last-use loan analysis. It may retain unused
