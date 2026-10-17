@@ -41,6 +41,13 @@ pub(crate) fn named_function(
                     }
                 }
             }
+            Item::Struct(structure) => {
+                for method in &structure.methods {
+                    if method.name.span == info.span {
+                        matches.push(method);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -149,6 +156,11 @@ pub(crate) fn closure_node<'a>(
             }
             Item::Implement(block) => {
                 for method in &block.methods {
+                    walk_block_nodes(&method.body, &mut |_| {}, &mut expression, &mut |_| {});
+                }
+            }
+            Item::Struct(structure) => {
+                for method in &structure.methods {
                     walk_block_nodes(&method.body, &mut |_| {}, &mut expression, &mut |_| {});
                 }
             }
