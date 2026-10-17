@@ -1694,9 +1694,15 @@ impl Translator<'_, '_> {
         let mut layout = if bitfield {
             b"JC\x07".to_vec()
         } else {
-            b"JC\x06".to_vec()
+            b"JC\x0a".to_vec()
         };
-        encode_name(&mut layout, &reflection_arguments[0].type_name)?;
+        encode_name(
+            &mut layout,
+            &self.construction_owner_name(owner, &reflection_arguments[0]),
+        )?;
+        if !bitfield {
+            encode_name(&mut layout, &reflection_arguments[0].type_name)?;
+        }
         let count = u32::try_from(fields.len())
             .map_err(|_| CodegenError::Backend("too many reflected construction fields".into()))?;
         layout.extend_from_slice(&count.to_le_bytes());
@@ -1746,6 +1752,14 @@ impl Translator<'_, '_> {
         let builder = self.leaf(NativeLeaf::BuilderNew, &[pointer, length], true)?;
         self.own_linear(builder)
     }
+    fn construction_owner_name(&self, owner: TypeId, info: &ReflectionTypeInfo) -> String {
+        if info.kind == "struct" {
+            self.types.type_name(owner)
+        } else {
+            info.type_name.clone()
+        }
+    }
+
     fn construct_variant_builder(
         &mut self,
         owner: TypeId,
@@ -2545,7 +2559,8 @@ impl Translator<'_, '_> {
             let field_type = reflection_arguments
                 .get(1)
                 .ok_or_else(|| self.unsupported(span, "checked construction field type"))?;
-            let (owner_pointer, owner_length) = self.static_bytes(&owner.type_name)?;
+            let owner_name = self.construction_owner_name(type_arguments[0], owner);
+            let (owner_pointer, owner_length) = self.static_bytes(&owner_name)?;
             let (type_pointer, type_length) = self.static_bytes(&field_type.type_name)?;
             let mut value_type = type_arguments[1];
             if matches!(
@@ -2596,14 +2611,10 @@ impl Translator<'_, '_> {
             let owner = reflection_arguments
                 .first()
                 .ok_or_else(|| self.unsupported(span, "checked construction owner"))?;
-            let owner_name = if owner.kind == "struct" {
-                let owner_type = type_arguments
-                    .first()
-                    .ok_or_else(|| self.unsupported(span, "checked construction type"))?;
-                self.types.type_name(*owner_type)
-            } else {
-                owner.type_name.clone()
-            };
+            let owner_type = type_arguments
+                .first()
+                .ok_or_else(|| self.unsupported(span, "checked construction type"))?;
+            let owner_name = self.construction_owner_name(*owner_type, owner);
             let (owner_pointer, owner_length) = self.static_bytes(&owner_name)?;
             let result = self.leaf(
                 NativeLeaf::BuilderFinish,

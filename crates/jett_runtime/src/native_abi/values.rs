@@ -3609,10 +3609,18 @@ impl NativeValues {
             );
             return Ok(id);
         }
-        if !matches!(&version, b"JC\x02" | b"JC\x03" | b"JC\x06" | b"JC\x07") {
+        if !matches!(
+            &version,
+            b"JC\x02" | b"JC\x03" | b"JC\x06" | b"JC\x07" | b"JC\x0a"
+        ) {
             return Err(INVALID_CONSTRUCTION_LAYOUT);
         }
         let owner = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+        let metadata_owner = if &version == b"JC\x0a" {
+            cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?
+        } else {
+            owner.clone()
+        };
         let count = usize::try_from(cursor.u32().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?)
             .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
         if count > layout.len() {
@@ -3683,7 +3691,7 @@ impl NativeValues {
         field_debug_layouts
             .try_reserve_exact(count)
             .map_err(|_| EXHAUSTED)?;
-        if matches!(&version, b"JC\x06" | b"JC\x07") {
+        if matches!(&version, b"JC\x06" | b"JC\x07" | b"JC\x0a") {
             for _ in 0..count {
                 let length =
                     usize::try_from(cursor.u32().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?)
@@ -3706,7 +3714,7 @@ impl NativeValues {
         self.builders.insert(
             id,
             NativeBuilderInfo {
-                metadata_owner: owner.clone(),
+                metadata_owner,
                 owner,
                 unsupported_kind: None,
                 variant: None,
