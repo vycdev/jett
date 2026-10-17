@@ -2596,7 +2596,15 @@ impl Translator<'_, '_> {
             let owner = reflection_arguments
                 .first()
                 .ok_or_else(|| self.unsupported(span, "checked construction owner"))?;
-            let (owner_pointer, owner_length) = self.static_bytes(&owner.type_name)?;
+            let owner_name = if owner.kind == "struct" {
+                let owner_type = type_arguments
+                    .first()
+                    .ok_or_else(|| self.unsupported(span, "checked construction type"))?;
+                self.types.type_name(*owner_type)
+            } else {
+                owner.type_name.clone()
+            };
+            let (owner_pointer, owner_length) = self.static_bytes(&owner_name)?;
             let result = self.leaf(
                 NativeLeaf::BuilderFinish,
                 &[builder, owner_pointer, owner_length],
