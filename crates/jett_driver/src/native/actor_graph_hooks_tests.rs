@@ -32,14 +32,69 @@ fn profile() -> &'static str {
         "release"
     }
 }
+struct Launcher {
+    bundle: NativeLauncherBundle,
+    _directory: tempfile::TempDir,
+}
+
 fn launcher() -> &'static NativeLauncherBundle {
-    static BUNDLE: OnceLock<NativeLauncherBundle> = OnceLock::new();
-    BUNDLE.get_or_init(|| {
-        let manifest = std::env::var_os("JETT_ACTOR_GRAPH_BUNDLE_MANIFEST")
-            .expect("fresh ordinary 56-export runtime bundle manifest must be supplied");
-        NativeLauncherBundle::from_manifest(Path::new(&manifest), !cfg!(debug_assertions))
-            .expect("fresh ordinary runtime bundle matching this test profile")
-    })
+    if let Some(manifest) = std::env::var_os("JETT_ACTOR_GRAPH_BUNDLE_MANIFEST") {
+        static BUNDLE: OnceLock<NativeLauncherBundle> = OnceLock::new();
+        return BUNDLE.get_or_init(|| {
+            NativeLauncherBundle::from_manifest(Path::new(&manifest), !cfg!(debug_assertions))
+                .expect("fresh ordinary runtime bundle matching this test profile")
+        });
+    }
+    static LAUNCHER: OnceLock<Launcher> = OnceLock::new();
+    &LAUNCHER
+        .get_or_init(|| {
+            let executable = std::env::current_exe().expect("test executable");
+            let profile_directory = executable.parent().unwrap().parent().unwrap();
+            let profile = profile_directory.file_name().unwrap().to_str().unwrap();
+            let cargo_profile = if profile == "debug" { "test" } else { profile };
+            let target = profile_directory
+                .parent()
+                .unwrap()
+                .join("native-values-launcher");
+            let host = host_target();
+            let status = Command::new(env!("CARGO"))
+                .args(["build", "-q", "-p", "jett_native_launcher"])
+                .args([
+                    "--target",
+                    &host,
+                    "--profile",
+                    cargo_profile,
+                    "--target-dir",
+                ])
+                .arg(&target)
+                .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+                .status()
+                .expect("build host- and profile-matched launcher");
+            assert!(status.success(), "launcher build failed: {status}");
+            let archive_name = if cfg!(windows) {
+                "jett_native_launcher.lib"
+            } else {
+                "libjett_native_launcher.a"
+            };
+            let archive = target.join(&host).join(profile).join(archive_name);
+            let directory = tempfile::tempdir().expect("launcher bundle directory");
+            let copied = directory.path().join(archive_name);
+            std::fs::copy(&archive, &copied).unwrap_or_else(|error| {
+                panic!(
+                    "cannot copy launcher archive {}: {error}",
+                    archive.display()
+                )
+            });
+            Launcher {
+                bundle: if cfg!(windows) {
+                    NativeLauncherBundle::windows_msvc_static_v1(copied)
+                } else {
+                    NativeLauncherBundle::linux_gnu_v1(copied)
+                },
+                _directory: directory,
+            }
+        })
+        .bundle
 }
 fn checked(
     source: &str,
