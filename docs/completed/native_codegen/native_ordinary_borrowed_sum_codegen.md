@@ -97,7 +97,7 @@ cargo test --locked -p jett_driver --test native_conformance ordinary_borrowed_s
 
 The private Resource gate additionally needs the independently measured archive
 receipt and its compile-time pin. See [archive measurement](native_resource_gnu_gate.md)
-and the [Resource runner](../../crates/jett_driver/tests/native_conformance/resource_execution.rs).
+and the [Resource runner](../../../crates/jett_driver/tests/native_conformance/resource_execution.rs).
 
 ## Remaining release gates
 
