@@ -1,0 +1,12 @@
+interface Named:
+    function name(view self: Named) returns string
+struct User:
+    label: string
+implement Named for User:
+    function name(view self: User) returns string:
+        return self.label
+function main() returns nothing:
+    Named item = run User(label: "owned payload")
+    trace item
+    println(Named.name(view item))
+    return nothing

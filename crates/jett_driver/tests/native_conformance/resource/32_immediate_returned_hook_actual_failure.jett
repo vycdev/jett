@@ -1,0 +1,17 @@
+namespace app
+function argument_label(view net: Network, view marker: resource_probe.TestHandle) returns int64:
+    use resource_probe
+    int64 label = resource_probe.borrow(view net, view marker) handle error:
+        default 0
+    int64 ignored = resource_probe.terminal_label()
+    return label
+export function main(net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle anchor = resource_probe.create(view net, 742) handle error:
+        return nothing
+    resource_probe.TestHandle marker = resource_probe.create(view net, 744) handle error:
+        return nothing
+    resource_probe.TestHandle token = resource_probe.select_create(view net, view anchor, false)(view net, argument_label(view net, view marker)) handle error:
+        return nothing
+    resource_probe.close(token)
+    return nothing

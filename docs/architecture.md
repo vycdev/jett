@@ -304,6 +304,13 @@ retained separately where formatting and source tooling need them.
 - **Pratt parsing** (precedence climbing) for expressions — handles arithmetic operators, comparisons, boolean operators, and `modulo` with correct precedence.
 - **Error recovery:** On a parse error, the parser skips to the next `Dedent` at the current level or `Newline`, emitting an error node. This allows reporting multiple errors per file.
 
+Generic-call and typed-local recognition scan balanced type delimiters without
+consuming tokens. The logical line and actual token stream bound the scan;
+there are no fixed token budgets for nested arguments or callable annotations.
+Callable return prefixes are scanned iteratively. Recognition still requires
+the matching generic `]` immediately before the call's `(`, or a complete local
+type followed by its binding name and `=`; normal parsing validates the type.
+
 ### Direct AST now, CST later
 
 Initial Jett versions deliberately parse directly into the AST while language
@@ -448,8 +455,10 @@ ResolveResult {
 - **No unused imports** — every `use` must be referenced.
 - **No unused variables** — every variable declaration must be referenced.
 - **Inline-only imports** — `use` statements are only allowed inside functions/blocks, never at file level. Within a function or nested block, `use` must appear before any other code. Executable access to another project or vendored namespace requires an active local import; same-namespace access and canonical qualified types in declaration signatures do not. Compiler-provided standard namespaces remain available by canonical qualification under the fixed prelude and module contract.
+- **Bare declarations before standard module prefixes** — a bare reference to a declared same-namespace function, such as `math(4)`, resolves to that function. A dotted standard call such as `math.abs(-4)` keeps its module prefix. Resolver facts carry this distinction into HIR.
 - **Duplicate namespace detection** — two project/dependency files declaring the same namespace is an error. Compiler-shipped stdlib files have a narrow fragment exception so one stdlib namespace can be split across several implementation files; duplicate declarations inside that namespace still fail normally.
-- **Global constants** — registered as top-level declarations (global mutable variables are forbidden). Their initializers may use literals and same-namespace declarations, but project or vendored declarations from another namespace are rejected with `E0211`; compiler-provided standard declarations follow the fixed stdlib namespace and prelude policy.
+- **Global constants** — registered as top-level declarations; the checker reports E0377 at every mutable namespace-level binding, without rejecting local mutability. Initializers admit literals (including signed numeric spellings), earlier same-namespace constant references, parentheses around those forms, or explicit `comptime expression`. Required calculations, including operators, interpolation, and calls, must be explicit; ordinary calculations report E0378 even with known operands. Project or vendored declarations from another namespace are rejected with `E0211`; compiler-provided standard declarations follow the fixed stdlib namespace and prelude policy.
+
 - **Canonical type names** — every struct, enum, interface, machine, actor,
   bitfield, alias, and refinement declaration is validated before registration.
   Names must begin with an ASCII uppercase letter and otherwise contain only
@@ -460,6 +469,25 @@ ResolveResult {
 - **Import aliasing** — `use net.http as net_http` binds the alias in local scope. Conflicting last-segment names require `as`.
 - **Parent namespace aggregation** — `use net.http` imports all child namespaces (`net.http.server`, `net.http.client`) when `net.http` itself is not a declared namespace but its children are. Accessing child items uses the last segment: `server.listen(...)`, `client.get(...)`.
 - **Namespace exports** — namespaced declarations are private to their declaring namespace by default. `export` marks public API declarations, but executable code outside the namespace must first import it locally and then use the import's bound name or alias; exported names are not inserted into the global flat scope.
+
+Namespace constants are materialized in declaration order during compilation,
+under their declaring namespace. The compiler retains values by declaration
+span in the shared checked-value table; reference execution, verify/property
+drivers, and native lowering receive that same table. HIR reads carry a
+`Constant` marker naming the checked declaration, which the native materializer
+replaces before MIR lowering. No source initializer executes at startup and no
+mutable global runtime storage is introduced. The implemented subset covers
+fixed-width integers, floats, booleans, strings, `nothing`, and transparent
+primitive aliases. Evaluation errors, unsupported constant types, and hidden
+pending primitive values report E9001 before execution or output publication.
+The [constant contract](open_design/global_constant_execution.md) retains the
+unresolved ownership rules for other types.
+
+A constant `trace` lowers through a scoped compiler-owned temporary with the
+declaration's debug type spelling. That temporary is absent from subsequent
+breakpoint snapshots and release lowering removes the observation. Constant
+reads inside generic bodies and inline callbacks keep declaration identity
+instead of becoming closure captures or caller-dependent ambient bindings.
 
 ---
 
@@ -488,10 +516,15 @@ Walk all type declarations and build the type registry:
 - **User-defined types:** structs, enums, machines, actors, bitfields, interfaces, type aliases (including refinement types).
 - **Compiler-shipped resource types:** nominal `resource Name` declarations with
   no source representation or constructor. They are move-only, carry one
-  trusted cleanup obligation, and expose only name plus `resource_type` in
-  type-level reflection. See the
-  [opaque runtime resource contract](completed/opaque_runtime_resource_contract.md).
-- **Function types:** `function(T) returns U`.
+  trusted cleanup obligation, and expose only the nominal name plus
+  `TypeKind.resource_type` in type-level reflection. Their primitive tag is
+  absent and their field, variant and machine-state metadata is empty. The
+  builtin enum schema and shared reflection mapper use the same resource tag;
+  existing enum indices and ordinary alias tags are preserved. See the
+  [opaque runtime resource contract](completed/opaque_runtime_resource_contract.md)
+  and [type-only implementation evidence](completed/native_codegen/native_resource_kind_tags.md).
+- **Function types:** `function(T) returns U`, with each parameter's owned or
+  `view` mode included in type identity and checked for function values.
 - **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`, `Log`. Random sampling uses the explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](completed/random_capability_entropy_contract.md). The interpreter-backed [`Environment` contract](open_design/environment_argv_capability_contract.md) uses source-owned `Environment.get` and `Environment.args` over one immutable injected launch snapshot; ambient `os.env`/`os.args` are removed. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md). `Log` authorizes the independent structured application-log channel defined by the [structured logging contract](completed/structured_logging_contract.md). Property tests may create only the typed test capabilities admitted by the [capability mocking contract](completed/capability_mocking_test_harness_contract.md); this does not open the capability set or add production constructors.
 - **Secret wrapper:** `secret[T]`.
 - **State-qualified types:** `Machine at state`.
@@ -539,8 +572,14 @@ Bottom-up type checking of every expression:
   primitive type, such as a small integer literal inside a `uint64` argument or
   `list[uint64]` element, the expression type map records the checked type
   rather than the literal's default carrier.
+- **Empty generic arguments:** an empty collection initially infers `never`.
+  For a direct inferred generic call whose arguments account for every type
+  parameter, the expected result shape refines only `never` parameters before
+  the arguments are rechecked against the resulting concrete signature.
+  Value-derived types are not overridden, and a result-only parameter remains
+  uninferable.
 - **Refinement type assignments:** wrapping a base type in a refinement type is fallible → must have `handle error:`.
-- **Handle blocks:** verify that `handle error:` is used on `result[T, E]` and `handle:` on `optional[T]`. Verify handle blocks end with `return` or `default`. The `default` keyword inside a handle block is part of the `HandleExpr` structure — it provides a fallback value and resumes normal execution.
+- **Handle blocks:** verify that `handle error:` is used on `result[T, E]` and `handle:` on `optional[T]`. Verify handle blocks end with `return` or `default`, or with `respond` inside a responding actor handler. The `default` keyword inside a handle block is part of the `HandleExpr` structure — it provides a fallback value and resumes normal execution.
 - **Coarsen expressions:** `coarsen value` converts a refinement type to an ancestor type. The target type is determined by the variable declaration's type annotation on the left side. The type checker walks the refinement chain to verify the target is a valid ancestor.
 - **Match exhaustiveness:** verify all enum variants are covered.
 - **Constrained generics:** For `function sort[T implements Orderable](...)`, verify that type arguments at call sites implement the required interfaces. Multiple constraints use `and` (e.g., `T implements Orderable and Displayable`). Unconstrained `T` can only be stored and passed around — no operations.
@@ -554,6 +593,27 @@ Bottom-up type checking of every expression:
   implementation validation. `!=` negates `equals` rather than adding a second
   customization point. Missing implementations report E0358. Enums retain
   variant-and-payload equality.
+  Nested user-struct payloads require the same explicit method, including through
+  containers, machines, and refinements. The frontend validates the recursive type
+  graph; HIR/MIR retain exact owner-to-function targets. The interpreter calls
+  source methods, while native cursors yield to generated calls outside the
+  runtime context lock. Struct fields remain opaque at this boundary. See
+  [the implementation note](completed/enum_payload_struct_equality.md).
+- **Direct collection equality:** `==` and `!=` on bytes, lists, maps, sets,
+  optionals, and results report E0376 in the frontend. Classification walks
+  secret and refinement wrappers; transparent aliases already share their base
+  type. Concrete generic bodies and explicit comptime expressions use the same
+  check before evaluation or lowering. Enum payload comparison retains its
+  separate aggregate path.
+- **Erased interface equality:** `==` and `!=` on interface-typed values
+  report E0376 before evaluation or lowering, including `Equatable`, transparent
+  aliases, nested refinement/secret wrappers, concrete generic bodies and inline
+  functions. The enum equality traversal rejects interface leaves through its
+  recursive aggregate graph, while stopping at an explicit user-struct equality
+  method. A struct method may intentionally ignore an interface-valued field.
+  Existing direct collection diagnostics, concrete equality dispatch and actor
+  identity are unchanged. Explicit domain comparison calls use ordinary method
+  dispatch, ownership and secrecy checks; no dynamic equality vtable is added.
 - **Primitive collection hashing boundary:** Type formation for `map[K, V]`
   and `set[T]` accepts signed/unsigned integers, `string`, `bool`, and
   refinements backed by those types. Other types report E0359 before
@@ -588,13 +648,17 @@ This sub-phase tracks the ownership state of every variable through the control 
 - A variable can only be used once unless it is a `view` or has an explicitly
   copyable type. Numeric primitives, `bool`, `nothing`, and immutable `string`
   are implicitly copyable; the primitive `bytes` type is move-only.
-- After a variable is passed to a non-`view` parameter, it becomes `Consumed`.
+- A bare move-only owned argument becomes `Consumed` even when its formal
+  parameter is `view`. Written `view` retains the caller owner only at a View
+  formal; an Owned formal requires an owned value or an explicit clone.
 - Using a `Consumed` variable is a compile error.
 - `view` parameters can read but not consume.
 - `view` values cannot be returned, stored in structs, or sent to actors.
 - For types that support duplication, `clone` creates an owned duplicate from
   an owned or viewed value. Clone support is type-specific rather than universal.
-- `mutable` variables can be rebound after their value is consumed.
+- Assigning to an immutable local is rejected during ownership analysis
+  (`E0404`). A `mutable` local can be rebound after its value is consumed.
+
 - **For loops:** `for item in items` consumes `items`; `for item in view items` borrows `items`.
 - **Run/join:** `run` marks a value as pending; it cannot be used until `join`ed.
 - **No orphaned tasks:** every `run` must have a matching `join` or `cancel` before the function returns.
@@ -609,6 +673,328 @@ This sub-phase tracks the ownership state of every variable through the control 
   task-control failure independently of the function's declared result error.
 - **View propagation:** Views propagate through field access and collection element access. `view list[T]` element access yields `view T`, not an owned copy. `clone` is required to get an owned value from a view.
 - **Closure capture analysis:** Anonymous functions may capture only implicitly copyable values from the enclosing scope. Each capture is copied into the closure. Capturing a move-only value is a compile error; it must be passed explicitly as a parameter.
+
+Projected field assignment implements the selected local replacement contract for ordinary records and exact-state machine values in checked reference, required-comptime and native execution. Checked actor-handler updates to ordinary owned state retain original handler identity and persistent-slot ownership through reference and native execution, with bounded MSVC acceptance recorded in the native audit. Resource-bearing updates remain a separate obligation. An exact resolved live mutable owned binding may supply a finite checked ordinary-record field path. An existing exact machine-state qualification or checked narrowing may supply that state's fields without changing the state or tag. No mutable reference, caller mutation or structural owner inference is introduced. See [owned mutable field updates](completed/native_codegen/owned_mutable_field_updates.md).
+
+Checked field places retain the original binding, concrete/scoped body and exact
+field identities through HIR and MIR. Preflight precedes RHS staging; commit
+revalidates the place and transfers a complete replacement before retiring the
+old field. The ordinary `StructReplaceOccupied` runtime leaf validates an occupied
+slot atomically and returns the displaced bits without performing cleanup. Its
+caller retains RHS ownership until success and handles terminal cleanup through
+the existing drop plan. Actor roots use the separate ordinary
+`ActorReplaceOccupied` leaf, which validates a live occupied actor slot and returns
+displaced bits without cleanup. After success, the caller clears the transferred
+staging owner, then retires the displaced owner through the checked cleanup plan.
+Neither ordinary leaf grants Resource custody.
+
+Nonzero facts for field reads use the exact root and checked finite field path.
+A write invalidates affected root facts after evaluating its RHS. Loop backedges
+and writes inside condition prefixes cannot reuse a stale guard. Borrowed enum
+match payloads carry their exact arm/tag/field origin through caller validation
+and canonical MIR remapping. Transparent `coarsen` and `declassify` views retain
+an independent native match snapshot before destructive payload extraction;
+owned matches retain ordinary owned transfers.
+
+The checker retains E0404 for immutable/temporary roots and E0401 for views, including mutable view parameters and view-derived aliases. Actual consumed/uninitialized/loaned roots must be rejected by ownership/liveness analysis, not inferred from a mutable flag. Paths through enclosing nominal refinements require whole-value reconstruction and validation; bitfields retain constructor-and-rebind updates. Exact field types and their existing refinement conversion rules remain authoritative.
+
+Compiler-produced reflection metadata is not an ordinary mutable user record.
+Field paths cannot traverse the canonical builtin metadata owners: TypeInfo,
+TypeField, TypeBitfield, TypeBitfieldField, TypeMachine, TypeMachineState,
+TypeMachineTransition and TypeVariant. The type table records their exact
+identities when creating the builtins and preserves that identity through clones
+and canonical remaps; checked-place construction and revalidation use that
+registry, never spelling or structural shape. Whole genuine metadata values can
+still replace fields in user holders. This maintains the existing constructor
+and reflected-observer authority boundary.
+
+The checked place and every ancestor's readiness/state are established before evaluating the RHS once. Existing runtime pending-inspection failures are preserved without an implicit join or reading pending payloads. Precommit RHS/validation/allocation failure preserves the old field and retires temporaries; successful replacement retires the displaced field once and preserves sibling ownership, exact metadata, task depth and logical clone independence. Cleanup failures keep established failure precedence. Typed HIR/MIR place, move/loan and drop plans must make those edges explicit before emission. Resource custody and Graph/original-Source authentication cannot be bypassed by the ordinary update route.
+
+The checker rejects known move-only views at owned return boundaries and
+ordinary bare argument boundaries with E0401, including calls whose formal is
+View. It reuses declaration facts for view parameters, local views, and forwarded
+aliases, retaining the borrow through parentheses, `coarsen`, and `declassify`
+when the checked result is move-only. Ordinary, generic, indirect, pipeline and
+actor calls obey the same boundary. Lexical verify, property and breakpoint
+expressions retain Rule25's ordinary-data observation behavior only through a
+validated copy, borrow or owning snapshot. Capability and Resource authority
+cannot be acquired through observation. Explicit written view arguments to Owned
+formals retain E0375; implicit-copy results, valid clones, ordinary owned field
+copies without Resource data, and owned call results remain valid.
+Resource-bearing field acquisition requires a nonowning view or a genuine owned
+transfer.
+
+A rejected typed invocation has no ownership handoff. Ownership recovery reads
+its dependencies in source order, preserving independent nested-call effects and
+use-after-move errors. Invalid builtin type arguments retain the operand shape for
+checking but have an ERROR result and cannot select an acquisition packet.
+
+Caller ownership facts retain the resolved target, raw source occurrence type,
+formal access, original written syntax, exact binding identity, and lexical
+argument order in each ordinary, concrete generic, and reflected body. Pipeline
+inputs have a separate checked input fact from the step's callee and output;
+sharing a syntax span does not merge these roles. HIR seals source facts before
+physical conversions and retains generated metadata operands separately. A
+physical View wrapper cannot turn a bare transfer into caller retention.
+
+MIR records finite owning, copying, observation and loan stages while preserving
+the original source certificate. A relinquished View input first moves its full
+endpoint into one owning temporary at its lexical position, then borrows that
+temporary through the call. Compiler-generated calls seal their exact operation,
+result, target and argument order through one fallible factory. Their stages
+retain an immutable acquisition witness and a once-only private storage
+association. Private generated-producer shapes preserve the exact operation,
+target, typed occurrence, ordered fields and backing identities. Restoring a
+materialized local requires its unique dominating owning initializer and the
+same immutable producer shape. Ordinary snapshots require recursive ordinary-data
+proof; a callable signature or opaque carrier cannot grant cloning authority.
+MIR joins the packet to its exact initializer, Begin/End loan and typed original
+occurrence before pruning, move planning or native eligibility.
+Observation snapshots can precede existing interface conversion only when the
+sealed raw source is ordinary data with an independently supported clone. MIR
+clones that exact backing once and restores the existing conversion spine;
+an erased Interface signature does not grant cloning authority.
+
+Intrinsic operands normalize their closed physical View roles before the common
+ordered caller staging check. That check distinguishes relinquished owners from
+retained borrows without using a collection's clone support as transfer authority.
+
+Extracted breakpoint conditions retain private constructor-owned lexical regions.
+The ownership walker rejoins their exact statements, terminators, CFG boundaries
+and final endpoints before selecting observation context. Canonical sequence and
+uninhabited-sum preparation update these records through checked edits and remaps;
+copied, moved or forged markers cannot grant observation context. Archived source
+conditions do not keep removed blocks or locals alive.
+
+Compiler-generated refinement handlers retain their ordered exact predicate
+identities, candidate backing, error-empty tests, selecting branches and shared
+failure entry. One validated output and every owning default must reach the use
+through that checked graph. Transparent default conversions cannot acquire a
+borrowed loop binder. Canonical compaction remaps the private proof without
+turning it into an execution read or cleanup owner.
+
+View-loop binders carry a private typed element/key/value proof only inside their
+exact lexical loop body. MIR retains the original checked loop inventory while
+canonical sequence preparation records the exact borrowed source, cursor, length,
+binders and body/exit graph. Prepared records cannot manufacture a missing original
+loop, authorize a binder outside its body or acquire its borrowed storage. Dense
+compaction remaps these identities without treating proof metadata as execution
+reads or cleanup owners.
+
+Canonical simplification of a checked uninhabited sum arm carries private
+preparation metadata across compaction. Distinct absent-success and present-success
+records preserve their exact source, output, runtime tag and selected edge. An
+arbitrary Goto or default cannot replace the checked sum edge, and a retained
+successful payload still requires its exact extraction and owning source.
+
+Expression lowering descends through existing containers and conversions when a
+nested checked call requires owning staging, even if it contains no handler.
+Short-circuit boolean operands retain their selected control-flow arm and lexical
+evaluation order. These facts do not supply Resource runtime layout, providers,
+async or actor execution.
+
+Directly written return-view annotations report E0401 by unique annotation
+span, including unused generic headers, interface/inherent/implementation
+methods, inline functions, and callable result types. This declaration check
+does not expand named aliases or prewalk unused generic bodies. It adds no
+lifetime or projected-place policy. General call-produced borrow provenance
+remains a separate gap.
+
+Checked binding facts distinguish owned copies from borrowed local aliases by
+declaration identity in each ordinary, generic, and reflected body. HIR records
+an alias's immediate backing `LocalId`; every alias slot in the finite chain
+remains immutable. Its terminal may be an immutable owner or view parameter, or
+a mutable owned local/owned parameter authenticated by the exact active checked
+binding fact. Mutable view-parameter backing remains unsupported. This bounded
+mutable-owner extension has focused MSVC acceptance recorded in the local-view
+note. A direct initializer preserves the same carrier and interface erasure. A projected initializer uses its existing
+finite typed `Field` nodes to prove each ordinary-struct, bitfield or exact
+declared `MachineState` owner, canonical field index, intermediate type, endpoint type,
+and terminating local identity. A qualified-machine step resolves the exact
+machine/state definition before indexing that state's fields. A stale state,
+foreign owner, invalid index, or different endpoint cannot supply a proof.
+Every machine step must preserve its exact state, and the terminating local
+must match its actual declared source type. A flow-narrowed bare backing slot
+is outside this bounded path contract. The
+whole owner's type can differ from the selected field type; the typed path,
+not carrier equality with the whole owner, establishes that dependency.
+
+The shared projected-view proof accepts a base whose type is the exact owner,
+or one direct `Secret(owner_type)` for a declared Struct, Bitfield or
+MachineState. Declaration/state/index lookup remains exact. For a secret base,
+`nothing` and already-secret fields retain their declared TypeId; a bounded
+walk of a declared refinement's base chain detects secrecy without erasing its
+nominal identity. Every other field expression must be exactly
+`Secret(declared_field_type)`. This is separate from the existing final local
+annotation's outer-secret promotion. The original secret receiver stays in the
+initializer, preserving existing pending guards. No arbitrary wrapper peeling,
+declassification, carrier retagging, hidden owner or runtime change is added.
+
+Declaration-backed endpoint types retain their checked qualification and
+existing representation checks. No field-index path is duplicated in alias
+metadata, and no runtime ABI, hidden owner or implicit allocation is introduced
+for these paths. Each such borrowed initializer must pass the typed proof before
+optimization can remove unused locals or unreachable blocks. Generated snapshots and captured copies remain owned;
+origins from another body cannot survive as borrowed captures. MIR retains and
+remaps the backing chain, expands alias reads into whole-owner liveness, and
+excludes aliases from cleanup slots. Pending checks remain at each field access.
+Bitfield steps resolve their exact declaration and read the selected
+`BitfieldFieldDef.ty` from borrowed metadata, preserving the declared semantic
+type without copying a field table. Their canonical FieldId is zero-based
+and needs no physical tag offset. The canonical machine FieldId is also
+zero-based within its declared payload; native emission alone adds the
+existing machine tag-slot offset. Neither path duplicates physical indexes
+in alias metadata. Borrowed linear
+field reads keep the existing handle, while ordinary owned reads clone it.
+Concrete generic contexts preserve their checked endpoint types and binding
+modes: implicitly copyable endpoints remain copies, while move-only aliases
+retain their validated source dependency.
+Borrowed matches clone their scrutinee before taking payloads, and callbacks
+borrow their descriptor while it is invoked. Explicit clones still acquire
+independent ownership.
+MIR preserves validated borrowed initializers through transparent `coarsen` and
+`declassify` wrappers. Those bindings keep their backing handle; the owning
+snapshots used for ordinary value expressions must not replace their origin.
+Copy-owned alias expressions acquire retained string or cloned descriptor
+temporaries before entering containers; borrowed argument lowering reads their
+existing handles. Plain string view expressions retain ordinary copy behavior.
+
+Ordinary handled optional/result projections authenticate the explicit outer
+View, inner View of an exact stable sum binding,
+concrete endpoint type and terminal Return continuation. HIR retains the
+checked binding identity. The bounded mutable-owned extension records a
+private receipt for every canonical declaration, including final primitive/String
+copies. It joins the original mutable Owned binding fact, alias fact, initializer,
+concrete scope path and complete real function snapshot; View parameters and
+borrowed match/iteration binders gain no owning authority. MIR consumes that
+receipt before admitting a mutable backing and rejoins it against its immutable
+original HIR function. MIR seals the original declaration, current local
+headers, tag observation, selecting branch, success projection, absent path
+and final initializer before pruning or ownership planning. Generated sum and
+success-payload locals remain nonowning; a move-only final alias has the same
+backing dependency and no cleanup slot.
+
+The checked final ownership mode distinguishes a borrowed payload from an
+implicitly copyable primitive or String destination. The copy destination may
+be mutable, and String receives an owning retained copy. After it is
+initialized, constructor-only projection intermediates leave the borrow
+inventory, permitting a later ordinary shell transfer or unwrap. The Result
+Fail companion likewise owns one String copy. A nonconsuming runtime payload
+read preserves the shell and selected payload identity; pending scalar depth
+and opaque container metadata remain intact. Outer pending sums fail at Handle
+observation before either extraction or failure continuation.
+
+This bounded ordinary proof does not grant Resource custody or prove the
+payload identity hidden by erased interfaces, callables, actors or capability
+carriers. Alternate outer Default payload lifetimes, mutable View-parameter
+roots, missing or inconsistent selected owner facts, temporary-backed Handle
+aliases and general loan expiry remain outside it. Mutable-owner admission
+changes neither generated nonowning slots nor copied-payload loan retirement.
+The initial sum snapshot follows genuine callable sealing; later private sealing
+reports exact old/new callable tokens for replay against the protected body.
+Reflected source normalization omits only the independently validated sum proof
+inventory; the sum snapshot retains exact callable identity. Baked/materialized
+callable composition remains explicit unverified debt. See the
+[bounded mutable-owned sum acceptance](completed/native_codegen/native_mutable_borrowed_sum_backings.md)
+and the
+[ordinary borrowed-sum implementation](completed/native_codegen/native_ordinary_borrowed_sum_codegen.md).
+
+Native ownership planning conservatively refuses owner consumption or rebinding
+after a persistent move-only source alias may have been created on a reachable
+path. Final copied primitive/String bindings retain the ordinary ownership
+behavior described above. This does not select general source loan expiry.
+Mutable source alias chains, temporary-backed source aliases beyond the bounded
+ordinary function-body slice below, allocating conversions, flow-narrowed
+bare-machine origins, and field paths without the checked declared-owner proof
+remain explicit native limitations. Read-only
+aliases grant no write authority, and retained dependent loans block changes to
+their owners, including after the last alias read. Selected owned-local field
+updates follow their checked ownership and loan requirements. The producer
+follows retained local-view binding dependencies through only
+the selected concrete fact map, resolving each exact DefId and declaration span
+with bounded cycle detection. Original types, modes and mutable flags remain
+unchanged. HIR still requires the exact root join; missing or inconsistent facts
+cannot fall back to flat global maps. Focused MSVC acceptance is recorded in the
+local-view note. Borrowed-sum Handle aliases keep their separate checked backing
+receipt and [bounded mutable-owned acceptance](completed/native_codegen/native_mutable_borrowed_sum_backings.md).
+Owner transitions after source alias creation follow the same
+conservative owner-change refusal; see
+[the bounded implementation](completed/native_codegen/native_local_view_aliases.md) and
+[the stable projected-view contract](completed/native_codegen/native_stable_projected_local_views.md).
+
+The selected temporary-backed local-alias contract requires one compiler-owned
+whole producer result, evaluated once at the original initializer and retained
+to the declaration's original lexical scope exit. Immutable aliases and their
+forwarding chain remain nonowning. A private checked association must join
+the original body/declaration, owned producer and concrete type, finite typed
+projection, generated backing initializer, lexical scope and every cleanup
+edge. `CheckedViewSource::Other`, matching types or synthesized LocalIds alone
+are not proof; generated storage receives no invented Source DefId. Scope
+identity must survive extraction and remapping before pruning. Last-use
+liveness cannot retire this backing early. Each executed loop declaration
+has its own owner; exits retire only crossed scopes, after acquiring any
+owned Return/Respond/Default result. Aliases receive no destructor slots.
+Copyable endpoints, readiness/error order and existing escape/loan rules stay
+unchanged. No actor/Resource authority or call-view End extension follows.
+The bounded implementation recognizes original ordinary nongeneric function-body
+declarations whose checked direct named producer returns a finite ordinary
+struct, projected through exact typed struct fields to bytes or a list. Its
+native owner proof admits finite primitive/string/bytes/list/struct data; other
+owner shapes remain outside this slice. Checked reference transport currently
+supports bytes; list transport remains pending.
+The original Other fact stays intact. Admission additionally requires an exact
+immutable original `VarDecl` with a written `view` initializer and its canonical
+variable fact. Viewed pattern and iteration binders retain their existing
+borrowed paths without temporary owner authority. Complete nested declaration
+lookup preserves refusals for genuine written temporaries at raw entries and in
+unsupported regions. A private SourceCall receipt joins the original checked
+declaration, producer, whole-owner header, projection and
+scope; single-use canonical capture and the immutable archive's expected
+inventory precede current-marker validation. Exact conversion and peer replay
+cannot infer this authority from matching names, spans or layout. Reusing the
+archive grants no Resource custody or execution family.
+
+MIR validates its immutable HIR association and complete current graph before
+pruning or planning. It authenticates either the direct whole-result acquisition
+or its exact staged call/End/move chain, then pins the initialized owning slot
+through the original function-body cleanup edges independently of alias reads.
+Aliases remain nonowning. Existing result emission acquires the owned return
+before dropping occupied slots. Checked reference activations retain whole
+Values in vacant/live/retired storage with private nonowning tickets and named
+argument frames, and bind acquired output to the exact completed activation.
+Original root definitions declared through `mutual:` use the immutable
+resolver's definition-name-span edge to the existing declaration DefId. The
+lookup remains unique and registration retains complete typed AST, canonical
+name, namespace and signature checks; temporary receipts additionally retain
+the physical root, original call and activation. A later body is not required
+to reuse its earlier declaration span. Interface method dispatch stays outside
+this ordinary-root activation family. No Runtime helper, ABI, implicit clone or
+fabricated Source DefId is added.
+
+Focused compiler/reference controls and core libraries pass. A genuine checked
+Source control covers a factory's staged temporary argument before a later
+Handle; genuine nonidentity local compaction is separately covered. Synthetic
+disconnected-block controls are refused by the public graph guard/pruner and
+exercise only isolated exact temporary replay back to the original graph; they
+are not Source-generated pruning evidence. The two bytes temporary controls
+pass four paired Source-deleted native executions (Source Debug/Runtime Debug
+and Source Release/Runtime Release). The complete refreshed regression matrix
+passes 23 tests/46 executions with all Source/Runtime/fixture guards intact.
+These receipts do not measure native allocation/destruction timing, which
+remains pending. Nested declarations, loops, actor/Resource/generic/reflected
+contexts and types, and other producer families
+still owe implementation and cleanup evidence without new checker bans. The
+full selected contract, unchanged Source09 and remaining gates are recorded in
+[the temporary local-view note](completed/native_codegen/native_temporary_local_views.md).
+
+The bounded [List reference transport](completed/native_codegen/native_temporary_list_views.md)
+extends the same private owner/ticket adapter through exact retained generic
+instance facts. Canonical mutual body/DefId joins and actual written-VarDecl
+classification remain mandatory; pattern and iteration borrows keep their
+existing paths. The complete matrix passes 24 tests and 48 paired native
+Debug/Release executions under its fresh matching gate. It includes the focused
+List pair, with no additional distinct count. Physical cleanup and broader
+lifetime gates remain open. Runtime helpers and ABI are unchanged.
 
 **Implementation strategy:** Abstract interpretation over the control flow graph. At each program point, maintain a mapping from variable → ownership state. At control flow joins (if/else merge points, loop entries), states must be compatible:
 
@@ -663,10 +1049,11 @@ Track which capabilities flow through the program:
   through `test.mock.environment`. See the
   [Environment and argument capability contract](open_design/environment_argv_capability_contract.md)
   and implementation issue [#170](https://github.com/vycdev/jett/issues/170).
-- **Scripted provider seams are exact.** Successful host-side Random and Clock
-  conformance runs reject unconsumed samples instead of accepting a script whose
-  expected operations were only partially observed. Runtime failures remain
-  primary and are not replaced by this successful-run cleanup check.
+- **Scripted provider seams are exact.** Successful interpreter and native
+  Random, Clock, and Graphics conformance runs reject unconsumed inputs instead
+  of accepting a script whose expected operations were only partially observed.
+  Runtime failures remain primary and are not replaced by this successful-run
+  check.
 - **Application logging is a capability operation.** The source-owned
   `log.emit` and level wrappers borrow `view Log`. Their public types, wrappers,
   private trusted-kernel boundary, capability propagation, and secret-output
@@ -677,12 +1064,30 @@ Track which capabilities flow through the program:
 - **`trace` and `breakpoint` are capability-exempt** — they produce output/open connections without requiring a `Stdout` or `Network` capability. They are compiler keywords with special treatment, compiled out in release mode.
 - **`print` and `println` are compiler-owned debug builtins, not ordinary I/O.**
   They remain secret-output boundaries and require no `Stdout` capability. The
-  current interpreter shares its stdout path with `Stdout.write`; a distinct
-  debug-event channel is pending. Mode-aware checking rejects them in release
-  builds with E0362. Future backends must either route them through a
-  debug diagnostic channel or reject them; they must never silently lower to
-  ambient process stdout. Verify/comptime entrypoints may allow them only when
-  debug text is isolated from protocol output. See the
+  interpreter keeps one canonical ordered buffer of typed debug events with
+  exact text. Accepted Print/Println calls retain caller argument type metadata
+  before evaluation and recursively redact hidden secrets with `[redacted]`.
+  Retained concrete identities and builder field types drive observation;
+  the reference fallback for missing composite/field metadata redacts the
+  subtree without inventing an owner contract. Native malformed-schema guards
+  remain errors. Print rendering does not invoke user methods or inspect
+  captures, and emits one complete event after all arguments succeed. This
+  selection leaves pending-sum diagnostics separate. The accompanying direct-field
+  diagnostic repair retains checked receiver types; integrated verification is
+  pending. Native typed schemas and redaction checks remain intact. Runtime
+  entrypoints emit
+  those bytes to stderr; only `Stdout.write`
+  enters application stdout. The native DebugPrint leaf shares the diagnostic
+  stderr transport used by trace and breakpoint without changing the C ABI.
+  Driver results retain comptime and frontend verification observations apart
+  from runtime events, including observations preceding a failure. Baked values
+  contain no event replay. A separate attempted-expression/context ledger prevents
+  duplicate failed comptime recovery without caching failed values. Property
+  shrinking remains private, including replay errors. Agent output
+  serializes explicit phase and kind with escaped exact text; it never infers
+  event kinds from user text. Mode-aware checking still rejects print builtins
+  in release builds with E0362. Future backends must provide this diagnostic
+  channel or reject the calls. See the
   [decided policy](open_design/print_debug_builtin_policy.md).
 
 **Implementation:** For each function, compute the set of semantic capabilities
@@ -704,12 +1109,12 @@ Track `secret[T]` values through the program:
   payloads. Strings compare as UTF-8 bytes. The interpreter treats length as
   observable, rejects length mismatches directly, and passes equal-length
   payloads to a vetted constant-time byte comparison with no content-dependent
-  early exit. Unsupported payloads are rejected by the checker. Future
-  HIR/MIR/native lowering must use a vetted
-  constant-time primitive or otherwise preserve this no-short-circuit contract;
-  [#33](https://github.com/vycdev/jett/issues/33) defines the boundary, while
-  [#20](https://github.com/vycdev/jett/issues/20) and
-  [#22](https://github.com/vycdev/jett/issues/22) own future lowering.
+  early exit. Unsupported payloads are rejected by the checker. HIR/MIR/native
+  lowering must preserve this no-short-circuit contract; the Cranelift native
+  path uses the same constant-time byte primitive for supported string and
+  byte secrets. [#33](https://github.com/vycdev/jett/issues/33) defines the
+  boundary, while [#20](https://github.com/vycdev/jett/issues/20) and
+  [#22](https://github.com/vycdev/jett/issues/22) cover remaining native work.
 - `json.serialize` on a struct with secret fields is a compile error -> use `json.serialize_public`. Public JSON serialization omits secret-bearing record fields; it may descend through containers to project nested records, but rejects secret wrappers and secret-bearing enums when their secret data cannot be projected away through record fields. A future explicit full-serialization path can require a declassification token.
 - **Secret refinement types:** For `type ApiKey = secret[string] where string.char_count(value) == 40`, the `where` clause operates on the inner `string` value — the constraint function implicitly receives the unwrapped value for validation purposes only.
 
@@ -732,6 +1137,10 @@ For each `machine` type:
   when an API intentionally erases precise state. Parameter, return, and local
   annotation boundaries are authoritative: once typed as bare `Machine`, exact
   state is forgotten and is not recovered from construction or caller history.
+  Native HIR retains that declared bare type for local storage while constructor
+  and assignment expressions keep their precise state, owner, and source span.
+  Ordinary owned rebinding therefore accepts another valid state of the same
+  machine and retires the old payload through the existing cleanup plan.
   A positive `if value at state:` guard narrows that local variable back to
   `Machine at state` for the guarded branch, exposing state payload fields and
   legal transitions there. A bare `Machine` value cannot satisfy a
@@ -744,6 +1153,8 @@ For each `machine` type:
 - A narrowed local keeps the exact state type for the guarded branch. Assigning
   a different state to that same local is rejected rather than silently widening
   the branch fact in place.
+  Native assignment verification checks the target's exact state alongside the
+  underlying storage type, including when the backing slot is a bare machine.
 - If the guarded value is a bare machine and an `if` / `else if` chain excludes
   all but one declared state, the final `else` branch narrows to that single
   remaining state. For `if not (value at state):`, the immediate `else` branch
@@ -797,7 +1208,8 @@ concrete method bodies; struct construction records canonical field order and
 refinement validation; struct field access uses dense field IDs; list/map
 constructors preserve lexical element order; and pipelines become nested
 checked calls with the piped value as synthetic argument 1. Result, optional,
-and refinement-boundary handles are explicit typed HIR operations; their
+and refinement-boundary handles are explicit typed HIR operations; owned
+`ok`, `fail`, and `some` payloads transfer ownership into the wrapper. Their
 failure blocks distinguish local `default` fallback from function `return`,
 and step-local handles wrap only their intermediate pipeline call. Enum
 construction carries a dense checked variant ID and payloads; exhaustive
@@ -807,16 +1219,433 @@ arguments and explicit lexical evaluation order, core expressions, returns, bran
 loops, `for`, assertions/debug controls, string interpolation, comptime
 markers, explicit declassification/coarsening, state tests, and task-control
 markers are also covered. Bitfield and state-machine construction, transitions,
-and fields carry explicit checked types plus dense field/state IDs. Remaining
-compiler-owned calls carry canonical intrinsic identity, typed arguments, and
-lexical evaluation order after type checking has authorized them. Inline
-functions and indirect calls retain explicit parameter/local identity;
-comptime type-bind scopes erase to checked HIR scopes; actor spawn/send/ask
-carry typed operands and message identity. Actor receive handlers are
-deterministic HIR functions whose locals preserve checked capability, state,
-and message bindings; actor construction, persistent state layout, scheduling,
-and dispatch remain actor-runtime work. Remaining source constructs are staged
-by the [initial HIR lowering plan](active/hir_lowering_plan.md).
+and fields carry explicit checked types plus dense field/state IDs. Each HIR
+local keeps its declared binding type separate from its checked runtime type,
+so state narrowing does not change the debug label. Native `coarsen` verifies
+a checked refinement ancestor and transfers its base
+representation, including ownership of aggregate payloads, without a wrapper.
+MIR copy and move planning propagate the enclosing argument's borrow mode
+through coarsening, declassification, and validated-refinement expressions.
+Native argument emission follows that same mode through transparent wrappers,
+including local and field projections, rather than loading an owned argument
+from a view-only binding. Direct and indirect calls retain ordinary cleanup
+when a later argument fails.
+
+For source `list(...)`, `map(...)`, `some(...)`, `none`, `ok(...)`, and
+`fail(...)` literals whose checked type has outer `Secret` wrappers, HIR builds
+the constructor at the exact inner container type, then uses the existing
+`InterfaceCoerce` to restore the original checked TypeId and source span. It
+peels only leading secret qualifiers and requires the matching constructor
+shape; nominal refinements and arbitrary producer types remain untouched.
+Payload interface boxing, function adapters, and inferred `never` conversions
+still run against that exact inner type. Native constructor validation remains
+strict, and the outer qualification preserves the existing representation,
+evaluation order, pending metadata, and ownership.
+Source `Call` and `GenericCall` expressions with a checked struct-construction
+fact use the same split when the constructor does not validate refinements and
+the peeled checked TypeId exactly matches its nominal `struct_type`. Field
+conversions and lexical evaluation order remain inside that constructor. Calls
+to ordinary producers, reflected builders, mismatched nominal types, and
+refinement-validating result constructors retain their existing metadata.
+For a checked validating struct call, HIR also separates leading secret wrappers
+from an exact `result[Struct, string]` output. The nominal success type,
+validation flag, per-field predicate chains, and source evaluation order remain
+inside the constructor. MIR extracts predicate control flow within the existing
+qualification coercion. An empty predicate chain keeps the validating result
+shape; predicate failures retain ordinary result-data handling.
+Resolved bitfield and machine declaration calls use the same qualification
+boundary. HIR removes only leading `Secret` wrappers to identify an exact
+bitfield value or `result[Bitfield, string]`, retaining `validates_widths` and
+the declaration's nominal TypeId. Machine construction retains the exact
+`MachineState`, validates its machine and source-selected state identity, and
+preserves its payload order. The outer checked type and span are restored by
+`InterfaceCoerce` after the unchanged constructor. Ordinary producer calls,
+nominal refinements, reflected builders, and machine transitions do not acquire
+constructor metadata through this path.
+HIR local allocation also retains the checked declaration TypeId when it has
+outer `Secret` qualification, including repeated wrappers. A less-qualified
+initializer keeps its checked producer type; the existing `Let` coercion adds
+the declared qualification. This does not extend contextual literal inference,
+and `declassify` continues to remove one outer secret layer at a time.
+
+Native field validation follows the checker's direct-secret receiver rule for
+structs, bitfields, and state-qualified machines. A receiver is either the exact
+nominal owner or exactly one `Secret` around that owner. The declared field
+TypeId remains exact for public receivers, `nothing`, and already-secret fields
+(including secret-backed refinements); other secret receiver fields require
+exactly `Secret(field TypeId)`. Emission retains the original receiver type for
+pending diagnostics and ownership, uses the existing machine-state field offset,
+and preserves field depth and owned-copy behavior. Nested-secret or refinement
+receivers, mismatched nominal owners, invalid indexes, and forged result types
+remain rejected. Direct-field receiver failures retain the original checked
+receiver type in both execution paths. The reference renderer observes the
+original value before consuming its wrappers and applies the existing typed
+secret redaction, matching native pending receiver diagnostics. Unsupported
+`handle` receivers use the same typed formatter before wrapper consumption;
+pipeline steps retain their full result type independently of the handler's
+error-child type. Neither diagnostic joins pending values, declassifies payloads,
+or changes the failure point. Pending-sum controls have bounded reference and native acceptance; other terminal paths retain separate audit obligations.
+
+For refinement boundaries, HIR lowers each checked predicate to a
+compiler-owned pure function. MIR calls unvalidated ancestor predicates in
+base-first order and branches to the source `handle error` block on a false
+result; successful construction transfers the original value through an
+explicit validated-refinement expression. An already-refined input skips its
+validated ancestors. A secret-backed input is unwrapped only for the checked
+predicate call. Direct struct constructors use the same predicate path for
+refined fields. Predicate runtime failures remain a future slice.
+Predicate functions retain their declaration namespace. Interpreter validation
+uses the same context: caller locals, namespace aliases, generic arguments,
+scoped type bindings, and per-function checked maps are isolated until validation
+returns. Predicate `value` has the fully coarsened base type with the outer
+secret wrapper removed, matching the checker and native predicate parameter.
+Inherited interface refinements therefore dispatch through that base inside
+their predicates. Both successful and rejected boundaries restore caller context.
+Interpreter local and direct struct-field boundaries capture the original
+checked source type before evaluating the expression or normalizing its value.
+Exact established refinements skip validation; ancestor inputs skip only the
+validated prefix. Result and optional handling supplies the checked success
+payload type only when extracting that payload. Explicit coarsening and sibling
+refinements cannot reuse discarded or unrelated predicates. This proof path
+does not use runtime `Typed` labels; metadata-free calls and property-shrink
+candidates retain their existing validation entry points.
+Direct generic struct construction resolves actual type arguments in caller
+context, maps them to the struct's own parameters, and resolves declared fields
+in declaration context. The selected concrete field types determine fallible
+result wrapping, independently of the caller's generic bindings and imports.
+Checked named calls, method calls, NamedFunction values, and source pipelines
+transport each argument's original source proof alongside its value. Named
+argument permutation moves both together. Return signals retain the checked
+return expression type until the named function boundary; a declared return
+type is never a proof of that expression. Public/raw call entry points disable
+refinement proof reuse throughout nested execution, including checked bodies,
+callbacks, and forced refinement validators. This prevents forged refined
+aggregate children from gaining proof through their declared field or element
+types. Checked program and zero-argument verify entries use an explicit bridge;
+their inputs still undergo forced normalization without invented source proofs.
+Inline closures retain their declared return annotation in the captured lexical
+context. Parameter and return normalization and refinement validation run before
+that context is restored; actual return-expression facts supply the same proof
+as named calls. Host-generated callbacks retain their separate forced-call path.
+Native returns into a root refinement validate the original checked expression
+before representation coercion. The selected concrete function signature supplies
+the destination, including generic methods and scoped inline functions. Exact
+sources retain their proof; ancestor sources skip their established predicate
+prefix. MIR stages the candidate once and uses its existing refinement checks.
+A compiler-owned `RuntimeFailureMessage` borrows the captured string error and
+terminates through the existing runtime failure leaf, preserving cleanup and
+the first predicate error. It has no source spelling and adds no ABI operation.
+Fresh private sum fallback results validate their selected actual type before
+checked source execution can reuse it as a proof. Raw and metadata-free calls
+keep the existing forced facade return boundary. This does not select a broader
+summation domain or change primitive arithmetic.
+Reference and native reflected field producers establish newly requested
+refinements before the result type becomes reusable proof. Already admitted
+requests use recursive producer trees for `list`, `set`, `map`, `optional`, and
+`result`, including root refinements over those wrappers. A complete structural
+pass over occupied payloads precedes every new predicate. Collection order is
+preserved, with each map key before its value and child validation before an
+enclosing root predicate. Empty collections, absent optional payloads, and
+inactive result arms have no child checks. Pending changed wrappers fail
+readiness before predicates; primitive pending children retain the ordinary
+predicate-error boundary. Neither pass joins a value.
+
+Actual checked declared schemas supply exact or ancestor proof; runtime labels
+do not. Requested named ancestors skip their established predicates, and the
+nearest established common named ancestor supplies a root branch's proven
+prefix. Exact whole schemas preserve pending depth. Child proof reuse does not
+make a changed outer wrapper exact: a named root over `list[Positive]` requested
+as `list[Positive]` still needs a ready list, despite zero child predicates.
+Requests containing no refinements skip producer validation. The root-ancestor
+lookup never obtains facts from an outer secret qualifier, collection, or
+nominal payload field.
+
+TypeInterner retains immutable canonical argument TypeIds for instantiated
+generic structs. The checker registers the selected arguments before resolving
+recursive fields or installing the instance cache; repeated registration must
+agree and invalid IDs or conflicting arguments fail registration. Producer
+refinement detection follows these argument edges, including unused parameters,
+and never substitutes ordinary struct, enum, machine, or bitfield payload
+fields for generic arguments. Transparent aliases share canonical IDs while
+source reflection retains their written identities. Closed HIR type validation
+also visits unused argument edges, so an unresolved error type cannot hide in a
+phantom parameter. This metadata does not select a nominal conversion.
+
+Reference reflected-name normalization tracks only the active alias-expansion
+path. Completed sibling arguments leave that path, so repeated aliases and
+refinements compare independently while actual recursive re-entry remains bounded.
+Native reads carry complete per-declared-slot typed validation trees in HIR.
+Each node retains its actual declared source TypeId and requested TypeId;
+validators reconstruct the canonical action, occupied wrapper schema, and
+unproven refinement suffix. Predicate targets must be the exact canonical
+refinement declarations with their selected base and input types. A new root's
+base node retains the original actual root TypeId so erasure cannot manufacture
+an exact-schema exemption.
+
+Direct and piped getters share the canonical hidden field-metadata tail,
+appended after the original source and selector operands. Narrowed machines keep
+their checked state identity while metadata uses the complete machine layout.
+The one-operand observers `type.variant_value`, `type.machine_state_value`, and
+`type.arg` likewise share their direct/pipeline metadata expansion. User operands
+run first; the checked pipeline output type selects each hidden metadata value's
+type, because the pipeline step span describes its input. Variant ordinals and
+discriminants remain distinct, and narrowed machine observations retain all base
+states. Existing runtime observation and cleanup leaves consume the same metadata.
+
+MIR stages the original operands once and completes the raw getter's existing
+selector and compatibility checks before dispatching the selected slot's tree.
+The getter produces an independent candidate; both passes leave it unchanged.
+Sequence projections clone private child snapshots, and occupied sum projections
+take payloads only from private sum clones. The first failure borrows its captured
+string through `RuntimeFailureMessage` before cleanup, preserving the original
+predicate error. Ownership, reachability, and backend verification cover the
+expanded control flow. The internal raw-read marker is emitted after consuming
+a checked HIR plan; leftover or missing markers fail MIR validation.
+
+`ReflectedContainerReady` is a compiler-owned typed MIR statement with a
+canonical diagnostic and an exact builtin wrapper contract. Codegen borrows its
+handle and extends dispatch tags of the existing `RejectPendingHandle` leaf for
+sets, maps, and sums; no runtime symbol or signature changes. Readiness inspects
+only that wrapper's pending depth, preserving source identity and child depths.
+Raw carrier compatibility recurses through the five builtin shapes, matching
+secrecy at every layer and retaining exact nominal, callable, and primitive
+identities. Existing root interface conversion remains separate; nested erased
+interface adapters and changed secret, callable, or nominal generic proofs keep
+their conservative refusals. Occupied unsupported proof nodes fail during
+preflight, while inactive branches do not run proof checks. The raw selector's
+compatibility relation still runs first. These safeguards do not select the
+broader [reflected requested-type admission rule](open_design/reflected_field_request_compatibility.md).
+Written type aliases resolve once in lexical context. Resolved checked owners,
+installed generic arguments, captured bindings, and reflected metadata retain
+their canonical declaration identities through selection and normalization.
+Canonical operations isolate caller aliases; function bodies keep their imports.
+Written view wrappers retain borrowing metadata while their underlying refinement
+still validates at raw boundaries.
+Explicit comptime HIR retains its original source span for evaluated-value lookup,
+independently of an enclosing expression span widened by parentheses.
+Interpolation selects the exact checked `Displayable.display` owner before
+using built-in primitive formatting. Interpreter selection uses the expression's
+checked type as well, preserving an interface's own display implementation over
+its concrete payload. Implementation registration resolves the interface's
+declaration namespace independently of the implementation's namespace.
+HIR marks implicitly selected display results with an exact string-to-string
+`DisplayResult` boundary. MIR retains that boundary inside staged interpolation
+segment initializers, so a pending result fails before later handlers or
+effects. Native code borrows the returned string for the readiness check and
+retains its existing owning slot for ordinary use or failure cleanup. Explicit
+method calls and ordinary pending string formatting remain unchanged.
+When a pending interface receiver cannot dispatch, the interpreter and generated
+dispatcher both name the registered interface method with its canonical namespace.
+Remaining compiler-owned calls carry a closed `IntrinsicId`, typed arguments, and
+lexical evaluation order after type checking has authorized them. The shared
+registry is the only source-spelling-to-intrinsic boundary; HIR, MIR,
+comptime/runtime dispatch, and native codegen consume the checked ID and use
+exhaustive matches rather than rediscovering policy from names. Inline
+functions and indirect calls retain explicit parameter/local identity. An
+indirect call evaluates arguments in lexical source order before resolving its
+function-valued expression, including a returned function or projected field.
+Argument handlers can change callback selection or return before the callee is
+evaluated. HIR preserves checked constructor, source function, and intrinsic
+identities through parentheses; other checked function expressions become
+`IndirectCall`. Checked declaration parameter names order named arguments;
+anonymous function values reject argument labels. Ownership analysis follows
+the same evaluation order, and capability signatures enforce call purity for
+every callee shape. Function types carry parameter `view` modes through HIR and
+MIR; native indirect calls borrow view arguments through the call and transfer
+only owned arguments. MIR lowering receives the checked type interner; existing
+handler snapshots remain restricted to recursively cloneable value types.
+Original explicit views of exact checked local/field origins instead use typed
+`BeginCallView` and `EndCallView` statements when snapshots cannot preserve the
+borrow. The initializer is evaluated eagerly, keeping checked field and pending
+receiver guards before later handlers. Direct views add no readiness check.
+The internal local is immutable and non-owning; its terminal owner may be
+mutable, and an ordinary owned temporary root evaluates once into a separate
+owning slot. Ownership/liveness analysis protects the owner through the complete
+operation, then kills only the internal loan. The operation result is stored
+before End; aborted returns/responds end abandoned loans before their owned
+operand, while break/continue respect the target loop's scope depth. Original
+metadata and every Begin/End path are validated before pruning; source alias
+names cannot authorize scope expiry. The emitter allocates no destructor slot
+for the internal alias and End emits no runtime ownership action. Existing
+source alias loans remain persistent. For an exact source-checked mutable plain
+`TypeConstruction` root, constructor-owned records now preserve a captured
+generation across later assignments. The original call, Source binding fact,
+full local header and assignments remain sealed independently of current dense
+IDs. Exact CFG and loan checks authorize a private escrow: the replacement RHS
+is acquired before the first old generation moves there; subsequent replacement
+owners and the captured generation retain separate cleanup. Canonical preparation
+validates and remaps current records without turning archival IDs into reads.
+Broader simultaneous cohorts and other owner kinds remain separate work; no
+source clone, owner pin or runtime ABI permission is introduced.
+
+A handled owned producer under written `view` is materialized once through its
+original checked endpoint conversion and exact owning Let/Begin/End proof. A
+fresh validated `CallerAcquisitions` map associates only that exact interface
+boxing occurrence with its proved concrete View input. Move analysis reads that
+input borrowed while keeping the produced box owned; unrelated View initializers
+retain their escape refusal. Runtime boxing may copy its payload, so this is not
+a zero-runtime-copy guarantee. The original Source/Handle and produced-result CFG
+checks remain mandatory. See the
+[scoped implementation contract](completed/native_codegen/native_scoped_call_view_staging.md).
+Interpreter function and closure invocations expose their own lexical scopes
+and the initial global environment, excluding unrelated caller locals and
+namespace aliases. Closures retain the namespace aliases visible at creation.
+Concrete source method values carry a separate checker-selected source-body
+identity through ordinary, generic, and reflected comptime body facts. HIR
+resolves that identity to the registered method function instead of treating
+the type namespace as a runtime field. The receiver stays an explicit callback
+parameter, with its checked ownership mode. Interpreter registration retains
+the declaration namespace separately from the qualified method name, so method
+bodies resolve their lexical helpers consistently for direct and indirect calls.
+Qualified interface method values carry the checked interface type and method
+slot through those same fact maps. HIR collects slots used only as callbacks,
+including generic and nested reflected bodies, and resolves them to the existing
+zero-capture dispatcher. Parameter types and view modes remain exact; the
+explicit receiver selects an implementation at invocation. Direct qualified
+calls retain their selected call target without an unused callback fact.
+Interpreter registration retains declared slots even without implementations,
+and transparent interface aliases produce the canonical named callback.
+Those aliases resolve their targets in declaration scope; caller namespace
+imports and generic type bindings cannot redirect the selected interface.
+Explicit compile-time callback values are materialized from the generated
+dispatcher's reserved identity and canonical debug name, rather than a concrete
+implementation body. Creating a callback does not invoke it or capture authority.
+Declared interface slots take precedence over concrete methods with a colliding
+qualified display name. The interpreter cannot fall back to that concrete body
+after failed dynamic selection, and compile-time materialization excludes the
+colliding source candidate while retaining its distinct implementation function.
+Generic body checking similarly saves and restores the triggering closure's capture
+scope so a generic callee's parameters cannot be mistaken for captures.
+Generic annotations on an inline function use ordinary type substitution;
+they do not by themselves make its enclosing function reflection-dependent or
+remove its concrete instantiation from native lowering.
+HIR/MIR function debug metadata retains named source identities and inline
+origin separately from native symbol identity. Function descriptors retain an
+owned display label alongside the code address and capture environment, so
+trace and breakpoint rendering can borrow function values inside recursive
+aggregate debug layouts without invoking callbacks or inspecting captures.
+Native actor registration assigns a separate debug ordinal in spawn order.
+Recursive debug layouts read that ordinal from a validated live actor handle
+and render `actor#N` without exposing the native allocation identity or state.
+For a non-short-circuit binary expression with a nested handler, the left value
+is captured before lowering the right; owned cloneable operands are cloned so
+the handler cannot change the value compared by a later enum equality.
+MIR also extracts handlers from field-access receivers, state-test operands,
+and `clone`, `coarsen`, and `declassify` operands. It evaluates handled `if`
+and `while` conditions in their respective control-flow blocks, so a loop
+rechecks the condition on every iteration, and evaluates handled `match`
+scrutinees before selecting an arm.
+Handlers in `for` iterables are extracted before the loop header. Sequence lowering
+then materializes the iterable once on the resulting preheader path, so a loop
+backedge never re-evaluates the source expression.
+For a checked list with an uninhabited element or map with an uninhabited key
+or value, HIR omits lowering the body after source checking. Native sequence
+preparation retains iterable materialization and the ordinary length/pending
+check, ends any iteration loan, and routes directly to the exit without reading
+an element. It compacts unreachable blocks and unused locals only in functions
+changed by this lowering, preserving dense IDs and retained debug metadata.
+Eager concrete generic specializations with a bare `never` parameter or result
+are not implicit native project roots. Retained calls require ordinary callable
+verification; a retained function descriptor is distinct from invoking its body.
+An exact non-capture `never` input permits descriptor-only representation, with
+normal capture storage, cloning, pending depth, labels and cleanup. Original
+typed metadata must be checked before preparation prunes any body or local,
+while native control-flow and ownership checks follow normal preparation.
+Original local and debug types are checked before unused enclosing-frame slots
+are compacted across all original blocks and typed references. This removes
+transferred inline-body slots without changing parent control flow or erasing
+real parameters, bindings, captures, observations or loan dependencies.
+Original type validation distinguishes checked metadata from native value
+eligibility. An exact `never` function result can appear in original metadata,
+including nested container and nominal types, without proving descriptor-only
+invocation. This preserves closures in absent optional/result arms until normal
+arm preparation removes their creation and calls. Function view-schema lengths
+and every inhabited child type are still validated before compaction. Prepared
+runtime classification remains strict: a surviving return-only `never` function
+is unsupported, and no `never` capture environment or carrier is emitted.
+The descriptor retains a nonzero internal trap entry with no `never` parameter
+or return carrier; no valid call reaches it and no original body effect is
+emitted. Created `never` capture environments, mismatched signatures and
+surviving impossible calls remain invalid. A return-only `never` signature does not grant this proof.
+
+Descriptor metadata validation also follows exact function, closure and adapter
+value targets inside the proven uncallable body. It checks each target identity,
+signature, view mode and capture-local type before a separate visited FunctionId
+set prevents repeated body traversal. Every followed original body is checked;
+this traversal does not add native callable roots or emit an inner environment.
+A latent zero-argument closure may describe an owned `never` capture from the
+outer input. Actual closure creation retains the ordinary copyable capture
+restriction and rejects uninhabited environment values.
+
+This body phase uses recursive OriginalMetadata classification for composite
+types and recognizes only exact `never` or one direct `secret[never]` as absent
+value metadata. Function-descriptor classification may omit that exact result
+shape only with an exact `never` input; original return-only type metadata is
+not runtime authority. Literal fabrication, malformed nested TypeIds/view
+schemas and surviving callable uses still fail. Arbitrary wrapper/refinement
+peeling, opaque Resource layouts and hidden-secret observation policy are
+unchanged. The existing descriptor trap ABI and native reachability need no
+new carrier or runtime operation.
+
+Inhabited containers and
+absent sum arms containing `never` retain their normal representations.
+Native handler preparation also recognizes an exact final `SumTag` followed
+by a branch on its checked boolean local. An optional with a `never` payload
+can only take absence; a result with exactly one `never` payload can only take
+the other arm. The pass retains sum observation, input evaluation, and pending
+diagnostics, then bypasses the impossible extraction and compacts only changed
+functions. It leaves other graph shapes and results with two uninhabited arms
+unchanged. Snapshot cloneability ignores absent `never` sum children while
+retaining the ordinary policy for inhabited payloads; bare `never` still has
+no runtime carrier or clone operation.
+Generated inline functions are reached through retained descriptors and calls,
+rather than treated as independent source-declaration roots. Native preparation
+compacts their copied local tables even when their own graph contains no erased
+loop or handler arm, preserving capture/parameter order and function identity.
+This removes unused parent bindings without changing named-function admission.
+The frontend's directional compatibility and collection-literal common-type
+inference establish these uninhabited proofs: concrete values cannot populate
+a `never` place, while mixed empty/absent members refine only their compatible
+uninhabited slots. Handler defaults, declarations, calls, constructors, and
+returns retain ordinary assignment checks before any native arm is removed.
+Contextual sum handling keeps the producer's original local or call signature.
+Inhabited nested containers receive an explicit conversion before extraction;
+empty collections are rebuilt with the target ownership flags, and nested
+function values retain their checked adapters. Owning Handle snapshots clone the
+underlying local before conversion so owned and borrowed sources stay readable.
+A certified ordinary borrowed-payload initializer instead preserves the exact
+backing and nonowning success projection described above.
+Inferred generic reflection peels transparent aliases only at each argument's
+root and preserves nested alias witnesses. Repeated compatible witnesses fill
+only missing `never` slots; concrete alias identity follows declaration parameter
+order. The checker and reference evaluator retain the same reflection names and
+kinds, including calls whose empty input comes through another generic local.
+Assertion and breakpoint conditions also extract handlers before their MIR
+statements execute. Assertion messages remain on the failure-only path.
+Handled machine transitions snapshot their source and payloads in lexical
+order before the new state is constructed. An earlier value cannot change when
+a later payload handler runs.
+`run` and `join` also extract handlers from their operands before the task
+operation, preserving the pending representation for `nothing` and other
+values.
+Actor spawn arguments use their checked lexical evaluation order when handlers
+are extracted. Actor messages capture the target first and then their ordered
+arguments, so a later handler cannot change an earlier message value.
+Actor handler execution retains a private checked session, original actor syntax,
+canonical actor type and handler ordinal. Exact capability, state and message
+roles join checked declaration facts to physical locals; persistent state is
+validated at real exits. Send/Ask facts retain their original outer expression,
+receiver, lexical argument acquisition and checked body/scoped context. Copies
+from another session, handler or scoped occurrence cannot grant this authority.
+The [actor field-update note](completed/native_codegen/actor_handler_field_updates.md) records this
+checked contract, bounded MSVC acceptance and remaining obligations.
+Comptime type-bind scopes erase to checked HIR scopes; actor spawn/send/ask
+carry typed operands and message identity. Generated actor receive bodies retain
+the original handler receipt and exact capability, state and message slots through
+HIR, MIR, construction and synchronous dispatch. Generated function identities do
+not replace original handler authority. Real asynchronous scheduling, authenticated
+Resource transport and wider frozen-graph compositions remain separate obligations.
+Remaining source constructs are staged by the [initial HIR lowering plan](active/hir_lowering_plan.md).
 
 The initial implemented `jett_mir` boundary accepts only HIR that passes the
 HIR structural validator. It lowers top-level `if`, `while`, exhaustive
@@ -836,9 +1665,63 @@ The HIR is the first representation where generic functions are fully expanded. 
 Resolver `DefId` and `TypeId` values remain session-local join keys. An
 in-memory HIR function identity is the compiler-supplied source origin,
 canonical namespace, canonical declaration name and kind, plus concrete type
-arguments. Persistent artifacts replace raw type interner IDs with canonical
-structural type identities. Lowering never infers source authority from
-`FileId` ranges or trusted-looking names.
+arguments and the checker-owned reflection-visible specialization facts.
+Persistent artifacts replace raw type interner IDs with canonical structural
+type identities and encode those specialization facts deterministically so an
+alias-specialized body cannot collide with its underlying-type body. Lowering
+never infers source authority from `FileId` ranges or trusted-looking names.
+Checked reflection operands also carry source-aware names, kinds, secret flags,
+and nested arguments into HIR and MIR. Scalar reflection and recursive
+`TypeInfo` construction use those facts instead of reconstructing aliases from
+canonical `TypeId`.
+The checker restores both the canonical type and source kind inside a
+`comptime type` binding. Generic calls made from that scope therefore select
+the alias branch before the underlying struct or collection branch; nested
+`type.arg` bindings resolve the aliased base while retaining its source-aware
+reflection metadata.
+`type.fields` lowers checked field snapshots into ordinary `TypeField` values
+only for struct and bitfield kinds; an alias remains a distinct total probe.
+The ordinary checked interpreter authenticates the original field intrinsic
+call or pipeline step before selecting the canonical struct or bitfield owner.
+Field metadata and the construction lifecycle use that same canonical owner
+when its generic arguments contain transparent aliases; source-visible names
+and `TypeInfo` still retain those aliases. The ordinary cursor carries no
+Resource custody or refinement proof authority, and its canonical field table
+must exactly match the retained checked program.
+`type.bitfield_layout` and `type.bitfield_fields` likewise lower checked
+bitfield layout snapshots into `TypeBitfield` and `TypeBitfieldField` values;
+other kinds produce an empty layout, including source aliases.
+`type.variants` lowers checked enum variant snapshots and their payload-field
+metadata into `TypeVariant` values; non-enum kinds, including aliases, produce
+an empty list.
+For a concrete enum, `type.variant_value` carries those same checked snapshots
+as hidden HIR operands. Native code reads the enum tag, selects the matching
+snapshot, and returns an owned clone without consuming the enum or its payload.
+`type.field_value` and `type.variant_field_value` likewise carry checked
+`TypeField` snapshots as hidden operands. Native code selects a candidate by
+field index and, for enums, the active variant tag; a runtime leaf validates
+the supplied metadata against that candidate before reading the borrowed
+source. The result receives its own ownership where required. Native mismatch
+diagnostics and alias-equivalence checks still need interpreter parity.
+`type.machine_state_value` uses the same snapshot handoff for checked machine
+states, selecting the active state by tag and returning an owned clone.
+`type.machine_field_value` selects a checked `TypeField` by active state tag
+and field index, validates the supplied metadata, then copies the payload
+from the borrowed machine. Exact mismatch diagnostics remain pending.
+Static `type.machine_layout`, `type.machine_states`, and
+`type.machine_transitions` lower checked state and edge snapshots into ordinary
+`TypeMachine`, `TypeMachineState`, and `TypeMachineTransition` values. Alias and
+non-machine probes produce empty layouts and lists.
+Reflected `comptime type` loops carry one checker-specialized MIR arm per
+concrete bound type. HIR records a canonical identity from checked `TypeInfo`
+metadata for each arm; native code compares the borrowed runtime `TypeInfo`
+recursively before selecting exactly one arm. Source aliases are transparent
+to dispatch identity while their source-aware names remain available inside
+the selected body.
+`type.arg[T](index)` carries checked, source-aware `TypeInfo` snapshots for the
+type arguments of `T` as hidden HIR operands. Native code validates the runtime
+index and returns an owned clone of the selected snapshot. Exact out-of-range
+diagnostic parity remains pending.
 Interface-implementation method declarations additionally include both the
 concrete owner and canonical interface in their identity.
 
@@ -853,6 +1736,48 @@ concrete owner and canonical interface in their identity.
    `string` are implicitly copyable. The primitive `bytes` type remains
    move-only and follows the same view/consume rules as other owned storage.
 7. **Comptime reflection lowering:** Preserve enough type metadata for comptime code to inspect `type.name[T]()`, `type.kind[T]()`, `type.has_secret[T]()`, `type.fields[T]()`, bitfield layout metadata, state-machine state/transition metadata, active machine states, and reflected active-state payload fields. JSON serialization is expressible in terms of these reflection primitives rather than as format-specific HIR magic. Struct, bitfield, enum, and state-machine deserialization use the explicit `TypeConstruction` builder family to build `T` from parsed field values; that builder is the sole canonical source form, with no parallel construction-block syntax.
+
+Native JSON lowering currently bridges checked `JsonTree` calls to trusted raw
+stdlib functions. For primitive serialization it constructs a checked
+`JsonTree` variant and uses the same source serializer. Primitive parsing for
+`string`, `bool`, `int64`, `uint64`, `float64`, `bytes`, and `nothing` calls
+private stdlib decoders over that tree. This is an interim lowering path while
+other concrete generic JSON bodies are staged for native specialization.
+Structs, lists, string-keyed maps, optionals, and results composed of supported
+primitive values now run the checked reflected stdlib serializer. The
+compiler-owned public policy gates still run first.
+Those gates already admit inferred uninhabited slots. Serializer source
+eligibility must retain `Type::Never` in an otherwise supported empty or
+absent carrier, without choosing a default element type or introducing a
+runtime Never representation. The same recursive checks still reject every
+unsupported inhabited slot; runtime emptiness is not a policy exception.
+The frontend checks the selected reflected source bodies before HIR/MIR omit
+impossible payload operations. Existing uninhabited preparation retains
+carrier evaluation, length or sum-tag observation, pending checks, and cleanup
+before normal native verification, independently of optimization.
+The selector repair, executed focused gates and remaining release gates are
+recorded in
+[the inferred JSON slot note](completed/native_codegen/native_json_uninhabited_slots.md).
+The separate parser eligibility repair retains `Type::Never` in otherwise
+supported inferred carriers. Checked reflection facts select the existing
+unknown-kind decoder, whose return type is inhabited `result[Never, string]`:
+it returns the ordinary unsupported-reflected-type error and must remain
+reachable. It does not construct Never, choose a default payload type, or
+replace the checked stdlib body with a native generic fallback. The ordinary
+array index loop still calls this decoder for occupied input; optional and
+result decoding skip only genuinely unoccupied payloads. Raw parsing, exact
+validation, field/index/arm prefixes, pending checks and cleanup retain their
+order. Existing uninhabited sum preparation may remove an impossible success
+extraction only after retaining the decoder call and sum observation. Checked
+TypeInfo/TypeKind argument facts select source branches; ordinary pure helper
+folding supplies no source-validity proof. Public JSON/key filters and inhabited
+unsupported targets are unchanged. Characterization and pending acceptance
+are recorded in [the parser contract](completed/native_codegen/native_json_uninhabited_parse_slots.md).
+The checker also records a source parser facade for `json.parse[T]` and
+`json.parse_exact[T]` pipeline steps from the checked result's success type.
+It uses the existing direct-call facade mechanism after public JSON policy
+and ordinary argument checks; HIR retains pipeline argument order, ownership,
+and step-local handlers.
 
 ---
 
@@ -971,11 +1896,63 @@ primitive interface dispatch. The same normalization enforces the declared
 `int8`/`int16`/`int32` and `uint8`/`uint16`/`uint32` ranges after expressions
 and at typed assignment, parameter, and return boundaries; values outside the
 checked primitive range stop interpretation with a deterministic diagnostic.
+The same checked-expression and declared-type normalization rounds float32
+literals and arithmetic results to f32 before widening into the internal
+`Value::Float64` carrier. Both runtime and explicit comptime evaluation use
+this boundary, so intermediate arithmetic cannot silently retain f64 precision.
+Native formatting and interpreter display both format that exactly widened value.
+The explicit pure `float32.from_float64` intrinsic applies this same rounding
+at runtime and in comptime; native codegen emits a scalar f64-to-f32 demotion.
 The driver additionally evaluates every explicit `comptime expression` after
 type checking and stores the resulting value by source span. Runtime
 interpretation consumes that stored value instead of evaluating the expression
 again. Explicit expressions are evaluated in an empty lexical environment, so
 runtime parameters and locals cannot leak into required compile-time work.
+The collector carries visible block-local `use` aliases as name bindings for
+each expression, including shadowing in nested blocks. Each evaluation has an
+isolated alias scope, so aliases cannot leak between baked expressions.
+
+A native verify audit entry is constructed from the retained checked primary
+file, selecting exact original Verify identities and their current protected
+bodies in source order. For an authenticated ordinary archive, the private HIR
+factory first checks the exact checked session, original type meanings and
+whole current function table. It appends only generated zero-argument Verify
+calls with `nothing` results and validates each call's ownership and target
+signature before renewing the existing reflected and Graph transitions.
+Original Source, constructor recipes, required values and ABI metadata remain
+unchanged. No caller-provided function or target list can renew that custody;
+edited existing bodies or edited appended suites fail the next conversion
+gate. Ordinary lowering without a protected archive retains its existing
+suite path and cannot gain Resource or Graph authority.
+
+The successor Resource suite transition retains the complete protected current
+table and immutable original Source separately. Its private factory appends only
+the exact checked Verify or Property wrapper, retains the successful required
+cache and opaque generated-case plan, and issues an Arc-backed receipt for each
+whole-wrapper preorder call occurrence. Identical sampled values do not merge
+trial identity. MIR carries a distinct boxed native-suite invocation role; it
+never manufactures a Source call certificate or admits Generated Resource calls
+by type alone. Canonical conversion preserves the private recorded-output receipt
+and validates the unchanged-before archive before joining its Graph, reflected and
+temporary peer transitions. Its transaction publishes only after sealing and all
+final HIR/backend-type checks. The first connected
+activation slice has ordinary generated arguments and a Nothing result; all
+transitive Resource aggregate helpers retain their existing Source/carrier plans.
+Zero provider acquisition and custody still require observed native evidence.
+See the [candidate protocol and acceptance boundary](completed/native_codegen/native_resource_suites.md).
+
+The Builder's contextual extraction predicate also recognizes exact retained
+direct Source calls in the Resource execution family whose arguments and result
+have ordinary endpoints. It propagates through existing eager/ordered operand
+containers with their original eligibility checks, stages preceding values in
+checked source order, and puts a lazy boolean RHS region only in its selected
+branch. Each normalized region authenticates the complete original tuple before
+extraction and retains ordered actual/site/header associations through its
+Begin/Stage/Invoke/End sequence; failed construction restores its checkpoint.
+This changes neither the suite wrapper's flat private protocol nor the separate
+carrier custody proof. Resource-bearing endpoint staging, indirect/hook timing,
+refinement-handler exits and broader aggregate contexts remain independent
+obligations. No Runtime helper, ABI, provider grant or Source rule is added.
 
 ### What Runs at Comptime
 
@@ -987,6 +1964,10 @@ runtime parameters and locals cannot leak into required compile-time work.
 3. **`comptime` expressions** — `if comptime is_numeric[T]()` branches are resolved, dead branches are eliminated.
 4. **Refinement type constraints on literals** — `Port p = 80` validates `80 >= 1 && 80 <= 65535` at compile time.
 5. **Bitfield literal validation** — `ColorChannel(red: 300, ...)` catches the out-of-range value at compile time.
+6. **Namespace constants** — literal values and earlier constant references are
+   materialized in declaration order for both execution backends, even when
+   unused. Every calculation in an initializer requires an explicit `comptime`
+   site; declaring a constant does not make evaluation implicit.
 
 ### Comptime Type Reflection
 
@@ -996,12 +1977,31 @@ The comptime interpreter supports basic type-level reflection for generic type p
 
 These are built-in operations of the comptime interpreter that query the compiler's type table. They enable `if comptime` branching on type properties.
 
+Every concrete generic invocation must have a checked body, including reflection
+inside interpolation, call arguments, and closures. Reflection placement never
+allows ordinary type checking to be skipped. A `comptime type` binding must be
+valid during compilation even behind an ordinary runtime condition: for example,
+`type.arg[string](0)` is invalid regardless of the condition's runtime value.
+Valid bindings under unknown runtime guards are checked normally in every
+branch. Only supported reflection specialization may exclude an unreachable
+branch.
+
 Generic specialization uses only reflection facts that remain structurally
 tied to the reflected type: direct `TypeKind` / `TypePrimitive` comparisons,
 immutable locals carrying those tags, typed helper parameters receiving them
 from the same generic instantiation, and matching arms. Arbitrary tags supplied
 by callers are not facts about `T`. The checker can use visible facts to
 determine branch reachability and validate casts for a concrete instantiation.
+Known selections are recorded inside inline functions and are independent of
+where other reflection expressions occur in the body. When no selection is
+known, the checker checks all branches, including their scoped type bindings;
+there is no separate placement restriction on otherwise valid bindings.
+Native reflected-type dispatch serializes `TypeInfo` identities using an
+explicit traversal stack. Finite argument and alias trees have no fixed runtime
+depth cutoff; active-path checks reject cyclic metadata while permitting shared
+children. Reflection dispatch retains alias identities, and canonical identity
+matching keeps its existing alias erasure. Both use the same identity encoding
+as before, without runtime source lookup or interpretation.
 Predicate calls that return `bool` and reflection comparisons copied into
 arbitrary `bool` locals do not carry type evidence. This conservative boundary
 prevents facts from being detached from their generic parameter or from hiding
@@ -1026,9 +2026,12 @@ The compiler never constructs runtime capability values for comptime; file,
 network, clock, randomness, environment, process, foreign access, and
 application logging are all excluded.
 
-Only explicit `comptime expression` sites require build-time value evaluation.
-Ordinary pure calls may be constant-folded later, but that optimization cannot
-affect diagnostics or source acceptance.
+Required compile-time value evaluation always uses explicit `comptime expression`
+sites. Literal spellings and earlier constant references denote existing values
+without executing a calculation. Namespace declarations do not introduce an
+implicit evaluation boundary for operators, interpolation, or calls. Ordinary
+pure expressions outside explicit sites may be constant-folded later, but that
+optimization cannot affect diagnostics or source acceptance.
 
 ---
 
@@ -1046,7 +2049,7 @@ These optimizations exploit Jett's linear type system — the compiler has **per
 
 #### Ownership-Aware Optimizations
 
-1. **In-place reuse (consume-transform pattern):** When a value is consumed and immediately transformed (`x = transform(x)`), the compiler detects that the old value has no other references and mutates the underlying memory in-place. This turns `list.append(old_list, item)` into a genuine in-place buffer append (no copy), and `struct.with_field(old_struct, new_value)` into a field write on the existing allocation. This is the single highest-impact Jett-specific optimization — it turns what looks like immutable functional code into zero-copy imperative code.
+1. **In-place reuse (consume-transform pattern):** A MIR optimization may reuse uniquely owned storage for a consume-and-return transform (`x = transform(x)`) or the canonical owned-local replacement `record.field = value`. A checked field update must preserve ancestor/place preflight, one RHS evaluation, replacement ownership, displaced-value cleanup and failure order. Shared backing must retain the selected clone/view and reconstruction rules. This is an optimization opportunity, not a claim that every update reuses its allocation or that list append is always zero-copy.
 
 2. **Move coalescing:** When a value is moved through a chain of single-use variables (`a` → `b` → `c` → `f(c)`), the intermediate names are eliminated and the value stays in the same memory location. No intermediate allocations or copies.
 
@@ -1247,7 +2250,14 @@ LLVM is the compilation bottleneck. Strategies to minimize its impact:
 
 3. **ThinLTO for release:** ThinLTO imports callee summaries into each module, enabling cross-module inlining and devirtualization without merging everything into one module. Achieves ~90-95% of full LTO's performance at much lower compile time. Each module is re-optimized in parallel.
 
-4. **Future: Cranelift for debug builds.** Cranelift compiles ~5-10x faster than LLVM O0 by avoiding LLVM's inherent overhead (IR construction, verifier, pass infrastructure). Code runs ~20-30% slower, acceptable for debug. Supports x86-64, AArch64, RISC-V. This would be a `jett_codegen_cranelift` crate following the same MIR → IR interface.
+4. **Cranelift AOT backend.** The initial production path uses the
+   `jett_codegen_cranelift` crate to turn validated MIR into a host object.
+   Every emitted Jett function receives a backend-private runtime-context
+   pointer before its source parameters, and direct calls forward that exact
+   pointer. The exported C-ABI entry wrapper accepts the context from the
+   launcher and forwards it to the compiler-selected Jett entry function.
+   LLVM remains the later optimizing backend and must share the same validated
+   MIR, runtime ABI, and conformance suite.
 
 #### Linking
 
@@ -1255,7 +2265,14 @@ LLVM is the compilation bottleneck. Strategies to minimize its impact:
 |---|---|---|
 | Linux | `mold` (~5-10x faster than `lld`) | `lld` (handles LTO) |
 | macOS | `lld` or Apple's linker | `lld` or Apple's linker |
-| Windows | `lld-link` | `lld-link` |
+| Windows | MSVC `link.exe` (initial host path) | MSVC `link.exe` (initial host path) |
+
+The Windows host linker consumes an exact checked program-entry identity and a
+typed launcher-bundle contract (target, runtime ABI, static CRT mode, and
+ordered native libraries). The driver discovers both the MSVC linker and
+Windows SDK, invokes the linker without a shell under a bounded timeout, stages
+all intermediates in a secure directory on the destination volume, and only
+atomically replaces the requested executable after a successful link.
 
 Additional linking optimizations:
 - **Split DWARF** (`-gsplit-dwarf`): Moves debug info into separate `.dwo` files that the linker does not process. Reduces link time by 30-50% for debug builds with large debug info. The debugger reads `.dwo` files directly.
@@ -1299,7 +2316,7 @@ Uses the `inkwell` crate for safe Rust bindings to the LLVM C API.
 | `trace` | Conditional instrumentation code (compiled out in release) |
 | `breakpoint` | Conditional pause + IPC server (compiled out in release). Supports optional condition expression (`breakpoint expr`) — only pauses when condition is true |
 | Bitfields | Packed integer types with shift/mask accessors |
-| `function(T) returns U` | Function pointer. Closures capturing immutable values use a fat pointer: `{ fn_ptr, env_ptr }` |
+| `function(T) returns U` | Owned function descriptor containing a code pointer, an environment handle, and a source-derived debug label. Captured inline functions copy enclosing values into the environment; native calls pass it as a hidden argument after the runtime context. |
 | Capabilities | Regular struct parameters — no special runtime representation |
 
 #### Platform-Specific Capability Lowering
@@ -1388,7 +2405,8 @@ values preserve their lexical namespace, so calls from the stdlib graphics loop
 resolve application helpers in the defining module.
 
 The callback audit includes implicit `Equatable.equals` dispatch from struct
-`==` and `!=` expressions. It selects the method using the operand type in the
+`==` and `!=` expressions and recursively nested enum payloads. It selects
+methods using the operand type in the
 current checked generic instantiation, without auditing unrelated instantiations.
 
 Bare generic templates are rejected as function values before interpretation;
@@ -1408,6 +2426,18 @@ cleanup without opening a display. Native input normalizes the inverted macOS
 focus flag in the exactly pinned minifb 0.28.0 backend before reconciling held keys;
 the adapter must be rechecked when that dependency changes. Focus/repeat unit tests
 exercise both backend conventions without requiring a native window.
+
+Native graphics uses the existing typed validation and session leaves. Kernel
+entry rejects pending Graphics authority through the existing capability depth
+check after evaluating arguments and before decoding configuration or using the
+provider. Complete joins preserve the original context-bound token. Configuration
+and scene decoders reject pending owners, fields, strings, list
+containers, and list elements before reading their payloads. Decoding follows
+the interpreter's field order and precedes domain validation; terminal shape
+errors remain distinct from handled domain failures. The emitter reads window
+dimensions only after complete configuration validation. Callback state keeps
+its pending metadata. Context destruction closes an unfinished native session
+before checking value ownership, including after a terminal decoding failure.
 
 Native macOS graphics keeps interpretation on the driver's caller thread, which
 must be the process main thread for AppKit. A worker-thread window request from
@@ -1433,7 +2463,7 @@ that compatibility case does not suppress errors from evaluated expressions.
 
 The driver injects authority only when runtime `main` requests `Graphics`.
 Comptime, verify/property, untrusted private-kernel calls, and nested sessions
-cannot open a window. Native compilation, textures, audio, animation timing, and
+cannot open a window. Textures, audio, animation timing, and
 source-visible window ownership remain separate work. See the
 [graphics contract](active/graphics_game_contract.md).
 
@@ -1445,7 +2475,78 @@ generic parameters, user destructor, or source-visible carrier. The checked
 program binds private trusted operations by stdlib-origin declaration identity,
 not by matching a public qualified-name string.
 
-The interpreter stores each live resource in a run-context registry and gives
+The identity prerequisite uses an empty-by-default compiler catalog associated
+with an actual parsed Resource declaration. A nonempty privileged catalog
+requires both the reserved stdlib FileId and loader `SourceOrigin::Stdlib`.
+Resolution inserts real private Function definitions through normal namespace,
+duplicate and declaration-order handling. Synthetic diagnostic spans do not
+replace the resource's source-span binding. Closed checker-session recipes bind
+complete `Type::Function` parameter types, view/owned modes and return types by
+those exact DefIds; validators check all entries, including unused ones.
+
+Explicit fallible resolver/checker entries publish the checked facts. Legacy
+checker entries reject nonempty catalogs with internal diagnostic code 0 instead
+of bypassing validation; normal empty-catalog and source diagnostic behavior
+remain unchanged. No production hook, provider dispatch or source carrier is
+installed. The implementation and focused evidence are in
+[the resource-hook identity note](completed/native_codegen/native_resource_hook_identity.md).
+
+`CheckedResourceProgram::prepare` consumes the whole `ParseResult` and explicit
+loader origins, then resolves and checks the owned AST internally with the
+existing private compiler catalog. Its Module, ResolveResult, CheckResult/type
+interner, origins and parser observations have only shared immutable access.
+There is no constructor from independent checked parts or mutable/into-parts
+access. Error diagnostics from each source phase prevent a sealed result;
+warnings remain inspectable. Public `validate_resource_hooks` additionally
+refuses checker errors with `SourceCheckingFailed`, while a crate-private
+identity/shape helper lets the diagnostic checker keep returning repair facts.
+The full generic/scoped facts, parameter permutations and binding modes remain
+owned by that exact session. This validates the frontend through checking;
+explicit comptime and verification keep their separate evaluation gates.
+The reference driver keeps a private preparation result containing the public
+BuildResult observations, an Arc of that sealed program and the primary FileId0
+main's saved span/namespace. Public BuildResult/build_file signatures and fields
+are unchanged. Required evaluation uses the original merged AST and checked
+scoped/generic facts once. Runtime emits retained frontend observations, gates
+build errors and missing snapshots before provider setup, then registers that
+exact merged module once; registration resets namespace at each item FileId.
+No post-preparation source read, parse or support rediscovery occurs. Existing
+macOS graphics thread selection still reads/parses before preparation, so the
+entire public run path is not claimed to parse once.
+
+ResourceProgramError keeps all observations through the failed phase in parse,
+resolve and check order. Metadata variants retain typed source errors plus the
+earlier observations; diagnostics() keeps its optional-slice signature and
+returns Some even for an empty metadata prefix. Display and Error::source expose
+the original metadata cause. Successful session records stay owned without
+repeat checking; earlier prefixes are cloned only on failure. See
+[the reference handoff](completed/native_codegen/native_prepared_reference_driver.md). This does
+not install Resource providers or callable authority; other driver/backend
+preparation paths and runtime eligibility remain separate work.
+
+Before source execution, the checker separates owning field copies from
+borrowed place projections. Only Field and the existing transparent place
+wrappers propagate that projection context; calls and owning constructors check
+their payloads normally. Recursive Resource-bearing field and cloning-getter
+results report E0364. A known Resource-bearing view cannot become an owned
+Some/Ok/Fail, list/map value, struct or machine payload (E0401), even when the
+completed constructor is itself viewed. Exact-state Resource-bearing transition
+sources reuse E0375/E0401 owned-argument checks. Ordinary owned data, empty
+containers, safe field views and non-Resource endpoints keep their existing
+admission. Generic phantom arguments do not count as stored Resource data.
+
+The payload guard diagnoses each source occurrence once and records only the
+exact identifier's legacy ownership counterpart for diagnostic deduplication;
+ordinary ownership traversal and unrelated diagnostics remain. Exact Resource
+roots also reject ordinary print/println and value-reflection operations with
+E0300. Type-only metadata, aggregate metadata and trace/breakpoint ownership
+summaries remain separate. Nested ordinary printing, including hidden Secret,
+known-absent and omitted values, has not been settled by this guard. The
+[static ownership note](completed/native_codegen/native_resource_ownership_boundaries.md) records
+executed checker evidence and remaining live-resource prerequisites.
+
+Under the selected execution contract, the interpreter stores each live
+resource in a run-context registry and gives
 source execution an internal key containing context, nominal type, slot, and
 generation identities. Operations validate every component before provider
 dispatch. Finalization detaches pending work, runs one infallible trusted
@@ -1462,8 +2563,121 @@ finalizers, and rejected insertions release their consumed provider payloads.
 Suppressed panic payloads are dropped under unwind protection; if their
 destructors panic too, only that secondary payload is deliberately forgotten
 to bound cleanup while retaining the first failure for propagation.
-Interpreter trusted-hook dispatch and source-level
-scope/drop integration remain later stages of the resource contract.
+The private reference interpreter now carries Resource and hook-descriptor
+values bound to an Arc of the successful checked program. The physical carrier
+may be copied internally without creating ownership; the separate non-cloneable
+holder ticket records custody and acquisition order. Checked argument packets
+supply source order, formal permutation and caller effects independently of
+callee View/Owned access. Nested checked calls keep those envelopes through
+ordinary function entry/return rather than unwrapping a Resource into an
+ordinary Value argument.
+
+Generated absent For/Match binders use a private original-control proof keyed to
+the current checked attempt and active body. It retains each original binder,
+ordinal, resolver definition, concrete TypeId and immutable ownership mode; Match
+also retains the exact selected arm and its payload cardinality. Complete proof
+revalidation and the existing recursive absence-shape validator precede binding
+publication. Resource-bearing children enter the existing declaration slot as
+ordinary evaluated values with empty custody; the strict missing-slot identifier
+guard remains intact. Original view loops borrow their retained parent binding
+through the existing transport, and generated scope retirement leaves unrelated
+live owner tickets intact. No Resource owner/grant, runtime leaf, ABI or native
+aggregate permission is added. The full comptime replay passes 554 tests,
+including the original 28-wrapper/120-constructor controls and 60 focused entry
+observations. Native aggregate emission remains a separate gate. See the
+[generated-binding contract](completed/native_codegen/native_resource_absent_generated_bindings.md).
+
+An executable source function rejoins a unique retained AST declaration and its
+exact resolver definition. Ordinary declarations use their actual DefInfo span;
+mutual definitions additionally rejoin the actual-body resolution and retained
+forward declaration. Namespace and header checks remain exact. Runtime
+registration clones identify the original checked body and cannot replace it.
+Generic selection remains an independent concrete-body proof.
+
+The ordered ledger covers source scopes, operation temporaries, partial actuals,
+owned storage/returns and occupied result payloads. Explicit close and reverse
+scope/failure cleanup retire each owning ticket once; views keep a live checked
+backing and never gain a ticket. Cleanup completes before context teardown.
+Protected cleanup continues after a finalizer panic. A cleanup failure takes
+precedence over entry failure; clean cleanup preserves the ordinary entry error,
+and source result.fail remains data. The implemented synchronous reference
+slice does not prove task/actor cancellation or all aggregate operations.
+
+Hook descriptors grant no invocation authority. A reached exact hook must have
+ReferenceRuntime purpose, matching program/type/signature/caller facts and
+runtime capability provenance. Explicit comptime, constants, verify and property
+workers cannot execute it; purpose is restored after property evaluation.
+The production catalog remains empty, its installed provider is Disabled, and
+scripted provider installation is compiler-test-only. All 83 Resource-focused
+reference tests pass, including both-profile Source lifecycles, exact absent
+aggregate layouts, enum-constructor dispatch and required-worker controls.
+Direct scoped/generic/required regions retain original body identity and complete
+concrete intrinsic metadata. Pipelines preserve original steps and lexical actual
+order; mutable assignment retains declaration slots and replaces owners only
+after RHS evaluation. Repeated entry restores metadata and body cursors.
+Ordinary refinement predicates, occupied aggregate custody, broader captured/
+reflected/worker coverage and production providers remain pending. Checked HIR
+lowering now retains an Arc-bound Resource manifest, exact hook descriptors and
+original Source invocation packets; MIR preserves that same manifest and lexical
+argument order. Whole-program validation checks unused hooks, nominal types and
+complete signatures. Raw lowering has an empty manifest and cannot authorize a
+Resource layout. Ordinary staging, acquisition, copy, move and native emission
+refuse Resource operations until the separate CFG ownership/drop plan and ABI
+exist. Five focused Source handoff groups and all 522 HIR/MIR/codegen/object
+emission tests pass; this does not establish native Resource execution. See
+[the current reference record](completed/native_codegen/native_resource_hook_identity.md#reference-lifecycle-execution).
+
+A separate private `jett_runtime::resource_custody` core now keeps program/kind/
+owner-slot identity, non-cloneable owner and loan tokens, and scope/operation/
+return frames. Moves advance holder generations; copied physical carriers
+cannot adopt an owner. Protected reverse cleanup continues after a finalizer
+panic and records Resource cleanup failures separately from ordinary native
+first-error state. A private native registration module now decodes bounded
+owned little-endian layout tables and validates every row, including unused
+hooks, complete signatures, occupied paths and operation references, before
+issuing fresh nominal kinds. Its single installation holder binds the registry
+context and rejects second installation, shutdown and live registry entries.
+Frame signature consistency follows the containing function independently of
+instruction site. A separate physical acquisition preflight checks/reserves
+storage before a future provider effect; core and opaque-table preflights remain
+mandatory. Registration itself creates no owner, loan, payload or provider.
+The private native context adapter now uses the existing stationary context
+lease and registry for exact installed layout, attempt, frame, owner, loan,
+prepared hook and sum records. Ordinary and Resource lookup IDs share one checked
+monotonic allocator; lookup bits alone cannot supply custody. Moves consume the
+old carrier only after successful core transfer, and refused transfers restore
+it. Test-only provider installation stages its paired Network publication after
+fallible preflight. Production state remains absent and providers disabled.
+
+Completion performs protected reverse cleanup before retaining outcome messages
+and counts. The caller's observed body status remains unchanged; ordinary first
+error, Resource body faults, host panic and cleanup failures determine the
+separate selected outcome. A legal ordinary FailureTake cannot erase a Resource
+fault. Ordinary borrow Result carriers and their error strings use the existing
+recursive native destruction path. Complete v2 Source rows retain lexical/formal
+permutations, exact owned argument holders, resident parent loans, callee Scope
+and provisional Return frames, and the original caller result destination.
+Source entry validates every owned transfer and reserves the whole acquisition
+log before moving a prefix. Return publication requires the completed Scope and
+current Return activation; failed Scope or Return cleanup cancels publication
+and takes priority over body failure. Absent and failed sum shells move as whole
+carriers without recovering a Resource owner. Historical v1 metadata cannot
+activate these Source transitions.
+
+All 32 exact Resource leaves use the existing authenticated context; entry
+getters return its actual root Scope and paired Network carrier. Output checks
+precede effects and reject known context/output overlaps. The formatted runtime
+package passes 204 unit and 13 integration tests, including nine Source controls,
+three v2 registration controls, two batch-transfer controls and all fifteen
+previous adapter controls. The exact root-outcome getter reads the body status
+saved only after root Scope retirement in the same Runtime attempt; it neither
+resets errors nor substitutes cleanup status. Five controls pin the original
+status, active/stale/foreign refusal and body zero with cleanup panic. Ordinary
+failure-companion validation checks every selected nested sum payload's ownership
+bit before drop. These are runtime host/C-boundary checks. Dedicated
+compiler body emission and ordinary companion cleanup, the matched archive,
+linked Source lifecycle execution and production providers remain pending. See
+[the Source runtime record](completed/native_codegen/native_resource_hook_identity.md#native-source-runtime-and-custody-leaves).
 
 Move dataflow transfers one cleanup obligation; views never own cleanup. Scope
 exit, return, handled failure, cancellation, dropped actor messages, and runtime
@@ -1524,6 +2738,14 @@ lowering. Native code adapts values to the same operation model instead of
 defining a second debugger wire schema. See the
 [breakpoint protocol record](completed/breakpoint_pause_inspection_protocol.md)
 for the lifecycle, authorization, envelopes, examples, and verification slices.
+HIR now records the visible source bindings at each breakpoint and carries the
+snapshot through MIR. The native backend emits the compatibility debug line
+for empty and multi-binding snapshots, including supported aggregate values,
+after evaluating the optional condition. Cross-function binding scope and
+interactive pausing remain pending.
+Failed native assertions keep their interpolated message in context-owned
+storage; the launcher copies it before destroying the context. The v1 result
+record continues to expose only process-lifetime static message bytes.
 
 ### How the Compiler Uses the Runtime
 
@@ -1758,9 +2980,10 @@ Crypto has reached that boundary for its implemented initial surface. Public
 `crypto.sha256`, `crypto.sha512`, legacy-only `crypto.md5`, and key-first binary
 `crypto.hmac_sha256` declarations live in
 `stdlib/crypto.jett`; source wrappers convert exact UTF-8 through `bytes` and
-format raw fixed-size digests as lowercase hex. Only private trusted compression
-kernels remain in the interpreter, and project code cannot call them. HMAC
-borrows a secret byte key and byte message and returns a secret 32-byte tag;
+format raw fixed-size digests as lowercase hex. Private trusted compression
+kernels are shared by the interpreter and typed native runtime leaves; project
+code cannot call them. HMAC borrows a secret byte key and byte message and
+returns a secret 32-byte tag;
 HMAC-SHA-512 remains reserved and undiscoverable. Exact taint,
 security, and backend obligations are defined by the
 [Crypto hashing and security contract](completed/crypto_hashing_security_contract.md).
@@ -2078,6 +3301,12 @@ Since Jett has one canonical form for everything, the formatter is relatively si
 
 The `jett test` command runs both `verify` blocks (at compile time, via the comptime interpreter) and `property` blocks (at test time, via the fuzzer).
 
+Both mechanisms evaluate assertions for concrete inputs. A passing `verify`
+block establishes its assertions for the executed examples; a passing property
+run establishes them for the generated cases only. Neither is a universally
+quantified proof. Static guarantees such as ownership, capability requirements,
+and exhaustive enum matching are enforced separately by the typechecker.
+
 ### Fuzzer Architecture
 
 1. **Type-aware generation:** For each `given` parameter, generate random values based on the type:
@@ -2268,7 +3497,7 @@ Each crate has its own unit tests:
 
 ### Integration Tests (`tests/`)
 
-- **`compile_pass/`** — Jett programs that should compile without errors. Tests run `jett build` and assert exit code 0.
+- **`compile_pass/`** — Jett programs that should compile without errors. Tests run `jett build --check` and assert exit code 0.
 - **`compile_fail/`** — Jett programs with intentional errors. Each test file declares its expected error-code multiset with comment annotations such as `# ERROR: E0601`; repeated diagnostics use the compact form `# ERROR: E0601 x3`. The harness rejects missing or malformed annotations, unexpected codes, and incorrect duplicate counts without depending on diagnostic order. Message text is not currently contractual.
 - **`run_pass/`** — Jett programs that should compile and execute successfully. Verify/property fixtures assert internally, and stdout-producing runtime fixtures can be pinned through the driver's captured-stdout test helper.
 - **`snapshots/`** — Source fixtures for the current direct AST snapshots tracked by [#162](https://github.com/vycdev/jett/issues/162); the committed `insta` outputs use the parser crate's conventional snapshot directory. HIR, MIR, and LLVM IR snapshots remain deferred until those representations exist.
@@ -2549,11 +3778,1786 @@ call, type, and handle diagnostics instead of getting a parallel error family.
 |---|---|
 | E0000 | Driver and file/project discovery errors |
 | E0200–E0212 | Name resolution errors and warnings (undefined, duplicate, namespace visibility, `export root`, type naming) |
-| E0300–E0373 | Type and language policy errors: calls, generic arity and function values, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, pipeline boundaries, collection hashing, sequence policy, arithmetic safety, graphics policy, and release debug-print policy |
-| E0400–E0401 | Ownership errors (use-after-move, consuming a view) |
+| E0300–E0378 | Type and language policy errors: calls, generic arity and function values, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, pipeline boundaries, collection hashing and equality, sequence policy, arithmetic safety, graphics policy, release debug-print policy, mutable global rejection, and required explicit constant evaluation |
+| E0400–E0404 | Ownership errors (use-after-move, consuming or writing through a view, move-only closure captures, pending task control, immutable rebinding, and temporary assignment roots) |
 | E0500–E0503 | Capability and purity errors (impure calls and capability-parameter ownership) |
 | E0600–E0603 | Secret errors (secret exposure, invalid declassification/helper use, secret-containing output) |
 | E0700 | Actor response errors (`respond` outside a handler with `responds`) |
 | E0800–E0802 | Complexity limit errors (too many statements, too much nesting, too much cyclomatic complexity) |
 | E0999–E1000 | Lexer/parser diagnostics surfaced by the parser |
 | E9000 | Comptime verify failures |
+| E9001 | Required compile-time evaluation failures, unsupported namespace constant types, and invalid primitive constant value shapes |
+
+### Native Linux executable seed
+
+The Cranelift scalar AOT path can link on the exact x86-64 Linux GNU host as
+well as the existing Windows MSVC target. An explicit, target-matched launcher
+bundle supplies ABI version, CRT mode, archive and system libraries. Linux uses
+`cc` or a literal `JETT_NATIVE_CC` executable path, without shell interpolation;
+Windows retains MSVC SDK discovery and the static-CRT contract. Both publish
+only a successfully linked executable. The Linux scalar seed runs under an
+automated deadline without source-tree or compiler environment dependencies.
+Full language/runtime parity and clean Windows execution are still release
+gates, not claims made by this seed. See `completed/native_codegen/native_codegen_parity_plan.md`.
+
+Explicit `comptime` results are materialized into typed HIR before MIR lowering,
+retaining their checked type and span. The shared native value materializer
+constructs supported aggregates from the evaluated value, including collections,
+sums, structs, bitfields, enums, machines, and bytes. It resolves named function
+values by checked identity and capture-free inline functions by source body span
+and signature. Captured inline functions resolve by the same checked span and
+signature; their evaluated capture values become typed caller-local bindings
+that feed the existing closure environment path.
+The checker passes the surrounding expected type through `comptime` for contextual
+sum values. Ordinary pure calls remain runtime calls. Missing or unsupported
+baked values fail before codegen; the original source computation is never
+emitted as a fallback. Native regressions execute baked `math.factorial(5)`
+after removing its source file
+and compare supported composite and closure results with the interpreter.
+
+Namespace primitive constants use the same evaluated-value materializer through
+their declaration-keyed HIR `Constant` reads. HIR baking completes before MIR,
+including reads inside test bodies, generic specializations, inline callbacks,
+and constant trace temporaries. Native validation rejects any remaining marker.
+This handoff does not authorize move-only namespace constants: their read,
+sharing, lifetime, and authority rules remain unresolved, and compilation
+conservatively reports E9001 rather than introducing implicit clones or storage.
+
+
+### Native string and numeric execution slice
+
+The current Cranelift subset also executes immutable strings, interpolation,
+print/println, checked Stdout entry parameters, and typed numeric runtime kernels.
+String handles have explicit retain/release ownership and are destroyed at last
+release. MIR definite-initialization and liveness facts drive local and temporary
+cleanup through branches, loops, overwrites, returns, and terminal failures.
+
+Floating-point `modulo` emits the typed `FloatRemainder` runtime leaf after the
+ordinary pending-operand checks. Its binary64 operands and result use the same
+remainder operation as the interpreter. Binary32 operands widen exactly for the
+call, and the result rounds back to binary32 at the checked expression boundary.
+NaN and infinity outcomes remain floating values rather than runtime failures.
+
+`list.sum[T]` uses the checked numeric primitive width in both execution paths.
+The native `ListSumPrimitive` leaf returns packed value bits for typed unpacking;
+fixed-width integers wrap and floating sums round at each addition, including
+binary32. Empty lists return zero of the declared numeric type. The list remains
+borrowed, and outer pending lists or pending elements retain their terminal
+failure checks. The checker admits only exact numeric primitive element types;
+transparent aliases already resolve to the same canonical type. The policy is
+attached to the closed `IntrinsicId::ListSum` signature, so public source-facade
+specializations, inferred and pipeline calls, concrete function wrappers, and
+trusted private-kernel calls share it. The private kernel requires its single
+explicit type operand; public inference still selects that operand through the
+source facade. The policy does not recursively coarsen refinements
+or strip secret wrappers. An unsupported domain produces E0300 before required
+values, frontend test bodies, or native publication run. The existing generic
+source signature introduces no public addition/identity interface. See the
+[summation decision](open_design/list_sum_type_contract.md).
+
+`list.sort[T]` selects its runtime carrier through refinement layers over
+numeric primitives, `string`, or `bool`, including nested refinements and
+transparent aliases. Admission still requires the identical checked `list[T]`
+input and result. The existing runtime reorder preserves payload bits, pending
+metadata, and owned string handles; it neither coarsens the public element type
+nor synthesizes values requiring predicate evaluation. Secret and aggregate
+carriers remain ineligible. Sort and sum use separate carrier admission, so
+sorting a refined list does not admit it to the numeric-primitive summation domain.
+Indexed sorting and sortedness checks use the same numeric width selection.
+They retain pending strings, selected pending keys, and pending rows as equal
+comparison cases without reading their payloads. Sortedness uses IEEE `<=` for
+ready floating pairs, so NaN makes an adjacent comparison false; sorting retains
+its stable equal-comparison fallback for unordered floating values.
+
+Native `math.average[T]` and `math.median[T]` admit every checked primitive
+numeric list carrier and require an exact `float64` result. Runtime conversion
+sign-extends narrow signed values, zero-extends unsigned values, and widens
+already-rounded binary32 values to binary64 before the shared aggregate
+algorithm. It validates carrier bits and checks outer pending depth, empty
+input, and pending elements before decoding values. The kernel leaves list
+storage and ownership intact; the source wrapper retains its consuming input
+contract. Refinements, secret wrappers, and nonnumeric types remain rejected,
+independently of sort's refinement support and the open summation domain.
+
+Native aggregate consumers check the owner's outer pending depth before public
+field reads, machine state tests/transitions, enum matches, and each ancestor in
+a projected sequence path. `StructPendingAccessCheck` leaves ready owners and
+their children untouched. Machine transition checks precede payload evaluation.
+Raw `StructField` remains available for internal reconstruction and reflection.
+Enum matches read numeric/bool payload depth before taking the field and retain
+that depth in the binding's scalar task carrier.
+Pending diagnostics use the typed debug graph and preserve its secret redaction.
+An unavailable graph uses a conservative `[redacted]` rendering without reading
+children; that fallback does not establish exact public diagnostic parity for
+unsupported layouts or settle the open hidden-secret observation policy.
+
+Non-release `print` and `println` validate aggregate arguments through the native
+debug type graph and reuse `DebugAppendAggregate` to format a borrowed value into
+an owned temporary string. Primitive task formatting retains its existing path.
+MIR argument modes preserve explicit views (also through coarsening and
+declassification) without changing consumption of ordinary print arguments.
+Handler extraction, ownership planning, and emission use the same argument rule.
+Formatting starts only after every argument has evaluated successfully.
+An additive `Uninhabited` debug node describes never-typed children of empty
+containers and absent sums; attempting to format an actual value at that node
+fails without reading a payload. Native and interpreter accepted Print/Println
+formatting now use typed redaction for hidden secrets. This selected print
+policy leaves trace behavior unchanged and pending-sum diagnostics separate.
+The accompanying direct-field diagnostic repair applies typed secret redaction;
+integrated verification remains pending until its focused and linked tests run.
+Typed aggregate formatting traverses values with an explicit work stack, so
+finite recursive values have no formatter-specific nesting cutoff. An active
+path tracks layout, node, and payload identity to reject malformed cycles while
+allowing shared children on separate paths. Dynamic interface and builder
+layouts are cached for the traversal; aliases are resolved with a schema-sized
+cycle check. Secret nodes short-circuit before inspecting payloads or pending
+depth, and the caller receives text only after the whole formatting succeeds.
+
+Terminal runtime failure is a context-local first error, not `result.fail` data.
+Compiled calls test that channel before using a return value; failure edges release
+frame owners and propagate it to the launcher. Context destruction checks for leaked
+native owners, and cleanup failure overrides entry failure. UTF-8 string kernels
+use the same extended-grapheme segmentation dependency as the interpreter. This
+initial handle representation is not the proposed inline/SSO optimization.
+Payload enum equality compares the selected variant's integer, boolean,
+floating-point, and string fields through the native value ABI. Supported
+aggregate payloads use the typed layout graph, including recursive enums,
+collections, sums, machines, and bitfields. Its explicit comparison stack
+preserves left-to-right short-circuit evaluation and rejects malformed cycles
+without imposing a fixed nesting cutoff on finite values. Equal handles do not
+bypass payload comparison: a nested NaN still compares unequal. Comparison
+against a known unit variant checks only the variant tag. User-struct payloads
+invoke their exact explicit `Equatable.equals` implementation. Erased-interface
+leaves are rejected by the frontend before this comparison path. Concrete actor
+identity retains its separate checked contract; neither rule creates a dynamic
+equality operation for erased payloads.
+
+Internal native `nothing` parameters, returns, locals, and aggregate payloads
+carry an unowned u64 pending depth. Sequential `run` increments that depth and
+`join` unwraps one level or returns a cancellation error for plain `nothing`.
+Closure captures, explicit `comptime`, debug formatting, and equality preserve
+the interpreter's current behavior. The public entry ABI still returns runtime
+status. Sequential cancellation leaves the operand unchanged; asynchronous
+scheduling and capability cancellation checkpoints remain unimplemented.
+
+The portable `native_conformance` integration suite executes the 30 manifest
+entry points, 25 runtime contracts, and complete verify/property inventories on
+both supported hosts. Entry and runtime-contract gates compare exact stdout,
+stderr, and terminal status with the interpreter, using the manifest's scripted
+providers and requiring successful context cleanup. The `native_parity` example
+discovers those bodies from parsed source and includes their execution counts
+alongside lowering, object, main, and runtime-contract results. Its successful
+fixture-gate result is distinct from a complete native release audit.
+All native builder modes retain frontend property failure diagnostics, including
+shrunk counterexamples and the property-name source span, before any native
+emission or output publication. Generated suite HIR sets compiler-owned property
+name and one-based trial context before materializing each case, then clears it
+after the call. The runtime copies that metadata independently of Jett value
+handles. Only terminal failure copies prepend it; errors caught during
+refinement checking retain their original text. Normal failure cleanup still
+runs. The native property driver retains the exact checked case/function
+identities and uses shorter native prefixes to locate the first failing case
+without parsing debug output. It confirms an isolated replay, then reuses the
+interpreter's ordered 50-step shrink search with a native execution predicate.
+Narrow integer pools carry their exact primitive identity in `Value::Typed`.
+The shared shrinker preserves that identity and rejects out-of-range candidates
+before either execution backend runs them. These tags survive list/set/map,
+sum, enum, and struct payload shrinking; integer carriers at their full 64-bit
+width keep their existing representation and search order. Refined generated
+values likewise retain their canonical type names. `float32` pools carry a typed,
+binary32-rounded payload in the interpreter's `Float64` carrier; every shrink
+candidate is rounded back to binary32 before replay or counterexample formatting.
+Generic record pools retain `concrete_type` using the interpreter's canonical
+type formatter, including transparent alias normalization and declaration-ordered
+type arguments. Replacing a field during shrinking preserves this metadata;
+otherwise erasure of a nested record loses its checked implementation owner.
+The interpreter recursively checks these tags before executing a shrink candidate. Native candidate
+materialization resolves the exact checked predicate functions and emits the
+existing refinement handlers, including inherited and nested predicates. A
+rejected candidate clears its diagnostic context and returns without calling
+the property; normal failure cleanup releases partially constructed inputs.
+The initial suite and prefix replay still use the already validated generator
+inputs, avoiding additional predicate effects in normal suite output.
+Every replay clones the retained checked HIR, replaces only compiler-owned
+input construction, completes typed conversions, validates MIR, and compiles
+and links a fresh attempt. It does not reload source or execute property bodies
+in the interpreter. Every attempt has a fresh process/context and a deadline.
+Only exits 0 and 71 count as completed attempts; other exits, compilation/link
+errors, timeouts, and non-reproducible failures abort the runner. Initial suite
+stdout/stderr remain separate from replay output and the shrunk counterexample.
+Native link and execution capture retains parent-owned append-only temporary
+files and gives each child an owned duplicate handle. Each readback uses explicit
+offsets bounded by one sampled file length; append-only writes preserve earlier
+bytes when Windows positioned reads move the shared cursor. Capture errors retain
+their stream, creation/duplication/snapshot stage and original I/O source. The
+existing polling deadline and child kill/reap protocol do not wait for EOF from
+descendants that inherited output handles.
+The CLI validates explicit build targets before loading source, accepting only
+the current supported host. Native `build` invokes the driver object and link stages and publishes an
+executable atomically. `build --check` retains frontend-only validation. The
+installed layout is `bin/jett`, `lib/jett/stdlib`, and
+`lib/jett/runtime/<host>/<debug|release>/launcher.json` plus its archive.
+Runtime selection prefers `--runtime-bundle`, then `JETT_NATIVE_RUNTIME_BUNDLE`,
+then the installed manifest; validation checks compiler version, target, ABI,
+CRT, profile, archive filename, and ordered native libraries before linking.
+Stdlib lookup prefers `JETT_STDLIB_DIR`, the installed sibling directory, then
+the development tree. Packaging builds both runtime profiles outside the CLI;
+the compiler never invokes Cargo. Default artifacts use
+`target/<host>/<profile>/<stem>` (`.exe` on Windows), overridable with `-o`.
+The native driver accepts `BuildOptions` for artifact generation. Release mode
+applies frontend debug-print restrictions, discards trace/breakpoint HIR nodes
+before MIR expands their expressions, and enables Cranelift speed optimization.
+Breakpoint conditions therefore have no release execution or output.
+Native verify and property suite lowering, object emission, and executable
+building accept the same `BuildOptions`. Their existing entry points retain
+default debug behavior; options variants apply release source policy and
+optimized codegen. Runtime archives remain explicit caller inputs, validated
+against their selected profile when loaded from a manifest.
+
+All eleven checked capability types have native entry grants and value
+representations. Stderr, Stdin, Filesystem, Network, Process, and Log use
+context-bound opaque tokens for their implemented move/view/call/task/debug
+behavior; this does not implement their pending I/O providers. Provider leaves
+continue to validate the exact authority granted to their context.
+
+One-line breakpoint snapshots use the current lexical function frame in both
+execution paths. The interpreter applies its name-lookup scope floor when
+collecting bindings and preserves closure capture type metadata; native code
+uses the checked HIR snapshot. Caller bindings are never merged into a callee's
+snapshot. Nested-scope locals disappear when their scope exits. The compiler
+also exports breakpoint exclusions from ownership flow, including transfers at
+binding and destructuring sites. HIR filters snapshots with those exclusions;
+the runtime interpreter, comptime evaluator, and verify/property runners receive
+the same map. Mutable assignment restores availability and branch joins require
+availability on every continuing path. Actor handlers establish and restore their
+own lexical frame, including on failure.
+
+Interface-typed runtime parameters, returns, stored values, and mixed collection
+literals use typed native boxes and compiler-generated dispatch functions. The
+checker records interface slots separately from concrete method bodies, including
+generic and reflected body facts. Interface values remain move-only, with explicit
+cloning, borrowing, pending depth, and recursive secret redaction preserved.
+Existing lists, maps, optionals, and results convert recursively across compatible
+interface boundaries while preserving ownership and pending depth.
+The runtime parses the finite compiler-owned conversion descriptor with a parent
+stack, retaining list/optional/map child order and both result branches. A checked
+conversion is not rejected because its descriptor exceeds 128 nested nodes,
+including when the source container is empty. Truncated descriptors, invalid
+flags, null callback addresses, and trailing bytes still fail before conversion.
+The checker compares function parameter types contravariantly, return types
+covariantly, and view modes exactly. Generated native adapters retain source
+callbacks, preserving captures, debug names, and pending depth, including callbacks
+inside existing lists, maps, optionals, and results. Container descriptors use
+linked addresses of checked generated adapters. Comptime callbacks materialize
+their checked source signatures before conversion to the requested type. A final
+HIR conversion pass reuses existing adapters and lowers newly materialized
+conversions before ownership analysis. Canonical completion runs on an unpublished
+Program clone. A private boxed receipt records the one actual coercer execution
+and its complete before/after tables, retaining occurrence-specific reflected
+callable identities. Actor, mutable-sum and temporary-view proof refreshers replay
+that output only for the exact complete input and the same borrowed type arena.
+They still validate their own original receipts and exact current operations.
+All peer views and final HIR/backend-type checks must succeed before publication.
+Every optional private archive Arc participates in identity comparison, including
+hidden views on an archive without original Source data. The receipt is temporary
+and cannot be stored in its own output graph; see
+[canonical value conversions](completed/native_codegen/native_canonical_value_conversions.md).
+Generic closures carry their lexical type
+bindings, ordered enclosing type arguments, and alias reflection metadata so
+materialization can select the checked body even when signatures coincide.
+Named calls resolve explicit type arguments in the caller before isolating the
+callee's type bindings. Both normal returns and failures restore the caller.
+The driver retains expression maps by generic declaration and checked
+specialization, including alias reflection and reflection-valued parameters.
+An invocation selects its checked function context; a closure retains the whole
+context through shared ownership. Native materialization matches reflection
+parameter facts alongside concrete type arguments and alias metadata. HIR
+inline functions retain their enclosing scoped type binding chain through
+extraction, including unconditional and reflected-loop bindings. Each binding
+retains both its canonical type and its source-visible reflection metadata.
+Evaluated closures preserve the same chain; native materialization matches it
+and native symbols encode structural types and alias-sensitive reflection.
+Reflected dispatch uses alias-preserving identity through the dedicated
+`TypeInfoReflectionMatches` leaf; the alias-transparent `TypeInfoMatches` ABI
+operation remains available. `TypeInfo.args` loops retain each argument's
+reflection metadata, including arguments reached through fields or other
+argument loops. Generic argument selection can retain reflection from the
+lexical scope or the interpreter's existing type reflection representation
+when a nested source spelling lacks its own global metadata entry.
+Named calls isolate the chain and restore it on success or failure.
+The driver also exports recursive scoped expression maps from each checked
+`comptime type` expansion. Execution selects the bound type's scope, and
+closures retain that scope alongside their checked function. Scoped entries
+are removed from enclosing flat maps, and nested binding maps remain under
+their lexical parent. Conflicting matching scope maps fail explicitly.
+Generic body entries are excluded from the global fallback map. Compiler-owned
+facades may execute interpreter source instances without a checked map, while
+conflicting matching maps fail explicitly. The
+metadata is boxed to avoid inflating every interpreter value and recursive frame.
+Actor and closure construction use separate evaluator helpers so their temporary
+state does not enlarge every recursive expression frame. The nested JSON machine
+conformance test exercises this path under the existing runtime stack limit.
+Other reflection specialization keys and parity edges remain open; see
+`completed/native_codegen/native_interface_values.md`.
+Explicit comptime interface values materialize from unambiguous checked concrete
+payload types; secret fields and pending wrappers remain part of the typed value.
+Construction builders materialize through the existing typed start/put
+intrinsics using checked reflection layouts. The checker exports source-aware
+reflection operands from ordinary, generic, and scoped bodies separately from
+canonical metadata, retaining names such as `Box[Label]` without changing the
+canonical `Box[string]` layout. Shared reflection-value encoders produce field,
+variant, and state metadata. Builder payloads use their storage types and defer
+refinement and width validation to runtime finish; no source computation is
+re-executed to recreate a builder.
+Primitive interface values retain their checked concrete identity even when
+runtime storage shares a wider carrier. Integer widths, `float32`, and nominal
+primitive refinements dispatch to their own implementations through collections,
+callbacks, reflected fields, and explicit comptime evaluation. Transparent
+aliases use their canonical base identity. Arithmetic and formatting inspect the
+payload without losing identity when the value is stored or cloned.
+Collection and sum interface payloads retain their full type arguments, including
+interface arguments qualified by namespace. Converting a concrete collection
+changes its outer checked identity to the destination type while retaining the
+concrete identities of its elements. List and record refinements likewise keep
+their nominal implementation identity. Type aliases used for concrete method
+calls or method values resolve within their declaration namespace.
+Function interface values use the same retained type metadata, with the full
+checked signature as their concrete owner. Calling one unwraps its payload;
+dispatch and comptime materialization use its exposed signature. Callback
+conversion replaces that signature without replacing the evaluated source body
+or closure context, allowing native materialization to reconstruct the source
+and its required adapter. Type-name parsing preserves nested function signatures
+and parameter view modes before interpreting generic type arguments.
+Function-backed refinements retain their nominal owner even when alias-base
+classification returns the simple carrier `function`. Coarsening replaces that
+owner with the base signature while preserving the source body and captures.
+Explicit comptime evaluation runs on a scoped worker with the same 8 MiB stack
+budget as reference execution, independent of the compiler caller's thread.
+The reference evaluator dispatches ordinary and generic calls before its general
+expression match. This keeps aggregate expression temporaries off the active
+stack across nested source calls; checked result normalization and control-flow
+signals still pass through the same central boundary.
+Modules without explicit expressions skip worker creation. Worker creation
+failures become compilation diagnostics; evaluation never moves to runtime.
+Explicit values are keyed by source span and checked type context, including
+generic arguments, reflection specialization, and lexical type-binding chains.
+HIR snapshots lexical bindings at each explicit expression, so native baking
+and interpreter execution select the same value after generic and inline
+function lowering. Evaluation supplies checked type bindings without runtime
+locals or parameters. Nested explicit expressions in baked inline function
+bodies are collected independently; a missing checked value is an error.
+Machine owners retain checked state qualification, including flow narrowing
+inside state guards. Native materialization constructs the exact state and binds
+it at the requested bare machine type when widening is required, so subsequent
+erasure and refinement validation see the correct owner. That generated constant
+local is cloned at each use so repeated evaluation does not consume its seed.
+Enum, machine, and
+bitfield refinements retain nominal identity without changing their payloads.
+Actor references retain their declared owner through interface erasure; message
+dispatch reads the underlying actor ID. Construction-builder and capability
+refinements likewise retain their nominal implementation owner. MIR handler
+extraction traverses validated refinement wrappers, including reconstruction
+operations nested inside baked builders.
+An interface-backed refinement retains two identities: its nominal method owner
+and the underlying erased value's concrete owner. Interface conversion boxes or
+unboxes that refinement even when both sides share the interface handle layout.
+MIR treats extraction as a borrow of the outer box. Interpreter metadata and
+comptime materialization preserve the inner identity so explicit coarsening can
+restore the requested ancestor without losing the concrete base implementation.
+The checker accepts a compatible whole sum before considering missing payload
+handling. Interpreter refinement handles use the checked source type to
+distinguish a sum from an interface whose concrete payload happens to be a sum.
+For an exact base/ancestor of the expected refinement, whole-value refinement
+validation takes precedence over sum extraction. Checked HIR keeps the matching
+handle kind and a string error local. Native sum extraction checks outer pending
+depth before reading the tag; a pending sum produces the reference handle error
+without taking its payload, including inside a caught refinement predicate.
+Predicates observe the base interface identity; already validated pending
+refinements retain their invariant without rerunning a predicate on the task.
+Constructor fields with pending predicate chains keep their checked ancestor
+type through interface conversion; MIR adds the refined type after validation.
+Interpreter boundary normalization likewise attaches nominal identity only
+after successful validation, including for pending constructor inputs.
+Machine state field type references pass through the same resolver traversal as
+struct and enum fields, retaining declaration-site namespaces, visibility checks,
+and declaration order before checked layouts and reflection metadata are built.
+Reflected interface fields and lists retain their erased owners through record,
+enum, and machine builders, including baked builders and completed values.
+For an admitted reflected read of an interface-backed refinement as an erased
+interface, native extraction selects conversion metadata from the actual field
+type. After the existing owner, member, requested-type, and pending checks,
+conversion borrows and clones the stored value into one owned result, retaining
+the refinement's method identity rather than reusing its base interface box.
+Ordinary and reflected boxing use the same owner rule: matching outer secret
+qualifiers are removed when choosing the concrete implementation, while nominal
+refinements and additional source secret layers remain intact. A secret source
+converted to an unqualified interface retains its explicitly secret-owned
+implementation and redacted layout. Destination secrecy still redacts the outer
+value; concrete layouts retain recursive redaction for nested secret payloads.
+These conversions preserve pending depth, source ownership, and failure cleanup.
+They do not broaden reflected requested-type admission, whose remaining contract
+is recorded in [reflected field request compatibility](open_design/reflected_field_request_compatibility.md).
+Expected type context also passes through `run`: for example, initializing
+`result[int64, string]` with `run ok(17)` retains both declared result payload
+types in the checked body used by native lowering.
+Generic structs retain their concrete type arguments across interface erasure,
+including reflected construction and comptime evaluation. Typed observations
+therefore redact secret generic fields while keeping the base struct display name.
+Interface implementations use the full instantiated struct identity, so
+`Box[int64]` and `Box[string]` dispatch independently. Transparent type aliases
+retain that identity for concrete method calls and method values. A bare
+generic owner such as `Box.name` is rejected for missing type arguments; name
+a concrete instantiation with a type alias before accessing its methods.
+Actor constructor parameters are retained before state initializers run; an
+initializer consuming its working parameter does not consume the actor's capture.
+
+The full native parity gate is still incomplete: the current object count is
+recorded in `completed/native_codegen/native_codegen_parity_plan.md`, alongside 30/30 main
+outcomes and 25/25 runtime contracts, with 182/182 typed lowering. See
+`active/native_value_abi.md` for ABI ownership and failure contracts and
+`completed/native_codegen/native_codegen_parity_plan.md` for the remaining gates. In particular,
+move-only value/drop elaboration, handlers, aggregates, collections, callbacks,
+remaining reflection/JSON shapes, actors and full task scheduling, other capabilities, and clean Windows release
+verification are not established by this slice.
+Native JSON parsing now checks and emits the stdlib decoder for concrete
+structs, lists, sets of primitive-backed hashable types, string-keyed maps,
+optionals, results, supported `secret[T]` wrappers, and bare or
+state-qualified machines recursively composed of supported leaves.
+Native JSON eligibility checks every state's payload for a bare machine,
+but only the exact selected payload for a state-qualified machine. An
+unrelated state's non-JSON map key or other unsupported field cannot block
+a valid qualified source specialization. Declared state metadata remains
+complete; this eligibility boundary does not filter public reflection.
+Loops over `type.machine_states[Machine at state]()` expose all declared
+states. The checker therefore records field-type and field-level source-alias
+candidates from all states for nested `state.fields` loops. Top-level aggregate
+aliases remain non-matching probes with empty metadata; this does not add
+automatic aggregate alias unwrapping. Direct loops over
+`type.machine_state_value[T](view value).fields` retain the selected payload
+boundary. This distinction keeps checked reflected dispatch complete without
+broadening JSON admission.
+The private fallback decoder selects raw-tree copying through the direct
+condition `type.name[T]() == "json.JsonTree"`, matching the named decoder.
+The existing checked static selection excludes that body when T is an
+unrelated inactive callable, interface, or actor payload. An ordinary
+`json_reflected_raw_type(view info)` call cannot supply the same checked
+fact: pure-call folding never permits an incompatible generic return body
+to escape typechecking. Alias, refinement, and secret dispatch continue
+through their existing typed paths; public JSON eligibility is unchanged.
+The private reflected map decoder uses an alias-aware closed key guard.
+Only an exact string key reaches its typed string-map construction body;
+other keys return an unsupported-key failure. Completing all-state checked
+candidates exposed the old incompatible return of a string map as a
+non-string-keyed T. No carrier conversion substitutes for a typed branch.
+For malformed qualified input naming another state's unsupported map,
+the guard can fail before the eventual builder state mismatch. Required
+field lookup and exact pre-decoding validation retain their order. Public
+non-string map requests still fail E0343; builder behavior is unchanged.
+Machine parsing uses the reflected state builder; an empty state has no field
+specializations, and HIR lowers its checked empty field loop as an empty scope.
+Builder finish still rejects a state that differs from the qualified target.
+Raw `secret[json.JsonTree]` uses a dedicated trusted parser; other unsupported
+field shapes remain on the generic intrinsic path. Set elements may be narrow
+integers or primitive-backed refinements, with their ordinary range and
+refinement checks applied before insertion. Top-level
+refinements with a supported base use checked source parsing and serialization;
+signed `int8`/`int16`/`int32` and unsigned `uint16`/`uint32` JSON values now
+use checked source decoding, both directly and inside supported aggregates.
+The decoder checks the `int64` range before constructing the narrow value
+through bounded arithmetic. `float32` JSON decoding uses a checked source
+call to `float32.from_float64` after reading a JSON number as `float64`.
+Checked source serialization formats the rounded `float32` value through its
+existing string display path, including when it is a record field.
+Record fields with supported refinements now decode through a checked source
+conversion before entering the native reflected builder. The builder accepts
+the exact refined type; direct struct constructors now lower checked field
+predicates into MIR branches and emit a success or failure result. Inputs with
+an intermediate refinement skip its already-validated predicates, and
+secret-backed inputs are unwrapped for validation. Exact refined fields retain
+their validated invariant. Top-level
+enums with supported payload fields, including nested raw `json.JsonTree`, use
+dedicated checked native parse and serialize hooks. Raw trees retain their JSON
+wire behavior and are cloned when a decoder returns a borrowed tree. Pipeline
+calls to `json.serialize` and `json.serialize_public` select the same checked
+source serializer for supported structured types as direct calls. Parser
+pipelines select the declared `json.parse` or `json.parse_exact` source facade
+using their checked result payload and the existing recursive parse
+eligibility predicate. This includes ordinary primitive parser pipelines;
+the policy, argument metadata, and input ownership remain unchanged. Supported
+sets with primitive-backed elements use that serializer directly or as record
+fields; iteration clones the viewed set before consuming its elements.
+Supported bitfields use dedicated checked parse, exact-parse, and serialization hooks
+that dispatch unit-enum fields separately. Payload `list[uint8]` decoding uses
+a bounded source conversion after JSON integer range validation. Nested enums
+and bitfields composed of supported fields now use checked source parsing and
+serialization inside records and collections. Generic branch specialization
+selects the raw `json.JsonTree` wire path by checked `type.name[T]()` equality
+with a string literal. Native
+source serialization supports bare and state-qualified machines with supported
+state fields; public serialization omits direct secret fields in records and
+machines. Generic `type.has_secret[T]()` branches are checked static selections;
+the serializer uses them to omit whole fields containing secret collections.
+The trusted JSON record decoder passes already validated field values to the
+native builder, whose runtime checks exact field metadata and canonical type.
+General base-to-refinement builder inputs remain blocked until native finish
+can run the predicate. Validated struct construction reserves separate
+temporary owners for its record and result wrapper. A trusted concrete bytes
+serializer emits the canonical hex JSON
+string. Records with `json.JsonTree` fields use the checked
+source serializer, cloning borrowed raw trees before encoding them. Native MIR
+verification accepts checked inner-value promotion to a
+secret local without allowing an implicit secret-to-public conversion.
+Widening a state-qualified machine local to a bare machine consumes the source
+unless it is cloned.
+Direct and field-level aliases take the source alias branch before
+construction. A self-recursive struct with supported fields remains eligible
+for source JSON serialization and parsing: the eligibility walk treats a
+revisited struct as an already checked edge, and checked function
+specializations form a finite recursive call graph. Refinement-validating
+construction remains outside this native path.
+The public compiler policy still runs before the source decoder.
+The interpreter handoff omits checked expression types at generic source spans
+whose concrete instantiations disagree, so a later unsigned instantiation
+cannot coerce an earlier signed call's values.
+
+
+### Native user struct slice
+
+Checked concrete struct layouts now reach native fixed field-slot records with
+explicit initialization and recursive ownership. MIR plans moves, call-bounded
+projected views, clone temporaries and drop slots; codegen emits construction,
+projection and all user control flow. Typed runtime leaves only manage storage.
+Native sequence loops can borrow a checked struct-field collection or string directly:
+MIR records the root owner and field path, keeps the root loan active through
+the loop, and clones each loop binding without owning the projected value.
+An owned field read clones the selected value, including nested move-only
+payloads, while a field view borrows the parent through the call boundary.
+The checker exports exact Equatable method identities for direct comparisons
+and typed owner-to-method metadata for aggregate payloads. HIR turns direct
+comparisons into exact method calls with an `EquatableResult` readiness
+boundary; native aggregate traversal yields custom leaves to compiled method
+calls and checks their result depth. Both reject pending method results before
+inequality negation. MIR preserves the direct boundary through handler staging,
+and codegen uses the existing pending-scalar check without an owning temporary
+or new ABI operation. Explicit calls remain ordinary boolean calls.
+Outer `secret` wrappers retain nominal enum constructor targets and taint the
+comparison's boolean result. Mixed public/secret operands compare their checked
+inner types without treating different nominal types as interchangeable.
+Equality graphs inspect the outer wrapped value's representation while debug
+graphs retain redaction; nested secret payload restrictions are unchanged.
+Verified clone/view conversions may add outer secrecy but cannot remove it,
+and native binary validation rejects handoffs that lose a secret result.
+See `active/native_value_abi.md` for the supported
+ownership subset and remaining projected-place/refinement/enum boundaries.
+Native reflected construction now uses the same explicit `TypeConstruction`
+builder source form for concrete structs, supported bitfields, enums, and
+machines. The checked type arguments select a field layout, including source
+alias spellings for field metadata, while runtime leaves own partially filled
+records, validate `TypeField` metadata, and return handled duplicate/missing-field
+errors.
+Native struct, enum, and machine builders accept base values for refined
+fields and invoke checked predicates at completion, after ordinary builder
+errors. Enum and machine completion validates only the selected variant or
+state. This handles nested refinements and mixed refined and ordinary fields
+sharing the same base type, including both bare and state-qualified machine
+targets. Trusted JSON decoders also bind each payload's exact reflected type
+before insertion.
+Native debug layouts recognize `TypeConstruction` handles. Builder metadata
+also carries checked debug layouts for each field and records successful put
+order, so trace and breakpoint render partial struct, bitfield, enum, and
+machine builders in the same order as the interpreter without consuming them.
+The zero-payload native debug tag `Redacted` (16) renders a secret without
+reading its bits or handle. Alias nodes preserve this behavior, including field
+pending depth. Interpreter formatting walks typed values and reflected builder
+fields recursively, and typed reflection failures use the same formatter.
+The checker exports declared debug type names separately from canonical TypeIds,
+per generic instantiation and reflected body expansion. HIR/MIR retain those
+labels, including closure captures. Interpreter loop, match, and handler bindings
+retain type metadata; generic handlers and pipelines use the active invocation's
+types when a single source span has multiple checked instantiations. HIR exposes
+new locals only after lowering their initializers.
+When a generic record helper is instantiated for a non-record reflection kind,
+native code creates an empty builder that preserves the interpreter's handled
+`type.construct_put` and `type.construct_finish` errors. It does not infer a
+record layout from the canonical `TypeId` of a source alias.
+Builder results transfer ownership through put and finish; abandoned builders
+drop their populated fields. Bitfield finish also validates field widths; enum
+and machine start validate selected member and payload metadata. State-qualified
+machine finish checks the selected state. Structs requiring refinement
+validation remain native parity work.
+Earlier native coverage figures above describe historical slices, not the current
+release gate. The exhaustive checkpoint is recorded in the active parity plan.
+
+Generic task joins preserve the instantiated error type in handler observations,
+including when one source body is called with both secret and public errors.
+The checked outer operand type selects whether a join preserves an exact result
+or creates an outer `result[Operand, string]`. Secret and nominal refinement
+boundaries remain intact; transparent aliases retain their canonical result
+type. Reference evaluation and Join type reconstruction use the active checked
+generic/reflected facts before declared-type fallback. Native sum joins clone
+the owner while removing one outer pending layer, then transfer that clone into
+the additional result when the checked output differs from the operand type.
+Payload pending depth and inner failure data remain unchanged.
+The native move planner borrows only explicitly viewed Join operands for that
+copy operation and ends the temporary loan before returning the owning result.
+Ordinary Join operands retain their consumption checks, including view-parameter
+rejection without an explicit `view`.
+
+### Source-authenticated Resource ownership analysis
+
+Successful checked HIR lowering captures an immutable archive of the complete
+original functions, equality map and type meanings, including nominal definitions
+and generic arguments. MIR authenticates it before constructor capture. A private
+per-function witness records the initially emitted graph and exact original/current
+Source call associations. Full Source operands, target, access, lexical context and
+evaluation order remain independently checked. Canonical block/local compaction
+remaps current records; other unsupported rewrites roll back transactionally.
+Nominal bounds are checked before archive getters, and malformed type metadata
+is rejected before dependent custody queries.
+
+`ResourceOwnershipPlan` separately analyzes scope/operation/provisional-return
+frames, exact local/expression/argument holders, incoming views, bounded loans,
+moves, occupied Optional/Result arms and cleanup obligations. A relinquished
+Resource actual has no ordinary caller owning-operand claim. The dynamic runtime
+acquisition log must determine reverse cleanup order; local-number order is not
+cleanup order. The plan's entry block is distinct from the driver-selected program
+entry function. The initial plain/Optional/Result analysis does not yet implement
+the execution ABI. A fresh plan now supplies the emitted native layout described
+below. Direct handled actuals use the constructor-owned call regions described
+below; complete aggregate/scoped/reflected custody and concurrency remain required.
+
+The formatted affected gate passes 535 HIR/MIR/codegen/object-emission tests,
+32 type-library tests and the MIR doctest. Twelve focused ownership groups and
+the missing-nominal-table regression pass. These are compiler checks, not linked
+native Resource execution. See the [ownership handoff record](completed/native_codegen/native_resource_hook_identity.md#source-authenticated-ownership-handoff).
+
+### Bounded recursive lowering frames on Windows
+
+Heavy HIR statement, equality and inline-function branches and MIR expression
+and per-actual branches now execute in private non-inlined helpers. Their
+existing Source checks, context restoration, lexical argument order, whole-call
+preflight and rollback remain unchanged. Resource call capture remains at the
+original expression-lowering entry. This reduces unrelated Debug branch locals
+in recursive callers without changing Source limits, worker stacks or launcher
+ordering. The original Windows CLI capture regression and all nine capture
+checks pass; compiler/object and driver/fixture gates pass. Measured MIR
+lower_value frames decrease from 169,448 to 15,272 bytes. See the
+[repair receipt](completed/native_codegen/native_resource_hook_identity.md#windows-lowering-stack-repair)
+for individual frame measurements and exact verification scopes. Native
+Resource Source execution remains pending its connected ABI and cleanup.
+
+### Resource execution family and object layout
+
+After authenticating the entire original checked HIR archive, MIR derives a
+private execution family from Resource functions and their direct Source caller
+predecessors. Resource-free wrappers receive their own sealed constructor
+witnesses and fresh Scope and invocation proofs. Current graph edits cannot
+recompute or expand that authority. Direct calls with handled actuals use typed
+Begin/Stage/Invoke/End statements. Their private witness retains the original
+call, lexical/formal permutation, generated endpoint headers, complete current
+graph and exact completion sites. Fresh CFG analysis tracks the active operation
+stack and arrived argument prefix across handler edges. Abandonment retires that
+prefix before the original Return operand; normal completion follows exactly one
+reached invocation.
+
+The reference interpreter records each callable body's operation floor and
+Return destination separately from its lexical Scopes. Checked Source functions
+retain the exact caller destination; ordinary closure and named-callable bodies
+have no Resource publication destination. Return retires only newer Operations,
+innermost first, while interleaved Scope owners and loans remain live. Private
+one-shot receipts bind a canceled Operation to its exact parent and permit
+completion only while propagating Return or error, never ordinary successful
+output adoption. Cleanup failure drains the eligible prefix before preventing
+the original Return operand.
+
+Native Source status checks validate a terminal completion record tied to the
+exact caller Operation, immutable Source tuple and retired callee Scope/Return
+frames. That record keeps the original body status separate from cleanup
+failure. An aborted call propagates its recorded failure without permitting
+output publication; incomplete or unrelated calls cannot acquire a completion
+record. Clean output still requires a running attempt with no latched failure.
+
+Each native operation-frame slot stores its dynamic frame and prepared Source
+call in sixteen bytes. Begin prepares the complete Source tuple without actual
+effects. Stage evaluates once, activates its exact transfer or loan, and records
+one lexical actual. Invoke consumes arrived endpoints and checks Source status
+before publishing its result. End clears prepared storage and retires only the
+proved prefix. Prepared borrowed-formal metadata remains complete even when no
+invocation is reached, using the existing wire-v2 rows and runtime ABI.
+
+The fresh custody plan also records the exact incoming execution frame at every
+reachable current statement and terminator. Sum tag reads, temporary transfers
+and selected extraction use that frame; their Local storage may remain in the
+ancestor Scope. This projection has no span, type or holder fallback, and public
+graph edits still fail the original/current witness checks.
+
+The code generator projects one fresh whole-program ownership plan into bounded,
+deterministic v2 layout bytes. Rows preserve exact containing-function signatures,
+parameter access and evaluation order, caller result destinations, provisional
+Return storage, absent sums and ordinary failure companions. Return publication
+uses the callee's completed root Scope while retaining the distinct Return slot.
+The immutable object accessor exposes that layout and the actual driver-selected
+entry function, signature and root Scope. It emits no Source body or provider.
+Dedicated body calls to the runtime ABI, a matched archive and linked lifecycle
+execution remain required.
+
+ResourceCompanionPlan borrows one fresh ResourceOwnershipPlan and selects only
+its exact immutable current function and types. Its private context retains the
+complete Source caller validation and ordinary type/child, initialization,
+liveness, alias, loan and move checks. Ordinary ownership storage excludes
+Resource carriers; their custody remains in the independent CFG plan. The plan
+exposes readonly ordinary storage and complete Source acquisition facts with the
+same immutable program lifetime. Public ordinary CopyValuePlan, MoveValuePlan
+and caller admission keep their Resource-pending refusals. The CFG validator
+associates roles with exact current expression occurrences; clones or same-span,
+same-type expressions cannot select those roles. This is a compiler prerequisite,
+not native body or runtime authority. Three focused both-profile groups and all
+546 HIR/MIR/codegen/object checks plus the MIR doctest pass.
+
+### Direct Resource emission and private matched archives
+
+The direct Resource emitter validates the original checked graph before native
+preparation, derives a fresh immutable custody/layout plan and retains the full
+ordinary companion/acquisition analyses. Only functions in that plan receive
+the internal Scope argument. Ordinary functions retain their previous CFG and
+storage: Resource failure blocks and Return cleanup slots are allocated only
+for selected Resource functions. The C entry reads the authenticated original
+root body outcome after retirement; Scope cleanup has its separate channel.
+
+One double-cfg `jett_runtime` staticlib owns the compiler-test main, private
+installation and read-only observations. It carries the actual wire-v2 codec
+and 32 Resource leaves. The matching receipt records actual profile, source,
+archive, native-library order, CRT fingerprints and complete symbol/import
+inspection. The driver report decoder preserves original outcome fields and
+pre-destruction counts; missing observations refuse acceptance. Ordinary
+runtime/test builds exclude the private modules. Actual HOST controls and five
+shared reference/native Source scenarios pass in both private archive profiles;
+the native programs run after deleting their Project and synthetic Stdlib files.
+Exact outcomes/events and zero obligations are observed before teardown. The
+private link uses its actual measured library ordering; the reviewed bcrypt/
+advapi32 prefix difference does not alter production launcher validation.
+This is a local compiler-test distribution seam, with production providers,
+supported-host distribution and broader Resource execution still pending.
+
+The selected normal-startup prerequisite is generated-object owned: the Resource
+C wrapper obtains its own immutable manifest, authenticates and installs the
+exact bytes/entry in the normal runtime, begins a Runtime attempt, and completes
+that attempt on body/refusal returns. Ordinary objects keep their entry ABI and
+the shared launcher has no optional manifest dependency. The normal launcher
+observes retained outcomes/messages and completes a Generated-owned Running
+attempt after a recoverable entry panic before its single context destruction.
+The double-cfg scripted private runner retains ownership of its existing
+attempts. Disabled installation supplies no Network authority or production I/O
+credit. See [the generated startup prerequisite](completed/native_codegen/native_resource_generated_startup.md)
+for the exact handoff, first-error channels and current bounded validation. The
+restored source passes 68 Python helper controls, eight Runtime startup controls,
+four codegen controls, the 11 existing launcher lifecycle controls and 2,371
+workspace library tests. Fresh callable regression gates retain 48 executions
+against the changed normal launcher. The 16 fresh private Resource gates retain
+754 executions and 900 entries. The complete local startup80 gate passes all
+48 normal and 32 private controls across Runtime Debug/Release; the private
+controls retain 40 decoded entries, including four derived borrowed probes
+classified separately. Linked manifests are wire2; occupied Source33 wire3 is
+object-only in this startup packet. Normal links use the ordered library vector
+measured from private v6, without a separately measured normal compiler note.
+Hosts must exclusively own entry and finish for the context; generated unwind
+has no invocation or thread token, and a rejected concurrent or recursive caller
+must not unwind its owner. The built-in launcher uses a fresh context for one
+entry. Full workspace/native conformance, exact CI, GNU, installed distribution,
+actor-graph import, public catalog, typed TCP transport, mixed entry capabilities
+and real providers remain required. No concurrent-host ABI or provider acceptance
+is implied.
+
+### Resource replacement preflight
+
+The native replacement leaf preflights its exact old and evaluated replacement owners against the registered destination before removing handles or invoking finalizers. Core custody checks both current generations and runtime frames, exclusive destination occupancy, absent loans, nominal kind and reserved transfer capacity. The existing transfer rechecks custody after old cleanup; no reusable transfer permission is exposed. Cleanup failure still retires the independently staged replacement and keeps its original failure priority. Four focused replacement tests and all 220 runtime checks pass. The Source projection is described below; aggregate replacement remains required.
+
+### Source Resource replacement emission
+
+The fresh MIR custody constructor seals the evaluated RHS slot into Replace, alongside its original mutable destination and old occupancy. The layout projects these exact distinct plain-owner slots to existing tag 12; equal nominal shape and the containing Scope are checked independently. Assignment emits the composite replacement once and publishes its new handle only after Status0, without replaying descriptive Drop/Transfer rows. Constructor-authenticated plain occupied Resource Local-to-same-Local reseating has no runtime row; vacant assignment uses its exact Transfer. Public Source/witness, ordinary companion and current activation checks stay mandatory. Eleven original Source scenarios pass the real reference and generated native programs in both profiles, with Source deleted before native launch and all native obligations retired before destroy. Conditional/sum, aggregate and projected replacement remain separate transport work.
+
+The selected direct-sum replacement contract extends that composite operation to distinct live `optional[R]` and `result[R, E]` shells with an exact registered direct-sum shape. It retains the original mutable owned Local, complete nominal Resource and failure shapes, containing Scope, current activation and exact Replace/Drop(old)/Transfer correspondence. Static Empty/Occupied/Conditional facts do not turn an absent shell into vacant storage or substitute for the actual authenticated payload. Preflight checks both shell loans, occupied token identities and generations, exact ordinary failure companions, and reserved handle/transfer capacity before effects. Old cleanup precedes destination publication; the independently owned RHS is cleaned once if old cleanup fails. Successful publication consumes the old and RHS handles and clears the RHS slot only after Status0.
+
+Both-absent sum replacement may execute in an otherwise eligible pure purpose without Resource acquisition, occupied transfer or an added capability. Some/Ok tokens retain the existing Runtime-purpose custody gates. Failure companions use the existing typed ordinary validation/drop protocol; explicit ordinary clones remain legal and replacement adds no hidden retain or clone. This contract reuses the existing Replace signature and tag without new public ABI or provider authority. Native acceptance of the extension, same-local sum reseating, aggregate/projected/actor-state replacement and wider failure carriers remain separate obligations; none is credited by this documentation change.
+
+The selected same-local custody whitelist admits an occupied plain Resource, or a direct `ResourceShape::Optional`/`ResourceShape::Result` shell with `Empty`, `Occupied` or `Conditional` occupancy. The original evaluated RHS and mutable destination must be the same owned Local, with exact Source, complete nominal/failure type, slot and containing Scope correspondence. Current activation and loan checks remain mandatory. Reseating preserves the existing sum shell and ordinary failure companion without a Runtime row, clone or ABI change; ordinary lexical cleanup still applies. Other carriers gain no native admission. The [active reseating note](completed/native_codegen/native_resource_same_local_reseating.md) records the original red baselines and the passing core compiler checkpoint. The existing `SelfRebind` remains the exact MIR marker without an added Replace/Transfer/Drop at that site. Linked native execution and occupied/unknown/companion/loan evidence remain pending.
+
+### Named Resource function values
+
+Checked named-indirect body selection retains the original Indirect invocation
+and exact argument packet. A private proof joins the original callee occurrence,
+immutable local initializer/alias chain, signature and retained declaration under
+the current checked program/body attempt. Namespace-qualified producers require
+the whole expression span to resolve to that Function definition and exact
+retained header/signature; instance fields and method adapters carry no such
+namespace authority. The reached function value and runtime
+registration must identify that declaration; matching a signature or supplying a
+public function name cannot select a replacement body. Execution uses the
+retained Source body and the existing Scope, argument envelopes and Return floor.
+
+MIR captures the original root-scope immutable producer and aliases, authenticates
+current headers/initializers after local remaps, and derives target facts through
+the current CFG. An independent current-use check refuses escapes even if a
+private current-body witness is copied and resealed. Exact current producer,
+value and reached invocation occurrences receive readonly projections. Ordinary
+companion storage admits only those proven descriptor expressions and locals;
+public type-only Resource signature refusals and compiler-hook descriptor
+handling remain unchanged.
+
+The native callee is evaluated once after the original actuals. Callable checks,
+exact selected code-address equality and environment-zero validation precede
+SourceEnter. Refusal reaches ordinary failure cleanup and retires the acquired
+prefix. Accepted calls use the selected Resource family's context/environment/
+Scope/actual ABI, followed by SourceStatus; an ordinary indirect call cannot
+supply that Scope. The descriptor has its ordinary owner lifetime and does not
+create another Resource owner or finalizer. Runtime ABI and wire-v2 are unchanged.
+
+Thirty-two shared Source scenarios pass in both reference and linked native
+profiles, including exact same-signature target selection, immutable aliases,
+construction failure, terminal body failure, finalizer failure and combined
+body/cleanup failure. Native Source is absent at launch and obligations are zero
+before teardown. This is local MSVC private-archive acceptance; returned hook,
+captured/scoped/generic and handled/pipeline callback forms and
+GNU private-archive Source execution remain separate required work.
+
+
+### Returned Resource hook descriptor transport
+
+Exact hook Return summaries are captured from the retained checked Source archive.
+Current producer/alias/Return occurrences, headers and CFG state are joined to
+that archive, with an independent body/entry/header snapshot checked before
+canonical remaps. Readonly getters select only exact current opaque metadata
+occurrences. A preceding ordinary branch can preserve a single root Return;
+nested returns, captures and dynamic alternatives do not inherit that proof.
+
+Returned hook shape 10 and indirect invocation tag 15 select the exact hook and
+signature plus a separate Acquire, Borrow or Close row at the same sealed frame.
+Actual staging precedes the once-only callee evaluation and HookPrepare. Source
+results are read only after SourceStatus completes Scope retirement. Exact opaque
+metadata avoids ordinary Function cloning/ownership storage; it creates no
+Resource owner or finalizer. Existing runtime wire-v2 and custody leaves are
+unchanged. Authenticated Resource function roots seed typed dependency traversal,
+so ordinary helpers receive normal declarations, verification and their existing
+context/environment ABI.
+
+All 46 shared Source scenarios pass in both reference and Source-absent linked
+native profiles (92 executions each), with zero obligations before teardown.
+Nine focused MIR groups and 242 MIR library tests, seven focused codegen groups,
+100 codegen library tests, 63 object tests and all 92 driver-library tests pass.
+This is local MSVC private-archive acceptance. Broader implemented callback,
+aggregate and reflection combinations, GNU private-archive Source execution and
+coherent-revision release gates remain in current parity scope. Production
+provider and asynchronous scheduler integration are unimplemented extension work.
+See the
+[returned descriptor note](completed/native_codegen/native_returned_resource_hooks.md).
+
+Required Resource materialization uses an opaque value proof produced from
+jett_comptime's private program-bound checked cache. HIR consumes that proof
+through an acyclic compiler-internal dependency, derives the admitted replacement
+itself and records an authenticated execution view while retaining the immutable
+original ResourceSourceArchive. MIR checks the original-to-materialized occurrence,
+function identity, specialization and same-manifest hook relation through CFG
+transforms. Public mirrored cache data or a fresh snapshot of mutated HIR cannot
+supply this authority.
+
+The driver exposes checked required evaluation and baking seams using one
+CheckedResourceProgram. Runtime Resource operations are preserved during baking;
+only explicit required values are replaced. Compile-time-only helper classification
+must be authenticated from the original checked call graph and exported/runtime
+roots. It cannot be inferred from a callable signature or used to erase original
+body, header or type integrity checks.
+
+
+Required-value rows also seal ordinary helpers' current MIR bodies. Proof capture
+is distinct from runtime custody classification: it cannot add Resource frames,
+executable Resource roots or hidden Resource ABI parameters to an ordinary helper.
+Both syntactic arms of an exact sum-tag guard are planned; the emitted runtime
+branch and extraction checks retain actual absence/occupancy. Typed sum headers
+and normalized operation nodes remain visible to disconnected-custody checks.
+The current shared checkpoint passes 61 scenarios in both reference and Source-
+absent native profiles (122 runs each) against the unchanged matched MSVC archives.
+
+### Borrowed Resource sum integration
+
+The next Resource family retains the checked concrete body's exact handled-view
+binding origin through HIR and a private MIR projection region. Generated sum and
+payload locals are nonowning. Fresh typed tag edges distinguish Some/Ok projections
+from None/Fail observations; ordinary consuming SumTake remains a separate role.
+Wire-v2 registration adds conditional source formals and explicit sum borrow,
+observe, project, failure-read and end operations. Five selected status/out C leaves
+extend the Resource leaf inventory from 32 to 37 without changing public record ABI.
+Absent shells receive live-loan guards despite having no occupied Resource token.
+
+The expanded 138-scenario corpus passes 276 reference and 276 Source-deleted
+native runs in Debug/Release against matched measured MSVC private runtime
+archives. Original declaration keys include exact lexical paths; current headers,
+backings, guards and constructor graphs retain independent seals. Certified
+Fallthrough/Return/Break/Continue records end child loans before parent loans and
+clear nonowning aliases before joins/backedges. Return operands run first; lexical
+retirement does not complete RootScope or consume its backing. Recursive declaration
+inventory alone does not admit For/Match/reflected bodies or unemitted declarations.
+Alternate outer Default lifetimes remain pending. Ordinary borrowed data sums
+follow their [separate implementation](completed/native_codegen/native_ordinary_borrowed_sum_codegen.md);
+this borrowed-sum slice does not itself extend Resource For/Match/reflected-body
+admission. See
+[the borrowed-sum contract](completed/native_codegen/native_resource_borrowed_sums.md) and
+[the verified nested contract](completed/native_codegen/native_resource_nested_sums.md).
+
+A separate [Resource control-flow proof](completed/native_codegen/native_resource_control_flow.md)
+authenticates consuming Resource-free list ForEach and ordinary Resource-free enum
+Switch. Sequence preparation reconstructs the exact three temporary headers,
+source/cursor/length initialization, get/increment prefix and original CFG before
+transporting current borrowed, lexical, call and descriptor proofs. Strict joins
+and final raw ForEach refusal remain unchanged. The focused local MSVC packet
+passes 30 cases / 60 Source-deleted executions across seven Sources, including
+consecutive and nested loops. Full 191/382 reference and Source-deleted MSVC native
+execution pass. At committed control-flow revision
+`f4fa59da6656b1424e7689b78f7035975b14cc14`, the coherent workspace passes 3,454
+tests with zero failures and three ignored tests across 92 result groups; all
+3,659 frozen inputs remain unchanged. The receipt is
+`target/native-control-flow-f4fa-workspace-evidence/after-evidence.json`.
+[Exact-revision CI run 37744039455](https://github.com/vycdev/jett/actions/runs/37744039455)
+also completes all four Windows/Linux compiler and installed-toolchain jobs
+successfully, recorded in the adjacent `ci-final.json`. These accepted gates
+belong to that control-flow revision. The latest reflected-field bridge still
+requires its own coherent-workspace and exact-revision CI gates. Excluded erased
+carriers and other iterator forms need separate compiler transport proofs under existing
+Source semantics. Source06's separate reference repair passes strict Resource execution, including
+exceptional exits and same-grant reentry. A separate direct-field HIR/MIR ordinal
+bridge now retains the exact checked scopes and passes its bounded native gate,
+including clean same-grant reentry. Original Source06 exceptional native
+single-entry and same-grant reentry acceptance, plus the bounded derived control
+matrix, are recorded below. Broader lifetime combinations remain obligations.
+
+The [checked reflected-field reference bridge](completed/native_codegen/native_resource_reflected_fields.md)
+retains the original For/body, parent attempt, resolver binder and ordered owner
+metadata. Each field ordinal selects its exact checker-owned scope and full
+reflection; runtime metadata alone grants no body authority. Calls isolate and
+restore item selectors, and normal/control/failure exits restore the entry frame.
+Retained `type.fields` facts also support pure required evaluation without a
+provider. Direct nominal-field native acceptance is recorded below; broader
+checked Resource reflected loops remain pending.
+
+### Checked Resource reflected-field ordinal transport
+
+`ResourceSourceArchive` now captures constructor-only correspondence for direct
+nominal-struct `TypeFields` loops in the root body of exact non-generic,
+noncapturing functions in its `CheckedResourceProgram`. HIR preserves
+every checked `ReflectedIteration(ordinal)` expansion instead of coalescing equal
+type/reflection arms in this path. The archive retains exact original For and
+binding objects, unique resolver declarations, owner TypeId and full source-aware
+reflection, ordered field snapshots, checked body facts, HIR headers and original
+loop/dispatch/arm Scope paths. Its opaque proof cannot be created from public HIR
+or caller-supplied metadata. The ordinary `lower_program` entry lacks this archive
+and retains its current coalescing behavior. Checking specializes type-level
+reflection facts while field-index/name branches inspect the current runtime
+binder. Independent ordinary positive controls pass 30 Source-deleted native
+main/verify/property executions across five forms without a production change.
+Those bounded controls establish no ordinary coalescing defect and do not prove
+broader checked Resource reflection transport.
+
+MIR consumes the exact archived dispatch occurrence. For each ordinal it derives
+the original immutable `TypeField` binder's index-equality guard and a one-arm
+`ReflectedTypeDispatch` with the full source-aware TypeInfo identity. Equal-TypeId
+fields consequently retain separate guards and body targets while the existing
+native dispatch uniqueness checks remain intact. Private original/current seals
+revalidate guard order, dispatches, body and refusing targets, field headers,
+archive membership and original lexical paths. Canonical sequence normalization,
+pruning and local remaps update only current sites and headers. Arm-specific
+subtree lookup preserves the exact nested handler paths; independent borrowed
+projection and lexical retirement validation keep local membership and custody
+joins unchanged.
+
+An ordinary function inside this checked Resource program can receive a proof-only
+MIR witness for its own archived loop. Execution-family classification remains
+ordinary: the witness adds no Resource plan, runtime Scope, provider permission or
+custody. Its ordinary map, string, view and uninhabited sequence lowering uses the
+existing finite `SequenceEdit` validator, retaining original headers and function
+identity and refreshing only the current graph and independent body seal.
+Resource execution functions retain their separate consuming-list reconstruction.
+No runtime leaf, ABI or wire-v2 row is added.
+
+The integrated affected-phase gate passes 1,202 checks with all 3,679 frozen inputs
+unchanged. The subsequent focused native gate passes 16 Source-deleted executables
+and 24 entries across four cases, including clean same-provider/grant reentry.
+The unchanged predecessor corpus separately passes all 191 cases / 382
+Source-deleted Debug/Release executions. Both native gates retain all 3,686 frozen
+inputs, nine matched MSVC runtime files and the frozen test executable unchanged.
+Exact receipts and the independent 30-execution ordinary positive control are in
+the [field-loop note](completed/native_codegen/native_resource_reflected_fields.md).
+Generic/alias owners, bitfields, variants, machines, `TypeInfo.args` and nested
+producers still require checked Resource compiler transport proofs and Source
+evidence. The original Source06 additionally passes all eight exceptional scripts
+through 16 reference observations, 16 objects and 16 Source-deleted native single
+entries in both checking profiles, with exact completion and pre-teardown retirement.
+
+The original nine-script matrix also passes 18 Source-deleted same-grant native
+executables / 36 entries in Debug/Release: every original script followed by READY
+on one retained Session/provider/paired Network grant. The private launcher
+completes and observes the first attempt before requesting the next existing
+`entry_begin`. All eight Resource counts and ordinary value storage are zero
+before teardown; the runtime independently validates current ordinary
+first-error/cleanup state, installed entry, attempt budget and absence of active
+or residual custody. Completed Resource cleanup failure is retained historical
+evidence and permits the declared next entry after these checks. No error reset
+or failure-taking API is introduced. Both immutable completion/diagnostic records,
+continuous ordered events and original first nonzero process exit remain exact;
+the combined script is exhausted before one Session destruction.
+
+Fresh measured MSVC Debug/Release archives use compiled receipt pin
+`96721717326f7d6f96dd2bb98dc1d6e919f7119235e33e103e5ac89bd6f29d0a`.
+Actual reference/native session 30992, terminal `22c716`, passes both Rust
+harnesses with exit zero and retains all 3,722 inputs and nine runtime files
+unchanged in the tested candidate based on parent `b5c55ac7`, recorded in
+`target/native-reflected-exceptional-reentry-evidence/after-v3.json`
+(SHA-256 `f3dc34c6a13079c6e0be04716d37af9a69580a7b99b859a4ebd5301376e3aa8b`).
+The earlier zero-test filter attempt remains explicitly unaccepted in `after-v2.json`;
+each corrected manifest filter executed one real test. Runtime ABI 1, Source wire 2
+and private script/report protocol 1 remain unchanged. This is local MSVC original
+Source06 acceptance; the separate derived control acceptance follows.
+
+The unchanged derived Sources7/8/9 now additionally pass the historical ten-script
+matrix: three handled Returns, two Break paths, two Continue paths and three
+scalar Handle Default paths. Borrow-failure handlers in Sources7/8 return before
+Break/Continue; the executed signal, rather than the fixture family name, defines
+these counts. A separate Source9 READY baseline was verified without changing
+Source bytes. Break keeps total17 and retires its selected scoped-type body;
+Continue keeps total34 and skips the statement after that body; scalar Default
+supplies primitive17, resumes the selected body and preserves both field visits
+and total34. The outer optional owner is retained until the existing consuming
+close or handled Return.
+
+Actual session 18249, terminal `e1bcf6`, passes all five one-test gates with exit
+zero: 22 single-entry reference calls, 40 same-grant reference calls, 22 objects,
+22 Source-deleted single-entry executables / 22 entries and 20 same-grant reentry
+executables / 40 entries, for **42 native executables / 62 entries**. Each original
+script is followed by its own Source's READY on the same Session/provider/paired
+Network grant. Strict completion/diagnostic/event records, all eight zero
+Resource counts and empty ordinary storage before teardown, combined-script
+exhaustion and one destruction remain exact. Explicit-close cleanup failures
+retain body255 / cleanup255 / Cleanup channel / first exit71 after READY; existing
+entry-begin checks and immutable first observations are unchanged, with no reset.
+`target/native-reflected-derived-control-native-evidence/after-v1.json`
+(SHA-256 `f9cfe12b7a2013fd63ac0e73672a1c4fbee617e01a366e5747a1ab17a1e6da24`)
+retains all 3,725 frozen inputs and nine measured v2 runtime files unchanged in
+the tested candidate based on parent `f4c63a0f`, using the MSVC receipt pin above.
+Prior original Source06 and 191/382 receipts remain separate. This gate adds no
+GNU carrier/fresh-v3 native execution acceptance. The dedicated Return successor
+is recorded below; broader lifetimes and coherent-revision gates remain separate.
+
+Dedicated additive Sources10/11 now pass twelve shared cases for genuine first-
+and second-field successful Return, handled first/later borrow failure and cleanup
+combinations. Three equal-int64 fields and terminal sentinels verify skipped
+subsequent fields/statements. Source10's implicit Return retires its scoped loan
+and outer optional owner; cleanup failure preserves original body0/cleanup255.
+Source11 returns a distinct owned Resource892 while retiring aliased outer891.
+Successful outer cleanup gates publication and exact caller Borrow892(29)/close;
+helper cleanup failure suppresses caller use, retires891 then provisional892 and
+propagates root body255/cleanup255. The helper Source follows a normal Return
+path; the report observes the entry-root completion and retirement events, not a
+separate nested callee completion. Cleanup channel, exact diagnostic and first
+exit71 remain immutable after same-Source READY.
+
+Actual sessions 64018 (`0b2a26`) and 47358 (`dcfb82`) pass all five one-test gates:
+72 reference calls, 24 objects, 24 Source-deleted single executables/24 entries
+and 24 same-grant reentry executables/48 entries, for **48 native executables /
+72 entries**. All eight native custody counts and ordinary storage retire before
+one destruction; continuous ordered events, per-entry boundaries, script
+exhaustion and both exact completions remain preserved on the same
+Session/provider/paired Network grant. No reset or failure-latch clearing occurs.
+`target/native-reflected-body-return-native-evidence/after-v2.json`
+(SHA-256 `9250a5d37375cd66ba212e1cfcaa489ef0b55571dba0efa72dc59a6d306baa18`)
+retains all 3,730 frozen inputs and nine measured v2 runtime files unchanged at
+tested parent `91105876e5dbbbe9bbaa1d19bc2408ec9a274255`, using the unchanged
+MSVC receipt pin above. Sources7/8/9 and their historical ten scripts remain exact.
+
+The Return operand continues to precede certified lexical retirement; the
+successful owned-return case uses a survivor without the outer owner's resident
+lease. Same-owner live-lease Return, broader body/Default lifetimes, generic/nested
+reflected producers, aggregate custody, fresh-v3 native evidence and coherent-
+workspace/exact-revision CI gates remain separate full-goal obligations. The
+rough 87% estimate and fixed 207/182 inventory denominators remain unchanged.
+
+
+### Typed Resource aggregate carrier transport
+
+A separate private carrier plan captures the complete authenticated original type
+graph and exact constructor/projection/current-CFG associations. Its slots reuse
+Scope/Operation/Return frames while preserving individual leaf custody separately.
+Runtime roots bind installed shape, activation, slot and generation; typed paths
+and bounded leases validate live projections. Dedicated v3 graph/slot/Source roles
+retain strict accepted v1/v2 decoding. An explicit parent-bound sum-loan adapter
+bridges selected optional/result children without consuming borrowed backing.
+Ordinary ownership fields cannot contain Resource-table handles. Bounded v14/v15
+object/native absence acceptance and current post-repair fresh MSVC-v3
+regression pass as recorded below; broader lifetime/purpose acceptance remains
+required. See the
+[typed aggregate plan](completed/native_codegen/native_resource_aggregate_carriers.md).
+
+### Authenticated ordinary native entry Scope
+
+The entry-aware MIR validator authenticates the complete current/original graph
+before canonical preparation and returns a separate readonly entry Scope plan.
+It adds no execution-family function, owner, loan or Source-call authority. Initial
+checked Resource-archive lowering captures proof-only metadata and an independent
+body seal for closed Network-only/Nothing candidates, including genuinely pure
+entries. Missing, foreign, transplanted or resealed mutable bodies refuse; raw
+HIR/default archive paths cannot mint this proof.
+
+Codegen serializes the selected wrapper root and Complete row separately from
+Source-family signature/frame maps and includes the exact entry as a reachability
+root. The wrapper validates the installed tuple, obtains the existing Network
+grant, calls the ordinary two-hidden-parameter body, reads its retained Status,
+attempts exact Complete without replacing the original outcome, and observes
+EntryOutcome. Existing Resource-family bodies keep their calling convention.
+Runtime ABI, layout wire and provider APIs remain unchanged by this entry bridge.
+Current compiler proof and bounded earlier native checkpoints are recorded below
+and in [the ordinary entry plan](completed/native_codegen/native_resource_ordinary_entry.md).
+
+### Bounded object/native acceptance and current compiler checkpoint
+
+All fourteen whole-Source17 wrappers emitted **28/28** genuine host objects in
+both profiles at v14, with zero refusals. The full original 3,600-byte Source
+prefix, twelve exports, unused refined contract, required controls, verify and
+property100 remain intact and in scope. This main-wrapper gate does not establish
+every original purpose or live aggregate value.
+
+target/native-resource-carrier-compile-evidence/after-v14.json (SHA-256
+43c3a3f1fc2fa6d1e4c6cbd7cc7e0bad4f0d560dce0685e6a8fcb2b411aee2dc)
+records actual session 94028, terminal f7b2aa, exit zero.
+
+The separate v15 gate passes **28 Source-deleted single-entry executables /
+28 entries**, including Source13's exact ordinary bounds error, and **26 clean
+same-grant reentry executables / 52 entries**: **54 native executables /
+80 entries**. Exact completion/message/event reports, all eight zero Resource
+custody counts and empty ordinary storage before one teardown, event boundaries
+and script exhaustion pass. Source13's repeated ordinary-error call on the same
+grant remains pending; thirteen clean Sources in both profiles do not replace
+that lifetime obligation.
+
+target/native-resource-carrier-compile-evidence/after-v15.json (SHA-256
+b20c4d9427b11676e7207e5691171c64a861666e0f728b8aa24dba631123154b)
+records actual session 93295, terminal b1a472, exit zero. Both v14/v15 retain
+all **3,752 frozen inputs / nine runtime files unchanged** at parent
+91e3706b770124cbddca952e5fe6b558abc170be. The measured v15 runtime receipt pin is
+74a811660ee1772e0374e04579dd51234e8ff38191b942335bedaab5b4e4b6cd.
+
+The current post-refinement-repair compiler gate is separate from v15 native
+acceptance. At v19, **17 focused entry controls (13 MIR + four codegen)** pass,
+including four new raw/refinement archive controls. Full package gates pass
+**314 MIR checks (313 library + one doctest)** and **181 Cranelift checks
+(118 library + 63 object)**, with zero failures or ignored tests.
+
+target/native-resource-carrier-compile-evidence/after-v19.json (SHA-256
+b549b995be46093f29dbf45314b47f1eea3b09c9bfc20cebf068e477bfaa8f8b)
+records actual session 65346, terminal 26ed19, exit zero and all **3,757 frozen
+inputs / nine runtime files unchanged** at the same parent. Earlier v3 runtime
+gates passed **275 checks at v6** and **44 focused carrier checks at v7**. These
+are historical revision-specific results, not current whole-runtime or workspace
+success.
+
+### Current workspace and wider-language observations
+
+The current v20 whole-workspace gate passes **3,582 checks, zero failures and
+13 ignored tests**, across **66 real selected groups / 92 total result groups**.
+Actual session **75431**, terminal **1f1c8b**, exits zero for
+`cargo test --offline -q --workspace --no-fail-fast`.
+target/native-resource-carrier-compile-evidence/after-v20.json (SHA-256
+fb59285ab91f6d15ce57ab59ecf7cc5c00187cdf4c323de04b5bbafe4a78e7d2)
+records all **3,757 source inputs / nine runtime files unchanged** at parent
+91e3706b770124cbddca952e5fe6b558abc170be. The inputs-v20 manifest SHA-256 is
+58dd6f590a1bf2fd63f04d0ec0abdd15aa71452e9e00b1ff36b1feb29ab3612a;
+the workspace log SHA-256 is
+f610439bbbcb334d88de90c8b8ebf4178f1015be564cc7caf63bba2b5d6ed8da.
+This is measured workspace success, not fresh ignored-native acceptance.
+
+All **11 fresh-v3 native gates now pass**, each selected as a real one-test gate.
+Actual session **41872**, terminal **3c7b60**, exits zero with **576 Source-deleted
+native executions / 672 entry calls**, across Debug and Release. This includes
+the unchanged **191-case / 382-execution corpus drawn from 113 distinct Sources**,
+carrier controls, reflected-body controls and owned-Return regression. The v20
+workspace's ignored-test count is historical; v21 independently executes the
+eleven native gates rather than treating ignored tests as acceptance.
+
+target/native-resource-carrier-compile-evidence/after-v21.json (SHA-256
+38f67805c93e66e273d29de84c1cfc3351d70c0235bf656ea661244474582fa2)
+records all **3,757 source inputs / nine runtime files, HEAD and inventory
+unchanged** at parent 91e3706b770124cbddca952e5fe6b558abc170be. The frozen native
+binary SHA-256 remains
+110ba3b7bf23e63677ac7afd13a83fc2fa98aeccebc553e8df4f294fb5bc872f.
+Matched MSVC v3 archive provenance passes before and after execution with receipt
+pin 74a811660ee1772e0374e04579dd51234e8ff38191b942335bedaab5b4e4b6cd.
+The successful runner report SHA-256 is
+699f2364769ccdd489c7322832f2410690129d8f687006239e3dc6f0b6e82ae6.
+This gate establishes no GNU runtime-archive acceptance.
+
+Owned-Return cleanup failure retains caller/entry-root **body255 / cleanup255**;
+the observations establish retirement and root completion, not a separate nested
+callee completion. The accepted historical Return semantics and exact Source
+prefixes remain intact. Earlier prospective fresh-v3, full-191/382 and reflected-
+Return gate statements in retained historical sections are superseded by v21;
+broader body/Default, generic/reflected lifetimes and occupied custody remain open.
+
+Source13's repeated ordinary error, occupied resources, wider whole-language
+parity and exact-revision CI remain pending. The rough 87% estimate and fixed
+207/182 inventory do not advance.
+
+The separate 15-case wider-language probe is an **observation baseline, not
+acceptance**. Actual session **77834**, terminal **ee797f**, leaves compiler
+inputs unchanged and records eight emitted objects, six object refusals, one
+earlier backend failure and three reference failures. Frontend/driver build
+success does not establish linked parity. Its authoritative receipt is
+target/native-language-parity-probe-observations-v1/root-after-evidence.json
+(SHA-256 434cba150528d36e018d89b9dbe3acb05adf0309ac6a5aeb47a8ea1b906b4c3d).
+
+### Raw refinement proof boundary
+
+Pure refinement predicates lowered through raw/default HIR without an
+authenticated checked Resource archive stay ordinary through canonical
+preparation. Declaration kind or spelling alone supplies no Resource witness or
+entry Scope. Raw bodies with actual Resource custody retain the independent
+mandatory capture/refusal path.
+
+Authenticated predicate proof requirements derive the original declaration kind
+from the immutable archived function. Removing a witness and changing the current
+predicate kind cannot escape that requirement. Constructor seals reject missing
+or foreign proof, modified predicate body and changed header. The repair preserves
+ordinary raw refinement behavior while retaining authenticated original authority.
+
+### Remaining acceptance
+
+The current whole-workspace gate passes at v20, and all eleven fresh matched-
+MSVC-v3 native gates pass at v21, including full **191-case / 382-execution**,
+carrier, reflected-body and owned-Return regression. Exact-revision CI remains
+pending. Earlier accepted GNU Source-prefix and Return documentation and wire-v2
+receipts retain their independent historical scope; only the measured v21 gate
+supplies current MSVC-v3 regression credit. No GNU runtime-archive acceptance is
+inferred from these local MSVC results.
+
+Source13 repeated-error lifetime, occupied aggregate transport/replacement,
+broader Resource-valued Default and generic/nested reflected lifetime compositions
+remain full-goal obligations. Whole Source/export/refinement and verify/property100
+purposes remain required. No refusal counts as successful Source execution, no
+Source policy exclusion is introduced, and the full native parity goal stays
+active. The rough 87% estimate and fixed 207/182 inventory do not advance.
+
+
+### Ordinary terminal-error lifetime for repeated checked entries
+
+The selected Resource entry lifetime keeps ordinary first-error state in a
+context-owned private record issued with the exact installed entry, purpose,
+RootScope and monotonic attempt identity. Nested ordinary/Source calls share
+that record. Exact entry completion retires Resource custody and verifies the
+ordinary owner/counter predicate before sealing status, dynamic diagnostic and
+prefix. Existing completed Resource diagnostics and original body status remain
+independent from selected cleanup. A failed report leaves a non-reenterable
+tombstone; a failed retirement leaves the Completing attempt observable.
+
+The next constructor authenticates the exact sealed predecessor, fresh ordinal,
+session failure/ordinary cleanup poison, installed layout and all original
+custody/storage guards before publishing another record under the same context
+lease. No reset/take-error API authorizes this transition. Existing checked
+refinement recovery applies only within its active evaluation and cannot consume
+a sealed terminal record. Historical Resource cleanup failure retains the
+accepted original Source06 behavior; persistent ordinary cleanup poison remains
+fatal even after empty tables. The private launcher requests declared entries,
+retains the first nonzero process exit and every completion, and destroys one
+Session. Legacy ordinary context failure behavior remains unchanged.
+
+The managed ordinary runtime passes 307 measured checks with fresh matched
+MSVC archives in measurements-02. The new fourteen-Source same-grant gate passes
+in Debug/Release: 28 Source-deleted executables / 56 entries, including both
+original control13 Bounds messages, body1/cleanup0/Body and retirement before
+one destruction. The accepted combined twelve-gate scope is 604 executables /
+728 entries: the authenticated first 28/56 plus eleven freshly rerun predecessor
+gates at 576/672. The fresh whole workspace passes 3,614 checks, zero failures
+and 14 ignored tests across 66 nonzero / 92 total groups. Independent v24 receipt
+verification preserves all 3,763 Source inputs, nine fresh/nine historical runtime
+artifacts, HEAD/inventory, both native binaries and fresh02 provenance.
+See the [ordinary error lifetime note](completed/native_codegen/native_resource_ordinary_error_reentry.md)
+for exact sessions and hashes. Earlier Source13-pending statements describe
+historical checkpoints superseded by this bounded acceptance. No reset,
+independent nested callee observation, GNU archive credit or feature-denominator
+change is introduced. The separate normal-main linked baseline is complete:
+16 observations (12 exit0 / four exit71) from eight exact opaque objects reused
+with Debug/Release runtime artifact profiles, with fifteen raw-probe Sources
+preserved. It supplies no desired Source oracle, ordinary public-Main context-
+retirement observations or feature credit. Occupied custody, broader lifetimes,
+wider ordinary parity and fixes, and the successor's exact CI remain open; the
+rough estimate stays 87%.
+
+### Native actor identity comparison
+
+Validated MIR retains exact nominal actor operand TypeIds and the checked
+aggregate layout. The direct comparison leaf validates both opaque IDs in the
+current context actor registry and requires complete live backing records.
+The recursive Actor layout node compares base instance identity and pending
+depth. Actor state stays behind its existing message interface.
+
+Pending handles use separate zero-field records with the base instance's debug
+ordinal. `run` and `join` retain shared state without changing other aliases'
+depths. Context retirement releases the base state once. The reference evaluator
+uses the same live identity rule for direct and recursive comparison.
+
+The local actor suite passes on Debug and Release runtime archives after Source
+deletion, including production output with Jett optimization enabled. See the
+[actor identity verification note](completed/native_codegen/actor_identity_equality.md) for scope
+and remaining native codegen acceptance work.
+
+### Checked occupied Resource struct constructors
+
+MIR retains authenticated Begin/Stage/Commit/End constructor operations and
+their exact original HIR fields, written permutation, scope and companion
+completion roles. Original/current body checks run before pruning; public
+node edits cannot mint the retained constructor proof. The carrier plan and
+codegen validator join each operation to the same checked family.
+
+Runtime ownership transfers transactionally between slot and carrier holders.
+A unified acquisition ledger retires ownership before invoking finalizers,
+including partial constructor cleanup and same-context reentry. Fresh local
+MSVC Debug/Release ABI1/wire3/static-CRT acceptance on 2026-10-12 passes 754
+Source-deleted native executions / 900 entries across all sixteen Resource gates:
+the original twelve predecessor gates, two occupied gates and two additional
+pipeline/control-flow subset gates. Executed Rust gates decode each completion and check
+the exact Source event, message, status and exit oracles, eight zero custody counts
+and empty ordinary storage before one destruction. Compiler and Source inputs,
+measured archives, compiled gate and dep-info guards pass after execution. The
+current integration also passes all 2,314 workspace library tests, including
+308 runtime, 577 interpreter, 317 MIR and 120 code generator unit tests, plus
+six occupied-struct object emissions. Private
+double-cfg archive measurement is separate from ordinary runtime unit execution.
+Owning strings/nested occupied carriers, broader aggregate families, public Driver
+provider admission, GNU and installed-distribution acceptance remain pending. See [the occupied struct checkpoint](completed/native_codegen/native_resource_occupied_structs.md).
+
+### Selected erased-interface concrete argument validation
+
+The dispatch boundary must bind a selected concrete method to the receiver's
+retained checked implementation owner, then validate every concrete argument
+requirement before concrete normalization and body entry. Runtime values retain
+nominal and generic identities through erasure; identical field layouts cannot
+substitute for the checked type. This is validation only and does not authorize
+cloning, bypass pending failures, or remove native unboxing/handle guards.
+Generated dispatch preflights already evaluated formals with `InterfaceValidate`
+before normalization. Its exact retained TypeIds include nominal refinements,
+generic arguments and widths. The reference path uses the selected declaration
+namespace before installing callee scopes. The leaf grants no ownership and does
+not allocate native value storage; descriptor parsing may allocate Rust storage.
+Local MSVC Debug/Release Source-deleted gates pass, including optimized production
+matching/mismatched cases. See
+[exact concrete argument verification](completed/native_codegen/native_erased_same_owner_arguments.md)
+for scope, helper-level limits and remaining platform acceptance.
+
+### Selected lazy reflected callable return validation
+
+A checked reflected callable request may establish supported new return
+refinements through an owned lazy adapter. Exact owner, member, field ordinal,
+pending-selector and declared-schema checks precede construction. The adapter
+retains the original stored signature, source body, captures, debug identity
+and pending state; constructing or reading it invokes neither callback nor
+predicate. Requested parameter, view and capability contracts must satisfy the
+existing ordinary callable adapter relation. A descriptor or requested type
+annotation grants no proof, effect authority or nominal conversion.
+
+Each invocation evaluates its actuals once, invokes the retained source once
+under the original signature, and preserves the source's ordinary validation.
+Only after the source result exists does the supported typed produced-refinement
+conversion establish the unproved requested return suffix. Failed validation
+uses the existing terminal refinement-boundary error and publishes no trusted
+target result. Exact established prefixes are reused. The adapter never joins
+implicitly or inspects pending payload; a pending result requiring a new check
+reaches the existing pending-inspection refusal before predicates or consumers,
+while exact already-proved pending transport remains unchanged.
+
+On 2026-10-12 the managed integration passes all eighteen original Sources,
+including the byte-exact wider/exact probes, named/captured callbacks, lazy reads,
+repeated calls, invalid results, selector precedence, optional results and
+Nothing/refined-unit pending transport. Their thirty-six Source-deleted native
+executions pass against normal MSVC Debug/Release Main archives, with the
+original release=false Source/debug policy and unoptimized objects preserved.
+Three additive canonical Stdout controls pass six objects and twelve executions
+across both Jett optimization settings and both runtime profiles: lazy repeated
+calls preserve the source descriptor; invalid returns suppress the consumer;
+wrong selector ownership refuses before callback body output. The four Driver
+gates compare exact stdout, stderr and exit status. The ordinary public launcher
+does not expose context-retirement counters.
+
+The current fourteen focused reference controls preserve every original thirteen
+test body and add a factory/primitive-call origin-restoration control. Original
+closure body and typed capture/context witnesses are constructed at the trusted
+capture site. Admission and invocation compare against retained witnesses;
+mutating the body, checked context, signature, ordinal, Source owner or predicate
+cannot mint proof. Ordinary required constants/refinements and already-proved
+ancestor transport retain their existing path.
+
+Capture-origin preparation now skips an unused checked-root projection only when
+the exhaustive named-body scan finds no possible inline capture origin. Inline
+setup stays inside its function-value arm; InlineFn, Comptime, Error and
+ComptimeTypeBind remain conservative positive shapes. Reflected authentication
+and pending capture snapshots remain unchanged. One isolated, unchanged native
+reflection control takes 295.06 seconds before and 64.86 seconds after this
+change; this measures that gate's wall time rather than general native throughput.
+
+After this performance change, all 2,359 workspace library tests across 22 result
+groups pass, together with the four callable Driver gates (48 native executions),
+27 broader interface, 10 erased-owner and nine actor native regression tests.
+Fresh current compiler/source/binary/dep-info guards also accept all sixteen
+private Resource gates: 754 Source-deleted executions and 900 entry completions.
+Only the unchanged, independently measured v4 Debug/Release ABI1/wire3 static-CRT
+runtime archives are reused, with compiled receipt pin
+`bc2ad54743380441f074d8d5d212048ecf440669817c0cb69ce2fd0810ba1c95`.
+The fresh post-change gate and complete source guard supply current acceptance;
+old v4 execution records do not. Each Rust gate checks its existing exact
+completion, script/event, message and cleanup oracles before one teardown.
+
+This is bounded local MSVC integration acceptance. Full coherent-workspace and
+native conformance gates, exact-revision supported-host CI, GNU and installed
+distribution remain pending. New nominal/secret proof establishment, protected
+secret observation, broader generic/reflected forms and coherent-revision acceptance
+of the generated Verify/Property transitions below remain full-goal obligations.
+No Source exclusion or broad language-completion claim follows: the rough 87% estimate,
+fixed 207-fixture/182-object inventory and full 100% goal remain unchanged.
+
+### Generated callback-suite proof continuity
+
+Checked Verify and Property execution now retain the original test-body owner
+when constructing a closure witness. The owner is joined to the same retained
+checked program, original block and namespace; active capture ownership and
+Property purpose restore on both ordinary errors and panic. Public test-file
+execution installs that same checked program instead of a metadata-only
+projection.
+
+The HIR observation proof separately joins an immutable owned CallbackHolder
+constructor or alias to its exact original binding, callable producer, captures
+and reflected read. Matching types, spans or an edited public body cannot mint
+that association. Existing full Source, current-body and CFG seals remain
+mandatory; this proof grants no runtime Resource or Scope authority.
+
+The ordinary reflected-callable Property path now uses an opaque checked-case
+plan from the original successful evaluator/cache snapshot. Its canonical HIR
+factory builds the ordered 100-trial wrapper and records the exact protected
+transition. Replay reconstructs from the private pre-suite graph, checks the
+retained plan and original trial identities, and validates changed shrink inputs.
+It cannot renew proof around a caller-appended or edited wrapper. Exact sampled
+inputs use full typed snapshots rather than ordinary Value equality. Verify's
+existing canonical factory remains unchanged.
+
+The Driver checked suite route retains the same original program and successful
+required-value view. Canonical wrapper installation updates only the authenticated
+suite transition while preserving prior functions and private reflected/graph
+seals. Native shrinking starts from that retained base instead of adopting
+publicly mutated HIR. The private test harness injects failures only after fresh
+MIR lowering and before ordinary validation/codegen; it refreshes no proof.
+
+All three permanent Driver controls now pass for original named/captured
+Sources19/20: both reference reports record 100 Property trials, six standalone
+purpose objects emit, and six separately emitted Source-deleted objects pass
+twelve normal MSVC Debug/Release launches. Current compiler/Source, dependency
+and reused measured-archive guards remain unchanged. Exact outputs/status and
+executable reaping/removal are checked; ordinary context-retirement counters are
+unavailable. Both six-test Comptime/HIR groups, all eight native Property
+controls and all 1,664 affected compiler-library tests pass. See the
+[bounded audit](completed/native_codegen/native_acceptance_audit.md#generated-reflected-callback-suites-bounded-msvc-acceptance);
+this adds no full-workspace, CI, GNU or installed-distribution acceptance.
+
+### Checked actor graph template import
+
+Successful required evaluation retains a program-owned immutable actor graph
+template, joined to its private checked required-value identity. A type-aware
+work queue and graph-wide memo preserve shared references, distinct seed nodes,
+evaluated state, pending depth and admitted captures. Each runtime evaluation
+imports fresh context-owned instances; ordinary aliases after binding share
+those imported instances. Initializers, handlers, source predicates and compiler
+observations are not replayed.
+
+Graph HIR reconstruction derives from the original checked program. Independent
+original/current MIR seals authenticate native reserve/fill/commit/abort staging
+before publication. Failed staging retires partial owners and registrations while
+preserving the first error and cleanup poison. The checked actor constructor
+remains the sole raw allocation boundary. Exact nominal and generic identities,
+Owner preflight, Resource constructor/incoming-frame checks and Callback
+plan/capture authentication remain separate requirements.
+
+An aggregate graph producer transported through Resource constructor staging
+retains its complete protected lifecycle and exact Commit output. Generated
+output headers remain separate from original Source headers. Planning and native
+ordinary word representation select a current physical graph producer, endpoint
+or complete call edge; they grant no type-wide aggregate admission or Resource
+custody. Ordinary graph heap retain/drop and prefix cleanup remain in codegen.
+When the Resource manifest has no kinds, the ordinary emitter still derives a
+fresh graph storage plan before and after canonical preparation. Verification and
+function emission consume that plan without a Resource layout or hidden Scope.
+Canonical collection iteration records only the exact generated iterator owner
+initialized from the protected original iterable. It remains separate from
+original Source headers; current validation checks its initializer, header and
+sequence operations before selecting ordinary storage.
+See [the constructor transport note](completed/native_codegen/native_graph_constructor_transport.md).
+
+One private immutable `OriginalGraphAnalysis` table reconstructs all owner rows
+for an exact checked execution archive. Execution closure classification,
+constructor capture and typed graph validation share that table. Selection
+checks exact archive identity, preserved type meanings and the complete original
+owner; current body/header, constructor, transport and pointer checks remain
+independent. Closure reconstruction recomputes membership using the retained
+table. This adds no global cache or type-wide admission. A completed private
+analysis proving no original rows, together with empty current metadata, may
+return only a negative storage answer. It grants no proof or custody exemption;
+positive/current records retain full validation. Original archive/type checks
+and independent closure reconstruction remain mandatory.
+
+Ordinary checked namespace initializers use the same retained original program
+and selected-purpose preparation as collected explicit expressions. The two
+passes share the existing private checked attempt key, suppressing duplicate
+evaluation of successful and failed initializers without filtering observations.
+Baked reads remain silent; no runtime globals, Resource transport or provider
+are introduced. Every retained checked ordinary archive also carries required
+replacement through the private transition, regardless of graph/callable-plan
+presence. Exact original archive, owner/context proof, typed occurrence,
+original locals and generated binding checks precede canonical seal renewal.
+An admitted TypeConstruction replacement must match the complete typed
+transcript from the sole evaluated-builder producer with no added locals or
+bindings. This repair grants no wider builder-domain admission.
+
+Ordinary actor/interface wrappers with exact original entry-Scope capture and
+no execution or graph records retain the existing finite ordinary sequence
+transition. That route independently excludes constructor/seal/call/region,
+borrowed-sum and lexical-custody records, checks the whole canonical edit and
+before/current witness, preserves original headers and refuses new custody.
+It retains wrapper authentication without installing a new Scope or grant.
+Dedicated graph sequence and real Resource execution paths remain separate.
+
+Graph Resource hook descriptors carry metadata bound to the same context,
+installed program, layout, descriptor operation, hook and signature. The new
+`jett_rt_v1_resource_graph_descriptor_box` export grants no Scope, Network
+authority or Resource custody. The composed Resource inventory is 56 production
+exports: 37 original ordinary leaves, one graph descriptor leaf, 13 carrier
+leaves and five startup leaves; the eight private hooks remain separate.
+Generated startup ownership and its test-only borrowed-attempt sentinel remain
+unchanged. Completion releases Resource companions before retiring actor state
+and unfinished imports for the exact Running ordinary attempt. Retirement
+precedes emptiness checks and terminal sealing; first diagnostics remain intact
+and cleanup poison prevents successful reentry. Later context destruction
+observes the drained actor table.
+
+Existing Source admission excludes move-only Actor closure captures with E0402.
+Unchanged admitted primitive captures retain their existing witness, and reflected
+callables retain their checked plan and authenticated source. No unchecked cache,
+witness reset or new capture admission is selected. This is a sequential import
+contract. Existing sequential task/actor behavior remains in native parity
+scope. Absent asynchronous scheduling and production-provider APIs are separate
+future feature work, not prerequisites for current reference parity. Focused local checks and 32 linked MSVC executions passed; broader
+native and supported-host acceptance remain pending.
+See [the graph note](completed/native_codegen/native_comptime_actor_graph.md).
+
+
+### Occupied Resource primitive companion transport
+
+The selected extension shares one checked primitive admission predicate between
+constructor planning and physical companion validation. It preserves canonical
+alias TypeIds, each original constructor endpoint and field ordinal, written
+evaluation order, and the existing acquisition and cleanup transcript. uint64
+requires `Value::Uint64`; float32 physical validation requires the exact f64
+widening of binary32. Checked expression normalization is the separate rounding
+boundary and restores every pending wrapper before physical validation.
+
+Integer, floating-point and bool carrier children retain pending depth
+separately from payload bits. Nothing keeps its existing scalar-word depth
+encoding: codegen sends zero payload plus depth into the carrier and reconstructs
+the depth word on observation. String handles retain their existing depth
+through clone, observation and retirement. Single-word observation refuses
+pending carrier scalar data; the generated path uses the depth-preserving pair.
+`jett_rt_v1_resource_carrier_child_scalar_task` and
+`jett_rt_v1_resource_carrier_observe_scalar_task` carry payload and depth without
+encoding Resource ownership or capability authority. Their observation outputs
+are committed only after handle, operation and output validation succeeds.
+All existing leaf signatures, generated startup ownership and graph descriptor
+authentication remain unchanged. ABI1/wire3 remains unchanged. The selected
+catalog has 58 production exports: 38 ordinary, 15 carrier and five startup;
+the eight private hooks remain separate. Source completion preserves an
+ordinary body failure only when the returned nonzero status exactly matches the
+recorded ordinary status. Independent Resource errors and cleanup failures retain
+their existing priority. The private test API copies each selected diagnostic
+channel directly; production failure-copy behavior is unchanged.
+
+The original all-target check, 46 focused compiler tests and 82 measurement-helper
+controls passed. After the ordinary source-completion repair, the four compiler
+libraries pass 1,322 tests and Runtime passes 366. Those unit checks precede the
+private report-copy repair and two-file native oracle correction. Fresh normal
+and private MSVC Debug/Release archive measurements retain the 58-export catalog,
+static CRT and unchanged ABI1/wire3. All eighteen corrected Resource gates pass
+846 Source-deleted executions and 1,038 entries; Startup80 also passes with exact
+current source guards. Earlier Graph32 and selected normal regressions retain
+their accepted scope before the isolated oracle correction, with no production
+or selected-test behavior change. This supplies bounded local MSVC acceptance;
+full workspace, inventory, GNU and installed-distribution acceptance remain
+separate requirements. See
+[primitive companion work](completed/native_codegen/native_resource_primitive_companions.md).
+
+
+### Ordinary diagnostic propagation across Source scopes
+
+Classification follows the recorded ordinary or Resource failure, not whether
+the failing expression is in a root or nested Source scope. The exact installed
+scope, operation and current ordinary status remain authenticated. Matching
+ordinary propagation does not add `NativeBodyFailure::Resource`; a wrong nonzero
+status or genuine protocol error still does. Cleanup priority and immutable
+completed attempts remain unchanged. The private test API copies the requested channel's
+own bytes; production failure-copy selection is unchanged.
+
+The v10/v24 Source13 observations of an additional Resource refusal are retained
+as historical behavior, not the current ordinary-only message contract. Their
+receipt counts remain bound to those revisions. Correcting only the stale
+message oracle supplies no execution credit; the affected exact native gates
+still require fresh acceptance. See the
+[ordinary terminal-error lifetime note](completed/native_codegen/native_resource_ordinary_error_reentry.md).
+
+### Original required regions for inline bodies and refinement predicates
+
+Required-value preparation follows explicit private region steps into retained
+inline bodies. The ordinary executable walker continues to stop at callable
+boundaries. Each step identifies the exact physical original inline node, keeps
+its enclosing declaration and concrete generic instance, and interleaves scoped
+selections in lexical order. These references are admitted only for explicit
+required evaluation; they cannot become runtime Resource entry authority.
+
+A refinement required region names the exact retained alias item, checked
+declaration definition and physical constraint expression. The existing checker
+still proves each explicit subexpression closed and pure. The original attempt
+key and read-only required proof include this region rather than selecting it by
+source spelling or nominal type alone.
+
+HIR records the canonical extraction association from an original inline node
+to its extracted function and enclosing original owner. Required materialization
+joins that private record, the retained checked program, exact original HIR
+header and expression, and complete generic and scoped context. Refinement
+materialization likewise joins the original checked predicate declaration and
+HIR function. Both routes retain original/current archive authentication and the
+existing value matcher. Prepared payloads and format checks provide no native
+execution credit; focused forgery controls and exact-head CI must pass first.
+
+### Actor-owned required-value provenance
+
+Closed pure explicit `comptime` remains valid in actor initializers and receive
+bodies. The required worker retains original actor owner/handler ordinals and
+checked handler scope facts as metadata; runtime ActorHandler Resource entry
+remains forbidden by its existing purpose gate. Frontend cache proofs do not
+authorize native body edits or renew actor snapshots. The separate checked HIR
+required-bake receipt described below joins exact actor owners and renews full
+snapshots. A separate actual-sealer receipt authenticates exact token edits and
+renewed execution tables. The original-Lowerer initial actor path below may
+authenticate its bounded snapshot delta and source epoch; later unrepresented
+actor-changing compositions still require their own path. A plan moved into a
+generated adapter need not change the handler snapshot. The frontend evidence remains recorded in
+[the actor required-value note](completed/native_codegen/native_actor_required_values.md).
+
+Retained ExplicitComptime and NamespaceConstant workers also validate lazy
+closure environments before creating a function value. The complete original
+parameters, return annotation and body must match the same checked program.
+External Variable/Param references must exist in the actual permitted lexical
+captures; own formals and body locals remain deferred. Exact namespace value
+declarations, named functions and types retain their registry roles, but a
+same-name constant cannot satisfy an actor field or handler parameter. Nested
+lazy bodies keep the same closedness requirement. This enforces the existing
+closed-expression rule without granting runtime actor entry, Resource custody,
+HIR baking or native snapshot renewal.
+
+### Checked actor required-value bake transitions
+
+Ordinary required-value baking retains an ephemeral receipt of its actual fully
+validated input/output, successful cache identity and type arena. Actor handler
+and constructor view snapshots advance only from that receipt while preserving
+original checker receipts, roles and projections. Peer execution tables capture
+the renewed table at the same private transaction boundary. The sole actual
+callable sealer retains complete before/output Programs, checked session, borrowed
+type arena, source epoch and exact token-slot edits. The already-materialized
+baked view authenticates its current table and private cache identity before
+renewing from that retained output, preserving mutable-sum replay and validating
+full actor snapshots unchanged. MIR retains complete archive equality. This
+already-materialized baked renewal does not admit actor-body-changing deltas.
+The separate original-Lowerer initial actor path below authenticates only its
+represented delta; later source-lineage, actor-owned Graph and Resource-hook-
+bearing obligations remain.
+Ordinary native output does not establish physical lifetime or same-context
+reentry; see the [checked actor bake note](completed/native_codegen/native_actor_required_bake.md).
+
+### Initial actor callable-sealing source epochs
+
+The original Lowerer may renew complete actor snapshots from the sole actual
+CheckedCallableSealing output, retaining original receipt/role/view metadata.
+A private finite epoch stores raw predecessor sources and the validated final
+table before attaching its own edge. Source comparison restores only existing
+protected stages to that exact checkpoint and retains full actor metadata.
+The same actual token receipt remains authoritative; no duplicate token producer
+is introduced. Actual Weak expiry controls cover the finite compiler graph, not
+native physical actor/callback lifetime or same-context reentry. A fresh original
+construction may also freeze unchanged temporary canonical producers through the
+separate exact transition below. Unrepresented later actor/checkpoint/Graph/Resource
+compositions remain pending; see the
+[initial actor sealing note](completed/native_codegen/native_actor_callable_sealing.md).
+
+### Initial actor and retained temporary-owner finalization
+
+The consuming Lowerer owns a non-Clone mint-time inventory of exact temporary
+proof Arcs, bound to its original module/check/type arena. It closes registration
+before canonical passes and never publishes a pending registry or Program. The
+ordinary no-actor/no-delta path retains its existing one-time late finalizer.
+
+For an actual initial actor callable delta, the sole actual sealer receipt may
+authenticate a separate open-to-closed temporary-cell transition. Every minted
+marker must match the complete retained input/output inventory and original
+owner/alias facts. Candidates come only from the actual receipt's BEFORE owner
+expressions, after clearing only their own outer marker; complete canonical
+operands must equal the token output. A hidden temporary argument proof visitor
+joins each predecessor to an exact earlier declaration in the same body. Repeated
+uses remain valid; absent, foreign, self or forward dependencies refuse. Bound
+callable payloads cannot import a sealed or Graph epoch.
+
+Preparation writes no cells. An opaque checkpoint derived from the retained
+actor stage and the actual initial sum producer authenticates the complete final
+peer table. All dependency, open-cell and attachment checks precede the first
+write. The producer consumes the fresh registry, fills OnceLocks once with its
+retained BEFORE values, then captures the existing pre-attachment actor epoch.
+Only its opaque completion may skip the late setter. Arc-based Program equality
+alone is not rollback or proof of a cell-state transition.
+
+The unchanged checker-valid Packet/list composition passes the new transition
+controls and the broader 2,553-test local regression checkpoint. Its fresh
+compile-only gate is accepted. One unchanged Source emits two objects and passes
+two Source-deleted Debug/Release native processes, each with observed:5 plus LF,
+empty stderr and exit zero. These bounded output and cleanup observations do not
+measure native physical actor ownership or same-context reentry. A canonical producer
+changed by sealing still needs a separate immutable current-canonical proof and
+HIR/MIR consumer design. No marker removal, current-table recapture, checker
+restriction, arbitrary historical ancestry or runtime authority is introduced.
+The 35 focused HIR controls are included in that broader total; no native
+execution credit is inferred from compiler tests. Earlier Resource observations
+retain their committed checkpoint scope. See the
+[temporary finalization note](completed/native_codegen/native_actor_temporary_owner_finalization.md).
+
+### Private Resource observation protocol 2
+
+The recorder under `cfg(all(test, jett_resource_native_test_archive))` adds
+private observation only. Production Runtime ABI 1, Resource layout wire 3, the 58
+production and 8 private C exports, NativeResourceCounts/ArchiveInfo layouts of
+72/32 bytes and
+receipt/normal-launcher manifest version 1 remain unchanged. The private
+ArchiveInfo.test_protocol and JTRRP002 report use version 2; host controls use
+JTRHC002. These versions select separate contracts.
+
+Five cumulative counters retain hook ingress, its acquire subset, factory
+prepare, factory commit and actual provider dispatch independently. Successful
+Property Set/Clear and Resource-ABI calls entered with installed Property
+context retain actual history and supported installed int64 bits. Calls without
+that context, ordinary ABI calls and other installed value forms remain
+unmeasured. Strict decoding preserves optional values and known sticky
+incompleteness; Source17 acceptance requires complete history and no incomplete
+flags. Observation failure preserves Source error selection.
+
+The implementation across 16 Rust paths passes 407 focused local checks. Six
+fresh MSVC Debug/Release archives have been measured and the fresh compiler gate
+is accepted. Archive measurement and compile-only acceptance grant zero Source
+executions. The matched native ingress control gate passes 32 categorized
+processes; Source17 passes eight processes with measured complete private
+history, installed int64 bits and five independent zero acquisition counters.
+Normal-launcher telemetry remains unmeasured. Per-kind ordinary storage, private artifact retainers, normal
+custody/reentry and physical lifetime remain open; see the
+[private observation checkpoint](completed/native_codegen/native_resource_private_observations.md).

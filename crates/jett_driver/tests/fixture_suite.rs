@@ -6,10 +6,11 @@ use jett_diagnostics::Severity;
 use jett_driver::{
     BuildOptions, ClockTestSample, EnvironmentTestEntry, EnvironmentTestSnapshot,
     EnvironmentTestText, RandomTestSample, build_file, build_file_with_options, build_source,
-    completions, completions_at, hover_type, run_file, run_file_capture_output,
-    run_file_capture_stdout, run_file_capture_stdout_with_clock_test_samples,
-    run_file_capture_stdout_with_environment_test_snapshot,
-    run_file_capture_stdout_with_random_test_samples, run_file_with_clock_test_samples,
+    completions, completions_at, hover_type, run_file,
+    run_file_capture_outcome_with_clock_test_samples,
+    run_file_capture_outcome_with_environment_test_snapshot,
+    run_file_capture_outcome_with_random_test_samples, run_file_capture_output,
+    run_file_capture_stdout, run_file_with_clock_test_samples,
     run_file_with_environment_test_snapshot, run_file_with_random_test_samples, test_file,
 };
 use jett_parser::ast::Item;
@@ -330,8 +331,8 @@ compile_pass_fixture!(
     compile_pass_generic_reflection_local_fact_specialization,
     "generic_reflection_local_fact_specialization.jett"
 );
-compile_pass_fixture!(
-    compile_pass_generic_reflection_runtime_guard_deferral,
+compile_fail_fixture!(
+    compile_fail_generic_reflection_runtime_guard_deferral,
     "generic_reflection_runtime_guard_deferral.jett"
 );
 compile_pass_fixture!(
@@ -392,6 +393,15 @@ compile_pass_fixture!(
 );
 
 compile_fail_fixture!(compile_fail_type_mismatch, "type_mismatch.jett");
+compile_fail_fixture!(compile_fail_function_view_modes, "function_view_modes.jett");
+compile_fail_fixture!(
+    compile_fail_function_expression_ownership,
+    "function_expression_ownership.jett"
+);
+compile_fail_fixture!(
+    compile_fail_function_expression_policy,
+    "function_expression_policy.jett"
+);
 compile_fail_fixture!(compile_fail_secret_stdout, "secret_stdout.jett");
 compile_fail_fixture!(compile_fail_secret_print, "secret_print.jett");
 
@@ -435,6 +445,10 @@ compile_fail_fixture!(
     "comptime_expression_requires_closed_value.jett"
 );
 compile_fail_fixture!(
+    compile_fail_comptime_generic_requires_closed_value,
+    "comptime_generic_requires_closed_value.jett"
+);
+compile_fail_fixture!(
     compile_fail_comptime_expression_rejects_capability,
     "comptime_expression_rejects_capability.jett"
 );
@@ -457,6 +471,14 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_refinement_requires_handle,
     "refinement_requires_handle.jett"
+);
+compile_fail_fixture!(
+    compile_fail_refinement_sum_requires_handle,
+    "refinement_sum_requires_handle.jett"
+);
+compile_fail_fixture!(
+    compile_fail_refinement_sum_requires_handle_error,
+    "refinement_sum_requires_handle_error.jett"
 );
 
 run_pass_fixture!(run_pass_simple, "simple.jett");
@@ -528,6 +550,16 @@ run_pass_fixture!(
     run_pass_explicit_struct_equality,
     "explicit_struct_equality.jett"
 );
+#[test]
+fn interface_explicit_comparisons_preserve_concrete_and_domain_contracts() {
+    let path = fixture_path("native", "interface_explicit_comparison.jett");
+    let output = run_file_capture_output(&path).expect("explicit comparison reference");
+    assert_eq!(output.stdout, "true false\ntrue true\n7 7 8\n");
+    assert!(output.debug_events.is_empty());
+    let tested = test_file(&path).expect("explicit comparison verify block");
+    assert_eq!((tested.total, tested.passed, tested.failed), (1, 1, 0));
+}
+
 run_pass_fixture!(
     run_pass_primitive_collection_hash_types,
     "primitive_collection_hash_types.jett"
@@ -652,11 +684,19 @@ fn run_file_capture_stdout_captures_json_runtime_output() {
 #[test]
 fn run_file_capture_output_captures_debug_lines() {
     let cases = [
-        ("trace_basic.jett", "trace total: int64 = 42"),
-        ("breakpoint_basic.jett", "breakpoint hit: total: int64 = 42"),
+        (
+            "trace_basic.jett",
+            jett_driver::DebugEventKind::Trace,
+            "trace total: int64 = 42\n",
+        ),
+        (
+            "breakpoint_basic.jett",
+            jett_driver::DebugEventKind::Breakpoint,
+            "breakpoint hit: total: int64 = 42\n",
+        ),
     ];
 
-    for (name, expected) in cases {
+    for (name, kind, expected) in cases {
         let path = fixture_path("run_pass", name);
         let output = run_file_capture_output(&path).unwrap_or_else(|err| {
             panic!(
@@ -665,7 +705,13 @@ fn run_file_capture_output_captures_debug_lines() {
             )
         });
         assert_eq!(output.stdout, "");
-        assert_eq!(output.debug_output, vec![expected]);
+        assert_eq!(
+            output.debug_events,
+            vec![jett_driver::DebugEvent {
+                kind,
+                text: expected.into()
+            }]
+        );
     }
 }
 
@@ -1185,6 +1231,18 @@ compile_fail_fixture!(
     "ownership_branch_partial_move.jett"
 );
 compile_fail_fixture!(
+    compile_fail_ownership_machine_state_widening_use_after_move,
+    "ownership_machine_state_widening_use_after_move.jett"
+);
+compile_fail_fixture!(
+    compile_fail_immutable_reassignment,
+    "immutable_reassignment.jett"
+);
+compile_fail_fixture!(
+    compile_fail_projected_readonly_roots,
+    "projected_readonly_roots.jett"
+);
+compile_fail_fixture!(
     compile_fail_ownership_for_zero_iteration_rebind,
     "ownership_for_zero_iteration_rebind.jett"
 );
@@ -1199,6 +1257,10 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_ownership_collection_literals_move_elements,
     "ownership_collection_literals_move_elements.jett"
+);
+compile_fail_fixture!(
+    compile_fail_ownership_result_optional_wrappers_move_payloads,
+    "ownership_result_optional_wrappers_move_payloads.jett"
 );
 compile_fail_fixture!(
     compile_fail_math_sum_consumes_list,
@@ -1571,7 +1633,7 @@ fn compile_fail_bytes_concat_consumes_both_inputs() {
 #[test]
 fn run_pass_random_scripted_contract() {
     let path = fixture_path("run_pass", "random_scripted.jett");
-    let output = run_file_capture_stdout_with_random_test_samples(
+    let output = run_file_capture_outcome_with_random_test_samples(
         &path,
         vec![
             RandomTestSample::Bounded(0),
@@ -1588,8 +1650,10 @@ fn run_pass_random_scripted_contract() {
         ],
     )
     .unwrap_or_else(|err| panic!("expected {} to run successfully: {err}", path.display()));
+    assert!(output.stdout.is_empty());
+    assert!(output.frontend_debug_observations.is_empty());
     assert_eq!(
-        output,
+        jett_driver::render_debug_events(&output.debug_events),
         concat!(
             "5:random.int64: lower bound must be less than upper bound:-1:1:0:9\n",
             "-9223372036854775808:9223372036854775806:0:0.9999999999999999:false:true\n",
@@ -1637,7 +1701,7 @@ fn runtime_fail_random_invalid_test_sample() {
 #[test]
 fn run_pass_clock_scripted_contract() {
     let path = fixture_path("run_pass", "clock_scripted.jett");
-    let output = run_file_capture_stdout_with_clock_test_samples(
+    let output = run_file_capture_outcome_with_clock_test_samples(
         &path,
         vec![
             ClockTestSample::Wall {
@@ -1663,7 +1727,12 @@ fn run_pass_clock_scripted_contract() {
         ],
     )
     .unwrap_or_else(|err| panic!("expected {} to run successfully: {err}", path.display()));
-    assert_eq!(output, "0:0:-1:42123:40000\n");
+    assert!(output.stdout.is_empty());
+    assert!(output.frontend_debug_observations.is_empty());
+    assert_eq!(
+        jett_driver::render_debug_events(&output.debug_events),
+        "0:0:-1:42123:40000\n"
+    );
 }
 
 #[test]
@@ -1745,7 +1814,7 @@ fn runtime_fail_clock_invalid_test_sample() {
 fn run_pass_environment_injected_snapshot_contract() {
     let path = fixture_path("run_pass", "environment_snapshot.jett");
     let text = |value: &str| EnvironmentTestText::Unicode(value.to_string());
-    let output = run_file_capture_stdout_with_environment_test_snapshot(
+    let output = run_file_capture_outcome_with_environment_test_snapshot(
         &path,
         EnvironmentTestSnapshot {
             arguments: vec![text("first"), text(""), text("third")],
@@ -1774,8 +1843,10 @@ fn run_pass_environment_injected_snapshot_contract() {
         },
     )
     .unwrap_or_else(|err| panic!("expected {} to run successfully: {err}", path.display()));
+    assert!(output.stdout.is_empty());
+    assert!(output.frontend_debug_observations.is_empty());
     assert_eq!(
-        output,
+        jett_driver::render_debug_events(&output.debug_events),
         concat!(
             "4:3:first:[]:third\n",
             "value:none:first:Environment.get: value is not valid Unicode:Environment.get: invalid variable name\n"
@@ -2078,8 +2149,8 @@ compile_fail_fixture!(
     compile_fail_generic_reflection_guarded_type_arg_error,
     "generic_reflection_guarded_type_arg_error.jett"
 );
-compile_fail_fixture!(
-    compile_fail_generic_reflection_guarded_unknown_fact,
+compile_pass_fixture!(
+    compile_pass_generic_reflection_guarded_unknown_fact,
     "generic_reflection_guarded_unknown_fact.jett"
 );
 compile_fail_fixture!(
@@ -2090,8 +2161,8 @@ compile_fail_fixture!(
     compile_fail_generic_reflection_match_reachable_arm_error,
     "generic_reflection_match_reachable_arm_error.jett"
 );
-compile_fail_fixture!(
-    compile_fail_generic_reflection_match_unknown_fact,
+compile_pass_fixture!(
+    compile_pass_generic_reflection_match_unknown_fact,
     "generic_reflection_match_unknown_fact.jett"
 );
 compile_fail_fixture!(
@@ -2161,6 +2232,48 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_equatable_signature_is_exact,
     "equatable_signature_is_exact.jett"
+);
+compile_fail_fixture!(compile_fail_mutable_global, "mutable_global.jett");
+compile_fail_fixture!(
+    compile_fail_global_constant_initializer,
+    "global_constant_initializer.jett"
+);
+compile_fail_fixture!(
+    compile_fail_direct_collection_equality,
+    "direct_collection_equality.jett"
+);
+compile_fail_fixture!(
+    compile_fail_direct_collection_equality_wrappers,
+    "direct_collection_equality_wrappers.jett"
+);
+compile_fail_fixture!(
+    compile_fail_direct_collection_equality_generic,
+    "direct_collection_equality_generic.jett"
+);
+compile_fail_fixture!(
+    compile_fail_direct_collection_equality_comptime,
+    "direct_collection_equality_comptime.jett"
+);
+compile_fail_fixture!(compile_fail_interface_equality, "interface_equality.jett");
+compile_fail_fixture!(
+    compile_fail_interface_equality_generic,
+    "interface_equality_generic.jett"
+);
+compile_fail_fixture!(
+    compile_fail_interface_equality_comptime,
+    "interface_equality_comptime.jett"
+);
+compile_fail_fixture!(
+    compile_fail_interface_equality_enum_payload,
+    "interface_equality_enum_payload.jett"
+);
+compile_fail_fixture!(
+    compile_fail_enum_struct_equality_requires_equatable,
+    "enum_struct_equality_requires_equatable.jett"
+);
+compile_fail_fixture!(
+    compile_fail_graphics_enum_equality_effect,
+    "graphics_enum_equality_effect.jett"
 );
 compile_fail_fixture!(
     compile_fail_collection_struct_hashing_is_unsupported,
@@ -2975,3 +3088,40 @@ fn stdlib_loaded_for_test_file() {
         .unwrap_or_else(|err| panic!("expected jett test path to load stdlib: {err}"));
     assert_eq!(result.failed, 0);
 }
+
+compile_fail_fixture!(
+    compile_fail_generic_method_owner,
+    "generic_method_owner.jett"
+);
+
+compile_fail_fixture!(
+    compile_fail_generic_reflection_body_type_error,
+    "generic_reflection_body_type_error.jett"
+);
+
+compile_fail_fixture!(
+    compile_fail_closure_reflection_boolean_boundaries,
+    "closure_reflection_boolean_boundaries.jett"
+);
+
+compile_fail_fixture!(
+    compile_fail_generic_reflection_unknown_guard_invalid_binding,
+    "generic_reflection_unknown_guard_invalid_binding.jett"
+);
+
+compile_fail_fixture!(compile_fail_view_owned_returns, "view_owned_returns.jett");
+
+compile_fail_fixture!(
+    compile_fail_view_owned_arguments,
+    "view_owned_arguments.jett"
+);
+
+compile_fail_fixture!(
+    compile_fail_view_explicit_owned_modes,
+    "view_explicit_owned_modes.jett"
+);
+
+compile_fail_fixture!(
+    compile_fail_view_return_annotations,
+    "view_return_annotations.jett"
+);

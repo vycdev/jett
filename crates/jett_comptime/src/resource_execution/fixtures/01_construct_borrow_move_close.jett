@@ -1,0 +1,14 @@
+namespace app
+function move_owned(token: resource_probe.TestHandle) returns resource_probe.TestHandle:
+    return token
+export function scenario(view net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle first = resource_probe.create(view net, 101) handle error:
+        return nothing
+    int64 before = resource_probe.borrow(view net, view first) handle error:
+        return nothing
+    int64 again = resource_probe.borrow(view net, view first) handle error:
+        return nothing
+    resource_probe.TestHandle moved = move_owned(first)
+    resource_probe.close(moved)
+    return nothing

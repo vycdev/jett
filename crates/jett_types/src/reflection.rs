@@ -6,6 +6,8 @@ use crate::TypeId;
 /// comptime reflection builtins.
 #[derive(Debug, Clone, Default)]
 pub struct ReflectionMetadata {
+    source_type_ids: HashMap<String, TypeId>,
+    source_type_infos: HashMap<String, ReflectionTypeInfo>,
     type_ids_by_name: HashMap<String, TypeId>,
     type_infos_by_id: HashMap<TypeId, ReflectionTypeInfo>,
     type_fields_by_id: HashMap<TypeId, Vec<ReflectionFieldInfo>>,
@@ -63,6 +65,27 @@ impl ReflectionMetadata {
 
     pub fn get_type_info_for_id(&self, type_id: TypeId) -> Option<&ReflectionTypeInfo> {
         self.type_infos_by_id.get(&type_id)
+    }
+
+    /// Source-visible metadata without replacing an alias by another name
+    /// sharing its canonical type ID.
+    pub fn get_source_type_info(&self, type_name: &str) -> Option<&ReflectionTypeInfo> {
+        self.source_type_infos
+            .get(type_name)
+            .or_else(|| self.type_infos.get(type_name))
+    }
+
+    /// Retain a checked reflection operand without changing canonical lookup.
+    pub fn insert_source_type_info(&mut self, ty: TypeId, info: ReflectionTypeInfo) {
+        self.source_type_ids.insert(info.type_name.clone(), ty);
+        self.source_type_infos.insert(info.type_name.clone(), info);
+    }
+
+    pub fn source_type_id_for_name(&self, type_name: &str) -> Option<TypeId> {
+        self.source_type_ids
+            .get(type_name)
+            .copied()
+            .or_else(|| self.type_id_for_name(type_name))
     }
 
     pub fn get_type_info(&self, type_name: &str) -> Option<&ReflectionTypeInfo> {
@@ -210,7 +233,7 @@ impl ReflectionMetadata {
 }
 
 /// Canonical metadata for `TypeInfo`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ReflectionTypeInfo {
     pub type_name: String,
     pub kind: String,
@@ -220,6 +243,67 @@ pub struct ReflectionTypeInfo {
 }
 
 impl ReflectionTypeInfo {
+    /// Structural value identity for compiler-produced `TypeInfo` values.
+    /// Source aliases are transparent; reflection-specialized dispatch uses
+    /// `reflection_identity` instead.
+    pub fn canonical_identity(&self) -> String {
+        self.identity(false)
+    }
+
+    /// Identity for bodies specialized by source-visible reflection facts.
+    pub fn reflection_identity(&self) -> String {
+        self.identity(true)
+    }
+
+    fn identity(&self, preserve_aliases: bool) -> String {
+        if !preserve_aliases && self.kind == "alias" && self.args.len() == 1 {
+            return self.args[0].identity(false);
+        }
+        let name = match self.kind.as_str() {
+            "list" | "set" | "map" | "optional" | "result" | "secret" | "function" => "",
+            "struct" if !self.args.is_empty() => self
+                .type_name
+                .split_once('[')
+                .map_or(self.type_name.as_str(), |(base, _)| base),
+            _ => &self.type_name,
+        };
+        let mut identity = format!(
+            "{}:{}{}:{}{}:{}",
+            self.kind.len(),
+            self.kind,
+            name.len(),
+            name,
+            u8::from(self.has_secret),
+            self.args.len(),
+        );
+        for argument in &self.args {
+            identity.push_str(&argument.identity(preserve_aliases));
+        }
+        identity
+    }
+
+    pub fn kind_tag_variant(kind: &str) -> &'static str {
+        match kind {
+            "primitive" => "primitive_type",
+            "alias" => "alias_type",
+            "refinement" => "refinement_type",
+            "struct" => "struct_type",
+            "bitfield" => "bitfield_type",
+            "enum" => "enum_type",
+            "list" => "list_type",
+            "set" => "set_type",
+            "map" => "map_type",
+            "optional" => "optional_type",
+            "result" => "result_type",
+            "secret" => "secret_type",
+            "function" => "function_type",
+            "machine" => "machine_type",
+            "machine_state" => "machine_state_type",
+            "resource" => "resource_type",
+            _ => "unknown_type",
+        }
+    }
+
     pub fn new(
         type_name: impl Into<String>,
         kind: impl Into<String>,
@@ -447,6 +531,28 @@ mod tests {
                 0, 0, state_name, 0, state_name,
             )],
         )
+    }
+
+    #[test]
+    fn canonical_identity_unwraps_aliases_inside_generic_types() {
+        let string = info("string", "primitive");
+        let alias =
+            ReflectionTypeInfo::new("app.Label", "alias", None, false, vec![string.clone()]);
+        let canonical = ReflectionTypeInfo::new("list[string]", "list", None, false, vec![string]);
+        let with_alias =
+            ReflectionTypeInfo::new("list[app.Label]", "list", None, false, vec![alias]);
+        assert_eq!(
+            canonical.canonical_identity(),
+            with_alias.canonical_identity()
+        );
+        assert_ne!(
+            canonical.reflection_identity(),
+            with_alias.reflection_identity()
+        );
+        assert_ne!(
+            info("app.First", "struct").canonical_identity(),
+            info("app.Second", "struct").canonical_identity(),
+        );
     }
 
     #[test]

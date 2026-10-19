@@ -1,0 +1,909 @@
+//! Shared typed reconstruction for evaluated values. Actor seeds require a private checked graph plan.
+use crate::{
+    Block, DeclarationKind, Expression, ExpressionKind, Function, FunctionDebugKind, FunctionId,
+    HandleKind, IntrinsicId, Local, LocalId, MapEntry, ParamMode, StateId, Statement,
+    StatementKind, VariantId,
+};
+use jett_common::Span;
+use jett_comptime::value::{ClosureTypeContext, Value};
+use jett_types::{ReflectionMetadata, ReflectionTypeInfo, Type, TypeId, TypeInterner};
+use std::collections::HashSet;
+
+#[derive(Debug)]
+pub struct FunctionValueCandidate {
+    scoped_type_bindings: Vec<crate::ScopedTypeBinding>,
+    source_name: Option<String>,
+    kind: DeclarationKind,
+    body_span: Span,
+    params: Vec<TypeId>,
+    view_params: Vec<bool>,
+    captures: Vec<(String, TypeId)>,
+    return_type: TypeId,
+    id: FunctionId,
+    type_arguments: Vec<TypeId>,
+    specialization: jett_typecheck::CheckedGenericSpecialization,
+}
+
+impl FunctionValueCandidate {
+    pub fn id(&self) -> FunctionId {
+        self.id
+    }
+    pub fn captures(&self) -> &[(String, TypeId)] {
+        &self.captures
+    }
+    fn matches_type_context(&self, context: &ClosureTypeContext, types: &TypeInterner) -> bool {
+        self.scoped_type_bindings.len() == context.scoped_type_bindings.len()
+            && self
+                .scoped_type_bindings
+                .iter()
+                .zip(&context.scoped_type_bindings)
+                .all(|(expected, actual)| {
+                    expected.name == actual.name
+                        && types.type_name(expected.ty) == actual.canonical_name
+                        && actual.reflection.as_ref() == Some(&expected.reflection)
+                })
+            && self.type_arguments.len() == context.arguments.len()
+            && self
+                .type_arguments
+                .iter()
+                .zip(&context.arguments)
+                .all(|(ty, actual)| types.type_name(*ty) == actual.canonical_name)
+            && (self.specialization.type_argument_reflections.is_empty()
+                || (self.specialization.type_argument_reflections.len() == context.arguments.len()
+                    && self
+                        .specialization
+                        .type_argument_reflections
+                        .iter()
+                        .zip(&context.arguments)
+                        .all(|(expected, actual)| actual.reflection.as_ref() == Some(expected))))
+            && self.matches_reflection_parameters(context)
+    }
+
+    fn matches_reflection_parameters(&self, context: &ClosureTypeContext) -> bool {
+        let expected = &self.specialization;
+        match &context.checked_function {
+            Some(actual) => {
+                expected.type_info_kinds == actual.type_info_kinds
+                    && expected.type_info_primitives == actual.type_info_primitives
+                    && expected.type_kind_values == actual.type_kind_values
+                    && expected.type_primitive_values == actual.type_primitive_values
+            }
+            None => {
+                expected.type_info_kinds.is_empty()
+                    && expected.type_info_primitives.is_empty()
+                    && expected.type_kind_values.is_empty()
+                    && expected.type_primitive_values.is_empty()
+            }
+        }
+    }
+}
+
+pub fn function_value_candidates(
+    functions: &[Function],
+    method_value_definitions: &HashSet<Span>,
+) -> Vec<FunctionValueCandidate> {
+    let dispatch_names = functions
+        .iter()
+        .filter(|function| is_interface_dispatcher(function))
+        .filter_map(|function| match &function.debug_kind {
+            FunctionDebugKind::Named(name) => Some(name.as_str()),
+            FunctionDebugKind::Inline => None,
+        })
+        .collect::<HashSet<_>>();
+    functions
+        .iter()
+        .filter(|function| {
+            matches!(
+                function.identity.declaration.kind,
+                DeclarationKind::Function
+                    | DeclarationKind::Method
+                    | DeclarationKind::Verify
+                    | DeclarationKind::Property
+            ) && (function.identity.declaration.kind != DeclarationKind::Method
+                // Generated interface dispatchers have no concrete source body.
+                // Their reserved identity and canonical debug name identify a
+                // named callback returned by explicit compile-time evaluation.
+                || is_interface_dispatcher(function)
+                // An implementation for an interface owner can share its debug
+                // name with a declared slot; the qualified spelling selects the slot.
+                || (method_value_definitions.contains(&function.span)
+                    && !matches!(
+                        &function.debug_kind,
+                        FunctionDebugKind::Named(name) if dispatch_names.contains(name.as_str())
+                    )))
+        })
+        .map(|function| {
+            let declaration = &function.identity.declaration;
+            let source_name = match &function.debug_kind {
+                FunctionDebugKind::Named(name) => Some(name.clone()),
+                FunctionDebugKind::Inline => None,
+            };
+            FunctionValueCandidate {
+                scoped_type_bindings: function.identity.scoped_type_bindings.clone(),
+                type_arguments: function.identity.type_arguments.clone(),
+                specialization: function.identity.specialization.clone(),
+                source_name,
+                kind: declaration.kind,
+                body_span: function.body.span,
+                params: function
+                    .params
+                    .iter()
+                    .skip(function.capture_count)
+                    .map(|param| param.ty)
+                    .collect(),
+                view_params: function
+                    .params
+                    .iter()
+                    .skip(function.capture_count)
+                    .map(|param| param.mode == ParamMode::View)
+                    .collect(),
+                captures: function
+                    .params
+                    .iter()
+                    .take(function.capture_count)
+                    .map(|param| (param.name.clone(), param.ty))
+                    .collect(),
+                return_type: function.return_type,
+                id: function.id,
+            }
+        })
+        .collect()
+}
+
+fn is_interface_dispatcher(function: &Function) -> bool {
+    function.identity.declaration.kind == DeclarationKind::Method
+        && function
+            .identity
+            .declaration
+            .name
+            .starts_with("$interface.dispatch.")
+}
+
+pub struct ValueContext<'a> {
+    pub actor_seeds: Option<&'a crate::actor_graph::ActorGraphSeeds>,
+    pub types: &'a TypeInterner,
+    pub reflection: &'a ReflectionMetadata,
+    pub functions: &'a [FunctionValueCandidate],
+    /// Present only when constructing unvalidated property shrink candidates.
+    pub refinement_functions: Option<&'a [Function]>,
+    pub locals: &'a mut Vec<Local>,
+    pub bindings: &'a mut Vec<Statement>,
+}
+
+fn erased_value_type(
+    value: &Value,
+    types: &TypeInterner,
+    seeds: Option<&crate::actor_graph::ActorGraphSeeds>,
+) -> Option<TypeId> {
+    if let Value::Actor(seed) = value {
+        return seeds?.actor_type(*seed);
+    }
+    if let Value::Typed { type_name, .. } = value {
+        let mut candidates = types
+            .type_ids()
+            .filter(|ty| types.type_name(*ty) == *type_name);
+        let candidate = candidates.next()?;
+        return candidates.next().is_none().then_some(candidate);
+    }
+    let primitive = match value {
+        Value::Int64(_) => Some(TypeInterner::INT64),
+        Value::Uint64(_) => Some(TypeInterner::UINT64),
+        Value::Float64(_) => Some(TypeInterner::FLOAT64),
+        Value::Bool(_) => Some(TypeInterner::BOOL),
+        Value::String(_) => Some(TypeInterner::STRING),
+        Value::Bytes(_) => Some(TypeInterner::BYTES),
+        Value::Nothing => Some(TypeInterner::NOTHING),
+        Value::TypeConstruction { .. } => Some(TypeInterner::TYPE_CONSTRUCTION),
+        _ => None,
+    };
+    if primitive.is_some() {
+        return primitive;
+    }
+    let mut candidates = types
+        .type_ids()
+        .filter(|ty| match (types.resolve(*ty), value) {
+            (
+                Type::Struct(id),
+                Value::Struct {
+                    type_name,
+                    concrete_type,
+                    ..
+                },
+            ) => types.resolve_struct(*id).name == concrete_type.as_deref().unwrap_or(type_name),
+            (Type::Bitfield(id), Value::Struct { type_name, .. }) => {
+                types.resolve_bitfield(*id).name == *type_name
+            }
+            (Type::Enum(id), Value::Enum { type_name, .. }) => {
+                types.resolve_enum(*id).name == *type_name
+            }
+            (Type::Machine(id), Value::Machine { type_name, .. }) => {
+                types.resolve_machine(*id).name == *type_name
+            }
+            _ => false,
+        });
+    let candidate = candidates.next()?;
+    candidates.next().is_none().then_some(candidate)
+}
+
+fn checked_refinement_candidate(
+    mut value: &Value,
+    ty: TypeId,
+    span: Span,
+    context: &mut ValueContext<'_>,
+) -> Result<Expression, String> {
+    let types = context.types;
+    let mut base_type = ty;
+    while let Type::Refinement { base, .. } = types.resolve(base_type) {
+        base_type = *base;
+    }
+    let input_type = match types.resolve(base_type) {
+        Type::Secret(inner) => *inner,
+        _ => base_type,
+    };
+    let mut current = ty;
+    let mut predicates = Vec::new();
+    while let Type::Refinement { name, base } = types.resolve(current) {
+        let mut functions = context
+            .refinement_functions
+            .unwrap()
+            .iter()
+            .filter(|function| {
+                let declaration = &function.identity.declaration;
+                let canonical = if declaration.namespace.is_empty() {
+                    declaration.name.clone()
+                } else {
+                    format!("{}.{}", declaration.namespace, declaration.name)
+                };
+                declaration.kind == DeclarationKind::RefinementPredicate
+                    && canonical == *name
+                    && function.params.len() == 1
+                    && function.params[0].ty == input_type
+            });
+        let function = functions.next().ok_or_else(|| {
+            format!("refinement '{name}' has no exact checked predicate for native replay")
+        })?;
+        if functions.next().is_some() {
+            return Err(format!(
+                "refinement '{name}' has multiple native replay predicates"
+            ));
+        }
+        predicates.push(crate::RefinementPredicate {
+            refined_type: current,
+            type_name: name.clone(),
+            function: function.id,
+            base_type,
+            input_type,
+        });
+        if let Value::Typed {
+            type_name,
+            value: inner,
+        } = value
+        {
+            if type_name == name {
+                value = inner;
+            }
+        }
+        current = *base;
+    }
+    predicates.reverse();
+    let target = value_expression(value, base_type, span, context)?;
+    Ok(Expression {
+        kind: ExpressionKind::Handle {
+            target: Box::new(target),
+            kind: HandleKind::Refinement {
+                refined_type: ty,
+                predicates,
+            },
+            error_local: None,
+            failure: Block {
+                statements: vec![
+                    Statement {
+                        kind: StatementKind::Expression(Expression {
+                            kind: ExpressionKind::PropertyCaseContext(None),
+                            ty: TypeInterner::NOTHING,
+                            span,
+                        }),
+                        span,
+                    },
+                    Statement {
+                        kind: StatementKind::Return(None),
+                        span,
+                    },
+                ],
+                span,
+            },
+        },
+        ty,
+        span,
+    })
+}
+
+pub fn value_expression(
+    value: &Value,
+    ty: TypeId,
+    span: Span,
+    context: &mut ValueContext<'_>,
+) -> Result<Expression, String> {
+    let types = context.types;
+    if context.refinement_functions.is_some()
+        && matches!(types.resolve(ty), Type::Refinement { .. })
+    {
+        return checked_refinement_candidate(value, ty, span, context);
+    }
+    let kind = match (types.resolve(ty), value) {
+        (Type::Actor(_), Value::Actor(seed)) => {
+            let seeds = context
+                .actor_seeds
+                .ok_or("actor value has no private checked graph seed proof")?;
+            let local = seeds.ready(*seed, ty)?;
+            ExpressionKind::Local(local)
+        }
+        (Type::Actor(_), Value::Pending(_)) => {
+            let seeds = context
+                .actor_seeds
+                .ok_or("pending actor has no private checked graph seed proof")?;
+            ExpressionKind::Local(seeds.pending(value, ty)?)
+        }
+        (_, Value::Pending(inner)) => {
+            ExpressionKind::Run(Box::new(value_expression(inner, ty, span, context)?))
+        }
+        (Type::Interface(_), _) => {
+            let concrete = erased_value_type(value, types, context.actor_seeds)
+                .ok_or("erased compile-time value has no unambiguous checked concrete type")?;
+            ExpressionKind::interface_coerce(Box::new(value_expression(
+                value, concrete, span, context,
+            )?))
+        }
+        (Type::Refinement { base, .. }, Value::Typed { type_name, value })
+            if types.type_name(ty) == *type_name =>
+        {
+            ExpressionKind::RefinementValidated(Box::new(value_expression(
+                value, *base, span, context,
+            )?))
+        }
+        (_, Value::Typed { value, .. }) => return value_expression(value, ty, span, context),
+        (Type::TypeConstruction, Value::TypeConstruction { .. }) => {
+            return crate::evaluated_builders::builder_expression(value, span, context);
+        }
+        (
+            Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64,
+            Value::Int64(number),
+        ) => ExpressionKind::Int(i128::from(*number)),
+        (Type::Uint8 | Type::Uint16 | Type::Uint32 | Type::Uint64, Value::Uint64(number)) => {
+            ExpressionKind::Int(i128::from(*number))
+        }
+        (Type::Float32 | Type::Float64, Value::Float64(number)) => ExpressionKind::Float(*number),
+        (Type::String, Value::String(text)) => ExpressionKind::String(text.clone()),
+        (Type::Bool, Value::Bool(flag)) => ExpressionKind::Bool(*flag),
+        (Type::Nothing, Value::Nothing) => ExpressionKind::Nothing,
+        (Type::Function { .. }, Value::ResourceHook(_)) => {
+            return context
+                .actor_seeds
+                .ok_or("hook value has no private graph reconstructor")?
+                .hook(value, ty);
+        }
+        (Type::Function { .. }, Value::ReflectedCallable(adapter)) => {
+            if ty != adapter.requested_type()
+                || !std::ptr::eq(types, &adapter.checked_program().checked().interner)
+                || !adapter
+                    .checked_plan()
+                    .validate(adapter.checked_program().checked())
+            {
+                return Err(
+                    "generated reflected callback belongs to another checked type context".into(),
+                );
+            }
+            let source = value_expression(adapter.source(), adapter.source_type(), span, context)?;
+            let mut expression = crate::lower_reflected_callable_value(source, adapter, span)?;
+            if let Some(seeds) = context.actor_seeds {
+                seeds.bind_reflected_source(adapter, &mut expression)?;
+            }
+            return Ok(expression);
+        }
+        (Type::Function { .. }, Value::NamedFunction(_) | Value::Function { .. }) => {
+            return function_value_expression(value, ty, span, context);
+        }
+        (Type::Bytes, Value::Bytes(bytes)) => return bytes_expression(bytes, span, types),
+        (Type::List(element), Value::List(values)) => ExpressionKind::ListConstruct {
+            elements: values
+                .iter()
+                .map(|value| value_expression(value, *element, span, context))
+                .collect::<Result<_, _>>()?,
+        },
+        (Type::Map(key, mapped), Value::Map(entries)) => ExpressionKind::MapConstruct {
+            entries: entries
+                .iter()
+                .map(|(key_value, mapped_value)| {
+                    Ok(MapEntry {
+                        key: value_expression(key_value, *key, span, context)?,
+                        value: value_expression(mapped_value, *mapped, span, context)?,
+                    })
+                })
+                .collect::<Result<_, String>>()?,
+        },
+        (Type::Set(element), Value::Set(values)) => {
+            return set_expression(values, *element, ty, span, context);
+        }
+        (Type::Optional(_), Value::OptionalNone) => ExpressionKind::OptionalNone,
+        (Type::Optional(inner), Value::OptionalSome(value)) => {
+            ExpressionKind::OptionalSome(Box::new(value_expression(value, *inner, span, context)?))
+        }
+        (Type::Result(ok, _), Value::ResultOk(value)) => {
+            ExpressionKind::ResultOk(Box::new(value_expression(value, *ok, span, context)?))
+        }
+        (Type::Result(_, failure), Value::ResultFail(value)) => {
+            ExpressionKind::ResultFail(Box::new(value_expression(value, *failure, span, context)?))
+        }
+        (Type::Secret(inner), _) => ExpressionKind::interface_coerce(Box::new(value_expression(
+            value, *inner, span, context,
+        )?)),
+        (Type::Refinement { base, .. }, _) => ExpressionKind::RefinementValidated(Box::new(
+            value_expression(value, *base, span, context)?,
+        )),
+        (Type::Struct(id), Value::Struct { fields, .. }) => {
+            let definition = types.resolve_struct(*id);
+            if fields.len() != definition.fields.len() {
+                return Err(format!(
+                    "generated struct has {} fields; checked type expects {}",
+                    fields.len(),
+                    definition.fields.len()
+                ));
+            }
+            ExpressionKind::StructConstruct {
+                struct_type: ty,
+                fields: definition
+                    .fields
+                    .iter()
+                    .map(|(name, field_type)| {
+                        let (_, value) = fields
+                            .iter()
+                            .find(|(candidate, _)| candidate == name)
+                            .ok_or_else(|| format!("generated struct field `{name}` is absent"))?;
+                        value_expression(value, *field_type, span, context)
+                    })
+                    .collect::<Result<_, _>>()?,
+                evaluation_order: (0..definition.fields.len()).collect(),
+                validates_refinements: false,
+                refinement_predicates: Vec::new(),
+            }
+        }
+        (Type::Bitfield(id), Value::Struct { fields, .. }) => {
+            let definition = types.resolve_bitfield(*id);
+            if fields.len() != definition.fields.len() {
+                return Err(format!(
+                    "generated bitfield has {} fields; checked type expects {}",
+                    fields.len(),
+                    definition.fields.len()
+                ));
+            }
+            ExpressionKind::BitfieldConstruct {
+                bitfield_type: ty,
+                fields: definition
+                    .fields
+                    .iter()
+                    .map(|field| {
+                        let (_, value) = fields
+                            .iter()
+                            .find(|(name, _)| name == &field.name)
+                            .ok_or_else(|| {
+                                format!("generated bitfield field `{}` is absent", field.name)
+                            })?;
+                        value_expression(value, field.ty, span, context)
+                    })
+                    .collect::<Result<_, _>>()?,
+                evaluation_order: (0..definition.fields.len()).collect(),
+                // The property generator already bounds every bitfield field.
+                validates_widths: false,
+            }
+        }
+        (
+            Type::Enum(id),
+            Value::Enum {
+                variant, fields, ..
+            },
+        ) => {
+            let definition = types.resolve_enum(*id);
+            let (index, variant_def) = definition
+                .variants
+                .iter()
+                .enumerate()
+                .find(|(_, candidate)| candidate.name == *variant)
+                .ok_or_else(|| format!("generated enum variant `{variant}` is absent"))?;
+            if fields.len() != variant_def.fields.len() {
+                return Err(format!(
+                    "generated enum variant `{variant}` has wrong arity"
+                ));
+            }
+            let index = u32::try_from(index)
+                .map_err(|_| "generated enum variant index exceeds u32".to_owned())?;
+            ExpressionKind::EnumConstruct {
+                enum_type: ty,
+                variant: VariantId::new(index),
+                evaluation_order: (0..fields.len()).collect(),
+                payloads: fields
+                    .iter()
+                    .zip(&variant_def.fields)
+                    .map(|(value, (_, field_type))| {
+                        value_expression(value, *field_type, span, context)
+                    })
+                    .collect::<Result<_, _>>()?,
+            }
+        }
+        (
+            Type::Machine(machine) | Type::MachineState { machine, .. },
+            Value::Machine { state, fields, .. },
+        ) => {
+            let definition = types.resolve_machine(*machine);
+            let (index, state_def) = definition
+                .states
+                .iter()
+                .enumerate()
+                .find(|(_, candidate)| candidate.name == *state)
+                .ok_or_else(|| format!("generated machine state `{state}` is absent"))?;
+            let index = u32::try_from(index)
+                .map_err(|_| "generated machine state index exceeds u32".to_owned())?;
+            if let Type::MachineState {
+                state: expected, ..
+            } = types.resolve(ty)
+                && expected.index() != index
+            {
+                return Err(format!(
+                    "generated machine state `{state}` disagrees with checked state"
+                ));
+            }
+            if fields.len() != state_def.fields.len() {
+                return Err(format!("generated machine state `{state}` has wrong arity"));
+            }
+            let state_type = if matches!(types.resolve(ty), Type::MachineState { .. }) {
+                ty
+            } else {
+                types
+                    .type_ids()
+                    .find(|candidate| {
+                        matches!(
+                            types.resolve(*candidate),
+                            Type::MachineState { machine: owner, state: state_id }
+                                if owner == machine && state_id.index() == index
+                        )
+                    })
+                    .ok_or("checked machine state type is absent")?
+            };
+            let constructed = Expression {
+                kind: ExpressionKind::MachineConstruct {
+                    state_type,
+                    state: StateId::new(index),
+                    payloads: fields
+                        .iter()
+                        .zip(&state_def.fields)
+                        .map(|(value, (_, field_type))| {
+                            value_expression(value, *field_type, span, context)
+                        })
+                        .collect::<Result<_, _>>()?,
+                },
+                ty: state_type,
+                span,
+            };
+            if state_type == ty {
+                return Ok(constructed);
+            }
+            // Construct the exact state, then apply the checked widening at a
+            // binding boundary. Erasure and refinement validation must see the
+            // requested bare machine type, not its constructor's state type.
+            let local = LocalId::new(context.locals.len() as u32);
+            context.locals.push(Local {
+                id: local,
+                name: format!("__native_baked_machine_{}", local.index()),
+                ty,
+                debug_ty: ty,
+                debug_type_name: None,
+                mutable: false,
+                view_source: None,
+                span,
+            });
+            context.bindings.push(Statement {
+                kind: StatementKind::Let {
+                    local,
+                    value: constructed,
+                },
+                span,
+            });
+            return Ok(Expression {
+                kind: ExpressionKind::Clone(Box::new(Expression {
+                    kind: ExpressionKind::Local(local),
+                    ty,
+                    span,
+                })),
+                ty,
+                span,
+            });
+        }
+        (expected, actual) => {
+            return Err(format!(
+                "cannot materialize generated `{actual:?}` as checked `{expected:?}`"
+            ));
+        }
+    };
+    Ok(Expression { kind, ty, span })
+}
+
+pub fn selected_function<'a>(
+    value: &Value,
+    expected: TypeId,
+    types: &TypeInterner,
+    functions: &'a [FunctionValueCandidate],
+) -> Result<&'a FunctionValueCandidate, String> {
+    let candidates = functions
+        .iter()
+        .filter(|function| match value {
+            Value::NamedFunction(name) => {
+                matches!(
+                    function.kind,
+                    DeclarationKind::Function | DeclarationKind::Method
+                ) && function.source_name.as_ref() == Some(name)
+                    && function.captures.is_empty()
+            }
+            Value::Function {
+                body,
+                captures,
+                type_context,
+                ..
+            } => {
+                function.source_name.is_none()
+                    && function.body_span == body.span
+                    && function.matches_type_context(type_context, types)
+                    && function
+                        .captures
+                        .iter()
+                        .all(|(name, _)| captures.contains_key(name))
+            }
+            _ => false,
+        })
+        .collect::<Vec<_>>();
+    let signature = |function: &FunctionValueCandidate| Type::Function {
+        params: function.params.clone(),
+        view_params: function.view_params.clone(),
+        return_type: function.return_type,
+    };
+    let exact = candidates
+        .iter()
+        .copied()
+        .filter(|function| types.resolve(expected) == &signature(function))
+        .collect::<Vec<_>>();
+    // Generic values may have several checked specializations. Preserve exact
+    // selection; otherwise use only an unambiguous evaluated source identity.
+    let matches = if exact.is_empty() {
+        &candidates
+    } else {
+        &exact
+    };
+    let label = match value {
+        Value::NamedFunction(name) => format!("function value `{name}`"),
+        _ => "inline function value".into(),
+    };
+    let function = match matches.as_slice() {
+        [] => return Err(format!("checked {label} is absent")),
+        [function] => *function,
+        _ => return Err(format!("checked {label} is ambiguous")),
+    };
+    Ok(function)
+}
+
+fn function_value_expression(
+    value: &Value,
+    expected: TypeId,
+    span: Span,
+    context: &mut ValueContext<'_>,
+) -> Result<Expression, String> {
+    let function = selected_function(value, expected, context.types, context.functions)?;
+    let signature = |function: &FunctionValueCandidate| Type::Function {
+        params: function.params.clone(),
+        view_params: function.view_params.clone(),
+        return_type: function.return_type,
+    };
+    let label = match value {
+        Value::NamedFunction(name) => format!("function value `{name}`"),
+        _ => "inline function value".into(),
+    };
+    let source_signature = signature(function);
+    let source_type = context
+        .types
+        .type_ids()
+        .find(|ty| context.types.resolve(*ty) == &source_signature)
+        .ok_or_else(|| format!("checked {label} signature is absent"))?;
+    let function_id = function.id;
+    let capture_types = function.captures.clone();
+    let mut capture_locals = Vec::with_capacity(capture_types.len());
+    for (name, capture_type) in capture_types {
+        let Value::Function { captures, .. } = value else {
+            return Err("named function unexpectedly requires captures".into());
+        };
+        let captured = captures
+            .get(&name)
+            .ok_or_else(|| format!("checked closure capture `{name}` is absent"))?;
+        let expression = value_expression(captured, capture_type, span, context)?;
+        let id = LocalId::new(context.locals.len() as u32);
+        context.locals.push(Local {
+            id,
+            name: format!("__native_baked_capture_{}", id.index()),
+            ty: capture_type,
+            debug_ty: capture_type,
+            debug_type_name: None,
+            mutable: false,
+            view_source: None,
+            span,
+        });
+        context.bindings.push(Statement {
+            kind: StatementKind::Let {
+                local: id,
+                value: expression,
+            },
+            span,
+        });
+        capture_locals.push(id);
+    }
+    let kind = if capture_locals.is_empty() {
+        ExpressionKind::FunctionRef(function_id)
+    } else {
+        ExpressionKind::ClosureRef {
+            function: function_id,
+            captures: capture_locals,
+        }
+    };
+    let source = Expression {
+        kind,
+        ty: source_type,
+        span,
+    };
+    if source_type == expected {
+        Ok(source)
+    } else {
+        Ok(Expression {
+            kind: ExpressionKind::interface_coerce(Box::new(source)),
+            ty: expected,
+            span,
+        })
+    }
+}
+
+pub fn evaluated_intrinsic_expression(
+    intrinsic: IntrinsicId,
+    type_arguments: Vec<TypeId>,
+    reflection_arguments: Vec<ReflectionTypeInfo>,
+    args: Vec<Expression>,
+    ty: TypeId,
+    span: Span,
+    types: &TypeInterner,
+) -> Result<Expression, String> {
+    let parameter_types = args.iter().map(|argument| argument.ty).collect::<Vec<_>>();
+    let access = (0..args.len())
+        .map(|index| {
+            jett_typecheck::intrinsic_operand_access(intrinsic, index, args.len())
+                .ok_or_else(|| "evaluated intrinsic operand has no checked access role".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let evaluation_order = (0..args.len()).collect::<Vec<_>>();
+    let ownership = crate::CallOwnership::generated(
+        crate::GeneratedOperation::EvaluatedValue { intrinsic },
+        &args,
+        &parameter_types,
+        &access,
+        ty,
+        &evaluation_order,
+        types,
+    )?;
+    Ok(Expression {
+        kind: ExpressionKind::Intrinsic {
+            intrinsic,
+            type_arguments,
+            reflection_arguments,
+            refinement_predicates: Vec::new(),
+            field_validation: None,
+            args,
+            evaluation_order,
+            ownership,
+        },
+        ty,
+        span,
+    })
+}
+
+fn set_expression(
+    values: &[Value],
+    element: TypeId,
+    ty: TypeId,
+    span: Span,
+    context: &mut ValueContext<'_>,
+) -> Result<Expression, String> {
+    let mut current = evaluated_intrinsic_expression(
+        IntrinsicId::SetNew,
+        vec![element],
+        Vec::new(),
+        Vec::new(),
+        ty,
+        span,
+        context.types,
+    )?;
+    for value in values {
+        let element_value = value_expression(value, element, span, context)?;
+        current = evaluated_intrinsic_expression(
+            IntrinsicId::SetAdd,
+            vec![element],
+            Vec::new(),
+            vec![current, element_value],
+            ty,
+            span,
+            context.types,
+        )?;
+    }
+    Ok(current)
+}
+
+fn bytes_expression(bytes: &[u8], span: Span, types: &TypeInterner) -> Result<Expression, String> {
+    let empty = evaluated_intrinsic_expression(
+        IntrinsicId::BytesNew,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        TypeInterner::BYTES,
+        span,
+        types,
+    )?;
+    if bytes.is_empty() {
+        return Ok(empty);
+    }
+    let result_type = types
+        .type_ids()
+        .find(|id| {
+            matches!(types.resolve(*id), Type::Result(ok, failure) if *ok == TypeInterner::BYTES && *failure == TypeInterner::STRING)
+        })
+        .ok_or("checked `result[bytes, string]` type is absent")?;
+    let hex = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok(Expression {
+        kind: ExpressionKind::Handle {
+            target: Box::new(evaluated_intrinsic_expression(
+                IntrinsicId::BytesFromHex,
+                Vec::new(),
+                Vec::new(),
+                vec![Expression {
+                    kind: ExpressionKind::String(hex),
+                    ty: TypeInterner::STRING,
+                    span,
+                }],
+                result_type,
+                span,
+                types,
+            )?),
+            kind: HandleKind::Result,
+            error_local: None,
+            failure: Block {
+                statements: vec![
+                    Statement {
+                        kind: StatementKind::Assert {
+                            condition: Expression {
+                                kind: ExpressionKind::Bool(false),
+                                ty: TypeInterner::BOOL,
+                                span,
+                            },
+                            message: None,
+                        },
+                        span,
+                    },
+                    Statement {
+                        kind: StatementKind::HandleDefault(empty),
+                        span,
+                    },
+                ],
+                span,
+            },
+        },
+        ty: TypeInterner::BYTES,
+        span,
+    })
+}

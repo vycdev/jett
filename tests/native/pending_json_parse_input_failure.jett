@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    string input = run "123"
+    result[int64, string] parsed = json.parse[int64](input)
+    trace parsed
+    return nothing

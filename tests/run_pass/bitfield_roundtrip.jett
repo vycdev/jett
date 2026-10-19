@@ -2,15 +2,21 @@ enum IpProtocol:
     icmp = 1
     tcp = 6
     udp = 17
-
 bitfield network Header:
     version: 4 bits
     header_length: 4 bits
     protocol: 8 bits as IpProtocol
-
+function checked_version(value: int64) returns string:
+    Header header = Header(version: value, header_length: 5, protocol: IpProtocol.tcp) handle error:
+        return error
+    return "{header.version}"
 function main() returns nothing:
     Header header = Header(version: 4, header_length: 5, protocol: IpProtocol.tcp)
     bytes raw = Header.to_bytes(header)
     Header decoded = Header.from_bytes(raw) handle error:
         return nothing
     return nothing
+verify direct_bitfield_widths:
+    assert checked_version(4) == "4"
+    assert checked_version(16) == "bitfield 'Header' field 'version' is 4 bit(s) wide and cannot hold '16'"
+    assert checked_version(-1) == "bitfield 'Header' field 'version' is 4 bit(s) wide and cannot hold '-1'"

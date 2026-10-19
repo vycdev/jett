@@ -1,0 +1,7 @@
+namespace app
+export function main(net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle token = resource_probe.create(view net, 751) handle error:
+        return nothing
+    resource_probe.descriptor()(token)
+    return nothing

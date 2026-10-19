@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    string value = run "ab"
+    for character in value:
+        trace character
+    return nothing

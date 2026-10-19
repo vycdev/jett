@@ -1,0 +1,6 @@
+namespace app
+function main(rng: Random) returns nothing:
+    Random pending = run rng
+    bool sampled = random.bool(view pending)
+    trace sampled
+    return nothing

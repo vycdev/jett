@@ -1,0 +1,35 @@
+namespace app
+struct Item:
+    label: string
+    score: int64
+struct Store:
+    rows: map[string, Item]
+    names: list[string]
+    tags: set[string]
+    title: string
+struct Envelope:
+    inner: Store
+function inspect(view envelope: Envelope) returns int64:
+    mutable int64 total = 0
+    for key, item in view envelope.inner.rows:
+        println(key, item.label)
+        total = total + item.score
+    for name in view envelope.inner.names:
+        println(name)
+        total = total + 1
+    for tag in view envelope.inner.tags:
+        println(tag)
+        total = total + 1
+    for character in view envelope.inner.title:
+        println(character)
+        total = total + 1
+    return total
+function main() returns nothing:
+    mutable set[string] tags = set.new[string]()
+    tags = set.add[string](tags, "live")
+    map[string, Item] rows = map("a": Item(label: "Ada", score: 2), "b": Item(label: "Lin", score: 3))
+    Store store = Store(rows: rows, names: list("first", "second"), tags: tags, title: "🚀é")
+    Envelope value = Envelope(inner: store)
+    println(inspect(view value), inspect(view value))
+    println(list.length[string](view value.inner.names), map.length[string, Item](view value.inner.rows))
+    return nothing

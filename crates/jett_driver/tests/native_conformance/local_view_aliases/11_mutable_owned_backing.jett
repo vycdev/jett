@@ -1,0 +1,22 @@
+namespace app
+struct Packet:
+    data: bytes
+    items: list[string]
+struct Envelope:
+    packet: Packet
+function inspect_bytes(view source: bytes) returns string:
+    bytes borrowed = view source
+    bytes forwarded = borrowed
+    return bytes.to_hex(view forwarded)
+function main(stdout: Stdout) returns nothing:
+    mutable Envelope envelope = Envelope(packet: Packet(data: bytes.from_string("AB"), items: list("keep", "source")))
+    bytes borrowed = view envelope.packet.data
+    bytes forwarded = borrowed
+    bytes grown = bytes.concat(clone forwarded, bytes.from_string("C"))
+    bytes copied = envelope.packet.data
+    bytes expanded = bytes.concat(copied, bytes.from_string("D"))
+    list[string] item_alias = view envelope.packet.items
+    list[string] forwarded_items = item_alias
+    list[string] grown_items = list.append[string](clone forwarded_items, "tail")
+    Stdout.write(view stdout, "bytes:{bytes.to_hex(view borrowed)}:{bytes.to_hex(view forwarded)}:{inspect_bytes(view forwarded)}:{bytes.to_hex(view grown)}:{bytes.to_hex(view expanded)}:{bytes.to_hex(view envelope.packet.data)}\n")
+    Stdout.write(view stdout, "items:{list.length(view item_alias)}:{list.length(view forwarded_items)}:{list.length(view grown_items)}:{list.length(view envelope.packet.items)}\n")

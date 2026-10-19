@@ -1,0 +1,23 @@
+namespace app
+function base64_decoded(value: string) returns string:
+    bytes raw = encoding.base64_decode(value) handle error:
+        return error
+    return bytes.to_hex(view raw)
+function hex_decoded(value: string) returns string:
+    bytes raw = encoding.hex_decode(value) handle error:
+        return error
+    return bytes.to_hex(view raw)
+function url_decoded(value: string) returns string:
+    return encoding.url_decode(value) handle error:
+        default error
+function form_decoded(value: string) returns string:
+    return encoding.form_decode(value) handle error:
+        default error
+function main() returns nothing:
+    bytes raw = bytes.from_hex("0080ff") handle error:
+        return
+    println(encoding.base64_encode(view raw), bytes.to_hex(view raw))
+    println(base64_decoded("AID/"), base64_decoded("AB=="), base64_decoded("!"), base64_decoded("!==="))
+    println(hex_decoded("00aBFF"), hex_decoded("z"), hex_decoded("00zz"))
+    println(encoding.url_encode("a b+c"), url_decoded("a%20b%2bc"), url_decoded("%FF%GG"), url_decoded("%FF"))
+    println(encoding.form_encode("a b+c~"), form_decoded("a+b%2bc"), form_decoded("%GG"))

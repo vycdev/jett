@@ -33,6 +33,11 @@ apply to direct and pipeline calls, with explicit or inferred generic arguments.
 Callback call-graph auditing waits until module typechecking has resolved method
 dispatch, so legal `mutual` declaration order cannot conceal an effectful helper.
 
+The borrowed display must be ready when entering the graphics kernel. A pending
+`Graphics` capability forwarded through a helper is a terminal runtime error
+before configuration validation or provider access. A partial join remains
+pending; complete joins restore the existing authority without an implicit join.
+
 `State` is concrete data: primitive values, structs, enums, and supported
 collections containing only concrete data. Function values, capabilities,
 resources, actors, and interfaces are rejected recursively, including behind
@@ -80,8 +85,9 @@ its caller thread instead of spawning and joining an interpreter worker. Library
 callers must use the main thread; the host returns a failure before window
 creation if they do not. Scripted graphics and non-graphics runs retain the
 ordinary worker-thread path. This first API has no animation tick, frame-clock
-promise, audio, mouse input, texture loading, asynchronous callbacks, or native
-executable output. Nested sessions are rejected.
+promise, audio, mouse input, texture loading, or asynchronous callbacks. Native
+executables use the same synchronous session contract. Nested sessions are
+rejected.
 
 ## Rendering and validation
 
@@ -98,8 +104,17 @@ scenes contain at most 10,000 rectangles and 1,024 text items. Each text item
 contains at most 16,384 UTF-8 bytes. Window titles contain at most 256 UTF-8 bytes
 and no NUL. Validate before opening a window or presenting a scene, and use checked
 coordinate arithmetic. Invalid input and host creation/presentation failures
-return `fail(string)`. Callback runtime errors remain interpreter errors; both
+return `fail(string)`. Callback runtime errors remain terminal errors; both
 error routes still close the host window.
+
+Decode the entire configuration or scene before validating its domain bounds.
+Records and their fields must be ready, including strings, Scene list containers,
+and each rectangle/text element. Pending values cause terminal shape errors in
+declaration order; they are never implicitly joined. Scene decoding checks its
+background, all rectangles, then all text. No window opens for an invalid
+configuration or initial scene, and no invalid later scene is presented.
+Callback state may itself be pending and retains its depth across callbacks;
+that does not permit pending configuration or scene data.
 
 ## Verification
 

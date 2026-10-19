@@ -1,0 +1,44 @@
+namespace app
+struct Packet:
+    data: bytes
+struct Envelope:
+    packet: Packet
+struct Carrier[T]:
+    value: T
+type Numbers = list[int64] where true
+struct Qualified:
+    hidden: secret[list[int64]]
+    refined: Numbers
+function generic_copy[T](view source: Carrier[T]) returns T:
+    T borrowed = view source.value
+    T forwarded = borrowed
+    return clone forwarded
+function qualified_report(view source: Qualified) returns string:
+    secret[list[int64]] hidden_alias = view source.hidden
+    list[int64] revealed = declassify view hidden_alias
+    Numbers refined_alias = view source.refined
+    list[int64] coarse = coarsen view refined_alias
+    mutable list[int64] grown = clone coarse
+    grown = list.append[int64](grown, 11)
+    return "{list.length(view revealed)}:{list.length(view coarse)}:{list.length(view grown)}"
+function main(stdout: Stdout) returns nothing:
+    Envelope envelope = Envelope(packet: Packet(data: bytes.from_string("AB")))
+    Packet projected = view envelope.packet
+    Packet forwarded = projected
+    bytes leaf = view forwarded.data
+    bytes leaf_copy = clone leaf
+    Stdout.write(view stdout, "nested:{bytes.to_hex(view leaf)}:{bytes.to_hex(view leaf_copy)}:{bytes.to_hex(view envelope.packet.data)}\n")
+    Carrier[int64] number = Carrier[int64](value: 7)
+    int64 scalar = generic_copy[int64](view number)
+    Carrier[bytes] payload = Carrier[bytes](value: bytes.from_string("CD"))
+    bytes copied = generic_copy[bytes](view payload)
+    bytes grown = bytes.concat(copied, bytes.from_string("E"))
+    Stdout.write(view stdout, "generic:{scalar}:{number.value}:{bytes.to_hex(view payload.value)}:{bytes.to_hex(view grown)}:{bytes.to_hex(view payload.value)}\n")
+    secret[list[int64]] hidden = list(2, 3)
+    Numbers refined = list(5, 7) handle error:
+        return Stdout.write(view stdout, "refinement error:{error}\n")
+    Qualified qualified = Qualified(hidden: hidden, refined: refined) handle error:
+        return Stdout.write(view stdout, "qualified error:{error}\n")
+    string first = qualified_report(view qualified)
+    string second = qualified_report(view qualified)
+    Stdout.write(view stdout, "qualified:{first}:{second}\n")

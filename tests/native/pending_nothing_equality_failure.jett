@@ -1,0 +1,8 @@
+namespace test
+function work() returns nothing:
+    return nothing
+function main() returns nothing:
+    nothing pending = run work()
+    println("before equality")
+    println(pending == nothing)
+    return nothing

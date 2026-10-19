@@ -1,0 +1,24 @@
+namespace app
+struct Record:
+    label: string
+enum Choice:
+    named(value: string)
+    empty
+function length[T](items: list[T]) returns int64:
+    return list.length[T](items)
+function empty[T]() returns list[T]:
+    return list()
+function first[T](view items: list[T]) returns optional[T]:
+    return list.first[T](view items)
+function main() returns nothing:
+    println(length[Record](list()), length[Choice](list()), length[list[string]](list()))
+    println(list.length[Record](empty[Record]()), list.length[Choice](empty[Choice]()))
+    list[Record] records = list(Record(label: "Ada"))
+    list[Choice] choices = list(Choice.named("Lin"))
+    println(length[Record](clone records), length[Choice](clone choices))
+    Record record = first[Record](view records) handle:
+        default Record(label: "missing")
+    Choice choice = first[Choice](view choices) handle:
+        default Choice.empty
+    println(record.label, choice == Choice.named("Lin"))
+    return nothing

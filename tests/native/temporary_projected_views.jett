@@ -1,0 +1,63 @@
+namespace app
+struct Item:
+    label: string
+    score: int64
+struct Store:
+    names: list[string]
+    tags: set[string]
+    rows: map[string, Item]
+    title: string
+struct Envelope:
+    inner: Store
+function make(label: string) returns Envelope:
+    println("make:{label}")
+    mutable set[string] tags = set.new[string]()
+    tags = set.add[string](tags, "tag")
+    Store inner = Store(names: list("Ada", "Lin"), tags: tags, rows: map("row": Item(label: "owned", score: 7)), title: "🚀é")
+    return Envelope(inner: inner)
+function first(view names: list[string], extra: string) returns string:
+    string name = list.get[string](view names, 0) handle:
+        default "empty"
+    return "{name}:{extra}:{list.length[string](view names)}"
+function missing(label: string) returns optional[string]:
+    println("missing:{label}")
+    return none
+function early() returns string:
+    return first(view make("early").inner.names, missing("early") handle:
+        return "returned"
+    )
+function inspect(view store: Store) returns int64:
+    mutable int64 count = 0
+    for name in view store.names:
+        println(name)
+        count = count + 1
+    for key, row in view store.rows:
+        println(key, row.label)
+        count = count + row.score
+    return count + list.length[string](view store.names)
+function main() returns nothing:
+    for name in view make("list").inner.names:
+        println(name)
+    for tag in view make("set").inner.tags:
+        println(tag)
+    for key, row in view make("map").inner.rows:
+        println(key, row.label, row.score)
+    for character in view make("string").inner.title:
+        println(character)
+    println(inspect(view make("record").inner))
+    println(first(view make("direct").inner.names, missing("direct") handle:
+        default "fallback"
+    ))
+    function(view list[string], string) returns string callback = first
+    println(callback(view make("indirect").inner.names, missing("indirect") handle:
+        default "fallback"
+    ))
+    println(early())
+    for name in view make("break").inner.names:
+        println(name)
+        break
+    for name in view make("continue").inner.names:
+        if name == "Ada":
+            continue
+        println(name)
+    return nothing

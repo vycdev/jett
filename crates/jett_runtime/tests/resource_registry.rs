@@ -1,15 +1,22 @@
 use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use jett_runtime::{AuthorityProvenance, ResourceRegistry, ResourceTypeId};
 
-struct PanicOnDrop;
+struct PanicOnDrop {
+    drops: Arc<AtomicUsize>,
+}
 
 impl Drop for PanicOnDrop {
     fn drop(&mut self) {
-        // The secondary payload also panics on drop, checking that disposal
-        // handles provider failure without unbounded recursive unwinding.
-        panic_any(PanicOnDrop);
+        self.drops.fetch_add(1, Ordering::SeqCst);
+        // If a regression drops this payload, make its destructor panic with
+        // another payload. The counter distinguishes forgetting the original
+        // payload from merely catching this destructor panic.
+        panic_any(PanicOnDrop {
+            drops: Arc::clone(&self.drops),
+        });
     }
 }
 
@@ -261,11 +268,13 @@ fn cleanup_panics_do_not_abort_an_existing_unwind() {
 }
 
 #[test]
-fn panic_payload_destruction_does_not_skip_older_resources() {
+fn suppressed_panic_payload_is_forgotten_without_skipping_older_resources() {
     let events = Arc::new(Mutex::new(Vec::new()));
+    let payload_drops = Arc::new(AtomicUsize::new(0));
     let mut registry = ResourceRegistry::new();
     for name in ["oldest", "middle", "newest"] {
         let events = Arc::clone(&events);
+        let payload_drops = Arc::clone(&payload_drops);
         registry
             .insert(
                 ResourceTypeId::new(1),
@@ -275,7 +284,9 @@ fn panic_payload_destruction_does_not_skip_older_resources() {
                     events.lock().unwrap().push(name);
                     match name {
                         "newest" => panic!("first provider failure"),
-                        "middle" => panic_any(PanicOnDrop),
+                        "middle" => panic_any(PanicOnDrop {
+                            drops: payload_drops,
+                        }),
                         _ => {}
                     }
                 },
@@ -291,19 +302,24 @@ fn panic_payload_destruction_does_not_skip_older_resources() {
     registry.shutdown();
     drop(registry);
     assert_eq!(*events.lock().unwrap(), ["newest", "middle", "oldest"]);
+    assert_eq!(payload_drops.load(Ordering::SeqCst), 0);
 }
 
 #[test]
 fn suppressed_finalizer_payload_does_not_replace_the_detach_failure() {
     let events = Arc::new(Mutex::new(Vec::new()));
+    let payload_drops = Arc::new(AtomicUsize::new(0));
     let finalized = Arc::clone(&events);
+    let finalizer_payload_drops = Arc::clone(&payload_drops);
     let mut registry = ResourceRegistry::new();
     let resource_type = ResourceTypeId::new(1);
     let authority = AuthorityProvenance::new(1, 1);
     let key = registry
         .insert(resource_type, (), authority, move |_| {
             finalized.lock().unwrap().push("finalized");
-            panic_any(PanicOnDrop);
+            panic_any(PanicOnDrop {
+                drops: finalizer_payload_drops,
+            });
         })
         .unwrap();
     registry
@@ -315,12 +331,15 @@ fn suppressed_finalizer_payload_does_not_replace_the_detach_failure() {
     assert_eq!(registry.live_count(), 0);
     drop(registry);
     assert_eq!(*events.lock().unwrap(), ["finalized"]);
+    assert_eq!(payload_drops.load(Ordering::SeqCst), 0);
 }
 
 #[test]
-fn panic_payload_destruction_does_not_abort_an_existing_unwind() {
+fn panic_payload_is_forgotten_during_an_existing_unwind() {
     let events = Arc::new(Mutex::new(Vec::new()));
+    let payload_drops = Arc::new(AtomicUsize::new(0));
     let finalized = Arc::clone(&events);
+    let finalizer_payload_drops = Arc::clone(&payload_drops);
     let failure = catch_unwind(move || {
         let mut registry = ResourceRegistry::new();
         registry
@@ -330,7 +349,9 @@ fn panic_payload_destruction_does_not_abort_an_existing_unwind() {
                 AuthorityProvenance::new(1, 1),
                 move |_| {
                     finalized.lock().unwrap().push("finalized");
-                    panic_any(PanicOnDrop);
+                    panic_any(PanicOnDrop {
+                        drops: finalizer_payload_drops,
+                    });
                 },
             )
             .unwrap();
@@ -339,4 +360,5 @@ fn panic_payload_destruction_does_not_abort_an_existing_unwind() {
     .unwrap_err();
     assert_eq!(failure.downcast_ref::<&str>(), Some(&"original failure"));
     assert_eq!(*events.lock().unwrap(), ["finalized"]);
+    assert_eq!(payload_drops.load(Ordering::SeqCst), 0);
 }

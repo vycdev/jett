@@ -1,0 +1,19 @@
+namespace app
+type Token = secret[string]
+interface Named:
+    function name(view self: Named) returns string
+struct Boxed[T]:
+    token: Token
+    value: T
+implement Named for Boxed[int64]:
+    function name(view self: Boxed[int64]) returns string:
+        return "generic"
+function emit[T](view item: T) returns nothing:
+    println(view item)
+function main() returns nothing:
+    Boxed[int64] original = Boxed[int64](token: "generic-secret", value: 7)
+    Named erased = clone original
+    emit[Named](view erased)
+    list[Named] items = list(erased)
+    println(view items, view original)
+    return nothing

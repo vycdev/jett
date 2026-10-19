@@ -15,7 +15,7 @@ class JettGradingPhaseTests(unittest.TestCase):
             (directory / "hidden.jett").write_text("PRIVATE FIXTURE", encoding="utf-8")
             task = {"id": "phase_check", "adapters": {"jett": {
                 "candidate": "solution.jett", "hidden": "hidden.jett", "grade_mode": "append",
-                "commands": [["{jett}", "build", "{candidate}"], ["{jett}", "test", "{candidate}"]],
+                "commands": [["{jett}", "build", "--check", "{candidate}"], ["{jett}", "test", "{candidate}"]],
             }}}
 
             def execute(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:

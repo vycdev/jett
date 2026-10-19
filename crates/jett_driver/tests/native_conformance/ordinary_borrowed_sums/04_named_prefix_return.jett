@@ -1,0 +1,36 @@
+namespace app
+function consume(extra: int64, amount: int64, view values: list[int64], view stdout: Stdout) returns int64:
+    Stdout.write(view stdout, "unexpected consume\n")
+    return extra + amount + list.sum[int64](view values)
+function observe(view values: list[int64], label: string, view stdout: Stdout) returns int64:
+    Stdout.write(view stdout, "prefix:{label}:{list.sum[int64](view values)}\n")
+    return list.length[int64](view values)
+function later(label: string, view stdout: Stdout) returns optional[int64]:
+    Stdout.write(view stdout, "later:{label}\n")
+    return none
+function inspect_optional(view source: optional[list[int64]], view stdout: Stdout) returns int64:
+    list[int64] alias = view((view source) handle:
+        return -1
+    )
+    return consume(amount: observe(view alias, "optional", view stdout), values: view alias, stdout: view stdout, extra: later("optional", view stdout) handle:
+        Stdout.write(view stdout, "return:optional\n")
+        return 7
+    )
+function inspect_result(view source: result[list[int64], string], view stdout: Stdout) returns int64:
+    list[int64] alias = view((view source) handle error:
+        return -1
+    )
+    return consume(amount: observe(view alias, "result", view stdout), values: view alias, stdout: view stdout, extra: later("result", view stdout) handle:
+        Stdout.write(view stdout, "return:result\n")
+        return 11
+    )
+function main(stdout: Stdout) returns nothing:
+    optional[list[int64]] optional_source = some(list(2, 3))
+    result[list[int64], string] result_source = ok(list(5, 7))
+    int64 optional_answer = inspect_optional(view optional_source, view stdout)
+    int64 result_answer = inspect_result(view result_source, view stdout)
+    Stdout.write(view stdout, "answers:{optional_answer}:{result_answer}\n")
+    int64 optional_retained = inspect_optional(view optional_source, view stdout)
+    int64 result_retained = inspect_result(view result_source, view stdout)
+    Stdout.write(view stdout, "retained:{optional_retained}:{result_retained}\n")
+    return nothing

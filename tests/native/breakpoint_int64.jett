@@ -1,0 +1,7 @@
+function main() returns nothing:
+    breakpoint true
+    if true:
+        int64 count = 9
+        breakpoint false
+        breakpoint count > 0
+    breakpoint true

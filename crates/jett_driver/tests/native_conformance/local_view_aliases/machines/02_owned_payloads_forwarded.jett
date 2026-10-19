@@ -1,0 +1,15 @@
+namespace app
+machine Packet:
+    states:
+        ready(data: bytes, items: list[int64])
+function main(stdout: Stdout) returns nothing:
+    Packet at ready packet = Packet(ready, bytes.from_string("AB"), list(2, 3))
+    bytes borrowed_data = view packet.data
+    bytes forwarded_data = borrowed_data
+    bytes grown = bytes.concat(clone forwarded_data, bytes.from_string("C"))
+    list[int64] borrowed_items = view packet.items
+    list[int64] forwarded_items = borrowed_items
+    mutable list[int64] independent = clone forwarded_items
+    independent = list.append[int64](independent, 7)
+    Stdout.write(view stdout, "bytes:{bytes.to_hex(view borrowed_data)}:{bytes.to_hex(view forwarded_data)}:{bytes.to_hex(view grown)}:{bytes.to_hex(view packet.data)}\n")
+    Stdout.write(view stdout, "items:{list.length(view borrowed_items)}:{list.length(view forwarded_items)}:{list.length(view independent)}:{list.length(view packet.items)}\n")

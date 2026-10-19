@@ -3,6 +3,7 @@
 mod defs;
 mod interner;
 mod reflection;
+mod resource_hooks;
 mod types;
 
 pub use defs::{
@@ -10,10 +11,12 @@ pub use defs::{
     BitfieldId, EnumDef, EnumId, FunctionSig, InterfaceDef, InterfaceId, MachineDef, MachineId,
     MachineStateDef, MachineStateId, MachineTransitionDef, StructDef, StructId, VariantDef,
 };
-pub use interner::TypeInterner;
+pub use interner::{NominalTypeArgumentsError, TypeInterner};
 pub use reflection::{
     ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo,
     ReflectionMachineInfo, ReflectionMachineStateInfo, ReflectionMachineTransitionInfo,
     ReflectionMetadata, ReflectionTypeInfo, ReflectionVariantInfo,
 };
-pub use types::{Type, TypeId};
+pub use types::{CapabilityKind, Type, TypeId};
+
+pub use resource_hooks::{ResourceHookKind, ResourceKernelRecipe};

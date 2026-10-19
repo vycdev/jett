@@ -1,0 +1,55 @@
+namespace app
+struct PrimitiveEnvelope:
+    token: resource_probe.TestHandle
+    signed8: int8
+    signed16: int16
+    signed32: int32
+    signed64: int64
+    unsigned8: uint8
+    unsigned16: uint16
+    unsigned32: uint32
+    unsigned64: uint64
+    rounded: float32
+    wide: float64
+    marker: string
+    enabled: bool
+    unit: nothing
+function expect(condition: bool) returns nothing:
+    use resource_companion_probe
+    if not condition:
+        resource_companion_probe.terminal_failure()
+    return nothing
+function retire_primitives(token: resource_probe.TestHandle) returns nothing:
+    PrimitiveEnvelope held = PrimitiveEnvelope(unsigned64: 18446744073709551615, rounded: 16777217.0, token: token, signed8: -128, signed16: -32768, signed32: -2147483648, signed64: -9223372036854775808, unsigned8: 255, unsigned16: 65535, unsigned32: 4294967295, wide: 16777217.0, marker: "retained", enabled: true, unit: nothing)
+    int8 expected_signed8 = -128
+    expect(held.signed8 == expected_signed8)
+    int16 expected_signed16 = -32768
+    expect(held.signed16 == expected_signed16)
+    int32 expected_signed32 = -2147483648
+    expect(held.signed32 == expected_signed32)
+    int64 expected_signed64 = -9223372036854775808
+    expect(held.signed64 == expected_signed64)
+    uint8 expected_unsigned8 = 255
+    expect(held.unsigned8 == expected_unsigned8)
+    uint16 expected_unsigned16 = 65535
+    expect(held.unsigned16 == expected_unsigned16)
+    uint32 expected_unsigned32 = 4294967295
+    expect(held.unsigned32 == expected_unsigned32)
+    uint64 expected_unsigned64 = 18446744073709551615
+    expect(held.unsigned64 == expected_unsigned64)
+    float32 expected_rounded = 16777216.0
+    expect(held.rounded == expected_rounded)
+    float64 expected_wide = 16777217.0
+    expect(held.wide == expected_wide)
+    string expected_marker = "retained"
+    expect(held.marker == expected_marker)
+    expect(held.enabled)
+    nothing expected_unit = nothing
+    expect(held.unit == expected_unit)
+    return nothing
+export function main(net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle token = resource_probe.create(view net, 1101) handle error:
+        return nothing
+    retire_primitives(token)
+    return nothing

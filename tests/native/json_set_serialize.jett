@@ -1,0 +1,30 @@
+namespace test
+type Tag = string where string.char_count(value) > 0
+struct Bag:
+    values: set[int16]
+function serialize_int_set() returns string:
+    mutable set[int64] values = set.new[int64]()
+    values = set.add[int64](values, 3)
+    values = set.add[int64](values, 1)
+    return json.serialize[set[int64]](view values)
+function serialize_int_set_pipeline() returns string:
+    mutable set[int64] values = set.new[int64]()
+    values = set.add[int64](values, 8)
+    return values into view json.serialize[set[int64]]()
+function serialize_tag_set() returns string:
+    Tag tag = "ready" handle error:
+        return error
+    mutable set[Tag] values = set.new[Tag]()
+    values = set.add[Tag](values, tag)
+    return json.serialize_public[set[Tag]](view values)
+function serialize_bag() returns string:
+    mutable set[int16] values = set.new[int16]()
+    values = set.add[int16](values, -32768)
+    values = set.add[int16](values, 32767)
+    Bag bag = Bag(values: values)
+    return json.serialize[Bag](view bag)
+function main() returns nothing:
+    println(serialize_int_set())
+    println(serialize_int_set_pipeline())
+    println(serialize_tag_set())
+    println(serialize_bag())

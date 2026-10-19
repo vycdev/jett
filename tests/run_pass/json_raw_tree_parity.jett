@@ -12,7 +12,7 @@ function raw_tree_object_kind_summary() returns string:
         return "raw parse: {error}"
     json.JsonTree tree = json.json_tree_parse(body) handle error:
         return "tree parse: {error}"
-    return "{json.kind(raw)}:{json.is_object(raw)}|{json.json_tree_kind(view tree)}:{json.json_tree_is_object(view tree)}"
+    return "{json.kind(view raw)}:{json.is_object(raw)}|{json.json_tree_kind(view tree)}:{json.json_tree_is_object(view tree)}"
 function raw_tree_string_field_summary() returns string:
     string body = "{{\"name\":\"Ada\"}}"
     json.JsonTree raw = json.parse_raw(body) handle error:
@@ -34,7 +34,7 @@ function raw_array_field_summary() returns string:
         return "raw parse: {error}"
     json.JsonTree raw_scores = json.field(raw, "scores") handle:
         return "raw missing scores"
-    int64 raw_score_count = json.array_length(raw_scores) handle error:
+    int64 raw_score_count = json.array_length(view raw_scores) handle error:
         return "raw score length: {error}"
     json.JsonTree raw_second = json.index(raw_scores, 1) handle:
         return "raw missing second"
@@ -58,9 +58,9 @@ function raw_scalar_field_summary() returns string:
     string body = "{{\"active\":true,\"missing\":null,\"ratio\":2.5}}"
     json.JsonTree raw = json.parse_raw(body) handle error:
         return "raw parse: {error}"
-    json.JsonTree raw_active = json.field(raw, "active") handle:
+    json.JsonTree raw_active = json.field(view raw, "active") handle:
         return "raw missing active"
-    json.JsonTree raw_missing = json.field(raw, "missing") handle:
+    json.JsonTree raw_missing = json.field(view raw, "missing") handle:
         return "raw missing null"
     json.JsonTree raw_ratio = json.field(raw, "ratio") handle:
         return "raw missing ratio"

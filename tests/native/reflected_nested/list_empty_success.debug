@@ -1,0 +1,3 @@
+trace record: app.Holder = app.Holder(payload: list())
+trace event: app.Event = app.Event.content(list())
+trace session: app.Session = app.Session@content(list())

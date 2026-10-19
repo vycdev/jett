@@ -1,0 +1,8 @@
+# ERROR: E0377 x2
+namespace app
+mutable int64 count = 0
+mutable string label = "global"
+function main(stdout: Stdout) returns nothing:
+    mutable int64 local = 0
+    local = 1
+    Stdout.write(view stdout, "{count}:{label}:{local}")

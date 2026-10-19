@@ -1,0 +1,29 @@
+namespace app
+function main() returns nothing:
+    int64 value = run 123
+    string direct = "{value}"
+    trace direct
+    string ready = join direct handle error:
+        println("direct join: {error}")
+        return nothing
+    trace ready
+    string encoded = json.serialize[int64](value)
+    trace encoded
+    int8 small = -128
+    string signed_text = "{run run small}"
+    trace signed_text
+    uint32 wide = 4294967295
+    string unsigned_text = "{run wide}"
+    trace unsigned_text
+    bool flag = run true
+    string bool_text = "{flag}"
+    trace bool_text
+    float32 narrow = 1.25
+    string float_text = "{run narrow}"
+    trace float_text
+    string encoded_bool = json.serialize[bool](flag)
+    trace encoded_bool
+    nothing empty = run nothing
+    string encoded_nothing = json.serialize[nothing](empty)
+    trace encoded_nothing
+    return nothing

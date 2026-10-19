@@ -1,0 +1,13 @@
+namespace app
+function pair(view left: list[int64], view right: list[int64]) returns int64:
+    return list.length[int64](view left) + list.length[int64](view right)
+function make_right(view stdout: Stdout) returns list[int64]:
+    Stdout.write(view stdout, "source:right\n")
+    return list(3, 4, 5)
+function make_left(view stdout: Stdout) returns list[int64]:
+    Stdout.write(view stdout, "source:left\n")
+    return list(1, 2)
+function main(stdout: Stdout) returns nothing:
+    int64 answer = pair(right: make_right(view stdout), left: make_left(view stdout))
+    Stdout.write(view stdout, "ordered:{answer}\n")
+    return nothing

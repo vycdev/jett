@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    list[int64] items = run list(1)
+    int64 count = list.length[int64](view items)
+    trace count
+    return nothing

@@ -1,0 +1,7 @@
+# ERROR: E0376 x4
+namespace app
+function main() returns nothing:
+    bool first = comptime(list(1) == list(1))
+    bool second = comptime(ok(1) != ok(1))
+    bool third = comptime(none == none)
+    bool fourth = comptime(bytes.from_string("a") != bytes.from_string("a"))

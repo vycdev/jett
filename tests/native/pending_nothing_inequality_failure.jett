@@ -1,0 +1,10 @@
+namespace test
+function work() returns nothing:
+    return nothing
+function make_pending() returns nothing:
+    return run work()
+function main() returns nothing:
+    nothing nested = run make_pending()
+    println("before inequality")
+    println(nothing != nested)
+    return nothing

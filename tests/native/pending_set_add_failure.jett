@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    set[int64] values = run set.new[int64]()
+    set[int64] changed = set.add[int64](values, 2)
+    trace changed
+    return nothing

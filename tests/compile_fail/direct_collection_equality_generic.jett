@@ -1,0 +1,11 @@
+# ERROR: E0376 x2
+namespace app
+function equal[T](view left: T, view right: T) returns bool:
+    return left == right
+function unequal[T](view left: T, view right: T) returns bool:
+    return left != right
+function main() returns nothing:
+    list[int64] values = list(1)
+    optional[string] absent = none
+    bool first = equal[list[int64]](view values, view values)
+    bool second = unequal[optional[string]](view absent, view absent)

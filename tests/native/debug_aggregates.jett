@@ -1,0 +1,75 @@
+namespace test
+struct Payload:
+    title: string
+    numbers: list[int16]
+    maybe: optional[string]
+    outcome: result[int64, string]
+enum Message:
+    empty
+    text(value: string)
+    nested(inner: Message)
+machine Session:
+    states:
+        guest
+        active(user: string)
+    transitions:
+        guest to active
+enum Protocol:
+    tcp = 6
+    udp = 17
+bitfield network Packet:
+    version: 4 bits
+    flags: 4 bits
+    protocol: 8 bits as Protocol
+    payload: list[uint8]
+bitfield Wide:
+    sequence: 64 bits
+struct PacketBox:
+    packet: Packet
+function make_packet() returns Packet:
+    mutable list[uint8] body = list.new[uint8]()
+    body = list.append[uint8](body, 7)
+    body = list.append[uint8](body, 255)
+    return Packet(version: 4, flags: 0, protocol: Protocol.tcp, payload: body)
+function roundtrip_packet(view packet: Packet) returns Packet:
+    bytes encoded = Packet.to_bytes(clone packet)
+    Packet decoded = Packet.from_bytes(encoded) handle error:
+        return clone packet
+    return decoded
+function trace_bitfields() returns nothing:
+    Packet packet = make_packet()
+    Packet decoded = roundtrip_packet(view packet)
+    Wide wide = Wide(sequence: 18446744073709551615)
+    PacketBox wrapped = PacketBox(packet: clone packet)
+    trace packet
+    trace decoded
+    trace wide
+    trace wrapped
+    breakpoint true
+    return nothing
+function main() returns nothing:
+    trace_bitfields()
+    list[optional[int64]] choices = list(some(3), none, some(-2))
+    mutable set[string] tags = set.new[string]()
+    tags = set.add[string](tags, "alpha")
+    tags = set.add[string](tags, "beta")
+    map[string, list[int64]] groups = map("one": list(1, 2), "other": list(0))
+    list[int64] empty = list.new[int64]()
+    Payload payload = Payload(title: "Ada", numbers: list(2, -3), maybe: some("ready"), outcome: fail("retry"))
+    Message message = Message.nested(Message.text("hello"))
+    Message unit = Message.empty
+    Session session = Session(active, "Lin")
+    Session guest = Session(guest)
+    result[int64, string] success = ok(42)
+    trace choices
+    trace tags
+    trace groups
+    trace empty
+    trace payload
+    trace message
+    trace unit
+    trace session
+    trace guest
+    trace success
+    breakpoint true
+    return nothing

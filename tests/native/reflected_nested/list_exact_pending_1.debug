@@ -1,0 +1,9 @@
+trace marker: string = positive
+trace marker: string = positive
+trace marker: string = positive
+trace items: list[app.Positive] = pending(list(7))
+trace items: list[app.Positive] = pending(list(7))
+trace items: list[app.Positive] = pending(list(7))
+trace record: app.Holder = app.Holder(payload: pending(list(7)))
+trace event: app.Event = app.Event.content(pending(list(7)))
+trace session: app.Session = app.Session@content(pending(list(7)))

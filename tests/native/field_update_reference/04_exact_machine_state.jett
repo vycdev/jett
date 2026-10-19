@@ -1,0 +1,21 @@
+namespace app
+struct Inner:
+    value: int64
+machine Session:
+    states:
+        closed
+        open(inner: Inner, label: string)
+    transitions:
+        closed to open
+function update_session(mutable session: Session at open) returns Session at open:
+    session.inner.value = 8
+    session.label = "after"
+    return session
+function machine_report() returns string:
+    Session at open changed = update_session(Session(open, Inner(value: 1), "before"))
+    bool preserved_state = changed at open
+    return "{changed.inner.value}:{changed.label}:{preserved_state}"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "machine:{machine_report()}\n")
+verify machine_keeps_state:
+    assert machine_report() == "8:after:true"

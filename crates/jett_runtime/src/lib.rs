@@ -1,6 +1,16 @@
 //! Backend-neutral runtime services for Jett execution contexts.
 
+pub mod clock;
+pub mod crypto;
+pub mod csv;
+pub mod encoding;
+pub mod environment;
 pub mod graphics;
+pub mod math;
+pub mod native_abi;
+pub mod random;
+mod resource_custody;
+pub mod uuid;
 
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -13,11 +23,11 @@ type Finalizer = Box<dyn FnOnce(ErasedPayload) + Send>;
 type PanicPayload = Box<dyn Any + Send>;
 
 fn discard_panic_payload(payload: PanicPayload) {
-    if let Err(secondary) = catch_unwind(AssertUnwindSafe(|| drop(payload))) {
-        // A panic payload can itself panic when dropped. Do not recursively
-        // drop that secondary payload: provider cleanup must remain bounded.
-        std::mem::forget(secondary);
-    }
+    // Panic payload destruction is user-controlled. Forgetting the payload is
+    // the only bounded operation: catching one destructor panic is not enough
+    // when another field destructor can panic during that unwind and abort the
+    // process before the catch boundary regains control.
+    std::mem::forget(payload);
 }
 
 fn retain_first_failure(first: &mut Option<PanicPayload>, result: std::thread::Result<()>) {

@@ -1,0 +1,13 @@
+namespace app
+type Positive = int64 where value > 0
+struct CallbackHolder:
+    callback: function() returns int64
+function five() returns int64:
+    return 5
+function main() returns nothing:
+    CallbackHolder holder = CallbackHolder(callback: five)
+    for field in type.fields[CallbackHolder]():
+        function() returns Positive observed = type.field_value[CallbackHolder, function() returns Positive](view holder, view field)
+        Positive value = observed()
+        println(coarsen value)
+    return nothing

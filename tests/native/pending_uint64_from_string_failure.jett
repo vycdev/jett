@@ -1,0 +1,5 @@
+namespace app
+function main() returns nothing:
+    result[uint64, string] value = uint64.from_string(run "3")
+    trace value
+    return nothing

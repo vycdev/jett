@@ -1,0 +1,10 @@
+namespace app
+function encode[T](view values: list[T]) returns string:
+    use json
+    list[T] pending = run run clone values
+    return json.serialize[list[T]](view pending)
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "before\n")
+    string encoded = encode(view list())
+    Stdout.write(view stdout, "after:{encoded}\n")
+    return nothing

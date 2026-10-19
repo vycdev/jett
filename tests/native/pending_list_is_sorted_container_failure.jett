@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    list[int64] items = run list(1, 2)
+    bool sorted = list.is_sorted[int64](view items)
+    trace sorted
+    return nothing

@@ -1,0 +1,37 @@
+namespace app
+type Count = int64
+type Entries = map[int64, int64]
+type BackupCount = int64
+machine Session:
+    states:
+        empty
+        ready(count: Count)
+        cached(entries: Entries, backup: BackupCount)
+    transitions:
+        empty to ready
+        ready to cached
+type Ready = Session at ready
+type Empty = Session at empty
+function declared_fields[T]() returns string:
+    mutable string names = ""
+    for state in type.machine_states[T]():
+        for field in state.fields:
+            comptime type Field = field.type_info:
+                string name = type.name[Field]()
+                names = "{names}{state.name}.{field.name}:{name};"
+    return names
+function selected_fields[T](view value: T) returns string:
+    mutable string names = ""
+    for field in type.machine_state_value[T](view value).fields:
+        comptime type Field = field.type_info:
+            string name = type.name[Field]()
+            names = "{names}{field.name}:{name};"
+    return names
+function main(stdout: Stdout) returns nothing:
+    Ready source = Session(ready, 5)
+    Empty empty_source = Session(empty)
+    Stdout.write(view stdout, "ready:{declared_fields[Session at ready]()}\n")
+    Stdout.write(view stdout, "empty:{declared_fields[Session at empty]()}\n")
+    Stdout.write(view stdout, "selected:{selected_fields[Session at ready](view source)}\n")
+    Stdout.write(view stdout, "selected-empty:{selected_fields[Session at empty](view empty_source)}\n")
+    Stdout.write(view stdout, "retained:{source.count}\n")

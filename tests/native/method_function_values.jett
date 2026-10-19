@@ -1,0 +1,95 @@
+namespace method_library
+function adjusted(value: int64) returns int64:
+    return value + 3
+export struct Point:
+    value: int64
+    function amount(view self: Point) returns int64:
+        return adjusted(self.value)
+    function offsetter(view self: Point) returns function(int64) returns int64:
+        int64 base = adjusted(self.value)
+        return function(input: int64) returns int64: return input + base
+export interface Reader:
+    function amount(view self: Reader) returns int64
+implement Reader for Point:
+    function amount(view self: Point) returns int64:
+        return adjusted(self.value) + 1000
+export struct Counter:
+    value: int64
+implement Reader for Counter:
+    function amount(view self: Counter) returns int64:
+        return adjusted(self.value) * 2
+export struct Holder:
+    callback: function(view Point) returns int64
+export function choose() returns function(view Point) returns int64:
+    return Point.amount
+export function generic_choice[T](unused: T) returns function(view Point) returns int64:
+    return Point.amount
+export function make_offset() returns function(int64) returns int64:
+    Point point = Point(value: 8)
+    return Point.offsetter(view point)
+export function make_holder() returns Holder:
+    return Holder(callback: Point.amount)
+namespace alternate_library
+export struct Point:
+    value: int64
+    function amount(view self: Point) returns int64:
+        return self.value + 100
+namespace test
+verify method_callbacks:
+    use method_library
+    use method_library as models
+    models.Point point = models.Point(value: 4)
+    function(view models.Point) returns int64 callback = models.Point.amount
+    function(view models.Point) returns int64 baked = comptime method_library.choose()
+    assert callback(view point) == 7
+    assert baked(view point) == 7
+property method_trials:
+    given input: int64
+    use method_library as models
+    models.Point point = models.Point(value: input)
+    function(view models.Point) returns int64 callback = models.Point.amount
+    assert callback(view point) == input + 3
+function main() returns nothing:
+    use method_library
+    use method_library as models
+    use alternate_library as other_models
+    models.Point point = models.Point(value: 7)
+    models.Counter counter = models.Counter(value: 9)
+    other_models.Point other_point = other_models.Point(value: 5)
+    function(view models.Point) returns int64 callback = models.Point.amount
+    function(view models.Counter) returns int64 implementation = models.Counter.amount
+    function(view other_models.Point) returns int64 other_callback = other_models.Point.amount
+    function(view models.Point) returns int64 returned = models.choose()
+    function(view models.Point) returns int64 generic_int = models.generic_choice[int64](0)
+    function(view models.Point) returns int64 generic_string = models.generic_choice[string]("unused")
+    function(view models.Point) returns int64 copied = clone callback
+    models.Holder holder = models.Holder(callback: clone callback)
+    list[function(view models.Point) returns int64] callbacks = list(clone callback, clone returned)
+    function(view models.Point) returns int64 selected = list.get[function(view models.Point) returns int64](view callbacks, 1) handle:
+        default callback
+    function(view models.Point) returns int64 baked = comptime method_library.Point.amount
+    function(view models.Counter) returns int64 baked_impl = comptime method_library.Counter.amount
+    function(view models.Point) returns int64 baked_returned = comptime method_library.choose()
+    function(view models.Point) returns int64 baked_generic = comptime method_library.generic_choice[int64](1)
+    models.Holder baked_holder = comptime method_library.make_holder()
+    list[function(view models.Point) returns int64] baked_list = comptime list(method_library.Point.amount)
+    function(view models.Point) returns int64 baked_selected = list.get[function(view models.Point) returns int64](view baked_list, 0) handle:
+        default callback
+    function(int64) returns int64 offset = models.Point.offsetter(view point)
+    function(int64) returns int64 baked_offset = comptime method_library.make_offset()
+    trace callback
+    trace implementation
+    trace other_callback
+    trace baked
+    trace baked_impl
+    trace baked_holder
+    trace baked_list
+    trace offset
+    trace baked_offset
+    println(callback(view point), implementation(view counter), other_callback(view other_point))
+    println((models.Point.amount)(view point), returned(view point), generic_int(view point), generic_string(view point))
+    println(copied(view point), holder.callback(view point), selected(view point))
+    println(baked(view point), baked_impl(view counter), baked_returned(view point), baked_generic(view point))
+    println(baked_holder.callback(view point), baked_selected(view point), offset(2), baked_offset(2))
+    println(models.Reader.amount(view point))
+    return nothing

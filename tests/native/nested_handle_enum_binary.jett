@@ -1,0 +1,31 @@
+namespace test
+enum State:
+    idle
+    text(value: string)
+function capture_left(maybe: optional[State]) returns bool:
+    mutable State left = State.text("old")
+    bool equal = left ==(maybe handle:
+        left = State.text("new")
+        default State.text("old")
+    )
+    println(left == State.text("new"))
+    return equal
+function capture_text(maybe: optional[string]) returns bool:
+    mutable string left = "old"
+    bool equal = left ==(maybe handle:
+        left = "new"
+        default "old"
+    )
+    println(left)
+    return equal
+function constructed_left(maybe: optional[State]) returns bool:
+    return State.text("old") ==(maybe handle:
+        default State.text("old")
+    )
+function main() returns nothing:
+    println(capture_left(none))
+    println(capture_left(some(State.text("old"))))
+    println(capture_text(none))
+    println(capture_text(some("old")))
+    println(constructed_left(none))
+    return nothing

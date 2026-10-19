@@ -1,0 +1,12 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+implement Named for list[secret[string]]:
+    function name(view self: list[secret[string]]) returns string:
+        return "hidden-list"
+function main() returns nothing:
+    list[secret[string]] items = list("pending-secret")
+    Named erased = items
+    Named pending = run run erased
+    println(view pending)
+    return nothing

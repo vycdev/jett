@@ -1,0 +1,67 @@
+function make_count[T]() returns function(T) returns int64:
+    return function(value: T) returns int64:
+        string label = "type:{type.name[T]()}"
+        if type.kind_tag[T]() == TypeKind.list_type:
+            list[int64] items = value
+            return list.length[int64](view items)
+        return 0
+function make_match[T]() returns function(T) returns int64:
+    return function(value: T) returns int64:
+        TypeKind kind = type.kind_tag[T]()
+        match kind:
+            list_type:
+                list[int64] items = value
+                return list.length[int64](view items)
+            other:
+                return 0
+function summarized[T](value: T) returns string:
+    string label = "type:{type.name[T]()}"
+    if type.kind_tag[T]() == TypeKind.list_type:
+        list[int64] items = value
+        return "{label}:{list.length[int64](view items)}"
+    return "{label}:0"
+function unknown_if[T](value: T, view kind: TypeKind) returns int64:
+    if kind == TypeKind.list_type:
+        comptime type Elem = type.arg[T](0):
+            list[Elem] items = value
+            return list.length[Elem](view items)
+    return 0
+function unknown_match[T](value: T, view kind: TypeKind) returns int64:
+    match kind:
+        list_type:
+            comptime type Elem = type.arg[T](0):
+                list[Elem] items = value
+                return list.length[Elem](view items)
+        other:
+            return 0
+function unknown_callback[T](flag: bool) returns function(T) returns int64:
+    return function(value: T) returns int64:
+        if flag:
+            comptime type Elem = type.arg[T](0):
+                list[Elem] items = value
+                return list.length[Elem](view items)
+        return 0
+function exercise_unknown(kind: TypeKind) returns nothing:
+    println(unknown_if[list[int64]](list(1, 2), view kind))
+    println(unknown_match[list[int64]](list(1, 2, 3), view kind))
+    function(list[int64]) returns int64 callback = unknown_callback[list[int64]](kind == TypeKind.list_type)
+    println(callback(list(1, 2, 3, 4)))
+    return nothing
+function main() returns nothing:
+    function(int64) returns int64 scalar = make_count[int64]()
+    function(list[int64]) returns int64 sequence = make_count[list[int64]]()
+    println(scalar(7))
+    println(sequence(list(1, 2)))
+    function(int64) returns int64 baked_scalar = comptime make_match[int64]()
+    function(list[int64]) returns int64 baked_sequence = comptime make_match[list[int64]]()
+    println(baked_scalar(7))
+    println(baked_sequence(list(1, 2, 3)))
+    println(summarized[int64](9))
+    println(summarized[list[int64]](list(4, 5)))
+    exercise_unknown(TypeKind.list_type)
+    exercise_unknown(TypeKind.primitive_type)
+    function(list[int64]) returns int64 baked_true = comptime unknown_callback[list[int64]](true)
+    function(list[int64]) returns int64 baked_false = comptime unknown_callback[list[int64]](false)
+    println(baked_true(list(8, 9)))
+    println(baked_false(list(8, 9)))
+    return nothing

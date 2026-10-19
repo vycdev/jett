@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    map[int64, int64] values = run map(2: 3)
+    bool has = map.has[int64, int64](view values, 2)
+    trace has
+    return nothing

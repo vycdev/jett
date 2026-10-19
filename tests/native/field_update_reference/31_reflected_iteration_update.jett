@@ -1,0 +1,24 @@
+namespace app
+struct Mixed:
+    first: int64
+    second: string
+    third: int64
+struct Record:
+    count: int64
+    label: string
+    items: list[int64]
+    sibling: string
+function report() returns string:
+    mutable Record record = Record(count: 0, label: "", items: list(0), sibling: "stable")
+    for field in type.fields[Mixed]():
+        comptime type Field = field.type_info:
+            record.count = record.count + field.index + 1
+            string name = type.name[Field]()
+            record.label = "{record.label}{name}|"
+            record.items = list(field.index)
+    int64 length = list.length[int64](view record.items)
+    return "{record.count}:{record.label}:{length}:{record.sibling}"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "reflected:{report()}\n")
+verify reflected_iteration_update:
+    assert report() == "6:int64|string|int64|:1:stable"

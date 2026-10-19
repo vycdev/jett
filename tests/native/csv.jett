@@ -1,0 +1,20 @@
+namespace app
+function parsed(value: string) returns string:
+    list[list[string]] rows = csv.parse(value) handle error:
+        return error
+    return csv.stringify(rows)
+function header_name(value: string) returns string:
+    list[map[string, string]] rows = csv.parse_with_header(value) handle error:
+        return error
+    map[string, string] first = list.get[map[string, string]](rows, 0) handle:
+        default map("missing": "row")
+    optional[string] name = map.get(first, "name")
+    return name handle:
+        default "missing name"
+function main() returns nothing:
+    println(parsed("a,b\r\n1,\"two, words\"\r\n"))
+    println(parsed("\"say \"\"hello\"\"\",x"))
+    println(parsed("a\rb"), parsed("\"unterminated"), parsed("a\"b"))
+    println(header_name("name,age\nalice,30"))
+    println(header_name("name,name\nalice,smith"))
+    println(header_name("name,age\nalice"))

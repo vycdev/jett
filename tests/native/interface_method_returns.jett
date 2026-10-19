@@ -1,0 +1,63 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+    function copy(view self: Named) returns Named
+    function copies(view self: Named) returns list[Named]
+    function producer(view self: Named) returns function() returns Named
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "number:{self}"
+    function copy(view self: int64) returns Named:
+        return self
+    function copies(view self: int64) returns list[Named]:
+        return list(self, self + 1)
+    function producer(view self: int64) returns function() returns Named:
+        return function() returns Named: return self
+implement Named for string:
+    function name(view self: string) returns string:
+        return "text:{self}"
+    function copy(view self: string) returns Named:
+        return self
+    function copies(view self: string) returns list[Named]:
+        return list(self, "{self}!")
+    function producer(view self: string) returns function() returns Named:
+        return function() returns Named: return self
+implement Named for int8:
+    function name(view self: int8) returns string:
+        return "tiny:{self}"
+    function copy(view self: int8) returns Named:
+        return self
+    function copies(view self: int8) returns list[Named]:
+        return list(self, self + 1)
+    function producer(view self: int8) returns function() returns Named:
+        return function() returns Named: return self
+function callbacks() returns list[function() returns Named]:
+    Named number = 13
+    Named text = "baked"
+    int8 small = 127
+    Named tiny = small
+    return list(Named.producer(view number), Named.producer(view text), Named.producer(view tiny))
+function show_callbacks(values: list[function() returns Named]) returns nothing:
+    for callback in values:
+        Named produced = callback()
+        println(Named.name(view produced))
+    return nothing
+function exercise() returns nothing:
+    int8 small = 127
+    list[Named] values = list(7, "hello", small)
+    for value in values:
+        Named copied = Named.copy(view value)
+        println(Named.name(view copied))
+        list[Named] many = Named.copies(view value)
+        for item in many:
+            println(Named.name(view item))
+        function() returns Named callback = Named.producer(view value)
+        Named produced = callback()
+        println(Named.name(view produced))
+    return nothing
+function main() returns nothing:
+    exercise()
+    show_callbacks(callbacks())
+    list[function() returns Named] baked = comptime callbacks()
+    show_callbacks(baked)
+    return nothing

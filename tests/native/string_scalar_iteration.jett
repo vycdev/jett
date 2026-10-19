@@ -1,0 +1,13 @@
+namespace app
+
+function emit_scalars(input: string) returns int64:
+    mutable int64 count = 0
+    for scalar in input:
+        println(scalar)
+        count = count + 1
+        if count == 4:
+            break
+    return count
+
+function main() returns nothing:
+    println(emit_scalars("👩‍💻ZQ"), emit_scalars(""))

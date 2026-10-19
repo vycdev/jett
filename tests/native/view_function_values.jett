@@ -1,0 +1,42 @@
+namespace test
+function count(view items: list[int64]) returns int64:
+    return list.length[int64](view items)
+function make_offset(delta: int64) returns function(view list[int64]) returns int64:
+    return function(view items: list[int64]) returns int64: return list.length[int64](view items) + delta
+function combine(view items: list[int64], value: int64) returns int64:
+    return list.length[int64](view items) + value
+function combine_extra(view items: list[int64], value: int64) returns int64:
+    return list.length[int64](view items) + value + 100
+function combine_owned(view items: list[int64], more: list[int64]) returns int64:
+    return list.length[int64](view items) + list.length[int64](view more)
+function apply[T](view items: list[T], callback: function(view list[T]) returns int64) returns int64:
+    return callback(view items)
+function main() returns nothing:
+    list[int64] items = list(1, 2, 3)
+    function(view list[int64]) returns int64 callback = count
+    println(callback(view items))
+    println(list.length[int64](view items))
+    list[int64] transient = list(4, 5)
+    println(callback(transient))
+    function(view list[int64]) returns int64 captured = make_offset(10)
+    println(captured(view items))
+    function(view list[int64], int64) returns int64 mixed = combine
+    println(mixed(view items, 7))
+    function(view list[int64], list[int64]) returns int64 mixed_owned = combine_owned
+    println(mixed_owned(view items, list(4, 5)))
+    println(list.length[int64](view items))
+    function(view list[int64]) returns int64 baked = comptime make_offset(20)
+    println(baked(view items))
+    function(view list[int64]) returns int64 baked_named = comptime count
+    println(baked_named(view items))
+    println(items into view callback)
+    println(apply[int64](view items, count))
+    println(apply(view items, captured))
+    mutable function(view list[int64], int64) returns int64 selected = combine
+    optional[int64] no_extra = none
+    int64 selected_answer = items into view selected(no_extra handle:
+        selected = combine_extra
+        default 4
+    )
+    println(selected_answer)
+    return nothing

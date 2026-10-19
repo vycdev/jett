@@ -1,0 +1,31 @@
+namespace app
+struct Heterogeneous:
+    label: string
+    count: int64
+    enabled: bool
+bitfield WideCounter:
+    sequence: 64 bits
+struct Pair[T, U]:
+    first: T
+    second: U
+export function heterogeneous_fields() returns string:
+    mutable string labels = ""
+    for field in type.fields[Heterogeneous]():
+        comptime type Element = field.type_info:
+            string label = type.name[Element]()
+            labels = "{labels}{field.name}:{label}|"
+    return labels
+export function bitfield_fields() returns string:
+    mutable string labels = ""
+    for field in type.fields[WideCounter]():
+        comptime type Element = field.type_info:
+            string label = type.name[Element]()
+            labels = "{labels}{field.name}:{label}|"
+    return labels
+export function generic_fields() returns string:
+    mutable string labels = ""
+    for field in type.fields[Pair[int64, string]]():
+        comptime type Element = field.type_info:
+            string label = type.name[Element]()
+            labels = "{labels}{field.name}:{label}|"
+    return labels

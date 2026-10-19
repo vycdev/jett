@@ -16,7 +16,7 @@ verify chars_first_test:
     assert chars_first_test() == "h"
 
 function chars_for_loop_count() returns int64:
-    int64 count = 0
+    mutable int64 count = 0
     for c in string.chars("hi!"):
         count = count + 1
     return count

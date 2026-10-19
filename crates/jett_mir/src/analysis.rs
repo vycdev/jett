@@ -117,6 +117,13 @@ fn terminator_successors(terminator: &TerminatorKind) -> Vec<BlockId> {
             .chain(*otherwise)
             .collect(),
         TerminatorKind::ForEach { body, exit, .. } => vec![*body, *exit],
+        TerminatorKind::ReflectedTypeDispatch {
+            arms, otherwise, ..
+        } => arms
+            .iter()
+            .map(|arm| arm.target)
+            .chain(std::iter::once(*otherwise))
+            .collect(),
     }
 }
 

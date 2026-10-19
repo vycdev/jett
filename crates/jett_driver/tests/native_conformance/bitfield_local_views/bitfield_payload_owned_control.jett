@@ -1,0 +1,15 @@
+namespace app
+bitfield network Packet:
+    version: 4 bits
+    flags: 4 bits
+    payload: list[uint8]
+function main(stdout: Stdout) returns nothing:
+    uint8 first = 7
+    uint8 second = 255
+    uint8 added = 9
+    Packet packet = Packet(version: 4, flags: 0, payload: list(first, second))
+    list[uint8] copied = clone packet.payload
+    list[uint8] expanded = list.append[uint8](copied, added)
+    bytes encoded = Packet.to_bytes(clone packet)
+    Stdout.write(view stdout, "{list.length(view expanded)}:{list.length(view packet.payload)}:{bytes.to_hex(view encoded)}")
+    return nothing

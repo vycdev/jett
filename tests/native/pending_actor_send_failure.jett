@@ -1,0 +1,8 @@
+namespace app
+actor Holder:
+    receive noop:
+        return nothing
+function main() returns nothing:
+    Holder pending = run spawn Holder()
+    send pending.noop
+    return nothing

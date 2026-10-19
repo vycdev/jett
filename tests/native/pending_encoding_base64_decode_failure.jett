@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    string encoded = run "YQ=="
+    result[bytes, string] decoded = encoding.base64_decode(encoded)
+    trace decoded
+    return nothing

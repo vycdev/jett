@@ -1,0 +1,12 @@
+namespace app
+struct User:
+    name: string
+function serialize_pipeline() returns string:
+    User user = User(name: "Ada")
+    return user into view json.serialize[User]()
+function serialize_public_pipeline() returns string:
+    User user = User(name: "Grace")
+    return user into view json.serialize_public[User]()
+function main() returns nothing:
+    println(serialize_pipeline())
+    println(serialize_public_pipeline())

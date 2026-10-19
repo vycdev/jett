@@ -1,0 +1,22 @@
+namespace app
+function observe(view values: list[int64], view stdout: Stdout) returns int64:
+    Stdout.write(view stdout, "prefix:result:{list.sum[int64](view values)}\n")
+    return list.length[int64](view values)
+function failing(view stdout: Stdout) returns int64:
+    Stdout.write(view stdout, "failure:result\n")
+    list[string] broken = list.remove_at[string](list("owned", "other"), -1)
+    return list.length[string](broken)
+function consume(amount: int64, extra: int64, view values: list[int64], view stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "unexpected consume\n")
+    return nothing
+function main(stdout: Stdout) returns nothing:
+    bytes earlier = bytes.from_string("retained")
+    result[list[int64], string] source = ok(list(5, 7))
+    list[int64] alias = view((view source) handle error:
+        return nothing
+    )
+    list[int64] forwarded = alias
+    Stdout.write(view stdout, "before:result:{bytes.length(view earlier)}\n")
+    consume(amount: observe(view forwarded, view stdout), values: view forwarded, stdout: view stdout, extra: failing(view stdout))
+    Stdout.write(view stdout, "unexpected after\n")
+    return nothing

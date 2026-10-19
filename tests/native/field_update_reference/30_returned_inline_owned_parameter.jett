@@ -1,0 +1,17 @@
+namespace app
+struct Record:
+    value: int64
+    label: string
+function factory() returns function(Record) returns Record:
+    return function(mutable owned: Record) returns Record:
+        owned.value = 8
+        return owned
+function report() returns string:
+    function(Record) returns Record change = factory()
+    Record original = Record(value: 1, label: "stable")
+    Record changed = change(clone original)
+    return "{original.value}:{changed.value}:{changed.label}"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "returned:{report()}\n")
+verify returned_inline_owned_parameter:
+    assert report() == "1:8:stable"

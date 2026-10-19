@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    list[int64] values = list(run 2, 3)
+    int64 total = list.sum[int64](view values)
+    trace total
+    return nothing

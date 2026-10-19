@@ -1,0 +1,30 @@
+namespace app
+struct User:
+    name: string
+struct Alternate:
+    code: int64
+function inspect_builder(view builder: TypeConstruction, extra: int64) returns int64:
+    trace builder
+    return extra
+function main() returns nothing:
+    TypeConstruction builder = type.construct_start[User]()
+    TypeConstruction pending = run builder
+    trace builder
+    trace pending
+    optional[TypeConstruction] maybe = some(type.construct_start[User]())
+    TypeConstruction first = maybe handle:
+        default type.construct_start[User]()
+    TypeConstruction second = maybe handle:
+        default type.construct_start[User]()
+    trace maybe
+    trace first
+    trace second
+    mutable TypeConstruction switchable = type.construct_start[User]()
+    optional[int64] missing = none
+    int64 selected = inspect_builder(view switchable, missing handle:
+        switchable = type.construct_start[Alternate]()
+        default 7
+    )
+    println(selected)
+    trace switchable
+    return nothing

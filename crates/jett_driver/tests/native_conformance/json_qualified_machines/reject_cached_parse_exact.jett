@@ -1,0 +1,13 @@
+namespace app
+machine Session:
+    states:
+        ready(count: int64)
+        cached(entries: map[int64, int64])
+    transitions:
+        ready to cached
+function rejected(raw: string) returns string:
+    Session at cached value = json.parse_exact[Session at cached](raw) handle error:
+        return error
+    return "unexpected"
+function main() returns nothing:
+    return nothing

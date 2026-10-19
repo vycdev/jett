@@ -1,0 +1,9 @@
+trace marker: string = text
+trace marker: string = text
+trace marker: string = text
+trace marker: string = text
+trace marker: string = text
+trace marker: string = text
+trace record: app.Holder = app.Holder(payload: list(Agent-λ🙂, next))
+trace event: app.Event = app.Event.content(list(Agent-λ🙂, next))
+trace session: app.Session = app.Session@content(list(Agent-λ🙂, next))

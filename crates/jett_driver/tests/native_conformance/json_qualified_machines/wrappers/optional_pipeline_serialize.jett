@@ -1,0 +1,20 @@
+namespace app
+machine Session:
+    states:
+        ready(count: int64)
+        cached(entries: map[int64, int64])
+    transitions:
+        ready to cached
+function optional_count(view value: optional[Session at ready]) returns string:
+    Session at ready item = clone value handle:
+        return "none"
+    return "{item.count}"
+function main(stdout: Stdout) returns nothing:
+    Session at ready seed = Session(ready, 41)
+    optional[Session at ready] first = some(seed)
+    optional[Session at ready] second = none
+    string first_encoded = first into view json.serialize[optional[Session at ready]]()
+    Stdout.write(view stdout, "{first_encoded}\n")
+    string second_encoded = second into view json.serialize[optional[Session at ready]]()
+    Stdout.write(view stdout, "{second_encoded}\n")
+    Stdout.write(view stdout, "retained:{optional_count(view first)}:{optional_count(view second)}\n")

@@ -1,0 +1,26 @@
+namespace app
+struct Store:
+    items: list[int64]
+function first_or_zero(view items: list[int64]) returns int64:
+    return list.get[int64](view items, 0) handle:
+        default 0
+function add_first(view items: list[int64], extra: int64) returns int64:
+    return first_or_zero(view items) + extra
+function main() returns nothing:
+    mutable Store store = Store(items: list(3))
+    optional[int64] missing = none
+    optional[int64] chosen = list.get[int64](view store.items, missing handle:
+        store = Store(items: list(8))
+        default 0
+    )
+    int64 old = chosen handle:
+        default -1
+    println(old, first_or_zero(view store.items))
+    function(view list[int64], int64) returns int64 callback = add_first
+    optional[int64] missing_again = none
+    int64 combined = callback(view store.items, missing_again handle:
+        store = Store(items: list(13))
+        default 2
+    )
+    println(combined, first_or_zero(view store.items))
+    return nothing

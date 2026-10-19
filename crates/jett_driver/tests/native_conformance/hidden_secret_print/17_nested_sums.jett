@@ -1,0 +1,23 @@
+namespace app
+struct Child:
+    token: secret[string]
+    label: string
+enum Choice:
+    item(value: Child)
+    empty
+machine Session:
+    states:
+        idle
+        active(token: secret[string], count: int64)
+    transitions:
+        idle to active
+function main() returns nothing:
+    Child child = Child(token: "child-secret", label: "[redacted]")
+    list[optional[Child]] children = list(some(clone child), none)
+    result[Child, string] success = ok(clone child)
+    result[int64, secret[string]] failed = fail("failure-secret")
+    println(view children, view success, view failed)
+    Choice selected = Choice.item(child)
+    Session active = Session(active, "machine-secret", 4)
+    println(view selected, view active)
+    return nothing

@@ -1,0 +1,25 @@
+namespace app
+struct Owned:
+    values: list[int64]
+    raw: bytes
+    hidden: secret[string]
+    label: string
+function make() returns Owned:
+    secret[string] hidden = "private-sibling"
+    return Owned(values: list(1, 2), raw: bytes.from_string("a"), hidden: hidden, label: "before")
+function update(mutable owned: Owned) returns Owned:
+    owned.values = list(3, 4, 5)
+    owned.raw = bytes.from_string("xyz")
+    owned.label = "after"
+    return owned
+function report() returns string:
+    Owned original = make()
+    Owned changed = update(clone original)
+    string original_hidden = declassify original.hidden
+    string changed_hidden = declassify changed.hidden
+    bool secret_preserved = original_hidden == changed_hidden
+    return "{list.length(view original.values)}:{bytes.length(view original.raw)}:{original.label}:{list.length(view changed.values)}:{bytes.length(view changed.raw)}:{changed.label}:{secret_preserved}"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "{report()}\n")
+verify owning_replacements:
+    assert report() == "2:1:before:3:3:after:true"

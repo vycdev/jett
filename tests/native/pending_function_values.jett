@@ -1,0 +1,24 @@
+namespace app
+function increment(value: int64) returns int64:
+    return value + 1
+function main() returns nothing:
+    function(int64) returns int64 plain = increment
+    function(int64) returns int64 pending = run clone plain
+    function(int64) returns int64 nested = run clone pending
+    trace plain
+    trace pending
+    trace nested
+    function(int64) returns int64 joined = join pending handle error:
+        default increment
+    trace joined
+    println(joined(4))
+    int64 offset = 7
+    function(int64) returns int64 captured = function(value: int64) returns int64: return value + offset
+    function(int64) returns int64 pending_captured = run clone captured
+    trace pending_captured
+    list[function(int64) returns int64] callbacks = list(clone nested, clone pending_captured)
+    trace callbacks
+    function(int64) returns int64 joined_captured = join pending_captured handle error:
+        default increment
+    println(joined_captured(4))
+    return nothing

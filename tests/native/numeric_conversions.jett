@@ -1,0 +1,17 @@
+namespace app
+function float_from_int(value: int64) returns string:
+    float64 converted = float64.from_int64(value) handle error:
+        return error
+    return string.from_float64(converted)
+function int_from_float(value: float64) returns string:
+    int64 converted = int64.from_float64(value) handle error:
+        return error
+    return string.from_int64(converted)
+function main() returns nothing:
+    println(float_from_int(9007199254740992))
+    println(float_from_int(9007199254740993))
+    println(float_from_int(9223372036854775807))
+    println(int_from_float(42.0))
+    println(int_from_float(-9223372036854775808.0))
+    println(int_from_float(3.14))
+    println(int_from_float(9223372036854775808.0))

@@ -1,0 +1,26 @@
+namespace app
+function encode[T](view values: list[T]) returns string:
+    use json
+    return json.serialize[list[T]](view values)
+function encode_public[T](view values: list[T]) returns string:
+    use json
+    return view values into json.serialize_public[list[T]]()
+function selected_empty(public_mode: bool) returns string:
+    if public_mode:
+        return encode_public(view list())
+    return encode(view list())
+function main(stdout: Stdout) returns nothing:
+    string baked = comptime selected_empty(false)
+    string public_baked = comptime selected_empty(true)
+    Stdout.write(view stdout, "{baked}:{public_baked}:{selected_empty(false)}:{selected_empty(true)}\n")
+    return nothing
+verify pure_inferred_empty:
+    string baked = comptime selected_empty(false)
+    string public_baked = comptime selected_empty(true)
+    assert baked == "[]"
+    assert public_baked == "[]"
+    assert selected_empty(false) == baked
+    assert selected_empty(true) == public_baked
+property inferred_empty_trials:
+    given public_mode: bool
+    assert selected_empty(public_mode) == "[]"

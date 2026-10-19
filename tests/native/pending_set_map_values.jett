@@ -1,0 +1,54 @@
+namespace app
+enum Collection:
+    tags(value: set[string])
+    entries(value: map[string, string])
+    empty
+function pending_set() returns set[string]:
+    mutable set[string] value = set.new[string]()
+    value = set.add[string](value, "live")
+    return run value
+function pending_map() returns map[string, string]:
+    return run map("a": "Ada")
+function inspect_set() returns nothing:
+    mutable set[string] plain = set.new[string]()
+    plain = set.add[string](plain, "live")
+    set[string] pending = run clone plain
+    set[string] nested = run pending_set()
+    trace plain
+    trace pending
+    trace nested
+    println(Collection.tags(clone pending) == Collection.tags(clone pending))
+    println(Collection.tags(clone pending) == Collection.tags(clone plain))
+    set[string] first = join pending handle error:
+        default set.new[string]()
+    set[string] inner = join nested handle error:
+        default set.new[string]()
+    trace first
+    trace inner
+    set[string] last = join inner handle error:
+        default set.new[string]()
+    trace last
+    return nothing
+function inspect_map() returns nothing:
+    map[string, string] plain = map("a": "Ada")
+    map[string, string] pending = run clone plain
+    map[string, string] nested = run pending_map()
+    trace plain
+    trace pending
+    trace nested
+    println(Collection.entries(clone pending) == Collection.entries(clone pending))
+    println(Collection.entries(clone pending) == Collection.entries(clone plain))
+    map[string, string] first = join pending handle error:
+        default map("unexpected": "value")
+    map[string, string] inner = join nested handle error:
+        default map("unexpected": "value")
+    trace first
+    trace inner
+    map[string, string] last = join inner handle error:
+        default map("unexpected": "value")
+    trace last
+    return nothing
+function main() returns nothing:
+    inspect_set()
+    inspect_map()
+    return nothing

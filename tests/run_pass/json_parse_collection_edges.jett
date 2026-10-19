@@ -13,6 +13,10 @@ function parse_top_level_set_dedupes() returns string:
         return error
     bool has_two = set.contains[int64](values_for_two, 2)
     return "{length}:{has_one}:{has_two}"
+function parse_top_level_uint64_set() returns int64:
+    set[uint64] values = json.parse[set[uint64]]("[0,42,42]") handle error:
+        return -1
+    return set.length[uint64](values)
 function parse_top_level_map_optional_bytes() returns string:
     map[string, optional[bytes]] entries = json.parse[map[string, optional[bytes]]]("{{\"blob\":\"0x4869\",\"missing\":null}}") handle error:
         return error
@@ -56,6 +60,7 @@ function parse_result_optional_json_value_null() returns string:
     return json.kind(view value)
 verify json_parse_collection_edges:
     assert parse_top_level_set_dedupes() == "2:true:true"
+    assert parse_top_level_uint64_set() == 2
     assert parse_top_level_map_optional_bytes() == "2:true:0"
     assert parse_top_level_result_fail_payload() == "Alice:bad"
     assert parse_result_optional_json_value_object() == "Ada"

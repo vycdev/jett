@@ -1,0 +1,54 @@
+namespace test
+function record(label: string, value: int64) returns int64:
+    println(label)
+    return value
+function calculate(maybe: optional[int64]) returns int64:
+    return record("left", 8) +(maybe handle:
+        println("fallback")
+        default record("right", 4)
+    )
+function capture_left(maybe: optional[int64]) returns int64:
+    mutable int64 left = 8
+    int64 answer = left +(maybe handle:
+        left = 100
+        default 4
+    )
+    println(left)
+    return answer
+function from_left(maybe: optional[int64]) returns int64:
+    return(maybe handle:
+        default 4
+    ) + record("right operand", 6)
+function negated(maybe: optional[int64]) returns int64:
+    return -(maybe handle:
+        default 4
+    )
+function nested_argument(maybe: optional[int64]) returns int64:
+    return record("outer",(maybe handle:
+        default 4
+    ) + 2)
+function logical_and(flag: bool, maybe: optional[bool]) returns bool:
+    return flag and(maybe handle:
+        println("and fallback")
+        default true
+    )
+function logical_or(flag: bool, maybe: optional[bool]) returns bool:
+    return flag or(maybe handle:
+        println("or fallback")
+        default false
+    )
+function main() returns nothing:
+    println(calculate(some(2)))
+    println(calculate(none))
+    println(capture_left(some(2)))
+    println(capture_left(none))
+    println(from_left(none))
+    println(negated(none))
+    println(nested_argument(none))
+    println(logical_and(false, none))
+    println(logical_and(true, none))
+    println(logical_and(true, some(false)))
+    println(logical_or(true, none))
+    println(logical_or(false, none))
+    println(logical_or(false, some(true)))
+    return nothing

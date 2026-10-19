@@ -5,6 +5,9 @@ enum Direction:
 struct Profile:
     display_name: string serialize "displayName"
     note: string
+implement Equatable for Profile:
+    function equals(view self: Profile, view other: Profile) returns bool:
+        return self.display_name == other.display_name && self.note == other.note
 enum Shape:
     circle(radius: float64)
     profile(profile: Profile)

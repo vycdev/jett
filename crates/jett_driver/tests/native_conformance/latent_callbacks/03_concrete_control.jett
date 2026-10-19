@@ -1,0 +1,20 @@
+namespace app
+function nested_map[T](values: list[T]) returns list[T]:
+    function(T) returns T callback = function(value: T) returns T:
+        function() returns T inner = function() returns T: return value
+        return inner()
+    return list.map[T, T](values, callback)
+function make_secret[T](view values: list[T]) returns function(T) returns secret[T]:
+    return function(value: T) returns secret[T]: return value
+function secret_descriptor_count[T](values: list[T]) returns int64:
+    function(T) returns secret[T] callback = make_secret[T](view values)
+    list[function(T) returns secret[T]] stored = list(clone callback)
+    return list.length[function(T) returns secret[T]](view stored)
+function main(stdout: Stdout) returns nothing:
+    list[int64] mapped = nested_map(list(7))
+    int64 first = list.get[int64](view mapped, 0) handle:
+        default -1
+    function(int64) returns secret[int64] callback = make_secret[int64](view mapped)
+    secret[int64] hidden = callback(9)
+    int64 shown = declassify hidden
+    Stdout.write(view stdout, "control:{list.length[int64](view mapped)}:{first}:{shown}\n")

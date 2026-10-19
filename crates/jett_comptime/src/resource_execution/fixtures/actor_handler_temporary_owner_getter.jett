@@ -1,0 +1,27 @@
+namespace app
+type Positive = int64 where value > 0
+struct Holder:
+    callback: function() returns int64
+struct Packet:
+    data: list[int64]
+    sibling: list[int64]
+function five() returns int64:
+    return 5
+function fallback() returns Positive:
+    return 7
+function make_packet() returns Packet:
+    return Packet(data: list(1, 2), sibling: list(3, 4))
+actor Worker:
+    receive read responds int64:
+        Holder holder = Holder(callback: five)
+        mutable function() returns Positive selected = fallback
+        for field in type.fields[Holder]():
+            selected = type.field_value[Holder, function() returns Positive](view holder, view field)
+        int64 value = coarsen selected()
+        respond value
+function main(stdout: Stdout) returns nothing:
+    list[int64] borrowed = view make_packet().data
+    Worker worker = spawn Worker()
+    int64 observed = ask worker.read
+    Stdout.write(view stdout, "observed:{observed}\n")
+    return nothing

@@ -10,7 +10,9 @@ struct Pure:
     value: int64
 implement Evaluator for Effectful:
     function evaluate(view self: Effectful) returns int64:
-        function() returns int64 perform = function() returns int64: return effect("fake stdout")
+        function() returns int64 perform = function() returns int64:
+            function(view Stdout) returns int64 emit = function(view stdout: Stdout) returns int64: return effect(view stdout)
+            return 0
         return perform()
 implement Evaluator for Pure:
     function evaluate(view self: Pure) returns int64:

@@ -1,0 +1,33 @@
+namespace app
+struct Inner:
+    value: int64
+function finish() returns nothing:
+    return nothing
+actor Store:
+    mutable Inner inner = Inner(value: 1)
+    mutable string label = "initial"
+    receive replace(value: int64):
+        inner.value = value
+        label = "changed"
+        return finish()
+        label = "unreachable"
+    receive guarded(candidate: optional[int64]):
+        inner.value = candidate handle:
+            return nothing
+            default 999
+        label = "selected"
+        return nothing
+    receive read responds string:
+        respond "{inner.value}:{label}"
+function main(stdout: Stdout) returns nothing:
+    Store first = spawn Store()
+    Store second = spawn Store()
+    send first.replace(7)
+    string committed = ask first.read
+    send first.guarded(none)
+    string retained = ask first.read
+    send first.guarded(some(9))
+    string selected = ask first.read
+    string independent = ask second.read
+    Stdout.write(view stdout, "void-return:{committed}|{retained}|{selected}|{independent}\n")
+    return nothing

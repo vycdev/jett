@@ -1,0 +1,50 @@
+namespace app
+function parity(value: int64) returns string:
+    if value modulo 2 == 0:
+        return "even"
+    return "odd"
+function sorted_name() returns string:
+    list[list[string]] names = list.sort_by_index[string](list(list("b", "2"), list("a", "1")), 0)
+    list[string] first_name_row = list.get[list[string]](view names, 0) handle:
+        default list()
+    string first_name = list.get[string](view first_name_row, 0) handle:
+        default "missing"
+    return first_name
+function sorted_uint64() returns uint64:
+    list[list[uint64]] numbers = list.sort_by_index[uint64](list(list(18446744073709551615), list(2), list(9223372036854775808)), 0)
+    list[uint64] first_number_row = list.get[list[uint64]](view numbers, 0) handle:
+        default list()
+    uint64 first_number = list.get[uint64](view first_number_row, 0) handle:
+        default 0
+    return first_number
+function sorted_float64() returns float64:
+    list[list[float64]] floats = list.sort_by_index[float64](list(list(3.5), list(-1.0)), 0)
+    list[float64] first_float_row = list.get[list[float64]](view floats, 0) handle:
+        default list()
+    float64 first_float = list.get[float64](view first_float_row, 0) handle:
+        default 0.0
+    return first_float
+function sorted_bool() returns bool:
+    list[list[bool]] flags = list.sort_by_index[bool](list(list(true), list(false)), 0)
+    list[bool] first_flag_row = list.get[list[bool]](view flags, 0) handle:
+        default list()
+    bool first_flag = list.get[bool](view first_flag_row, 0) handle:
+        default true
+    return first_flag
+function missing_key_stays_first() returns bool:
+    list[list[string]] missing = list.sort_by_index[string](list(list("a"), list("b")), -1)
+    list[string] first_missing_row = list.get[list[string]](view missing, 0) handle:
+        default list()
+    string first_missing = list.get[string](view first_missing_row, 0) handle:
+        default "missing"
+    return first_missing == "a"
+function even_group_size() returns int64:
+    map[string, list[int64]] groups = list.group_by[int64](list(1, 2, 3, 4), parity)
+    list[int64] evens = map.get[string, list[int64]](groups, "even") handle:
+        default list()
+    return list.length[int64](view evens)
+function main() returns nothing:
+    list[string] words = list("a", "b")
+    list[uint64] unsigneds = list(2, 18446744073709551615)
+    list[bool] booleans = list(true, false)
+    println(sorted_name(), sorted_uint64() == 2, sorted_float64() == -1.0, not sorted_bool(), missing_key_stays_first(), even_group_size(), list.is_sorted[string](view words), list.is_sorted[uint64](view unsigneds), not list.is_sorted[bool](view booleans))

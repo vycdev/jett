@@ -1,0 +1,14 @@
+namespace app
+function make_size[T](view values: list[T]) returns function(T) returns int64:
+    int64 size = list.length[T](view values)
+    return function(ignored: T) returns int64: return size
+function ownership_report[T](values: list[T]) returns string:
+    function(T) returns int64 callback = make_size[T](view values)
+    list[function(T) returns int64] originals = list(clone callback)
+    list[function(T) returns int64] copies = clone originals
+    function(T) returns int64 selected = list.get[function(T) returns int64](view copies, 0) handle:
+        return "missing"
+    list[int64] mapped = list.map[T, int64](values, selected)
+    return "{list.length[int64](view mapped)}:{list.length[function(T) returns int64](view originals)}:{list.length[function(T) returns int64](view copies)}"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "owners:{ownership_report(list())}\n")

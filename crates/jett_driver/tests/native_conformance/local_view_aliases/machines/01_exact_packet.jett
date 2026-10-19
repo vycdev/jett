@@ -1,0 +1,10 @@
+namespace app
+machine Packet:
+    states:
+        ready(data: bytes)
+function main() returns nothing:
+    Packet at ready packet = Packet(ready, bytes.from_string("AB"))
+    bytes borrowed = view packet.data
+    bytes forwarded = borrowed
+    bytes independent = clone forwarded
+    return nothing

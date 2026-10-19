@@ -1,0 +1,4520 @@
+use std::{cell::RefCell, collections::HashSet};
+mod carriers;
+
+use jett_common::{SourceOrigin, Span};
+use jett_hir::{
+    BinaryOp, Expression, ExpressionKind, FunctionId, InterfaceFunctionAdapter, UnaryOp,
+};
+use jett_mir::{
+    Function, Program, SequenceSource, Statement, StatementKind, Terminator, TerminatorKind,
+};
+use jett_types::{BitfieldFieldKind, Type, TypeId, TypeInterner};
+
+use crate::reachability::reachable_function_ids_with_types;
+use crate::{CodegenError, symbol_name};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScalarKind {
+    SignedInteger(u16),
+    UnsignedInteger(u16),
+    Float(u16),
+    Bool,
+    Nothing,
+    String,
+    Bytes,
+    Sum,
+    List,
+    Set,
+    Map,
+    Struct,
+    Enum,
+    Bitfield,
+    Machine,
+    Construction,
+    Function,
+    Actor,
+    Stdout,
+    Clock,
+    Random,
+    Environment,
+    Graphics,
+    OpaqueCapability,
+    // Only original-body integrity checking of a descriptor-only function uses
+    // this kind. scalar_kind never supplies a runtime carrier for bare Never.
+    Uninhabited,
+}
+
+pub(crate) fn known_unit_enum_variant(expression: &Expression) -> bool {
+    match &expression.kind {
+        ExpressionKind::EnumConstruct { payloads, .. } => payloads.is_empty(),
+        ExpressionKind::View(inner) | ExpressionKind::Clone(inner) => {
+            known_unit_enum_variant(inner)
+        }
+        _ => false,
+    }
+}
+
+impl ScalarKind {
+    pub(crate) fn is_integer(self) -> bool {
+        matches!(self, Self::SignedInteger(_) | Self::UnsignedInteger(_))
+    }
+
+    fn is_numeric(self) -> bool {
+        self.is_integer() || matches!(self, Self::Float(_))
+    }
+}
+
+fn native_constructible_struct(types: &TypeInterner, ty: TypeId) -> bool {
+    matches!(types.resolve(ty), Type::Struct(_))
+}
+
+fn native_constructible_bitfield(types: &TypeInterner, ty: TypeId) -> bool {
+    let Type::Bitfield(id) = types.resolve(ty) else {
+        return false;
+    };
+    types
+        .resolve_bitfield(*id)
+        .fields
+        .iter()
+        .all(|field| match field.kind {
+            BitfieldFieldKind::Bits { width } if width <= 64 => match types.resolve(field.ty) {
+                Type::Int64 | Type::Uint64 => true,
+                Type::Enum(enum_id) => types
+                    .resolve_enum(*enum_id)
+                    .variants
+                    .iter()
+                    .all(|variant| variant.fields.is_empty()),
+                _ => false,
+            },
+            BitfieldFieldKind::Payload => {
+                !matches!(types.resolve(field.ty), Type::Refinement { .. })
+            }
+            _ => false,
+        })
+}
+
+fn native_constructible_record(types: &TypeInterner, ty: TypeId) -> bool {
+    native_constructible_struct(types, ty) || native_constructible_bitfield(types, ty)
+}
+
+fn native_builder_value_type_supported(types: &TypeInterner, owner: TypeId, value: TypeId) -> bool {
+    if matches!(
+        types.resolve(owner),
+        Type::Struct(_) | Type::Enum(_) | Type::Machine(_) | Type::MachineState { .. }
+    ) {
+        // Reflected completion now validates the checked field predicates.
+        return true;
+    }
+    let fields: Vec<TypeId> = match types.resolve(owner) {
+        Type::Struct(id) => types
+            .resolve_struct(*id)
+            .fields
+            .iter()
+            .map(|(_, ty)| *ty)
+            .collect(),
+        Type::Bitfield(id) => types
+            .resolve_bitfield(*id)
+            .fields
+            .iter()
+            .map(|field| field.ty)
+            .collect(),
+        Type::Enum(id) => types
+            .resolve_enum(*id)
+            .variants
+            .iter()
+            .flat_map(|variant| variant.fields.iter().map(|(_, ty)| *ty))
+            .collect(),
+        Type::Machine(id) | Type::MachineState { machine: id, .. } => types
+            .resolve_machine(*id)
+            .states
+            .iter()
+            .flat_map(|state| state.fields.iter().map(|(_, ty)| *ty))
+            .collect(),
+        _ => return true,
+    };
+    if fields
+        .iter()
+        .any(|field_ty| matches!(types.resolve(*field_ty), Type::Refinement { .. }))
+        && !fields.contains(&value)
+    {
+        return false;
+    }
+    // The native builder receives already validated refinement values. A base
+    // value can only be accepted once finish can invoke the refinement predicate.
+    fields.iter().all(|field_ty| {
+        let mut current = *field_ty;
+        while let Type::Refinement { base, .. } = types.resolve(current) {
+            if *base == value {
+                return false;
+            }
+            current = *base;
+        }
+        true
+    })
+}
+
+fn native_constructible_enum(types: &TypeInterner, ty: TypeId) -> bool {
+    matches!(types.resolve(ty), Type::Enum(_))
+}
+
+fn native_constructible_machine(types: &TypeInterner, ty: TypeId) -> bool {
+    matches!(
+        types.resolve(ty),
+        Type::Machine(_) | Type::MachineState { .. }
+    )
+}
+
+fn native_constructible_builder_kind(types: &TypeInterner, ty: TypeId) -> Option<&'static str> {
+    match types.resolve(ty) {
+        Type::Struct(_) if native_constructible_struct(types, ty) => Some("struct"),
+        Type::Bitfield(_) if native_constructible_bitfield(types, ty) => Some("bitfield"),
+        Type::Enum(_) if native_constructible_enum(types, ty) => Some("enum"),
+        Type::Machine(_) if native_constructible_machine(types, ty) => Some("machine"),
+        Type::MachineState { .. } if native_constructible_machine(types, ty) => {
+            Some("machine_state")
+        }
+        _ => None,
+    }
+}
+
+/// A real function descriptor can exist although its invocation needs an
+/// impossible argument. Captures are values, so they must never supply this proof.
+pub(crate) fn descriptor_only_function(function: &Function) -> bool {
+    function.capture_count <= function.params.len()
+        && !function.params[..function.capture_count]
+            .iter()
+            .any(|parameter| parameter.ty == TypeInterner::NEVER)
+        && function.params[function.capture_count..]
+            .iter()
+            .any(|parameter| parameter.ty == TypeInterner::NEVER)
+}
+
+/// Check the original uncallable bodies before native preparation can erase a
+/// malformed local, function reference or capture. Their source bodies will not
+/// be emitted, but their typed contracts still apply.
+pub(crate) fn verify_descriptor_bodies(
+    program: &Program,
+    types: &TypeInterner,
+) -> Result<(), CodegenError> {
+    verify_descriptor_bodies_inner(program, types, None)
+}
+
+pub(crate) fn verify_resource_descriptor_bodies(
+    plan: &jett_mir::ResourceOwnershipPlan<'_>,
+) -> Result<(), CodegenError> {
+    verify_descriptor_bodies_inner(plan.program(), plan.types(), Some(plan))
+}
+
+fn verify_descriptor_bodies_inner<'a>(
+    program: &'a Program,
+    types: &'a TypeInterner,
+    resource: Option<&'a jett_mir::ResourceOwnershipPlan<'a>>,
+) -> Result<(), CodegenError> {
+    jett_mir::validate_native_actor_graphs(program).map_err(CodegenError::Backend)?;
+    jett_mir::validate_field_updates(program, types).map_err(CodegenError::Backend)?;
+    jett_mir::validate_call_ownership(program, types).map_err(CodegenError::InvalidMir)?;
+    jett_mir::validate_reflected_callable_plans(program, types)
+        .map_err(CodegenError::InvalidMir)?;
+    // Shared inline tables and impossible sum arms contain valid Never metadata
+    // that need not allocate a native frame slot. Validate original type shapes
+    // without demanding a carrier for an absent function result; every surviving
+    // callable Never use is still rejected after preparation.
+    for function in &program.functions {
+        for local in &function.locals {
+            for (ty, role) in [(local.ty, "local"), (local.debug_ty, "debug local")] {
+                if !resource.is_some_and(|plan| plan.type_requires_custody(ty))
+                    && !exact_uninhabited_metadata_type(types, ty)
+                {
+                    if let Some(proof) =
+                        jett_mir::native_graph_storage_for_local(function, types, local)
+                    {
+                        graph_storage_kind(
+                            types,
+                            &proof,
+                            format!("original {role} `{}`", local.name),
+                        )?;
+                    } else {
+                        scalar_kind_inner(
+                            types,
+                            ty,
+                            format!("original {role} `{}`", local.name),
+                            &mut HashSet::new(),
+                            TypeValidationPhase::OriginalMetadata,
+                        )?;
+                    }
+                }
+            }
+        }
+    }
+    let mut functions = Vec::new();
+    let mut by_mir_index = vec![None; program.functions.len()];
+    for function in &program.functions {
+        if !function.params[function.capture_count..]
+            .iter()
+            .any(|parameter| parameter.ty == TypeInterner::NEVER)
+        {
+            continue;
+        }
+        if function.params[..function.capture_count]
+            .iter()
+            .any(|parameter| parameter.ty == TypeInterner::NEVER)
+        {
+            return Err(CodegenError::InvalidMirContract {
+                function: function.identity.declaration.name.clone(),
+                span: function.span,
+                message: "descriptor capture cannot be uninhabited".into(),
+            });
+        }
+        if function.params[..function.capture_count]
+            .iter()
+            .any(|parameter| parameter.mode != jett_mir::ParamMode::Owned)
+        {
+            return Err(CodegenError::InvalidMirContract {
+                function: function.identity.declaration.name.clone(),
+                span: function.span,
+                message: "descriptor capture must use owned environment storage".into(),
+            });
+        }
+        super::emit::debug::function_label(function).map_err(|message| {
+            CodegenError::InvalidMirContract {
+                function: function.identity.declaration.name.clone(),
+                span: function.span,
+                message: message.into(),
+            }
+        })?;
+        by_mir_index[function.id.index() as usize] = Some(functions.len());
+        functions.push(VerifiedFunction {
+            mir_id: function.id,
+            symbol: symbol_name(&function.identity, types)?,
+        });
+    }
+    let verified = VerifiedProgram {
+        by_mir_index,
+        functions,
+    };
+    let verifier = Verifier {
+        program,
+        types,
+        verified: &verified,
+        phase: VerifierPhase::DescriptorMetadata,
+        metadata_functions: RefCell::new(HashSet::new()),
+        resource,
+    };
+    for function in &program.functions {
+        if descriptor_only_function(function) {
+            verifier.function(function)?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VerifiedFunction {
+    pub(crate) mir_id: FunctionId,
+    pub(crate) symbol: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VerifiedProgram {
+    functions: Vec<VerifiedFunction>,
+    by_mir_index: Vec<Option<usize>>,
+}
+
+impl VerifiedProgram {
+    pub(crate) fn functions(&self) -> &[VerifiedFunction] {
+        &self.functions
+    }
+
+    pub(crate) fn get(&self, id: FunctionId) -> Option<&VerifiedFunction> {
+        let index = usize::try_from(id.index()).ok()?;
+        let verified_index = self.by_mir_index.get(index).copied().flatten()?;
+        self.functions
+            .get(verified_index)
+            .filter(|function| function.mir_id == id)
+    }
+}
+
+/// Unit-only access to the existing native expression integrity gate.
+/// Outer emission independently checks the original caller ownership packet;
+/// this helper supplies no preparation, callable frame or emission authority.
+#[cfg(test)]
+pub(crate) fn verify_callable_expression_for_test(
+    program: &Program,
+    types: &TypeInterner,
+    function: &Function,
+    expression: &Expression,
+) -> Result<(), CodegenError> {
+    let verified = VerifiedProgram {
+        functions: Vec::new(),
+        by_mir_index: vec![None; program.functions.len()],
+    };
+    let verifier = Verifier {
+        program,
+        types,
+        verified: &verified,
+        phase: VerifierPhase::CallableNative,
+        metadata_functions: RefCell::new(HashSet::new()),
+        resource: None,
+    };
+    verifier.expression(function, expression)
+}
+
+pub(crate) fn verify_program(
+    program: &Program,
+    types: &TypeInterner,
+) -> Result<VerifiedProgram, CodegenError> {
+    jett_mir::validate_native_actor_graphs(program).map_err(CodegenError::Backend)?;
+    jett_mir::validate_field_updates(program, types).map_err(CodegenError::Backend)?;
+    jett_mir::validate_call_ownership(program, types).map_err(CodegenError::InvalidMir)?;
+    jett_mir::validate_reflected_callable_plans(program, types)
+        .map_err(CodegenError::InvalidMir)?;
+
+    // Reachability may omit lifted bodies, but malformed source metadata must
+    // not disappear with an unused descriptor.
+    for function in &program.functions {
+        super::emit::debug::function_label(function).map_err(|message| {
+            CodegenError::InvalidMirContract {
+                function: function.identity.declaration.name.clone(),
+                span: function.span,
+                message: message.into(),
+            }
+        })?;
+    }
+
+    for (&owner, &method) in &program.equality_methods {
+        let (_, target) = function_by_id(program, method)?;
+        if owner.index() as usize >= types.len()
+            || !matches!(types.resolve(owner), Type::Struct(_))
+            || target.capture_count != 0
+            || target.params.len() != 2
+            || target.return_type != TypeInterner::BOOL
+            || target.params.iter().any(|parameter| {
+                parameter.ty != owner || parameter.mode != jett_mir::ParamMode::View
+            })
+        {
+            return Err(CodegenError::InvalidMirContract {
+                function: target.identity.declaration.name.clone(),
+                span: target.span,
+                message: "enum equality target must have two exact struct views and return bool"
+                    .into(),
+            });
+        }
+    }
+    let reachable = reachable_function_ids_with_types(program, types)?;
+    let mut functions = Vec::with_capacity(reachable.len());
+    let mut by_mir_index = vec![None; program.functions.len()];
+    let mut unique_symbols = HashSet::with_capacity(reachable.len());
+    for function_id in reachable {
+        let (function_index, function) = function_by_id(program, function_id)?;
+        let symbol = symbol_name(&function.identity, types)?;
+        if !unique_symbols.insert(symbol.clone()) {
+            return Err(CodegenError::DuplicateSymbol(symbol));
+        }
+        let verified_index = functions.len();
+        by_mir_index[function_index] = Some(verified_index);
+        functions.push(VerifiedFunction {
+            mir_id: function_id,
+            symbol,
+        });
+    }
+
+    let verified = VerifiedProgram {
+        functions,
+        by_mir_index,
+    };
+
+    for verified_function in verified.functions() {
+        let (_, function) = function_by_id(program, verified_function.mir_id)?;
+        let verifier = Verifier {
+            program,
+            types,
+            verified: &verified,
+            phase: if descriptor_only_function(function) {
+                VerifierPhase::DescriptorMetadata
+            } else {
+                VerifierPhase::CallableNative
+            },
+            metadata_functions: RefCell::new(HashSet::new()),
+            resource: None,
+        };
+        verifier.function(function)?;
+    }
+    Ok(verified)
+}
+
+pub(crate) fn verify_resource_program(
+    plan: &jett_mir::ResourceOwnershipPlan<'_>,
+) -> Result<VerifiedProgram, CodegenError> {
+    let program = plan.program();
+    let types = plan.types();
+    // Reachability may omit lifted bodies, but malformed source metadata must
+    // not disappear with an unused descriptor.
+    for function in &program.functions {
+        super::emit::debug::function_label(function).map_err(|message| {
+            CodegenError::InvalidMirContract {
+                function: function.identity.declaration.name.clone(),
+                span: function.span,
+                message: message.into(),
+            }
+        })?;
+    }
+
+    for (&owner, &method) in &program.equality_methods {
+        let (_, target) = function_by_id(program, method)?;
+        if owner.index() as usize >= types.len()
+            || !matches!(types.resolve(owner), Type::Struct(_))
+            || target.capture_count != 0
+            || target.params.len() != 2
+            || target.return_type != TypeInterner::BOOL
+            || target.params.iter().any(|parameter| {
+                parameter.ty != owner || parameter.mode != jett_mir::ParamMode::View
+            })
+        {
+            return Err(CodegenError::InvalidMirContract {
+                function: target.identity.declaration.name.clone(),
+                span: target.span,
+                message: "enum equality target must have two exact struct views and return bool"
+                    .into(),
+            });
+        }
+    }
+    let selected = crate::reachability::reachable_resource_function_ids(plan)?;
+    let mut functions = Vec::new();
+    let mut by_mir_index = vec![None; program.functions.len()];
+    let mut symbols = HashSet::new();
+    for id in selected {
+        let (index, function) = function_by_id(program, id)?;
+        let symbol = symbol_name(&function.identity, types)?;
+        if !symbols.insert(symbol.clone()) {
+            return Err(CodegenError::DuplicateSymbol(symbol));
+        }
+        by_mir_index[index] = Some(functions.len());
+        functions.push(VerifiedFunction { mir_id: id, symbol });
+    }
+    let verified = VerifiedProgram {
+        functions,
+        by_mir_index,
+    };
+
+    for function in &program.functions {
+        // The plan's archive authenticates all original Resource type graphs;
+        // unrelated ordinary metadata keeps the previous complete type visitor.
+        for local in &function.locals {
+            for ty in [local.ty, local.debug_ty] {
+                if !plan.type_requires_custody(ty) && !exact_uninhabited_metadata_type(types, ty) {
+                    if let Some(proof) =
+                        jett_mir::native_graph_storage_for_local(function, types, local)
+                    {
+                        graph_storage_kind(types, &proof, "original ordinary companion local")?;
+                    } else {
+                        scalar_kind_inner(
+                            types,
+                            ty,
+                            "original ordinary companion local".into(),
+                            &mut HashSet::new(),
+                            TypeValidationPhase::OriginalMetadata,
+                        )?;
+                    }
+                }
+            }
+        }
+        if verified.get(function.id).is_some() {
+            let verifier = Verifier {
+                program,
+                types,
+                verified: &verified,
+                phase: if descriptor_only_function(function) {
+                    VerifierPhase::DescriptorMetadata
+                } else {
+                    VerifierPhase::CallableNative
+                },
+                metadata_functions: RefCell::new(HashSet::new()),
+                resource: Some(plan),
+            };
+            verifier.function(function)?;
+        }
+    }
+    Ok(verified)
+}
+
+fn function_by_id(program: &Program, id: FunctionId) -> Result<(usize, &Function), CodegenError> {
+    let index = usize::try_from(id.index()).map_err(|_| {
+        CodegenError::Backend("reached MIR function index does not fit this host".to_string())
+    })?;
+    let function = program
+        .functions
+        .get(index)
+        .filter(|function| function.id == id)
+        .ok_or_else(|| {
+            CodegenError::Backend(
+                "verified reachable function is absent from the original MIR table".to_string(),
+            )
+        })?;
+    Ok((index, function))
+}
+
+/// Only these exact checked shapes describe an absent value in latent bodies.
+/// This does not grant either shape a runtime carrier or peel other qualifiers.
+fn exact_uninhabited_metadata_type(types: &TypeInterner, ty: TypeId) -> bool {
+    ty == TypeInterner::NEVER
+        || ((ty.index() as usize) < types.len()
+            && matches!(types.resolve(ty), Type::Secret(inner) if *inner == TypeInterner::NEVER))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypeValidationPhase {
+    OriginalMetadata,
+    NativeValue,
+    // Machine representation only, after the strict verifier and any private
+    // occurrence-selected graph storage proof have authenticated execution.
+    NativeStorage,
+}
+
+pub(crate) fn scalar_kind(
+    types: &TypeInterner,
+    ty: TypeId,
+    context: impl Into<String>,
+) -> Result<ScalarKind, CodegenError> {
+    scalar_kind_inner(
+        types,
+        ty,
+        context.into(),
+        &mut HashSet::new(),
+        TypeValidationPhase::NativeValue,
+    )
+}
+/// Machine storage mapping is independent of recursive Source type admission.
+/// Emission consumes a VerifiedProgram/fresh Resource plan; this helper cannot
+/// create either and is never used as the default verifier type visitor.
+pub(crate) fn native_storage_kind(
+    types: &TypeInterner,
+    ty: TypeId,
+    context: impl Into<String>,
+) -> Result<ScalarKind, CodegenError> {
+    scalar_kind_inner(
+        types,
+        ty,
+        context.into(),
+        &mut HashSet::new(),
+        TypeValidationPhase::NativeStorage,
+    )
+}
+
+/// Only an opaque exact occurrence/header proof selects graph metadata storage.
+fn graph_storage_kind(
+    types: &TypeInterner,
+    proof: &jett_mir::GraphStorageProof,
+    context: impl Into<String>,
+) -> Result<ScalarKind, CodegenError> {
+    native_storage_kind(types, proof.ty(), context)
+}
+
+fn scalar_kind_inner(
+    types: &TypeInterner,
+    ty: TypeId,
+    context: String,
+    seen: &mut HashSet<TypeId>,
+    phase: TypeValidationPhase,
+) -> Result<ScalarKind, CodegenError> {
+    let type_count = u32::try_from(types.len()).unwrap_or(u32::MAX);
+    if ty.index() >= type_count {
+        return Err(CodegenError::UnsupportedType {
+            type_name: format!("<invalid type {}>", ty.index()),
+            context,
+        });
+    }
+    if phase == TypeValidationPhase::NativeStorage {
+        // Containers and actor/function handles have one fixed native scalar
+        // storage representation. Their payload/signature integrity was checked
+        // before emission; no runtime Resource leaf is admitted here.
+        let opaque = match types.resolve(ty) {
+            Type::Struct(_) | Type::Interface(_) => Some(ScalarKind::Struct),
+            Type::Enum(_) => Some(ScalarKind::Enum),
+            Type::Bitfield(_) => Some(ScalarKind::Bitfield),
+            Type::Machine(_) | Type::MachineState { .. } => Some(ScalarKind::Machine),
+            Type::Function { .. } => Some(ScalarKind::Function),
+            Type::Actor(_) => Some(ScalarKind::Actor),
+            Type::List(_) => Some(ScalarKind::List),
+            Type::Set(_) => Some(ScalarKind::Set),
+            Type::Map(_, _) => Some(ScalarKind::Map),
+            Type::Optional(_) | Type::Result(_, _) => Some(ScalarKind::Sum),
+            Type::TypeConstruction => Some(ScalarKind::Construction),
+            _ => None,
+        };
+        if let Some(kind) = opaque {
+            return Ok(kind);
+        }
+    }
+    let kind = match types.resolve(ty) {
+        Type::Int8 => ScalarKind::SignedInteger(8),
+        Type::Int16 => ScalarKind::SignedInteger(16),
+        Type::Int32 => ScalarKind::SignedInteger(32),
+        Type::Int64 => ScalarKind::SignedInteger(64),
+        Type::Uint8 => ScalarKind::UnsignedInteger(8),
+        Type::Uint16 => ScalarKind::UnsignedInteger(16),
+        Type::Uint32 => ScalarKind::UnsignedInteger(32),
+        Type::Uint64 => ScalarKind::UnsignedInteger(64),
+        Type::Float32 => ScalarKind::Float(32),
+        Type::Float64 => ScalarKind::Float(64),
+        Type::Bool => ScalarKind::Bool,
+        Type::Nothing => ScalarKind::Nothing,
+        Type::String => ScalarKind::String,
+        Type::Bytes => ScalarKind::Bytes,
+        Type::Secret(inner) | Type::Refinement { base: inner, .. } => {
+            return scalar_kind_inner(types, *inner, context, seen, phase);
+        }
+        Type::Struct(id) => {
+            if seen.insert(ty) {
+                for (_, field) in &types.resolve_struct(*id).fields {
+                    scalar_kind_inner(types, *field, "struct field".into(), seen, phase)?;
+                }
+            }
+            ScalarKind::Struct
+        }
+        Type::Enum(id) => {
+            if seen.insert(ty) {
+                for variant in &types.resolve_enum(*id).variants {
+                    for (_, field) in &variant.fields {
+                        scalar_kind_inner(types, *field, "enum payload".into(), seen, phase)?;
+                    }
+                }
+            }
+            ScalarKind::Enum
+        }
+        Type::Bitfield(id) => {
+            if seen.insert(ty) {
+                for field in &types.resolve_bitfield(*id).fields {
+                    scalar_kind_inner(types, field.ty, "bitfield field".into(), seen, phase)?;
+                }
+            }
+            ScalarKind::Bitfield
+        }
+        Type::Machine(id) | Type::MachineState { machine: id, .. } => {
+            if seen.insert(ty) {
+                for state in &types.resolve_machine(*id).states {
+                    for (_, field) in &state.fields {
+                        scalar_kind_inner(types, *field, "machine payload".into(), seen, phase)?;
+                    }
+                }
+            }
+            ScalarKind::Machine
+        }
+        Type::Function {
+            params,
+            view_params,
+            return_type,
+        } => {
+            if params.len() != view_params.len() {
+                return Err(CodegenError::UnsupportedType {
+                    type_name: types.type_name(ty),
+                    context: "function value view parameter metadata".into(),
+                });
+            }
+            // A real descriptor needs an impossible input to omit its result
+            // carrier. Original metadata may also describe a return-only Never
+            // function in an arm that native preparation proves absent. This
+            // phase grants neither descriptor authority nor a runtime carrier.
+            let descriptor_only = params.contains(&TypeInterner::NEVER);
+            if seen.insert(ty) {
+                for param in params {
+                    if !descriptor_only || *param != TypeInterner::NEVER {
+                        scalar_kind_inner(
+                            types,
+                            *param,
+                            "function value parameter".into(),
+                            seen,
+                            phase,
+                        )?;
+                    }
+                }
+                if !exact_uninhabited_metadata_type(types, *return_type)
+                    || (!descriptor_only && phase == TypeValidationPhase::NativeValue)
+                {
+                    scalar_kind_inner(
+                        types,
+                        *return_type,
+                        "function value result".into(),
+                        seen,
+                        phase,
+                    )?;
+                }
+            }
+            ScalarKind::Function
+        }
+        Type::Actor(id) => {
+            if seen.insert(ty) {
+                let actor = types.resolve_actor(*id);
+                for (_, field) in actor.capability_params.iter().chain(&actor.state_fields) {
+                    scalar_kind_inner(types, *field, "actor state field".into(), seen, phase)?;
+                }
+                for message in &actor.messages {
+                    for (_, parameter) in &message.params {
+                        scalar_kind_inner(
+                            types,
+                            *parameter,
+                            "actor message parameter".into(),
+                            seen,
+                            phase,
+                        )?;
+                    }
+                    scalar_kind_inner(
+                        types,
+                        message.responds,
+                        "actor message response".into(),
+                        seen,
+                        phase,
+                    )?;
+                }
+            }
+            ScalarKind::Actor
+        }
+        Type::List(inner) => {
+            if *inner != TypeInterner::NEVER {
+                scalar_kind_inner(types, *inner, "list element".into(), seen, phase)?;
+            }
+            ScalarKind::List
+        }
+        Type::Set(inner) => {
+            scalar_kind_inner(types, *inner, "set element".into(), seen, phase)?;
+            ScalarKind::Set
+        }
+        Type::Map(key, value) => {
+            if *key != TypeInterner::NEVER {
+                scalar_kind_inner(types, *key, "map key".into(), seen, phase)?;
+            }
+            if *value != TypeInterner::NEVER {
+                scalar_kind_inner(types, *value, "map value".into(), seen, phase)?;
+            }
+            ScalarKind::Map
+        }
+        Type::TypeConstruction => ScalarKind::Construction,
+        Type::Interface(_) => ScalarKind::Struct,
+        Type::Optional(inner) => {
+            if *inner != TypeInterner::NEVER {
+                scalar_kind_inner(types, *inner, "optional payload".into(), seen, phase)?;
+            }
+            ScalarKind::Sum
+        }
+        Type::Result(ok, error) => {
+            if *ok != TypeInterner::NEVER {
+                scalar_kind_inner(types, *ok, "result success payload".into(), seen, phase)?;
+            }
+            if *error != TypeInterner::NEVER {
+                scalar_kind_inner(types, *error, "result failure payload".into(), seen, phase)?;
+            }
+            ScalarKind::Sum
+        }
+        Type::Capability(jett_types::CapabilityKind::Stdout) => ScalarKind::Stdout,
+        Type::Capability(jett_types::CapabilityKind::Clock) => ScalarKind::Clock,
+        Type::Capability(jett_types::CapabilityKind::Random) => ScalarKind::Random,
+        Type::Capability(jett_types::CapabilityKind::Environment) => ScalarKind::Environment,
+        Type::Capability(jett_types::CapabilityKind::Graphics) => ScalarKind::Graphics,
+        Type::Capability(
+            jett_types::CapabilityKind::Stderr
+            | jett_types::CapabilityKind::Stdin
+            | jett_types::CapabilityKind::Filesystem
+            | jett_types::CapabilityKind::Network
+            | jett_types::CapabilityKind::Process
+            | jett_types::CapabilityKind::Log,
+        ) => ScalarKind::OpaqueCapability,
+        unsupported => {
+            return Err(CodegenError::UnsupportedType {
+                type_name: types.type_name(ty),
+                context: format!("{context} ({unsupported:?})"),
+            });
+        }
+    };
+    Ok(kind)
+}
+
+// An empty collection or an absent sum arm has no value of its inferred
+// `never` element type. Its runtime representation is the same as the checked
+// contextual type, so embedding it does not require a conversion.
+fn never_value_compatible(types: &TypeInterner, expected: TypeId, actual: TypeId) -> bool {
+    if expected == actual {
+        return true;
+    }
+    if actual == TypeInterner::NEVER {
+        return true;
+    }
+    match (types.resolve(expected), types.resolve(actual)) {
+        (Type::List(expected), Type::List(actual))
+        | (Type::Optional(expected), Type::Optional(actual))
+        | (Type::Secret(expected), Type::Secret(actual)) => {
+            never_value_compatible(types, *expected, *actual)
+        }
+        (Type::Map(expected_key, expected_value), Type::Map(actual_key, actual_value))
+        | (Type::Result(expected_key, expected_value), Type::Result(actual_key, actual_value)) => {
+            never_value_compatible(types, *expected_key, *actual_key)
+                && never_value_compatible(types, *expected_value, *actual_value)
+        }
+        _ => false,
+    }
+}
+
+fn interface_conversion_shape(
+    types: &TypeInterner,
+    source: TypeId,
+    target: TypeId,
+    adapters: &[InterfaceFunctionAdapter],
+) -> bool {
+    if jett_mir::move_values::is_secret(types, source)
+        && !jett_mir::move_values::is_secret(types, target)
+        && !matches!(types.resolve(target), Type::Interface(_))
+    {
+        return false;
+    }
+    let source = jett_mir::move_values::representation_type(types, source);
+    let target = jett_mir::move_values::representation_type(types, target);
+    if source == target || source == TypeInterner::NEVER {
+        return true;
+    }
+    match (types.resolve(source), types.resolve(target)) {
+        (Type::Interface(_), _) | (_, Type::Interface(_)) => true,
+        (Type::List(a), Type::List(b)) | (Type::Optional(a), Type::Optional(b)) => {
+            interface_conversion_shape(types, *a, *b, adapters)
+        }
+        (Type::Map(ak, av), Type::Map(bk, bv)) | (Type::Result(ak, av), Type::Result(bk, bv)) => {
+            interface_conversion_shape(types, *ak, *bk, adapters)
+                && interface_conversion_shape(types, *av, *bv, adapters)
+        }
+        (Type::Function { .. }, Type::Function { .. }) => adapters
+            .iter()
+            .any(|entry| entry.source == source && entry.target == target),
+        _ => false,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerifierPhase {
+    /// Typed original-body integrity, with no callable frame or Never carrier.
+    DescriptorMetadata,
+    /// Prepared operations that will actually execute through the native ABI.
+    CallableNative,
+}
+
+struct Verifier<'a> {
+    program: &'a Program,
+    types: &'a TypeInterner,
+    verified: &'a VerifiedProgram,
+    phase: VerifierPhase,
+    // This is an original-body integrity traversal, not callable reachability.
+    metadata_functions: RefCell<HashSet<FunctionId>>,
+    resource: Option<&'a jett_mir::ResourceOwnershipPlan<'a>>,
+}
+
+impl Verifier<'_> {
+    fn value_kind(
+        &self,
+        _function: &Function,
+        ty: TypeId,
+        context: impl Into<String>,
+    ) -> Result<ScalarKind, CodegenError> {
+        if self.phase == VerifierPhase::DescriptorMetadata {
+            if exact_uninhabited_metadata_type(self.types, ty) {
+                return Ok(ScalarKind::Uninhabited);
+            }
+            scalar_kind_inner(
+                self.types,
+                ty,
+                context.into(),
+                &mut HashSet::new(),
+                TypeValidationPhase::OriginalMetadata,
+            )
+        } else {
+            scalar_kind(self.types, ty, context)
+        }
+    }
+
+    fn local_kind(
+        &self,
+        function: &Function,
+        local: &jett_mir::Local,
+        context: impl Into<String>,
+    ) -> Result<ScalarKind, CodegenError> {
+        if let Some(proof) = jett_mir::native_graph_storage_for_local(function, self.types, local) {
+            graph_storage_kind(self.types, &proof, context)
+        } else {
+            self.value_kind(function, local.ty, context)
+        }
+    }
+    fn expression_kind(
+        &self,
+        function: &Function,
+        expression: &Expression,
+        context: impl Into<String>,
+    ) -> Result<ScalarKind, CodegenError> {
+        if let Some(proof) =
+            jett_mir::native_graph_storage_for_expression(function, self.types, expression)
+        {
+            graph_storage_kind(self.types, &proof, context)
+        } else {
+            self.value_kind(function, expression.ty, context)
+        }
+    }
+    fn function(&self, function: &Function) -> Result<(), CodegenError> {
+        if self.phase == VerifierPhase::DescriptorMetadata {
+            super::emit::debug::function_label(function)
+                .map_err(|message| self.contract_error(function, function.span, message))?;
+            symbol_name(&function.identity, self.types)?;
+            if !self.metadata_functions.borrow_mut().insert(function.id) {
+                return Ok(());
+            }
+        }
+        self.reject_entry_predecessors(function)?;
+
+        let name = self.function_name(function);
+        for param in &function.params {
+            if self.resource.is_some_and(|plan| {
+                plan.function(function.id).is_some() && plan.type_requires_custody(param.ty)
+            }) {
+                continue;
+            }
+            let header = function.local(param.local).ok_or_else(|| {
+                self.contract_error(
+                    function,
+                    param.span,
+                    "parameter has no exact current local header",
+                )
+            })?;
+            self.local_kind(
+                function,
+                header,
+                format!("parameter `{}` of `{name}`", param.name),
+            )?;
+        }
+        if !(self.resource.is_some_and(|plan| {
+            plan.function(function.id).is_some() && plan.type_requires_custody(function.return_type)
+        })) {
+            if let Some(proof) = jett_mir::native_graph_storage_for_return(function, self.types) {
+                graph_storage_kind(self.types, &proof, format!("return type of `{name}`"))?;
+            } else {
+                self.value_kind(
+                    function,
+                    function.return_type,
+                    format!("return type of `{name}`"),
+                )?;
+            }
+        }
+        for local in &function.locals {
+            if self.resource.is_some_and(|plan| {
+                plan.function(function.id).is_some() && plan.type_requires_custody(local.ty)
+            }) {
+                continue;
+            }
+            self.local_kind(
+                function,
+                local,
+                format!("local `{}` of `{name}`", local.name),
+            )?;
+            if self.phase == VerifierPhase::DescriptorMetadata {
+                self.value_kind(
+                    function,
+                    local.debug_ty,
+                    format!("debug type of original local `{}` of `{name}`", local.name),
+                )?;
+            }
+        }
+        for block in &function.blocks {
+            for (index, statement) in block.statements.iter().enumerate() {
+                self.statement(function, block.id, index, statement)?;
+            }
+            self.terminator(function, &block.terminator)?;
+        }
+        // Descriptor-only bodies retain their original typed contracts, but
+        // never execute and need neither a native sequence form nor an owning
+        // machine-code frame. Their caller still validates capture evaluation,
+        // initialization, ownership and cleanup normally.
+        if self.phase == VerifierPhase::CallableNative {
+            if let Some(plan) = self.resource.filter(|plan| {
+                plan.function(function.id).is_some()
+                    || jett_mir::native_graph_storage_has_records(function, self.types)
+            }) {
+                jett_mir::ResourceCompanionPlan::analyze(plan, function.id)
+                    .map_err(|message| self.contract_error(function, function.span, message))?;
+            } else {
+                jett_mir::move_values::MoveValuePlan::analyze(self.program, function, self.types)
+                    .map_err(|message| self.contract_error(function, function.span, message))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Call only after the referencing edge's identity/signature/captures pass.
+    /// An uncallable outer body can describe an inner callable body without
+    /// allocating its environment or adding the target to native reachability.
+    fn latent_function(&self, target: FunctionId) -> Result<(), CodegenError> {
+        if self.phase == VerifierPhase::DescriptorMetadata {
+            let (_, target) = function_by_id(self.program, target)?;
+            self.function(target)?;
+        }
+        Ok(())
+    }
+
+    fn reject_entry_predecessors(&self, function: &Function) -> Result<(), CodegenError> {
+        for block in &function.blocks {
+            let targets_entry = match &block.terminator.kind {
+                TerminatorKind::Goto(target) => *target == function.entry,
+                TerminatorKind::Branch {
+                    then_block,
+                    else_block,
+                    ..
+                } => *then_block == function.entry || *else_block == function.entry,
+                TerminatorKind::Switch {
+                    variants,
+                    otherwise,
+                    ..
+                } => {
+                    variants
+                        .iter()
+                        .any(|(_, target, _)| *target == function.entry)
+                        || otherwise.is_some_and(|target| target == function.entry)
+                }
+                TerminatorKind::ForEach { body, exit, .. } => {
+                    *body == function.entry || *exit == function.entry
+                }
+                TerminatorKind::ReflectedTypeDispatch {
+                    arms, otherwise, ..
+                } => {
+                    arms.iter().any(|arm| arm.target == function.entry)
+                        || *otherwise == function.entry
+                }
+                TerminatorKind::Return(_)
+                | TerminatorKind::Respond(_)
+                | TerminatorKind::Unreachable => false,
+            };
+            if targets_entry {
+                return Err(self.contract_error(
+                    function,
+                    block.terminator.span,
+                    format!(
+                        "control-flow edge from block {} targets ABI entry block {}",
+                        block.id.index(),
+                        function.entry.index()
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn graph_constructor_statement(
+        &self,
+        function: &Function,
+        node: &jett_mir::ResourceConstructorNode,
+        span: Span,
+    ) -> Result<bool, CodegenError> {
+        let Some(proof) =
+            jett_mir::native_graph_storage_for_constructor(function, self.types, node)
+        else {
+            return Ok(false);
+        };
+        let original = function
+            .resource_constructor(node.constructor())
+            .map_err(|message| self.contract_error(function, span, message))?;
+        if proof.ty() != original.original().ty {
+            return Err(self.contract_error(
+                function,
+                span,
+                "Graph constructor changed its exact output type",
+            ));
+        }
+        graph_storage_kind(self.types, &proof, "checked Graph constructor output")?;
+        match node {
+            jett_mir::ResourceConstructorNode::Stage { value, .. } => {
+                self.expression(function, value)?
+            }
+            jett_mir::ResourceConstructorNode::Commit { output, .. } => {
+                let (_, header) = original.commit().ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        span,
+                        "Graph constructor lost its exact Commit output",
+                    )
+                })?;
+                let current = function
+                    .local(*output)
+                    .filter(|current| *current == header)
+                    .ok_or_else(|| {
+                        self.contract_error(
+                            function,
+                            span,
+                            "Graph constructor changed its exact Commit output",
+                        )
+                    })?;
+                if header.id != *output {
+                    return Err(self.contract_error(
+                        function,
+                        span,
+                        "Graph constructor changed its exact Commit output",
+                    ));
+                }
+                self.local_kind(function, current, "checked Graph constructor Commit output")?;
+            }
+            jett_mir::ResourceConstructorNode::Begin { .. }
+            | jett_mir::ResourceConstructorNode::End { .. } => {}
+        }
+        Ok(true)
+    }
+
+    fn statement(
+        &self,
+        function: &Function,
+        block: jett_mir::BlockId,
+        index: usize,
+        statement: &Statement,
+    ) -> Result<(), CodegenError> {
+        super::emit::ordinary_borrowed_sums::validate_statement(
+            function, self.types, block, index, statement,
+        )
+        .map_err(|message| self.contract_error(function, statement.span, message))?;
+        match &statement.kind {
+            StatementKind::ResourceConstructor(node) => {
+                if self.graph_constructor_statement(function, node, statement.span)? {
+                    return Ok(());
+                }
+                use jett_mir::ResourceConstructorNode as Node;
+                let original = function
+                    .resource_constructor(node.constructor())
+                    .map_err(|message| self.contract_error(function, statement.span, message))?;
+                let family = self
+                    .resource
+                    .and_then(|p| p.function(function.id))
+                    .ok_or_else(|| {
+                        self.contract_error(
+                            function,
+                            statement.span,
+                            "Resource constructor has no fresh carrier family",
+                        )
+                    })?;
+                let plan = family.carriers().ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "Resource constructor has no fresh carrier family",
+                    )
+                })?;
+                let position = jett_mir::ResourcePosition::Statement(index);
+                let planned = match node {
+                    Node::End { outcome, .. } => {
+                        let begin = plan.operations().iter().find(|operation| {
+                            operation.site() == original.begin()
+                                && matches!(
+                                    operation.role(),
+                                    jett_mir::ResourceCarrierOperationRole::BeginConstructor { .. }
+                                )
+                        });
+                        begin.is_some_and(|begin| {
+                            family.operations().iter().filter(|operation| {
+                                operation.site().block() == block
+                                    && operation.site().position() == position
+                                    && operation.frame() == begin.frame()
+                                    && matches!(operation.role(), jett_mir::ResourceOperationRole::Complete { outcome: found } if found == outcome)
+                                    && original.exits().contains(&(operation.site(), *outcome))
+                            }).count() == 1
+                        })
+                    }
+                    _ => plan.operations().iter().any(|operation| {
+                        operation.site().block() == block && operation.site().position() == position
+                    }),
+                };
+                if !planned {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "Resource constructor has no exact planned occurrence",
+                    ));
+                }
+                match node {
+                    Node::Stage {
+                        source_index,
+                        field,
+                        value,
+                        ..
+                    } => {
+                        if original.fields().get(*source_index).is_none_or(|f| {
+                            f.field() != *field
+                                || f.stage().block() != block
+                                || f.stage().position() != position
+                        }) {
+                            return Err(self.contract_error(
+                                function,
+                                statement.span,
+                                "Resource constructor changed its exact field site",
+                            ));
+                        }
+                        self.expression(function, value)?;
+                    }
+                    Node::Commit { output, .. }
+                        if original.commit().is_none_or(|(site, header)| {
+                            site.block() != block
+                                || site.position() != position
+                                || header.id != *output
+                        }) =>
+                    {
+                        return Err(self.contract_error(
+                            function,
+                            statement.span,
+                            "Resource constructor changed its exact Commit site",
+                        ));
+                    }
+                    _ => {}
+                }
+                Ok(())
+            }
+            StatementKind::ResourceLexicalExit(_) => {
+                let position = jett_mir::ResourcePosition::Statement(index);
+                let ownership = self.resource.ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "lexical Resource node has no ownership proof",
+                    )
+                })?;
+                let plan = ownership
+                    .function(function.id)
+                    .and_then(|function| function.lexical_exit(block, position))
+                    .ok_or_else(|| {
+                        self.contract_error(
+                            function,
+                            statement.span,
+                            "lexical Resource node lost its exact planned site",
+                        )
+                    })?;
+                let original = function
+                    .resource_lexical_exit(block, position)
+                    .map_err(|message| self.contract_error(function, statement.span, message))?
+                    .ok_or_else(|| {
+                        self.contract_error(
+                            function,
+                            statement.span,
+                            "lexical Resource node lost its private constructor",
+                        )
+                    })?;
+                if original.kind() != plan.kind()
+                    || plan.kind() == jett_mir::ResourceLexicalExitKind::Return
+                {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "lexical Resource node changed its exact exit kind",
+                    ));
+                }
+                Ok(())
+            }
+            StatementKind::ResourceCall(node) => {
+                use jett_mir::ResourceCallNode as Node;
+                let ownership = self.resource.ok_or_else(|| {
+                    self.unsupported(
+                        function,
+                        statement.span,
+                        "staged Resource node has no constructor-owned ownership proof",
+                    )
+                })?;
+                let region_id = match node {
+                    Node::Begin { region }
+                    | Node::Stage { region, .. }
+                    | Node::Invoke { region, .. }
+                    | Node::End { region, .. } => *region,
+                };
+                let region = function.resource_call_region(region_id).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "staged Resource node lost its private region",
+                    )
+                })?;
+                let plan = ownership.function(function.id).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "staged region is outside the fresh execution family",
+                    )
+                })?;
+                if !plan.operations().iter().any(|operation| matches!(operation.role(),
+                    jett_mir::ResourceOperationRole::BeginSourceFunction { region, .. } if *region == region_id)) {
+                    return Err(self.contract_error(function, statement.span,
+                        "staged region has no complete fresh Begin projection"));
+                }
+                match node {
+                    Node::Stage {
+                        value, ordinary, ..
+                    } => {
+                        self.expression(function, value)?;
+                        if let Some(local) = ordinary {
+                            let endpoint = function.local(*local).ok_or_else(|| {
+                                self.contract_error(
+                                    function,
+                                    statement.span,
+                                    "staged ordinary endpoint is absent",
+                                )
+                            })?;
+                            self.require_same_type(
+                                function,
+                                statement.span,
+                                endpoint.ty,
+                                value.ty,
+                                "staged ordinary endpoint changes its evaluated type",
+                            )?;
+                        }
+                    }
+                    Node::Invoke { output, .. } => {
+                        let endpoint = function.local(*output).ok_or_else(|| {
+                            self.contract_error(
+                                function,
+                                statement.span,
+                                "staged invocation output is absent",
+                            )
+                        })?;
+                        self.require_same_type(
+                            function,
+                            statement.span,
+                            endpoint.ty,
+                            region.original().ty,
+                            "staged invocation changes its original result type",
+                        )?;
+                    }
+                    Node::Begin { .. } | Node::End { .. } => {}
+                }
+                Ok(())
+            }
+            StatementKind::IterationBorrow { source, token, .. } => {
+                if !matches!(
+                    self.types.resolve(self.sequence_source_type(
+                        function,
+                        source,
+                        statement.span
+                    )?),
+                    Type::List(_) | Type::Set(_) | Type::Map(..) | Type::String
+                ) || function.local(*token).unwrap().ty != TypeInterner::INT64
+                {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "invalid iteration loan",
+                    ));
+                }
+                Ok(())
+            }
+            StatementKind::ReflectedContainerReady { source, kind } => {
+                let source = function.local(*source).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "missing reflected container place",
+                    )
+                })?;
+                if !kind.matches_type(self.types, source.ty) {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "reflected container readiness kind disagrees with checked wrapper",
+                    ));
+                }
+                // Diagnostic text is canonical to the typed enum, never a source operand.
+                Ok(())
+            }
+            StatementKind::ReflectedValueReady { source, .. } => {
+                let source = function.local(*source).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "missing reflected callback result place",
+                    )
+                })?;
+                self.value_kind(function, source.ty, "reflected callback result")?;
+                Ok(())
+            }
+            StatementKind::SequenceLength { source, target }
+            | StatementKind::SequenceGet { source, target, .. } => {
+                if matches!(
+                    statement.kind,
+                    StatementKind::SequenceGet { consume: true, .. }
+                ) && matches!(source, SequenceSource::Projected { .. })
+                {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "cannot consume a projected sequence field",
+                    ));
+                }
+                let sequence_ty = self.sequence_source_type(function, source, statement.span)?;
+                let element = match self.types.resolve(sequence_ty) {
+                    Type::List(element) | Type::Set(element) => {
+                        if matches!(statement.kind, StatementKind::SequenceGet { part, .. } if part != jett_mir::SequencePart::Element)
+                        {
+                            return Err(self.contract_error(
+                                function,
+                                statement.span,
+                                "invalid sequence projection",
+                            ));
+                        }
+                        *element
+                    }
+                    Type::Map(key, value) => match statement.kind {
+                        StatementKind::SequenceGet {
+                            part: jett_mir::SequencePart::Key,
+                            ..
+                        } => *key,
+                        StatementKind::SequenceGet {
+                            part: jett_mir::SequencePart::Value,
+                            ..
+                        } => *value,
+                        StatementKind::SequenceLength { .. } => *key,
+                        _ => {
+                            return Err(self.contract_error(
+                                function,
+                                statement.span,
+                                "invalid map projection",
+                            ));
+                        }
+                    },
+                    Type::String => {
+                        if matches!(statement.kind, StatementKind::SequenceGet { part, .. } if part != jett_mir::SequencePart::Element)
+                        {
+                            return Err(self.contract_error(
+                                function,
+                                statement.span,
+                                "invalid string iteration projection",
+                            ));
+                        }
+                        TypeInterner::STRING
+                    }
+                    _ => {
+                        return Err(self.contract_error(
+                            function,
+                            statement.span,
+                            "sequence requires list or set",
+                        ));
+                    }
+                };
+                let expected = if let StatementKind::SequenceGet { index, .. } = statement.kind {
+                    self.require_same_type(
+                        function,
+                        statement.span,
+                        TypeInterner::INT64,
+                        function.local(index).unwrap().ty,
+                        "sequence index must be int64",
+                    )?;
+                    element
+                } else {
+                    TypeInterner::INT64
+                };
+                self.require_same_type(
+                    function,
+                    statement.span,
+                    expected,
+                    function.local(*target).unwrap().ty,
+                    &format!(
+                        "sequence target type mismatch: expected {}, got {}",
+                        self.types.type_name(expected),
+                        self.types.type_name(function.local(*target).unwrap().ty)
+                    ),
+                )
+            }
+
+            StatementKind::SumTag { source, target }
+            | StatementKind::SumTake { source, target, .. } => {
+                let source = function.local(*source).ok_or_else(|| {
+                    self.contract_error(function, statement.span, "missing sum place")
+                })?;
+                let target = function.local(*target).ok_or_else(|| {
+                    self.contract_error(function, statement.span, "missing payload place")
+                })?;
+                let payload = match (self.types.resolve(source.ty), &statement.kind) {
+                    (Type::Result(..) | Type::Optional(_), StatementKind::SumTag { .. }) => {
+                        TypeInterner::BOOL
+                    }
+                    (Type::Result(ok, error), StatementKind::SumTake { success, .. }) => {
+                        if *success { *ok } else { *error }
+                    }
+                    (Type::Optional(inner), StatementKind::SumTake { success: true, .. }) => *inner,
+                    _ => {
+                        return Err(self.contract_error(
+                            function,
+                            statement.span,
+                            "invalid sum projection",
+                        ));
+                    }
+                };
+                if matches!(self.types.resolve(target.ty), Type::Secret(inner) if *inner == payload)
+                {
+                    return Ok(());
+                }
+                self.require_same_type(
+                    function,
+                    statement.span,
+                    payload,
+                    target.ty,
+                    "sum payload type mismatch",
+                )
+            }
+
+            StatementKind::Let { local, value } | StatementKind::BeginCallView { local, value } => {
+                let local = function.local(*local).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "let target is absent from the local table",
+                    )
+                })?;
+                self.expression(function, value)?;
+                self.require_same_type(
+                    function,
+                    statement.span,
+                    local.ty,
+                    value.ty,
+                    "let initializer type does not match its local",
+                )
+            }
+            StatementKind::EndCallView { local } => {
+                function.local(*local).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "call view end target is absent from the local table",
+                    )
+                })?;
+                Ok(())
+            }
+            StatementKind::OpenCallOwnerGeneration { root, .. }
+            | StatementKind::ReplaceCallOwnerGeneration { root, .. } => {
+                let owner = function.local(*root).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "call owner generation root is absent from the local table",
+                    )
+                })?;
+                if owner.ty.index() as usize >= self.types.len()
+                    || !matches!(self.types.resolve(owner.ty), Type::TypeConstruction)
+                    || !owner.mutable
+                    || function.is_view_local(*root)
+                    || function.parameter_for_local(*root).is_some()
+                {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "call owner generation root is not its exact mutable builder owner",
+                    ));
+                }
+                self.value_kind(function, owner.ty, "call owner generation root")?;
+                if let StatementKind::ReplaceCallOwnerGeneration { rhs_owner, .. } = &statement.kind
+                {
+                    let rhs = function.local(*rhs_owner).ok_or_else(|| {
+                        self.contract_error(
+                            function,
+                            statement.span,
+                            "call owner generation RHS is absent from the local table",
+                        )
+                    })?;
+                    if rhs_owner == root
+                        || rhs.ty != owner.ty
+                        || function.is_view_local(*rhs_owner)
+                        || function.parameter_for_local(*rhs_owner).is_some()
+                    {
+                        return Err(self.contract_error(
+                            function,
+                            statement.span,
+                            "call owner generation RHS is not its independent owning builder",
+                        ));
+                    }
+                    self.value_kind(function, rhs.ty, "call owner generation RHS")?;
+                }
+                // Exact sites, private Source joins and Open/Replace/Close CFG
+                // authority were checked by the original all-body MIR gate.
+                Ok(())
+            }
+            StatementKind::CloseCallOwnerGeneration { .. } => Ok(()),
+            StatementKind::PrepareFieldUpdate { place, .. } => place
+                .validate(place.target(), &function.locals, self.types)
+                .map_err(|message| self.contract_error(function, statement.span, message)),
+            StatementKind::UpdateField {
+                target,
+                value,
+                place,
+            } => {
+                place
+                    .validate(target, &function.locals, self.types)
+                    .map_err(|message| self.contract_error(function, statement.span, message))?;
+                if function.is_view_local(place.root()) {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "field update targets a view",
+                    ));
+                }
+                self.expression(function, target)?;
+                self.expression(function, value)?;
+                self.require_same_type(
+                    function,
+                    statement.span,
+                    target.ty,
+                    value.ty,
+                    "field update value type changed",
+                )
+            }
+            StatementKind::CheckRefinement { local, call, .. } => {
+                let local = function.local(*local).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "refinement error target is absent from the local table",
+                    )
+                })?;
+                self.expression(function, call)?;
+                self.require_same_type(
+                    function,
+                    statement.span,
+                    TypeInterner::STRING,
+                    local.ty,
+                    "refinement error target must be string",
+                )?;
+                self.require_same_type(
+                    function,
+                    statement.span,
+                    TypeInterner::BOOL,
+                    call.ty,
+                    "refinement predicate must return bool",
+                )
+            }
+            StatementKind::Assign { target, value } => {
+                let ExpressionKind::Local(local_id) = target.kind else {
+                    return Err(self.unsupported(
+                        function,
+                        statement.span,
+                        "assignment target other than a local",
+                    ));
+                };
+                let local = function.local(local_id).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "assignment target is absent from the local table",
+                    )
+                })?;
+                if !local.mutable {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "assignment targets an immutable local",
+                    ));
+                }
+                self.expression(function, target)?;
+                self.expression(function, value)?;
+                self.require_same_type(
+                    function,
+                    statement.span,
+                    local.ty,
+                    value.ty,
+                    "assigned value type does not match its local",
+                )?;
+                // Storage can be a bare machine while a visible guard makes
+                // this assignment target exact. Preserve that checked state.
+                if matches!(self.types.resolve(target.ty), Type::MachineState { .. }) {
+                    self.require_same_type(
+                        function,
+                        statement.span,
+                        target.ty,
+                        value.ty,
+                        "assigned value type does not match its exact machine target",
+                    )?;
+                }
+                Ok(())
+            }
+            StatementKind::Evaluate(value) => self.expression(function, value),
+            StatementKind::HandleDefault(_) => {
+                Err(self.unsupported(function, statement.span, "handle default"))
+            }
+            StatementKind::Assert { condition, message } => {
+                self.expression(function, condition)?;
+                if condition.ty != TypeInterner::BOOL {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "assert condition is not bool",
+                    ));
+                }
+                if let Some(message) = message {
+                    self.expression(function, message)?;
+                    self.require_same_type(
+                        function,
+                        statement.span,
+                        TypeInterner::STRING,
+                        message.ty,
+                        "assert message must be string",
+                    )?;
+                }
+                Ok(())
+            }
+            StatementKind::Trace(local) => {
+                let Some(local) = function.local(*local) else {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "trace target is absent from the local table",
+                    ));
+                };
+                if super::emit::debug::debug_layout(self.types, local.ty).is_some() {
+                    Ok(())
+                } else {
+                    Err(self.unsupported(function, statement.span, "aggregate trace value"))
+                }
+            }
+            StatementKind::Breakpoint {
+                condition,
+                bindings,
+            } => {
+                if let Some(condition) = condition {
+                    self.expression(function, condition)?;
+                    self.require_same_type(
+                        function,
+                        statement.span,
+                        TypeInterner::BOOL,
+                        condition.ty,
+                        "breakpoint condition must be bool",
+                    )?;
+                }
+                for binding in bindings {
+                    let local = function.local(*binding).ok_or_else(|| {
+                        self.contract_error(
+                            function,
+                            statement.span,
+                            "breakpoint binding is absent from local table",
+                        )
+                    })?;
+                    if super::emit::debug::debug_layout(self.types, local.ty).is_none() {
+                        return Err(self.unsupported(
+                            function,
+                            statement.span,
+                            "aggregate breakpoint binding",
+                        ));
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn function_adapter_signature(
+        &self,
+        function: &Function,
+        span: Span,
+        source: TypeId,
+        target: TypeId,
+        adapter: FunctionId,
+    ) -> Result<(), CodegenError> {
+        if !self.types.type_ids().any(|ty| ty == source)
+            || !self.types.type_ids().any(|ty| ty == target)
+        {
+            return Err(self.contract_error(function, span, "function adapter type is absent"));
+        }
+        let callee = self
+            .program
+            .functions
+            .get(adapter.index() as usize)
+            .filter(|callee| callee.id == adapter)
+            .ok_or_else(|| {
+                self.contract_error(function, span, "function adapter target is absent")
+            })?;
+        let Type::Function {
+            params,
+            view_params,
+            return_type,
+        } = self.types.resolve(target)
+        else {
+            return Err(self.contract_error(function, span, "function adapter type mismatch"));
+        };
+        if !matches!(self.types.resolve(source), Type::Function { .. })
+            || callee.capture_count != 1
+            || callee.params.len() != params.len() + 1
+            || callee.params[0].ty != source
+            || callee.params[0].mode != jett_mir::ParamMode::Owned
+            || callee.return_type != *return_type
+            || params.len() != view_params.len()
+            || callee.params[1..]
+                .iter()
+                .zip(params.iter().zip(view_params))
+                .any(|(actual, (ty, view))| {
+                    actual.ty != *ty || (actual.mode == jett_mir::ParamMode::View) != *view
+                })
+        {
+            return Err(self.contract_error(function, span, "function adapter signature mismatch"));
+        }
+        Ok(())
+    }
+
+    fn sequence_source_type(
+        &self,
+        function: &Function,
+        source: &SequenceSource,
+        span: Span,
+    ) -> Result<TypeId, CodegenError> {
+        match source {
+            SequenceSource::Local(local) => function
+                .local(*local)
+                .map(|local| local.ty)
+                .ok_or_else(|| self.contract_error(function, span, "missing sequence source")),
+            SequenceSource::Projected { owner, path, ty } => {
+                if path.is_empty() {
+                    return Err(self.contract_error(
+                        function,
+                        span,
+                        "projected sequence has no field path",
+                    ));
+                }
+                let mut current =
+                    function
+                        .local(*owner)
+                        .map(|local| local.ty)
+                        .ok_or_else(|| {
+                            self.contract_error(function, span, "missing projected sequence owner")
+                        })?;
+                for step in path {
+                    if current != step.owner_type {
+                        return Err(self.contract_error(
+                            function,
+                            span,
+                            "projected sequence owner type mismatch",
+                        ));
+                    }
+                    let Type::Struct(struct_id) = self.types.resolve(current) else {
+                        return Err(self.contract_error(
+                            function,
+                            span,
+                            "projected sequence owner is not a struct",
+                        ));
+                    };
+                    current = self
+                        .types
+                        .resolve_struct(*struct_id)
+                        .fields
+                        .get(step.field.index() as usize)
+                        .map(|(_, field_ty)| *field_ty)
+                        .ok_or_else(|| {
+                            self.contract_error(
+                                function,
+                                span,
+                                "projected sequence field is absent",
+                            )
+                        })?;
+                }
+                if current != *ty {
+                    return Err(self.contract_error(
+                        function,
+                        span,
+                        "projected sequence field type mismatch",
+                    ));
+                }
+                Ok(*ty)
+            }
+        }
+    }
+
+    fn terminator(&self, function: &Function, terminator: &Terminator) -> Result<(), CodegenError> {
+        match &terminator.kind {
+            TerminatorKind::Return(value) => match value {
+                Some(value) => {
+                    self.expression(function, value)?;
+                    self.require_same_type(
+                        function,
+                        terminator.span,
+                        function.return_type,
+                        value.ty,
+                        "returned value does not match the function return type",
+                    )
+                }
+                None => {
+                    if scalar_kind(self.types, function.return_type, "return without a value")?
+                        == ScalarKind::Nothing
+                    {
+                        Ok(())
+                    } else {
+                        Err(self.contract_error(
+                            function,
+                            terminator.span,
+                            "non-nothing function returns without a value",
+                        ))
+                    }
+                }
+            },
+            TerminatorKind::Goto(_) | TerminatorKind::Unreachable => Ok(()),
+            TerminatorKind::Branch { condition, .. } => {
+                self.expression(function, condition)?;
+                if scalar_kind(self.types, condition.ty, "branch condition")? == ScalarKind::Bool {
+                    Ok(())
+                } else {
+                    Err(self.contract_error(
+                        function,
+                        terminator.span,
+                        "branch condition is not bool",
+                    ))
+                }
+            }
+            TerminatorKind::Respond(value) => {
+                if function.identity.declaration.kind != jett_hir::DeclarationKind::ActorHandler {
+                    return Err(self.contract_error(
+                        function,
+                        terminator.span,
+                        "response outside actor handler",
+                    ));
+                }
+                self.expression(function, value)?;
+                self.require_same_type(
+                    function,
+                    terminator.span,
+                    function.return_type,
+                    value.ty,
+                    "actor response type does not match handler return type",
+                )
+            }
+            TerminatorKind::Switch {
+                scrutinee,
+                variants,
+                otherwise,
+            } => {
+                self.expression(function, scrutinee)?;
+                let Type::Enum(enum_id) = self.types.resolve(scrutinee.ty) else {
+                    return Err(self.contract_error(
+                        function,
+                        terminator.span,
+                        "variant switch scrutinee is not an enum",
+                    ));
+                };
+                let definition = self.types.resolve_enum(*enum_id);
+                let mut seen = std::collections::BTreeSet::new();
+                for (variant, _, bindings) in variants {
+                    let index = usize::try_from(variant.index()).map_err(|_| {
+                        self.contract_error(function, terminator.span, "variant index overflow")
+                    })?;
+                    let Some(variant_definition) = definition.variants.get(index) else {
+                        return Err(self.contract_error(
+                            function,
+                            terminator.span,
+                            "variant switch has an invalid arm",
+                        ));
+                    };
+                    if !seen.insert(index) {
+                        return Err(self.contract_error(
+                            function,
+                            terminator.span,
+                            "variant switch has a duplicate arm",
+                        ));
+                    }
+                    if bindings.len() != variant_definition.fields.len() && !bindings.is_empty() {
+                        return Err(self.contract_error(
+                            function,
+                            terminator.span,
+                            "variant binding count mismatch",
+                        ));
+                    }
+                    let mut unique_bindings = std::collections::BTreeSet::new();
+                    for (binding, (_, expected)) in bindings.iter().zip(&variant_definition.fields)
+                    {
+                        let Some(local) = function.local(*binding) else {
+                            return Err(self.contract_error(
+                                function,
+                                terminator.span,
+                                "variant binding is not a local",
+                            ));
+                        };
+                        if local.ty != *expected || !unique_bindings.insert(binding.index()) {
+                            return Err(self.contract_error(
+                                function,
+                                terminator.span,
+                                "variant binding has an invalid type or duplicate local",
+                            ));
+                        }
+                    }
+                }
+                if otherwise.is_none() && seen.len() != definition.variants.len() {
+                    return Err(self.contract_error(
+                        function,
+                        terminator.span,
+                        "variant switch is not exhaustive",
+                    ));
+                }
+                Ok(())
+            }
+            TerminatorKind::ForEach {
+                key,
+                value,
+                iterable,
+                ..
+            } if self.phase == VerifierPhase::DescriptorMetadata => {
+                // Original typed loops are valid in an uncallable body. Check
+                // their binding schema before native preparation may erase it;
+                // do not demand a prepared native loop or execute the iterable.
+                self.expression(function, iterable)?;
+                let (key_type, value_type) = match self.types.resolve(iterable.ty) {
+                    Type::List(element) | Type::Set(element) if value.is_none() => (*element, None),
+                    Type::Map(key, value_type) if value.is_some() => (*key, Some(*value_type)),
+                    Type::String if value.is_none() => (TypeInterner::STRING, None),
+                    _ => {
+                        return Err(self.contract_error(
+                            function,
+                            terminator.span,
+                            "original descriptor loop has an invalid iterable or binding shape",
+                        ));
+                    }
+                };
+                self.require_same_type(
+                    function,
+                    terminator.span,
+                    key_type,
+                    function.local(*key).unwrap().ty,
+                    "original descriptor loop key type does not match its iterable",
+                )?;
+                if let (Some(value), Some(value_type)) = (value, value_type) {
+                    self.require_same_type(
+                        function,
+                        terminator.span,
+                        value_type,
+                        function.local(*value).unwrap().ty,
+                        "original descriptor loop value type does not match its iterable",
+                    )?;
+                }
+                Ok(())
+            }
+            TerminatorKind::ForEach { .. } => {
+                Err(self.unsupported(function, terminator.span, "for-each loop"))
+            }
+            TerminatorKind::ReflectedTypeDispatch {
+                type_info, arms, ..
+            } => {
+                let valid_type_info = matches!(self.types.resolve(type_info.ty), Type::Struct(id)
+                    if self.types.resolve_struct(*id).name == "TypeInfo");
+                let identities = arms
+                    .iter()
+                    .map(|arm| arm.reflection_identity.as_str())
+                    .collect::<std::collections::HashSet<_>>();
+                if valid_type_info
+                    && !arms.is_empty()
+                    && arms.iter().all(|arm| !arm.reflection_identity.is_empty())
+                    && identities.len() == arms.len()
+                {
+                    Ok(())
+                } else {
+                    Err(self.contract_error(
+                        function,
+                        terminator.span,
+                        "invalid checked reflected type dispatch",
+                    ))
+                }
+            }
+        }
+    }
+
+    fn expression(&self, function: &Function, expression: &Expression) -> Result<(), CodegenError> {
+        let graph_storage =
+            jett_mir::native_graph_storage_for_expression(function, self.types, expression);
+        if graph_storage.is_none() && self.carrier_expression(function, expression)?.is_some() {
+            return Ok(());
+        }
+        let named_value = self
+            .resource
+            .and_then(|ownership| ownership.function(function.id))
+            .and_then(|plan| plan.named_callable_value(expression));
+        let descriptor_value = self
+            .resource
+            .and_then(|ownership| ownership.function(function.id))
+            .and_then(|plan| plan.descriptor_value(expression));
+        if let Some(hook) = descriptor_value {
+            if hook.function_type() != expression.ty
+                || !self.resource.is_some_and(|ownership| {
+                    ownership.program().resource_manifest.contains_hook(hook)
+                })
+            {
+                return Err(self.contract_error(
+                    function,
+                    expression.span,
+                    "opaque descriptor occurrence changes its exact hook proof",
+                ));
+            }
+            if let ExpressionKind::Call {
+                function: target, ..
+            } = &expression.kind
+            {
+                if self
+                    .resource
+                    .and_then(|ownership| ownership.function(*target))
+                    .and_then(|callee| callee.descriptor_return())
+                    != Some(hook)
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "returned descriptor changes its exact Source callee Return proof",
+                    ));
+                }
+            }
+        }
+        if let Some(ownership) = self.resource {
+            // Source signatures do not describe the selected family's hidden Scope.
+            // Descriptor and adapter emission requires its distinct authenticated ABI.
+            let family_descriptor = match &expression.kind {
+                ExpressionKind::FunctionRef(target)
+                | ExpressionKind::ClosureRef {
+                    function: target, ..
+                }
+                | ExpressionKind::FunctionAdapter {
+                    function: target, ..
+                } => ownership.function(*target).is_some(),
+                ExpressionKind::InterfaceCoerce { adapters, .. } => adapters
+                    .iter()
+                    .any(|adapter| ownership.function(adapter.function).is_some()),
+                _ => false,
+            };
+            let named_producer = ownership
+                .function(function.id)
+                .and_then(|plan| plan.named_callable_producer(expression));
+            let proved_named_descriptor = matches!(&expression.kind,
+                ExpressionKind::FunctionRef(target) if named_producer.is_some_and(|proof|
+                    proof.function() == *target && proof.signature_type() == expression.ty));
+            if family_descriptor && !proved_named_descriptor {
+                return Err(self.unsupported(
+                    function,
+                    expression.span,
+                    "pending Resource family descriptor hidden Scope ABI",
+                ));
+            }
+            if let Some(plan) = ownership.function(function.id) {
+                for operation in plan.operations_for_expression(expression) {
+                    if let jett_mir::ResourceOperationRole::InvokeNativeSuite { invocation } =
+                        operation.role()
+                    {
+                        let proof = invocation.proof();
+                        if proof.target() != invocation.function()
+                            || !proof.matches(function.id, expression, proof.expression_ordinal())
+                        {
+                            return Err(self.contract_error(
+                                function,
+                                expression.span,
+                                "Resource native suite edge changed its exact factory receipt",
+                            ));
+                        }
+                    }
+                }
+            }
+            if let ExpressionKind::Call {
+                function: target, ..
+            } = &expression.kind
+            {
+                let activation = ownership.function(function.id).is_some_and(|plan| {
+                    plan.operations_for_expression(expression).any(|operation| {
+                        match operation.role() {
+                            jett_mir::ResourceOperationRole::InvokeSourceFunction {
+                                function: callee,
+                                ..
+                            } => callee == target,
+                            jett_mir::ResourceOperationRole::InvokeNativeSuite { invocation } => {
+                                invocation.function() == *target
+                            }
+                            _ => false,
+                        }
+                    })
+                });
+                if ownership.function(*target).is_some() && !activation {
+                    return Err(self.unsupported(
+                        function,
+                        expression.span,
+                        "Resource family direct edge has no exact scope activation",
+                    ));
+                }
+            }
+        }
+        if let Some(plan) = self.resource.and_then(|plan| plan.function(function.id)) {
+            let invocation = plan.operations_for_expression(expression).any(|operation| {
+                matches!(
+                    operation.role(),
+                    jett_mir::ResourceOperationRole::InvokeHook { .. }
+                        | jett_mir::ResourceOperationRole::InvokeSourceFunction { .. }
+                        | jett_mir::ResourceOperationRole::InvokeNativeSuite { .. }
+                )
+            });
+            if invocation
+                || (named_value.is_none()
+                    && graph_storage.is_none()
+                    && self
+                        .resource
+                        .is_some_and(|proof| proof.type_requires_custody(expression.ty)))
+            {
+                match &expression.kind {
+                    ExpressionKind::Local(local) => {
+                        let local = function.local(*local).ok_or_else(|| {
+                            self.contract_error(
+                                function,
+                                expression.span,
+                                "custody local is outside its exact current header",
+                            )
+                        })?;
+                        return self.require_same_type(
+                            function,
+                            expression.span,
+                            local.ty,
+                            expression.ty,
+                            "custody local type changed",
+                        );
+                    }
+                    ExpressionKind::View(inner)
+                    | ExpressionKind::OptionalSome(inner)
+                    | ExpressionKind::ResultOk(inner)
+                    | ExpressionKind::ResultFail(inner) => return self.expression(function, inner),
+                    ExpressionKind::Clone(inner) if descriptor_value.is_some() => {
+                        if plan.descriptor_value(inner) != descriptor_value {
+                            return Err(self.contract_error(
+                                function,
+                                expression.span,
+                                "opaque descriptor alias changes its exact producer",
+                            ));
+                        }
+                        return self.expression(function, inner);
+                    }
+                    ExpressionKind::ResourceHookValue { hook } => {
+                        if descriptor_value != Some(hook) {
+                            return Err(self.contract_error(
+                                function,
+                                expression.span,
+                                "opaque hook value has no exact current producer proof",
+                            ));
+                        }
+                        return Ok(());
+                    }
+                    ExpressionKind::OptionalNone => {
+                        return Ok(());
+                    }
+                    ExpressionKind::Call { args, .. }
+                    | ExpressionKind::ResourceInvoke { args, .. } => {
+                        if !invocation {
+                            return Err(self.contract_error(
+                                function,
+                                expression.span,
+                                "Resource native call lost its exact fresh operation",
+                            ));
+                        }
+                        for actual in args {
+                            self.expression(function, actual)?;
+                        }
+                        if !self
+                            .resource
+                            .is_some_and(|proof| proof.type_requires_custody(expression.ty))
+                        {
+                            self.value_kind(
+                                function,
+                                expression.ty,
+                                "ordinary custody call result",
+                            )?;
+                        }
+                        return Ok(());
+                    }
+                    ExpressionKind::IndirectCall { callee, args, .. } => {
+                        if !invocation {
+                            return Err(self.contract_error(
+                                function,
+                                expression.span,
+                                "Resource indirect hook lost its exact fresh operation",
+                            ));
+                        }
+                        for operation in plan.operations_for_expression(expression) {
+                            if let jett_mir::ResourceOperationRole::InvokeHook {
+                                hook,
+                                source,
+                                ..
+                            } = operation.role()
+                            {
+                                if operation.indirect_hook_target() != Some(hook)
+                                    || plan.descriptor_value(callee) != Some(hook)
+                                    || callee.ty != hook.function_type()
+                                    || !matches!(source.target, jett_hir::CallTarget::Indirect { signature_type }
+                                        if signature_type == callee.ty)
+                                    || source.bridge != jett_hir::CallBridge::Direct
+                                    || !source.generated_operands.is_empty()
+                                {
+                                    return Err(self.contract_error(function, expression.span,
+                                        "Resource indirect hook changes its sealed descriptor target or Source tuple"));
+                                }
+                            }
+                            if let jett_mir::ResourceOperationRole::InvokeSourceFunction {
+                                function: target,
+                                source,
+                                ..
+                            } = operation.role()
+                            {
+                                let proof = operation.named_indirect_target().ok_or_else(|| self.contract_error(
+                                    function, expression.span, "Resource indirect Source call lost its exact named target proof"))?;
+                                if proof.function() != *target
+                                    || proof.signature_type() != callee.ty
+                                    || !matches!(source.target, jett_hir::CallTarget::Indirect { signature_type } if signature_type == callee.ty)
+                                {
+                                    return Err(self.contract_error(function, expression.span,
+                                        "Resource indirect Source call changes its sealed selected target"));
+                                }
+                            }
+                        }
+                        self.expression(function, callee)?;
+                        for actual in args {
+                            self.expression(function, actual)?;
+                        }
+                        return Ok(());
+                    }
+                    _ => {
+                        return Err(self.unsupported(
+                            function,
+                            expression.span,
+                            "dedicated Resource expression transport",
+                        ));
+                    }
+                }
+            }
+        }
+        let kind = if let Some(proof) = named_value {
+            if proof.signature_type() != expression.ty
+                || !matches!(self.types.resolve(expression.ty), Type::Function { .. })
+            {
+                return Err(self.contract_error(
+                    function,
+                    expression.span,
+                    "named descriptor occurrence changes its sealed signature",
+                ));
+            }
+            ScalarKind::Function
+        } else {
+            self.expression_kind(
+                function,
+                expression,
+                format!("expression in `{}`", self.function_name(function)),
+            )?
+        };
+        match &expression.kind {
+            ExpressionKind::ResourceHookValue { .. } | ExpressionKind::ResourceInvoke { .. } => Err(self.contract_error(function, expression.span, "pending ResourceOwnershipPlan: native Resource descriptor and invocation ABI are not admitted")),
+            ExpressionKind::Int(value) => self.integer_literal(function, expression, *value, kind),
+            ExpressionKind::Float(_) => {
+                if matches!(kind, ScalarKind::Float(_)) {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "float literal"))
+                }
+            }
+            ExpressionKind::Bool(_) => {
+                if kind == ScalarKind::Bool {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "bool literal"))
+                }
+            }
+            ExpressionKind::Nothing => {
+                if kind == ScalarKind::Nothing {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "nothing literal"))
+                }
+            }
+            ExpressionKind::Local(local) => {
+                let local = function.local(*local).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        expression.span,
+                        "expression local is absent from the local table",
+                    )
+                })?;
+                if let (
+                    Type::Machine(machine),
+                    Type::MachineState {
+                        machine: narrowed, ..
+                    },
+                ) = (
+                    self.types.resolve(local.ty),
+                    self.types.resolve(expression.ty),
+                ) && machine == narrowed
+                {
+                    return Ok(());
+                }
+                if let (
+                    Type::MachineState {
+                        machine: narrowed, ..
+                    },
+                    Type::Machine(machine),
+                ) = (
+                    self.types.resolve(local.ty),
+                    self.types.resolve(expression.ty),
+                ) && machine == narrowed
+                {
+                    return Ok(());
+                }
+                if matches!(self.types.resolve(expression.ty), Type::Secret(inner) if *inner == local.ty)
+                {
+                    return Ok(());
+                }
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    local.ty,
+                    expression.ty,
+                    "local expression type does not match local metadata",
+                )
+            }
+            ExpressionKind::FunctionAdapter {
+                value,
+                function: target,
+            } => {
+                self.expression(function, value)?;
+                self.function_adapter_signature(
+                    function,
+                    expression.span,
+                    value.ty,
+                    expression.ty,
+                    *target,
+                )?;
+                self.latent_function(*target)
+            }
+            ExpressionKind::FunctionRef(target) => {
+                let Some(callee) = self
+                    .program
+                    .functions
+                    .get(target.index() as usize)
+                    .filter(|callee| callee.id == *target)
+                else {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "function value target is absent",
+                    ));
+                };
+                let Type::Function {
+                    params,
+                    view_params,
+                    return_type,
+                } = self.types.resolve(expression.ty)
+                else {
+                    return Err(self.expression_kind_error(function, expression, "function value"));
+                };
+                if callee.capture_count != 0
+                    || params.len() != callee.params.len()
+                    || view_params.len() != params.len()
+                    || params.iter().zip(view_params).zip(&callee.params).any(
+                        |((expected, view), actual)| {
+                            *expected != actual.ty
+                                || *view != (actual.mode == jett_mir::ParamMode::View)
+                        },
+                    )
+                    || *return_type != callee.return_type
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "function value signature does not match target",
+                    ));
+                }
+                self.latent_function(*target)
+            }
+            ExpressionKind::ClosureRef {
+                function: target,
+                captures,
+            } => {
+                let Some(callee) = self
+                    .program
+                    .functions
+                    .get(target.index() as usize)
+                    .filter(|callee| callee.id == *target)
+                else {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "closure target is absent",
+                    ));
+                };
+                let Type::Function {
+                    params,
+                    view_params,
+                    return_type,
+                } = self.types.resolve(expression.ty)
+                else {
+                    return Err(self.expression_kind_error(function, expression, "closure value"));
+                };
+                if callee.capture_count == 0
+                    || callee.capture_count != captures.len()
+                    || callee.params.len() != captures.len() + params.len()
+                    || view_params.len() != params.len()
+                    || *return_type != callee.return_type
+                    || callee
+                        .params
+                        .iter()
+                        .skip(callee.capture_count)
+                        .zip(params.iter().zip(view_params))
+                        .any(|(actual, (expected, view))| {
+                            actual.ty != *expected
+                                || (actual.mode == jett_mir::ParamMode::View) != *view
+                        })
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "closure signature does not match target",
+                    ));
+                }
+                for (capture, parameter) in captures.iter().zip(&callee.params) {
+                    let Some(local) = function.local(*capture) else {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "closure capture local is absent",
+                        ));
+                    };
+                    if local.ty != parameter.ty {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "closure capture type does not match target",
+                        ));
+                    }
+                    if parameter.mode != jett_mir::ParamMode::Owned {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "closure capture must use owned environment storage",
+                        ));
+                    }
+                    let latent_never = self.phase == VerifierPhase::DescriptorMetadata
+                        && local.ty == TypeInterner::NEVER;
+                    if !latent_never
+                        && !matches!(
+                            self.types.resolve(local.ty),
+                            Type::Int8
+                                | Type::Int16
+                                | Type::Int32
+                                | Type::Int64
+                                | Type::Uint8
+                                | Type::Uint16
+                                | Type::Uint32
+                                | Type::Uint64
+                                | Type::Float32
+                                | Type::Float64
+                                | Type::String
+                                | Type::Bool
+                                | Type::Nothing
+                        )
+                    {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "closure capture is not an implicitly copyable source value",
+                        ));
+                    }
+                }
+                self.latent_function(*target)
+            }
+            ExpressionKind::Unary { op, value } => {
+                self.expression(function, value)?;
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    expression.ty,
+                    value.ty,
+                    "unary operand and result types differ",
+                )?;
+                let supported = match op {
+                    UnaryOp::Not => kind == ScalarKind::Bool,
+                    UnaryOp::Negate => {
+                        matches!(kind, ScalarKind::SignedInteger(_) | ScalarKind::Float(_))
+                    }
+                };
+                if supported {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "unary operation"))
+                }
+            }
+            ExpressionKind::Binary { left, op, right } => {
+                self.binary(function, expression, left, *op, right)
+            }
+            ExpressionKind::Call {
+                function: callee,
+                args,
+                ..
+            } => {
+                let callee_index = usize::try_from(callee.index()).map_err(|_| {
+                    self.contract_error(
+                        function,
+                        expression.span,
+                        "direct call target index does not fit this host",
+                    )
+                })?;
+                let Some(callee) = self.program.functions.get(callee_index) else {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "direct call target is absent from the function table",
+                    ));
+                };
+                if self.phase == VerifierPhase::CallableNative
+                    && callee
+                        .params
+                        .iter()
+                        .any(|parameter| parameter.ty == TypeInterner::NEVER)
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "callable direct edge requires an uninhabited parameter",
+                    ));
+                }
+                if args.len() != callee.params.len() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "direct call argument count does not match its signature",
+                    ));
+                }
+                let pure = callee.params.iter().all(|parameter| {
+                    !matches!(self.types.resolve(parameter.ty), Type::Capability(_))
+                });
+                let mut lifted_secret = false;
+                for (argument, parameter) in args.iter().zip(&callee.params) {
+                    self.expression(function, argument)?;
+                    lifted_secret |= self
+                        .call_argument_taints_result(parameter.ty, argument.ty, pure)
+                        .ok_or_else(|| {
+                            self.contract_error(
+                                function,
+                                argument.span,
+                                "direct call argument type does not match its parameter",
+                            )
+                        })?;
+                }
+                self.require_call_result_type(
+                    function,
+                    expression.span,
+                    callee.return_type,
+                    expression.ty,
+                    lifted_secret,
+                    "direct call result type does not match its signature",
+                )
+            }
+            ExpressionKind::Comptime { .. } => {
+                Err(self.unsupported(function, expression.span, "unbaked comptime expression"))
+            }
+            ExpressionKind::Constant { .. } => {
+                Err(self.unsupported(function, expression.span, "unbaked namespace constant"))
+            }
+            ExpressionKind::View(value) | ExpressionKind::Clone(value) => {
+                self.expression(function, value)?;
+                self.require_call_result_type(
+                    function,
+                    expression.span,
+                    value.ty,
+                    expression.ty,
+                    false,
+                    "scalar wrapper changes its value type",
+                )
+            }
+            ExpressionKind::String(_) if kind == ScalarKind::String => Ok(()),
+            ExpressionKind::String(_) => {
+                Err(self.expression_kind_error(function, expression, "string literal"))
+            }
+            ExpressionKind::Intrinsic {
+                intrinsic,
+                args,
+                type_arguments,
+                reflection_arguments,
+                field_validation,
+                ..
+            } => {
+                if jett_hir::is_reflected_field_intrinsic(*intrinsic) {
+                    if !matches!(
+                        field_validation,
+                        Some(jett_hir::ReflectedFieldValidation::Read
+                            | jett_hir::ReflectedFieldValidation::ReadCallable(_))
+                    ) {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "reflected selector proof plans were not lowered",
+                        ));
+                    }
+                } else if field_validation.is_some() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "non-selector intrinsic carries reflected validation plans",
+                    ));
+                }
+                if type_arguments
+                    .iter()
+                    .any(|ty| ty.index() as usize >= self.types.len())
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "intrinsic type operand is absent from checked type table",
+                    ));
+                }
+                for arg in args {
+                    self.expression(function, arg)?;
+                }
+                if matches!(
+                    intrinsic,
+                    jett_hir::IntrinsicId::TypeName
+                        | jett_hir::IntrinsicId::TypeKind
+                        | jett_hir::IntrinsicId::TypeHasSecret
+                ) {
+                    let expected = if *intrinsic == jett_hir::IntrinsicId::TypeHasSecret {
+                        TypeInterner::BOOL
+                    } else {
+                        TypeInterner::STRING
+                    };
+                    if !args.is_empty()
+                        || type_arguments.len() != 1
+                        || reflection_arguments.len() != 1
+                        || expression.ty != expected
+                    {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "invalid checked reflection intrinsic operands",
+                        ));
+                    }
+                    return Ok(());
+                }
+                if *intrinsic == jett_hir::IntrinsicId::TypeConstructStart {
+                    let unsupported_kind = reflection_arguments.len() == 1
+                        && !matches!(reflection_arguments[0].kind.as_str(), "struct" | "bitfield");
+                    let record_fields =
+                        type_arguments
+                            .first()
+                            .and_then(|ty| match self.types.resolve(*ty) {
+                                Type::Struct(id) => {
+                                    Some(("struct", self.types.resolve_struct(*id).fields.len()))
+                                }
+                                Type::Bitfield(id) => Some((
+                                    "bitfield",
+                                    self.types.resolve_bitfield(*id).fields.len(),
+                                )),
+                                _ => None,
+                            });
+                    let valid = args.is_empty()
+                        && type_arguments.len() == 1
+                        && (unsupported_kind
+                            || (record_fields.is_some_and(|(kind, count)| {
+                                reflection_arguments.len() == count + 1
+                                    && reflection_arguments[0].kind == kind
+                            }) && native_constructible_record(self.types, type_arguments[0])))
+                        && expression.ty == TypeInterner::TYPE_CONSTRUCTION;
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.unsupported(
+                            function,
+                            expression.span,
+                            "type.construct_start target requiring unsupported construction validation",
+                        ))
+                    };
+                }
+                if *intrinsic == jett_hir::IntrinsicId::TypeConstructVariantStart {
+                    let fields =
+                        type_arguments
+                            .first()
+                            .and_then(|ty| match self.types.resolve(*ty) {
+                                Type::Enum(id) => Some(
+                                    self.types
+                                        .resolve_enum(*id)
+                                        .variants
+                                        .iter()
+                                        .map(|variant| variant.fields.len())
+                                        .sum::<usize>(),
+                                ),
+                                _ => None,
+                            });
+                    let valid = args.len() == 1
+                        && type_arguments.len() == 1
+                        && fields.is_some_and(|count| reflection_arguments.len() == count + 1)
+                        && reflection_arguments[0].kind == "enum"
+                        && native_constructible_enum(self.types, type_arguments[0])
+                        && matches!(self.types.resolve(args[0].ty), Type::Struct(id)
+                            if self.types.resolve_struct(*id).name == "TypeVariant")
+                        && matches!(self.types.resolve(expression.ty), Type::Result(ok, err)
+                            if *ok == TypeInterner::TYPE_CONSTRUCTION && *err == TypeInterner::STRING);
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.unsupported(function, expression.span,
+                            "type.construct_variant_start target requiring unsupported construction validation"))
+                    };
+                }
+                if *intrinsic == jett_hir::IntrinsicId::TypeConstructMachineStart {
+                    let fields = type_arguments.first().and_then(|ty| {
+                        let id = match self.types.resolve(*ty) {
+                            Type::Machine(id) | Type::MachineState { machine: id, .. } => *id,
+                            _ => return None,
+                        };
+                        Some(
+                            self.types
+                                .resolve_machine(id)
+                                .states
+                                .iter()
+                                .map(|state| state.fields.len())
+                                .sum::<usize>(),
+                        )
+                    });
+                    let valid = args.len() == 1
+                        && type_arguments.len() == 1
+                        && fields.is_some_and(|count| reflection_arguments.len() == count + 1)
+                        && native_constructible_builder_kind(self.types, type_arguments[0])
+                            == Some(reflection_arguments[0].kind.as_str())
+                        && matches!(self.types.resolve(args[0].ty), Type::Struct(id)
+                            if self.types.resolve_struct(*id).name == "TypeMachineState")
+                        && matches!(self.types.resolve(expression.ty), Type::Result(ok, err)
+                            if *ok == TypeInterner::TYPE_CONSTRUCTION && *err == TypeInterner::STRING);
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.unsupported(function, expression.span,
+                            "type.construct_machine_start target requiring unsupported construction validation"))
+                    };
+                }
+                if *intrinsic == jett_hir::IntrinsicId::TypeConstructPut {
+                    // Trusted decoders bind Field from each reflected field.
+                    // Runtime BuilderPut checks the field index, name, and
+                    // exact canonical type, so an unrelated refinement field
+                    // sharing a base type cannot reject this specialization.
+                    let checked_json_reflected_decoder = function.identity.declaration.origin
+                        == SourceOrigin::Stdlib
+                        && function.identity.declaration.namespace == "json"
+                        && matches!(
+                            function.identity.declaration.name.as_str(),
+                            "json_decode_tree_record_reflected"
+                                | "json_decode_tree_enum_payload_reflected"
+                                | "json_decode_tree_machine_reflected"
+                        );
+                    let unsupported_kind = reflection_arguments.first().is_some_and(|info| {
+                        !matches!(
+                            info.kind.as_str(),
+                            "struct" | "bitfield" | "enum" | "machine" | "machine_state"
+                        )
+                    });
+                    let valid = args.len() == 3
+                        && type_arguments.len() == 2
+                        && reflection_arguments.len() == 2
+                        && (unsupported_kind
+                            || native_constructible_builder_kind(self.types, type_arguments[0])
+                                == Some(reflection_arguments[0].kind.as_str()))
+                        && (unsupported_kind
+                            || checked_json_reflected_decoder
+                            || native_builder_value_type_supported(
+                                self.types,
+                                type_arguments[0],
+                                type_arguments[1],
+                            ))
+                        && args[0].ty == TypeInterner::TYPE_CONSTRUCTION
+                        && matches!(self.types.resolve(args[1].ty), Type::Struct(id)
+                            if self.types.resolve_struct(*id).name == "TypeField")
+                        && args[2].ty == type_arguments[1]
+                        && matches!(self.types.resolve(expression.ty), Type::Result(ok, err)
+                            if *ok == TypeInterner::TYPE_CONSTRUCTION && *err == TypeInterner::STRING);
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.unsupported(
+                            function,
+                            expression.span,
+                            "type.construct_put target requiring unsupported construction validation",
+                        ))
+                    };
+                }
+                if *intrinsic == jett_hir::IntrinsicId::TypeConstructFinish {
+                    let unsupported_kind = reflection_arguments.first().is_some_and(|info| {
+                        !matches!(
+                            info.kind.as_str(),
+                            "struct" | "bitfield" | "enum" | "machine" | "machine_state"
+                        )
+                    });
+                    let valid = args.len() == 1
+                        && type_arguments.len() == 1
+                        && reflection_arguments.len() == 1
+                        && (unsupported_kind
+                            || native_constructible_builder_kind(self.types, type_arguments[0])
+                                == Some(reflection_arguments[0].kind.as_str()))
+                        && args[0].ty == TypeInterner::TYPE_CONSTRUCTION
+                        && matches!(self.types.resolve(expression.ty), Type::Result(ok, err)
+                            if *ok == type_arguments[0] && *err == TypeInterner::STRING);
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.unsupported(
+                            function,
+                            expression.span,
+                            "type.construct_finish target requiring unsupported construction validation",
+                        ))
+                    };
+                }
+                if *intrinsic == jett_hir::IntrinsicId::TypeVariantValue {
+                    let Some(&owner_ty) = type_arguments.first() else {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "type.variant_value has no checked enum type",
+                        ));
+                    };
+                    let Type::Enum(enum_id) = self.types.resolve(owner_ty) else {
+                        return Err(self.unsupported(
+                            function,
+                            expression.span,
+                            "type.variant_value of non-enum type",
+                        ));
+                    };
+                    let variants = &self.types.resolve_enum(*enum_id).variants;
+                    let valid = type_arguments.len() == 1
+                        && reflection_arguments.len() == 1
+                        && reflection_arguments[0].kind == "enum"
+                        && !variants.is_empty()
+                        && args.len() == variants.len() + 1
+                        && args[0].ty == owner_ty
+                        && args[1..].iter().all(|arg| arg.ty == expression.ty)
+                        && matches!(self.types.resolve(expression.ty), Type::Struct(id)
+                            if self.types.resolve_struct(*id).name == "TypeVariant");
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "invalid checked type.variant_value operands",
+                        ))
+                    };
+                }
+                if *intrinsic == jett_hir::IntrinsicId::TypeArg {
+                    let valid = type_arguments.len() == 1
+                        && reflection_arguments.len() == 1
+                        && args.len() == reflection_arguments[0].args.len() + 1
+                        && args[0].ty == TypeInterner::INT64
+                        && args[1..].iter().all(|arg| arg.ty == expression.ty)
+                        && matches!(self.types.resolve(expression.ty), Type::Struct(id)
+                            if self.types.resolve_struct(*id).name == "TypeInfo");
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "invalid checked type.arg operands",
+                        ))
+                    };
+                }
+                if *intrinsic == jett_hir::IntrinsicId::TypeMachineStateValue {
+                    let Some(&owner_ty) = type_arguments.first() else {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "type.machine_state_value has no checked machine type",
+                        ));
+                    };
+                    let (machine_id, owner_kind) = match self.types.resolve(owner_ty) {
+                        Type::Machine(id) => (*id, "machine"),
+                        Type::MachineState { machine, .. } => (*machine, "machine_state"),
+                        _ => {
+                            return Err(self.unsupported(
+                                function,
+                                expression.span,
+                                "type.machine_state_value of non-machine type",
+                            ));
+                        }
+                    };
+                    let states = &self.types.resolve_machine(machine_id).states;
+                    let valid = type_arguments.len() == 1
+                        && reflection_arguments.len() == 1
+                        && reflection_arguments[0].kind == owner_kind
+                        && !states.is_empty()
+                        && args.len() == states.len() + 1
+                        && args[0].ty == owner_ty
+                        && args[1..].iter().all(|arg| arg.ty == expression.ty)
+                        && matches!(self.types.resolve(expression.ty), Type::Struct(id)
+                            if self.types.resolve_struct(*id).name == "TypeMachineState");
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "invalid checked type.machine_state_value operands",
+                        ))
+                    };
+                }
+                if *intrinsic == jett_hir::IntrinsicId::TypeFieldValue {
+                    let Some(&owner_ty) = type_arguments.first() else {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "type.field_value has no checked owner type",
+                        ));
+                    };
+                    let (field_count, owner_kind) = match self.types.resolve(owner_ty) {
+                        Type::Struct(id) => (self.types.resolve_struct(*id).fields.len(), "struct"),
+                        Type::Bitfield(id) => {
+                            (self.types.resolve_bitfield(*id).fields.len(), "bitfield")
+                        }
+                        _ => {
+                            return Err(self.unsupported(
+                                function,
+                                expression.span,
+                                "type.field_value of non-struct type",
+                            ));
+                        }
+                    };
+                    let field_ty = args.get(1).map(|arg| arg.ty);
+                    let valid_field_ty = field_ty.is_some_and(|ty| {
+                        jett_hir::valid_reflected_field_metadata_type(self.types, ty)
+                    });
+                    let valid = type_arguments.len() == 2
+                        && type_arguments[1] == expression.ty
+                        && reflection_arguments.len() == 2
+                        && reflection_arguments[0].kind == owner_kind
+                        && args.len() == field_count + 2
+                        && args[0].ty == owner_ty
+                        && valid_field_ty
+                        && args[2..].iter().all(|arg| Some(arg.ty) == field_ty);
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "invalid checked type.field_value operands",
+                        ))
+                    };
+                }
+                if *intrinsic == jett_hir::IntrinsicId::TypeVariantFieldValue {
+                    let Some(&owner_ty) = type_arguments.first() else {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "type.variant_field_value has no checked enum type",
+                        ));
+                    };
+                    let Type::Enum(enum_id) = self.types.resolve(owner_ty) else {
+                        return Err(self.unsupported(
+                            function,
+                            expression.span,
+                            "type.variant_field_value of non-enum type",
+                        ));
+                    };
+                    let field_count = self
+                        .types
+                        .resolve_enum(*enum_id)
+                        .variants
+                        .iter()
+                        .map(|variant| variant.fields.len())
+                        .sum::<usize>();
+                    let field_ty = args.get(1).map(|arg| arg.ty);
+                    let valid_field_ty = field_ty.is_some_and(|ty| {
+                        jett_hir::valid_reflected_field_metadata_type(self.types, ty)
+                    });
+                    let valid = type_arguments.len() == 2
+                        && type_arguments[1] == expression.ty
+                        && reflection_arguments.len() == 2
+                        && reflection_arguments[0].kind == "enum"
+                        && args.len() == field_count + 2
+                        && args[0].ty == owner_ty
+                        && valid_field_ty
+                        && args[2..].iter().all(|arg| Some(arg.ty) == field_ty);
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "invalid checked type.variant_field_value operands",
+                        ))
+                    };
+                }
+                if *intrinsic == jett_hir::IntrinsicId::TypeMachineFieldValue {
+                    let Some(&owner_ty) = type_arguments.first() else {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "type.machine_field_value has no checked machine type",
+                        ));
+                    };
+                    let (machine_id, owner_kind) = match self.types.resolve(owner_ty) {
+                        Type::Machine(id) => (*id, "machine"),
+                        Type::MachineState { machine, .. } => (*machine, "machine_state"),
+                        _ => {
+                            return Err(self.unsupported(
+                                function,
+                                expression.span,
+                                "type.machine_field_value of non-machine type",
+                            ));
+                        }
+                    };
+                    let field_count = self
+                        .types
+                        .resolve_machine(machine_id)
+                        .states
+                        .iter()
+                        .map(|state| state.fields.len())
+                        .sum::<usize>();
+                    let field_ty = args.get(1).map(|arg| arg.ty);
+                    let valid_field_ty = field_ty.is_some_and(|ty| {
+                        jett_hir::valid_reflected_field_metadata_type(self.types, ty)
+                    });
+                    let valid = type_arguments.len() == 2
+                        && type_arguments[1] == expression.ty
+                        && reflection_arguments.len() == 2
+                        && reflection_arguments[0].kind == owner_kind
+                        && args.len() == field_count + 2
+                        && args[0].ty == owner_ty
+                        && valid_field_ty
+                        && args[2..].iter().all(|arg| Some(arg.ty) == field_ty);
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "invalid checked type.machine_field_value operands",
+                        ))
+                    };
+                }
+                let numeric_generic = matches!(
+                    intrinsic,
+                    jett_hir::IntrinsicId::MathKernelAbs
+                        | jett_hir::IntrinsicId::MathKernelMin
+                        | jett_hir::IntrinsicId::MathKernelMax
+                );
+                if numeric_generic
+                    && type_arguments.as_slice()
+                        != [args.first().map_or(TypeInterner::ERROR, |a| a.ty)]
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "numeric intrinsic type argument differs from operand",
+                    ));
+                }
+                let list_generic = crate::values::list_intrinsic(*intrinsic);
+                let math_aggregate_generic = matches!(
+                    intrinsic,
+                    jett_hir::IntrinsicId::MathAverage | jett_hir::IntrinsicId::MathMedian
+                );
+                if math_aggregate_generic
+                    && type_arguments.as_slice()
+                        != [args
+                            .first()
+                            .and_then(|arg| match self.types.resolve(arg.ty) {
+                                Type::List(element) => Some(*element),
+                                _ => None,
+                            })
+                            .unwrap_or(TypeInterner::ERROR)]
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "numeric list intrinsic type argument differs from element",
+                    ));
+                }
+                let list_element =
+                    crate::values::list_element(*intrinsic, args, expression.ty, self.types)
+                        .unwrap_or(TypeInterner::ERROR);
+                let list_type_argument = if *intrinsic == jett_hir::IntrinsicId::ListSortByIndex {
+                    match self.types.resolve(list_element) {
+                        Type::List(inner) => *inner,
+                        _ => TypeInterner::ERROR,
+                    }
+                } else {
+                    list_element
+                };
+                if list_generic && type_arguments.as_slice() != [list_type_argument] {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "list intrinsic type argument differs from element",
+                    ));
+                }
+                let set_generic = crate::values::set_intrinsic(*intrinsic);
+                if set_generic
+                    && type_arguments.as_slice()
+                        != [
+                            crate::values::set_element(*intrinsic, args, expression.ty, self.types)
+                                .unwrap_or(TypeInterner::ERROR),
+                        ]
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "set intrinsic type argument differs from element",
+                    ));
+                }
+                let map_generic = crate::values::map_intrinsic(*intrinsic);
+                if map_generic
+                    && type_arguments.as_slice()
+                        != crate::values::map_types(*intrinsic, args, expression.ty, self.types)
+                            .map(|(k, v)| [k, v])
+                            .unwrap_or([TypeInterner::ERROR; 2])
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "map intrinsic type arguments differ from key and value",
+                    ));
+                }
+                let graphics_generic = *intrinsic == jett_hir::IntrinsicId::GraphicsRun;
+                if graphics_generic
+                    && (args.len() != 5 || type_arguments.as_slice() != [args[2].ty])
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "graphics state type argument differs from its initial value",
+                    ));
+                }
+                if !numeric_generic
+                    && !list_generic
+                    && !math_aggregate_generic
+                    && !set_generic
+                    && !map_generic
+                    && !graphics_generic
+                    && !type_arguments.is_empty()
+                {
+                    return Err(self.unsupported(
+                        function,
+                        expression.span,
+                        format!("generic native intrinsic {intrinsic}"),
+                    ));
+                }
+                crate::values::verify_intrinsic(*intrinsic, args, expression.ty, self.types)
+                    .map_err(|message| self.contract_error(function, expression.span, message))
+            }
+            ExpressionKind::IndirectCall { callee, args, .. } => {
+                self.expression(function, callee)?;
+                let Type::Function {
+                    params,
+                    view_params,
+                    return_type,
+                } = self.types.resolve(callee.ty)
+                else {
+                    return Err(self.expression_kind_error(function, expression, "indirect call"));
+                };
+                if self.phase == VerifierPhase::CallableNative
+                    && params.contains(&TypeInterner::NEVER)
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "callable indirect edge requires an uninhabited parameter",
+                    ));
+                }
+                if params.len() != args.len() || view_params.len() != params.len() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "indirect call argument count does not match function type",
+                    ));
+                }
+                let pure = params
+                    .iter()
+                    .all(|param| !matches!(self.types.resolve(*param), Type::Capability(_)));
+                let mut lifted_secret = false;
+                for ((argument, expected), view) in args.iter().zip(params).zip(view_params) {
+                    self.expression(function, argument)?;
+                    if !view && matches!(argument.kind, ExpressionKind::View(_)) {
+                        return Err(self.contract_error(
+                            function,
+                            argument.span,
+                            "owned indirect call parameter cannot accept a view",
+                        ));
+                    }
+                    lifted_secret |= self
+                        .call_argument_taints_result(*expected, argument.ty, pure)
+                        .ok_or_else(|| {
+                            self.contract_error(
+                                function,
+                                argument.span,
+                                "indirect call argument type mismatch",
+                            )
+                        })?;
+                }
+                self.require_call_result_type(
+                    function,
+                    expression.span,
+                    *return_type,
+                    expression.ty,
+                    lifted_secret,
+                    "indirect call result type mismatch",
+                )
+            }
+            ExpressionKind::StructConstruct {
+                struct_type,
+                fields,
+                validates_refinements,
+                ..
+            } => {
+                if *validates_refinements {
+                    let valid_result = matches!(self.types.resolve(expression.ty),
+                        Type::Result(ok, err) if *ok == *struct_type && *err == TypeInterner::STRING);
+                    if !valid_result {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "refinement-validating struct construction must return result[Struct, string]",
+                        ));
+                    }
+                } else {
+                    self.require_same_type(
+                        function,
+                        expression.span,
+                        *struct_type,
+                        expression.ty,
+                        "struct construction type mismatch",
+                    )?;
+                }
+                let Type::Struct(id) = self.types.resolve(*struct_type) else {
+                    return Err(self.expression_kind_error(
+                        function,
+                        expression,
+                        "struct construction",
+                    ));
+                };
+                let layout = &self.types.resolve_struct(*id).fields;
+                if *validates_refinements
+                    && !layout
+                        .iter()
+                        .any(|(_, ty)| matches!(self.types.resolve(*ty), Type::Refinement { .. }))
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "refinement-validating struct has no refinement field",
+                    ));
+                }
+                if fields.len() != layout.len() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "struct field count mismatch",
+                    ));
+                }
+                for (field, (_, ty)) in fields.iter().zip(layout) {
+                    self.expression(function, field)?;
+                    // An exact refinement value passed its predicate at the
+                    // earlier boundary. Base values still need native predicate
+                    // invocation and must not silently acquire that type.
+                    if *validates_refinements
+                        && matches!(self.types.resolve(*ty), Type::Refinement { .. })
+                        && field.ty != *ty
+                    {
+                        return Err(self.unsupported(
+                            function,
+                            field.span,
+                            "struct refinement validation from a base value",
+                        ));
+                    }
+                    self.require_same_type(
+                        function,
+                        field.span,
+                        *ty,
+                        field.ty,
+                        "struct field type mismatch",
+                    )?;
+                }
+                Ok(())
+            }
+            ExpressionKind::BitfieldConstruct {
+                bitfield_type,
+                fields,
+                validates_widths,
+                ..
+            } => {
+                if *validates_widths {
+                    let Type::Result(ok, error) = self.types.resolve(expression.ty) else {
+                        return Err(self.expression_kind_error(
+                            function,
+                            expression,
+                            "validated bitfield construction result",
+                        ));
+                    };
+                    self.require_same_type(
+                        function,
+                        expression.span,
+                        *bitfield_type,
+                        *ok,
+                        "bitfield construction success type mismatch",
+                    )?;
+                    self.require_same_type(
+                        function,
+                        expression.span,
+                        TypeInterner::STRING,
+                        *error,
+                        "bitfield construction failure type mismatch",
+                    )?;
+                } else {
+                    self.require_same_type(
+                        function,
+                        expression.span,
+                        *bitfield_type,
+                        expression.ty,
+                        "bitfield construction type mismatch",
+                    )?;
+                }
+                let Type::Bitfield(id) = self.types.resolve(*bitfield_type) else {
+                    return Err(self.expression_kind_error(
+                        function,
+                        expression,
+                        "bitfield construction",
+                    ));
+                };
+                let layout = &self.types.resolve_bitfield(*id).fields;
+                if fields.len() != layout.len() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "bitfield field count mismatch",
+                    ));
+                }
+                for (field, definition) in fields.iter().zip(layout) {
+                    self.expression(function, field)?;
+                    self.require_same_type(
+                        function,
+                        field.span,
+                        definition.ty,
+                        field.ty,
+                        "bitfield field type mismatch",
+                    )?;
+                }
+                Ok(())
+            }
+            ExpressionKind::MachineConstruct {
+                state_type,
+                state,
+                payloads,
+            } => {
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    *state_type,
+                    expression.ty,
+                    "machine construction type mismatch",
+                )?;
+                let Type::MachineState {
+                    machine,
+                    state: declared_state,
+                } = self.types.resolve(*state_type)
+                else {
+                    return Err(self.expression_kind_error(
+                        function,
+                        expression,
+                        "machine construction",
+                    ));
+                };
+                if declared_state.index() != state.index() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "machine constructor state mismatch",
+                    ));
+                }
+                let definition = self
+                    .types
+                    .resolve_machine(*machine)
+                    .state(*declared_state)
+                    .ok_or_else(|| {
+                        self.contract_error(
+                            function,
+                            expression.span,
+                            "machine constructor state is missing",
+                        )
+                    })?;
+                if payloads.len() != definition.fields.len() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "machine constructor payload count mismatch",
+                    ));
+                }
+                for (payload, (_, expected)) in payloads.iter().zip(&definition.fields) {
+                    self.expression(function, payload)?;
+                    self.require_same_type(
+                        function,
+                        payload.span,
+                        *expected,
+                        payload.ty,
+                        "machine constructor payload type mismatch",
+                    )?;
+                }
+                Ok(())
+            }
+            ExpressionKind::MachineTransition {
+                source,
+                state_type,
+                target,
+                payloads,
+            } => {
+                self.expression(function, source)?;
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    *state_type,
+                    expression.ty,
+                    "machine transition type mismatch",
+                )?;
+                let Type::MachineState {
+                    machine,
+                    state: declared_target,
+                } = self.types.resolve(*state_type)
+                else {
+                    return Err(self.expression_kind_error(
+                        function,
+                        expression,
+                        "machine transition",
+                    ));
+                };
+                if declared_target.index() != target.index() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "machine transition target mismatch",
+                    ));
+                }
+                let Type::MachineState {
+                    machine: source_machine,
+                    state: source_state,
+                } = self.types.resolve(source.ty)
+                else {
+                    return Err(self.unsupported(
+                        function,
+                        expression.span,
+                        "transition from unqualified machine state",
+                    ));
+                };
+                let definition = self.types.resolve_machine(*machine);
+                if source_machine != machine
+                    || !definition.has_transition(*source_state, *declared_target)
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "machine transition edge is not declared",
+                    ));
+                }
+                let target_definition = definition.state(*declared_target).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        expression.span,
+                        "machine transition target is missing",
+                    )
+                })?;
+                if payloads.len() != target_definition.fields.len() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "machine transition payload count mismatch",
+                    ));
+                }
+                for (payload, (_, expected)) in payloads.iter().zip(&target_definition.fields) {
+                    self.expression(function, payload)?;
+                    self.require_same_type(
+                        function,
+                        payload.span,
+                        *expected,
+                        payload.ty,
+                        "machine transition payload type mismatch",
+                    )?;
+                }
+                Ok(())
+            }
+            ExpressionKind::ListConstruct { elements } => {
+                let Type::List(element) = self.types.resolve(expression.ty) else {
+                    return Err(self.expression_kind_error(
+                        function,
+                        expression,
+                        "list construction",
+                    ));
+                };
+                for value in elements {
+                    self.expression(function, value)?;
+                    self.require_same_type(
+                        function,
+                        value.span,
+                        *element,
+                        value.ty,
+                        "list element type mismatch",
+                    )?;
+                }
+                Ok(())
+            }
+            ExpressionKind::MapConstruct { entries } => {
+                let Type::Map(key, value) = self.types.resolve(expression.ty) else {
+                    return Err(self.expression_kind_error(
+                        function,
+                        expression,
+                        "map construction",
+                    ));
+                };
+                for entry in entries {
+                    self.expression(function, &entry.key)?;
+                    self.require_same_type(
+                        function,
+                        entry.key.span,
+                        *key,
+                        entry.key.ty,
+                        "map key type mismatch",
+                    )?;
+                    self.expression(function, &entry.value)?;
+                    self.require_same_type(
+                        function,
+                        entry.value.span,
+                        *value,
+                        entry.value.ty,
+                        "map value type mismatch",
+                    )?;
+                }
+                Ok(())
+            }
+            ExpressionKind::ResultOk(value)
+            | ExpressionKind::ResultFail(value)
+            | ExpressionKind::OptionalSome(value) => {
+                let payload = match (&expression.kind, self.types.resolve(expression.ty)) {
+                    (ExpressionKind::ResultOk(_), Type::Result(ok, _)) => *ok,
+                    (ExpressionKind::ResultFail(_), Type::Result(_, error)) => *error,
+                    (ExpressionKind::OptionalSome(_), Type::Optional(inner)) => *inner,
+                    _ => {
+                        return Err(self.expression_kind_error(
+                            function,
+                            expression,
+                            "sum constructor",
+                        ));
+                    }
+                };
+                self.expression(function, value)?;
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    payload,
+                    value.ty,
+                    "sum constructor payload type mismatch",
+                )
+            }
+            ExpressionKind::OptionalNone => {
+                if matches!(self.types.resolve(expression.ty), Type::Optional(_)) {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "optional none"))
+                }
+            }
+            ExpressionKind::Handle { .. } => {
+                Err(self.unsupported(function, expression.span, "failure handler"))
+            }
+            ExpressionKind::EnumConstruct {
+                enum_type,
+                variant,
+                payloads,
+                ..
+            } => {
+                self.require_call_result_type(
+                    function,
+                    expression.span,
+                    *enum_type,
+                    expression.ty,
+                    false,
+                    "enum construction type mismatch",
+                )?;
+                let Type::Enum(enum_id) = self.types.resolve(*enum_type) else {
+                    return Err(self.expression_kind_error(
+                        function,
+                        expression,
+                        "enum construction",
+                    ));
+                };
+                let index = usize::try_from(variant.index()).map_err(|_| {
+                    self.contract_error(function, expression.span, "variant index overflow")
+                })?;
+                let Some(definition) = self.types.resolve_enum(*enum_id).variants.get(index) else {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "enum constructor variant is missing",
+                    ));
+                };
+                if payloads.len() != definition.fields.len() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "enum constructor payload count mismatch",
+                    ));
+                }
+                for (payload, (_, expected)) in payloads.iter().zip(&definition.fields) {
+                    self.expression(function, payload)?;
+                    self.require_same_type(
+                        function,
+                        payload.span,
+                        *expected,
+                        payload.ty,
+                        "enum constructor payload type mismatch",
+                    )?;
+                }
+                Ok(())
+            }
+            ExpressionKind::StringInterpolation(segments) => {
+                if kind != ScalarKind::String {
+                    return Err(self.expression_kind_error(function, expression, "interpolation"));
+                }
+                for segment in segments {
+                    if let jett_hir::StringSegment::Value(value) = segment {
+                        self.expression(function, value)?;
+                        if !crate::values::is_formattable(self.types, value.ty) {
+                            return Err(self.unsupported(function, value.span, "format value"));
+                        }
+                    }
+                }
+                Ok(())
+            }
+            ExpressionKind::DisplayResult(value) => {
+                self.expression(function, value)?;
+                if expression.ty == TypeInterner::STRING && value.ty == TypeInterner::STRING {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "display result"))
+                }
+            }
+            ExpressionKind::EquatableResult(value) => {
+                self.expression(function, value)?;
+                let mut result = expression.ty;
+                while let Type::Secret(inner) = self.types.resolve(result) {
+                    result = *inner;
+                }
+                if value.ty == expression.ty && result == TypeInterner::BOOL {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "equality result"))
+                }
+            }
+            ExpressionKind::Declassify(value) => {
+                self.expression(function, value)?;
+                if matches!(self.types.resolve(value.ty), Type::Secret(inner) if *inner == expression.ty)
+                {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "declassification"))
+                }
+            }
+            ExpressionKind::Coarsen(value) => {
+                self.expression(function, value)?;
+                let mut ancestor = value.ty;
+                let mut valid = false;
+                while let Type::Refinement { base, .. } = self.types.resolve(ancestor) {
+                    ancestor = *base;
+                    if ancestor == expression.ty {
+                        valid = true;
+                        break;
+                    }
+                }
+                if valid {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "coarsen"))
+                }
+            }
+            ExpressionKind::InterfaceCoerce { value, adapters } => {
+                self.expression(function, value)?;
+                let mut signatures = HashSet::new();
+                for entry in adapters {
+                    if !signatures.insert((entry.source, entry.target)) {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "duplicate container callback adapter",
+                        ));
+                    }
+                    self.function_adapter_signature(
+                        function,
+                        expression.span,
+                        entry.source,
+                        entry.target,
+                        entry.function,
+                    )?;
+                }
+                if interface_conversion_shape(self.types, value.ty, expression.ty, adapters) {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "interface conversion"))
+                }
+            }
+            ExpressionKind::InterfaceType(value) => {
+                self.expression(function, value)?;
+                if matches!(self.types.resolve(value.ty), Type::Interface(_))
+                    && expression.ty == TypeInterner::UINT64
+                {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "interface type identity"))
+                }
+            }
+            ExpressionKind::RuntimeFailureMessage(value) => {
+                self.expression(function, value)?;
+                if value.ty == TypeInterner::STRING && expression.ty == TypeInterner::NOTHING {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "dynamic runtime failure"))
+                }
+            }
+            ExpressionKind::RuntimeFailure(_) => Ok(()),
+            ExpressionKind::PropertyCaseContext(case) => {
+                if expression.ty == TypeInterner::NOTHING
+                    && case
+                        .as_ref()
+                        .is_none_or(|case| !case.name.is_empty() && case.trial > 0)
+                {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "property case context"))
+                }
+            }
+            ExpressionKind::RefinementValidated(value) => {
+                self.expression(function, value)?;
+                let mut current = expression.ty;
+                let mut valid = false;
+                while let Type::Refinement { base, .. } = self.types.resolve(current) {
+                    if *base == value.ty
+                        || matches!(self.types.resolve(*base), Type::Secret(inner) if *inner == value.ty)
+                    {
+                        valid = true;
+                        break;
+                    }
+                    current = *base;
+                }
+                if valid {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "validated refinement"))
+                }
+            }
+            ExpressionKind::StateIs { value, state } => {
+                self.expression(function, value)?;
+                let machine = match self.types.resolve(value.ty) {
+                    Type::Machine(machine) | Type::MachineState { machine, .. } => *machine,
+                    _ => {
+                        return Err(self.expression_kind_error(
+                            function,
+                            expression,
+                            "machine state test",
+                        ));
+                    }
+                };
+                if kind != ScalarKind::Bool
+                    || self
+                        .types
+                        .resolve_machine(machine)
+                        .states
+                        .get(state.index() as usize)
+                        .is_none()
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "machine state test has an invalid result or state",
+                    ));
+                }
+                Ok(())
+            }
+            ExpressionKind::Run(value) => {
+                self.expression(function, value)?;
+                if value.ty == expression.ty
+                    || matches!(self.types.resolve(expression.ty), Type::Secret(inner) if *inner == value.ty)
+                {
+                    Ok(())
+                } else {
+                    Err(self.contract_error(function, expression.span, "run result type mismatch"))
+                }
+            }
+            ExpressionKind::Join(value) => {
+                self.expression(function, value)?;
+                let Type::Result(ok, error) = self.types.resolve(expression.ty) else {
+                    return Err(self.expression_kind_error(function, expression, "task join"));
+                };
+                if value.ty == expression.ty || (*ok == value.ty && *error == TypeInterner::STRING)
+                {
+                    Ok(())
+                } else {
+                    Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "join result does not match task value",
+                    ))
+                }
+            }
+            ExpressionKind::Cancel(value) => {
+                self.expression(function, value)?;
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    TypeInterner::NOTHING,
+                    expression.ty,
+                    "cancel must return nothing",
+                )
+            }
+            ExpressionKind::InlineFunction { .. } => {
+                Err(self.unsupported(function, expression.span, "inline function"))
+            }
+            ExpressionKind::ActorGraphImport(_) => Err(self.contract_error(function, expression.span, "actor graph import was not expanded before native verification")),
+            ExpressionKind::ActorGraphStep { instruction, args } => {
+                instruction.validate(function.id, &function.identity, args, expression.ty, self.types).map_err(|message| self.contract_error(function, expression.span, &message))?;
+                for arg in args { self.expression(function, arg)?; }
+                Ok(())
+            }
+            ExpressionKind::ActorSpawn {
+                actor_type,
+                args,
+                constructor,
+                ..
+            } => {
+                let Type::Actor(actor_id) = self.types.resolve(expression.ty) else {
+                    return Err(self.expression_kind_error(function, expression, "actor spawn"));
+                };
+                let actor = self.types.resolve_actor(*actor_id);
+                let expected = if let Some(constructor) = constructor {
+                    let (_, target) = function_by_id(self.program, *constructor)?;
+                    if target.identity.declaration.kind
+                        != jett_hir::DeclarationKind::ActorConstructor
+                        || target.return_type != expression.ty
+                    {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "actor spawn target is not its checked constructor",
+                        ));
+                    }
+                    target
+                        .params
+                        .iter()
+                        .map(|param| param.ty)
+                        .collect::<Vec<_>>()
+                } else {
+                    if function.identity.declaration.kind
+                        != jett_hir::DeclarationKind::ActorConstructor
+                        || function.return_type != expression.ty
+                        || actor_type != &actor.name
+                    {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "actor allocation is outside its checked constructor",
+                        ));
+                    }
+                    actor
+                        .capability_params
+                        .iter()
+                        .chain(&actor.state_fields)
+                        .map(|(_, ty)| *ty)
+                        .collect::<Vec<_>>()
+                };
+                if args.len() != expected.len() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "actor spawn argument count does not match its checked fields",
+                    ));
+                }
+                for (argument, expected) in args.iter().zip(expected) {
+                    self.expression(function, argument)?;
+                    self.require_same_type(
+                        function,
+                        argument.span,
+                        expected,
+                        argument.ty,
+                        "actor spawn argument type mismatch",
+                    )?;
+                }
+                Ok(())
+            }
+            ExpressionKind::ActorMessage {
+                actor,
+                message,
+                handler,
+                args,
+                kind: message_kind,
+                ..
+            } => {
+                self.expression(function, actor)?;
+                let Type::Actor(actor_id) = self.types.resolve(actor.ty) else {
+                    return Err(self.expression_kind_error(function, expression, "actor message"));
+                };
+                let definition = self.types.resolve_actor(*actor_id);
+                let Some(checked_message) = definition.messages.iter().find(|m| m.name == *message)
+                else {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "actor message is absent from its checked actor type",
+                    ));
+                };
+                let (_, target) = function_by_id(self.program, *handler)?;
+                let capture_count =
+                    definition.capability_params.len() + definition.state_fields.len();
+                let (expected_namespace, actor_name) = definition
+                    .name
+                    .rsplit_once('.')
+                    .unwrap_or(("", &definition.name));
+                let expected_name = format!("{actor_name}.{message}");
+                if target.identity.declaration.kind != jett_hir::DeclarationKind::ActorHandler
+                    || target.identity.declaration.name != expected_name
+                    || target.identity.declaration.namespace != expected_namespace
+                    || target.capture_count != capture_count
+                    || target.return_type != checked_message.responds
+                    || target.params.len() != capture_count + args.len()
+                    || args.len() != checked_message.params.len()
+                    || target.params[..capture_count]
+                        .iter()
+                        .zip(
+                            definition
+                                .capability_params
+                                .iter()
+                                .chain(&definition.state_fields),
+                        )
+                        .any(|(parameter, (_, expected))| parameter.ty != *expected)
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "actor message target does not match its checked handler",
+                    ));
+                }
+                for ((argument, parameter), (_, checked_type)) in args
+                    .iter()
+                    .zip(&target.params[capture_count..])
+                    .zip(&checked_message.params)
+                {
+                    self.expression(function, argument)?;
+                    self.require_same_type(
+                        function,
+                        argument.span,
+                        parameter.ty,
+                        argument.ty,
+                        "actor message argument type mismatch",
+                    )?;
+                    self.require_same_type(
+                        function,
+                        argument.span,
+                        *checked_type,
+                        parameter.ty,
+                        "actor handler parameter type mismatch",
+                    )?;
+                }
+                let expected = if *message_kind == jett_hir::ActorMessageKind::Send {
+                    TypeInterner::NOTHING
+                } else {
+                    checked_message.responds
+                };
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    expected,
+                    expression.ty,
+                    "actor message result type mismatch",
+                )
+            }
+            ExpressionKind::Field {
+                base,
+                owner_type,
+                field,
+            } => {
+                self.expression(function, base)?;
+                // The checker exposes one direct secret-qualified aggregate's
+                // fields through its exact nominal layout. Keep the receiver's
+                // checked type for pending diagnostics and ownership handling.
+                let secret_owner = matches!(
+                    self.types.resolve(base.ty),
+                    Type::Secret(inner)
+                        if *inner == *owner_type
+                            && matches!(
+                                self.types.resolve(*inner),
+                                Type::Struct(_) | Type::Bitfield(_) | Type::MachineState { .. }
+                            )
+                );
+                if base.ty != *owner_type && !secret_owner {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "field owner mismatch",
+                    ));
+                }
+                let ty = match self.types.resolve(*owner_type) {
+                    Type::Struct(id) => self
+                        .types
+                        .resolve_struct(*id)
+                        .fields
+                        .get(field.index() as usize)
+                        .map(|(_, ty)| *ty),
+                    Type::Bitfield(id) => self
+                        .types
+                        .resolve_bitfield(*id)
+                        .fields
+                        .get(field.index() as usize)
+                        .map(|field| field.ty),
+                    Type::MachineState { machine, state } => self
+                        .types
+                        .resolve_machine(*machine)
+                        .state(*state)
+                        .and_then(|state| state.fields.get(field.index() as usize))
+                        .map(|(_, ty)| *ty),
+                    _ => {
+                        return Err(self.unsupported(
+                            function,
+                            expression.span,
+                            "non-aggregate field access",
+                        ));
+                    }
+                }
+                .ok_or_else(|| {
+                    self.contract_error(function, expression.span, "invalid aggregate field index")
+                })?;
+                // Match maybe_wrap_secret exactly: nothing stays public and an
+                // already secret field keeps its full nominal type, including
+                // refinements over secret values. Other fields gain one wrapper.
+                let valid_result = if secret_owner
+                    && ty != TypeInterner::NOTHING
+                    && self.secret_inner_type(ty).is_none()
+                {
+                    matches!(self.types.resolve(expression.ty), Type::Secret(inner) if *inner == ty)
+                } else {
+                    expression.ty == ty
+                };
+                if !valid_result {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "projected field type mismatch",
+                    ));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn integer_literal(
+        &self,
+        function: &Function,
+        expression: &Expression,
+        value: i128,
+        kind: ScalarKind,
+    ) -> Result<(), CodegenError> {
+        let in_range = match kind {
+            ScalarKind::SignedInteger(bits) => {
+                let magnitude = 1_i128 << (bits - 1);
+                (-magnitude..magnitude).contains(&value)
+            }
+            ScalarKind::UnsignedInteger(bits) => {
+                let limit = 1_i128 << bits;
+                (0..limit).contains(&value)
+            }
+            _ => false,
+        };
+        if in_range {
+            Ok(())
+        } else {
+            Err(self.expression_kind_error(function, expression, "integer literal"))
+        }
+    }
+
+    fn binary(
+        &self,
+        function: &Function,
+        expression: &Expression,
+        left: &Expression,
+        op: BinaryOp,
+        right: &Expression,
+    ) -> Result<(), CodegenError> {
+        self.expression(function, left)?;
+        self.expression(function, right)?;
+        let operand = self.expression_kind(function, left, "binary operand")?;
+        let right_operand = self.expression_kind(function, right, "binary operand")?;
+        let left_type = self.secret_inner_type(left.ty).unwrap_or(left.ty);
+        let right_type = self.secret_inner_type(right.ty).unwrap_or(right.ty);
+        let refined_divisor = operand.is_integer()
+            && matches!(op, BinaryOp::Divide | BinaryOp::Modulo)
+            && matches!(
+                self.types.resolve(right_type),
+                Type::Refinement { base, .. } if *base == left_type
+            )
+            && operand == right_operand;
+        if left_type != right_type && !refined_divisor {
+            return Err(self.contract_error(
+                function,
+                expression.span,
+                "binary operand types differ",
+            ));
+        }
+        let result = self.expression_kind(function, expression, "binary result")?;
+        if (self.secret_inner_type(left.ty).is_some() || self.secret_inner_type(right.ty).is_some())
+            && self.secret_inner_type(expression.ty).is_none()
+        {
+            return Err(self.contract_error(
+                function,
+                expression.span,
+                "secret binary operands require a secret result",
+            ));
+        }
+        if operand == ScalarKind::Enum
+            && matches!(op, BinaryOp::Equal | BinaryOp::NotEqual)
+            && !known_unit_enum_variant(left)
+            && !known_unit_enum_variant(right)
+            && let Type::Enum(id) = self
+                .types
+                .resolve(jett_mir::move_values::representation_type(
+                    self.types, left.ty,
+                ))
+            && self
+                .types
+                .resolve_enum(*id)
+                .variants
+                .iter()
+                .flat_map(|variant| &variant.fields)
+                .any(|(_, field_ty)| {
+                    !matches!(
+                        scalar_kind(self.types, *field_ty, "enum equality payload"),
+                        Ok(ScalarKind::SignedInteger(_)
+                            | ScalarKind::UnsignedInteger(_)
+                            | ScalarKind::Float(32 | 64)
+                            | ScalarKind::Bool
+                            | ScalarKind::String)
+                    )
+                })
+            && super::emit::debug::equality_layout(
+                self.types,
+                left.ty,
+                &self.program.equality_methods,
+            )
+            .is_none()
+        {
+            return Err(self.unsupported(function, expression.span, "enum equality payload type"));
+        }
+        if matches!(op, BinaryOp::Divide | BinaryOp::Modulo)
+            && operand.is_integer()
+            && integer_expression_is_statically_zero(right)
+        {
+            return Err(self.contract_error(
+                function,
+                right.span,
+                "integer division or modulo has a statically zero divisor",
+            ));
+        }
+        let supported = match op {
+            BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide => {
+                operand.is_numeric() && result == operand
+            }
+            BinaryOp::Modulo => operand.is_numeric() && result == operand,
+            BinaryOp::Equal | BinaryOp::NotEqual => {
+                !matches!(
+                    operand,
+                    ScalarKind::Stdout
+                        | ScalarKind::Clock
+                        | ScalarKind::Random
+                        | ScalarKind::Environment
+                        | ScalarKind::Graphics
+                        | ScalarKind::OpaqueCapability
+                        | ScalarKind::Bytes
+                        | ScalarKind::Sum
+                        | ScalarKind::List
+                        | ScalarKind::Map
+                        | ScalarKind::Struct
+                        | ScalarKind::Bitfield
+                        | ScalarKind::Machine
+                        | ScalarKind::Function
+                ) && result == ScalarKind::Bool
+            }
+            BinaryOp::Less | BinaryOp::Greater | BinaryOp::LessEqual | BinaryOp::GreaterEqual => {
+                operand.is_numeric() && result == ScalarKind::Bool
+            }
+            BinaryOp::And | BinaryOp::Or => {
+                operand == ScalarKind::Bool && result == ScalarKind::Bool
+            }
+        };
+        if supported {
+            Ok(())
+        } else {
+            Err(self.expression_kind_error(function, expression, "binary operation"))
+        }
+    }
+
+    /// Match the checker's directional secret argument compatibility without
+    /// treating equal native representations as interchangeable source types.
+    fn call_argument_types_compatible(&self, expected: TypeId, actual: TypeId) -> bool {
+        if expected == actual {
+            return true;
+        }
+        match (self.types.resolve(expected), self.types.resolve(actual)) {
+            (Type::Secret(expected), Type::Secret(actual))
+            | (Type::List(expected), Type::List(actual))
+            | (Type::Optional(expected), Type::Optional(actual))
+            | (Type::Set(expected), Type::Set(actual)) => {
+                self.call_argument_types_compatible(*expected, *actual)
+            }
+            (Type::Secret(expected), _) => self.call_argument_types_compatible(*expected, actual),
+            (Type::Map(expected_key, expected_value), Type::Map(actual_key, actual_value))
+            | (
+                Type::Result(expected_key, expected_value),
+                Type::Result(actual_key, actual_value),
+            ) => {
+                self.call_argument_types_compatible(*expected_key, *actual_key)
+                    && self.call_argument_types_compatible(*expected_value, *actual_value)
+            }
+            (
+                Type::Function {
+                    params: expected_params,
+                    view_params: expected_views,
+                    return_type: expected_return,
+                },
+                Type::Function {
+                    params: actual_params,
+                    view_params: actual_views,
+                    return_type: actual_return,
+                },
+            ) => {
+                expected_params.len() == actual_params.len()
+                    && expected_views == actual_views
+                    && expected_params
+                        .iter()
+                        .zip(actual_params)
+                        .all(|(expected, actual)| {
+                            self.call_argument_types_compatible(*expected, *actual)
+                        })
+                    && self.call_argument_types_compatible(*expected_return, *actual_return)
+            }
+            (
+                Type::Machine(expected),
+                Type::MachineState {
+                    machine: actual, ..
+                },
+            ) => expected == actual,
+            _ => false,
+        }
+    }
+
+    fn secret_inner_type(&self, ty: TypeId) -> Option<TypeId> {
+        match self.types.resolve(ty) {
+            Type::Secret(inner) => Some(*inner),
+            Type::Refinement { base, .. } => self.secret_inner_type(*base),
+            _ => None,
+        }
+    }
+
+    fn call_argument_taints_result(
+        &self,
+        expected: TypeId,
+        actual: TypeId,
+        pure: bool,
+    ) -> Option<bool> {
+        if self.call_argument_types_compatible(expected, actual) {
+            return Some(false);
+        }
+        if pure
+            && let Some(inner) = self.secret_inner_type(actual)
+            && self.call_argument_types_compatible(expected, inner)
+        {
+            return Some(true);
+        }
+        None
+    }
+
+    fn require_call_result_type(
+        &self,
+        function: &Function,
+        span: Span,
+        expected: TypeId,
+        actual: TypeId,
+        lifted_secret: bool,
+        message: &str,
+    ) -> Result<(), CodegenError> {
+        // A surrounding secret context may add secrecy independently of a call.
+        if matches!(self.types.resolve(actual), Type::Secret(inner) if *inner == expected) {
+            return Ok(());
+        }
+        if lifted_secret
+            && expected != TypeInterner::NOTHING
+            && self.secret_inner_type(expected).is_none()
+        {
+            return Err(self.contract_error(function, span, message));
+        }
+        self.require_same_type(function, span, expected, actual, message)
+    }
+
+    fn require_same_type(
+        &self,
+        function: &Function,
+        span: Span,
+        expected: TypeId,
+        actual: TypeId,
+        message: &str,
+    ) -> Result<(), CodegenError> {
+        if never_value_compatible(self.types, expected, actual)
+            || matches!(
+                (self.types.resolve(expected), self.types.resolve(actual)),
+                (Type::Machine(expected), Type::MachineState { machine: actual, .. })
+                    if expected == actual
+            )
+        {
+            Ok(())
+        } else {
+            Err(self.contract_error(function, span, message))
+        }
+    }
+
+    fn expression_kind_error(
+        &self,
+        function: &Function,
+        expression: &Expression,
+        construct: &str,
+    ) -> CodegenError {
+        self.contract_error(
+            function,
+            expression.span,
+            format!(
+                "{construct} is inconsistent with checked type `{}`",
+                self.types.type_name(expression.ty)
+            ),
+        )
+    }
+
+    fn function_name(&self, function: &Function) -> &str {
+        self.verified
+            .get(function.id)
+            .map(|function| function.symbol.as_str())
+            .unwrap_or("<invalid-function>")
+    }
+
+    fn contract_error(
+        &self,
+        function: &Function,
+        span: Span,
+        message: impl Into<String>,
+    ) -> CodegenError {
+        CodegenError::InvalidMirContract {
+            function: self.function_name(function).to_string(),
+            span,
+            message: message.into(),
+        }
+    }
+
+    fn unsupported(
+        &self,
+        function: &Function,
+        span: Span,
+        construct: impl Into<String>,
+    ) -> CodegenError {
+        CodegenError::UnsupportedMir {
+            function: self.function_name(function).to_string(),
+            span,
+            construct: construct.into(),
+        }
+    }
+}
+
+fn integer_expression_is_statically_zero(expression: &Expression) -> bool {
+    match &expression.kind {
+        ExpressionKind::Int(0) => true,
+        ExpressionKind::Unary {
+            op: UnaryOp::Negate,
+            value,
+        }
+        | ExpressionKind::Comptime { value, .. }
+        | ExpressionKind::View(value)
+        | ExpressionKind::Clone(value) => integer_expression_is_statically_zero(value),
+        _ => false,
+    }
+}

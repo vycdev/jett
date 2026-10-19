@@ -1,0 +1,36 @@
+struct Record:
+    number: int64
+    text: string
+    repeated: int64
+function plain() returns function() returns string:
+    return function() returns string: return "plain"
+function make() returns list[function() returns string]:
+    mutable list[function() returns string] callbacks = list.new[function() returns string]()
+    for field in type.fields[Record]():
+        comptime type Field = field.type_info:
+            string label = field.name
+            function() returns string unrelated = plain()
+            callbacks = list.append[function() returns string](callbacks, unrelated)
+            callbacks = list.append[function() returns string](callbacks, function() returns string: return "{label}:{type.name[Field]()}")
+    return callbacks
+function make_nested[T]() returns list[function() returns function() returns string]:
+    mutable list[function() returns function() returns string] callbacks = list.new[function() returns function() returns string]()
+    for field in type.fields[T]():
+        comptime type Outer = field.type_info:
+            comptime type Inner = type.info[bool]():
+                callbacks = list.append[function() returns function() returns string](callbacks, function() returns function() returns string:
+                    return function() returns string: return "{type.name[Outer]()}:{type.name[Inner]()}"
+                )
+    return callbacks
+function print_callbacks(callbacks: list[function() returns string]) returns nothing:
+    for callback in callbacks:
+        println(callback())
+    return nothing
+function main() returns nothing:
+    print_callbacks(make())
+    print_callbacks(comptime make())
+    list[function() returns function() returns string] nested = comptime make_nested[Record]()
+    for factory in nested:
+        function() returns string callback = factory()
+        println(callback())
+    return nothing

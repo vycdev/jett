@@ -1,0 +1,50 @@
+struct Widths:
+    narrow: int8
+    wide: int64
+    repeated: int8
+struct UnsignedWidths:
+    narrow: uint8
+    wide: uint64
+function direct(view values: Widths) returns string:
+    mutable list[string] results = list.new[string]()
+    for field in type.fields[Widths]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[Widths, Field](view values, view field)
+            Field bumped = value + 1
+            results = list.append[string](results, "{bumped}")
+    return string.join(results, ",")
+function generic[T](view values: T) returns string:
+    mutable list[string] results = list.new[string]()
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[T, Field](view values, view field)
+            comptime type Inner = type.info[Field]():
+                Inner bumped = value + 1
+                results = list.append[string](results, "{bumped}")
+    return string.join(results, ",")
+function make[T](view values: T) returns list[function() returns string]:
+    mutable list[function() returns string] callbacks = list.new[function() returns string]()
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[T, Field](view values, view field)
+            comptime type Inner = type.info[Field]():
+                callbacks = list.append[function() returns string](callbacks, function() returns string: return "{value + 1}")
+    return callbacks
+function print_callbacks(callbacks: list[function() returns string]) returns nothing:
+    for callback in callbacks:
+        println(callback())
+    return nothing
+function main() returns nothing:
+    Widths values = Widths(narrow: 127, wide: 127, repeated: 127)
+    UnsignedWidths unsigned_values = UnsignedWidths(narrow: 255, wide: 18446744073709551615)
+    println(direct(view values))
+    println(comptime direct(view Widths(narrow: 127, wide: 127, repeated: 127)))
+    println(generic[Widths](view values))
+    println(comptime generic[Widths](view Widths(narrow: 127, wide: 127, repeated: 127)))
+    println(generic[UnsignedWidths](view unsigned_values))
+    println(comptime generic[UnsignedWidths](view UnsignedWidths(narrow: 255, wide: 18446744073709551615)))
+    print_callbacks(make[Widths](view values))
+    print_callbacks(comptime make[Widths](view Widths(narrow: 127, wide: 127, repeated: 127)))
+    print_callbacks(make[UnsignedWidths](view unsigned_values))
+    print_callbacks(comptime make[UnsignedWidths](view UnsignedWidths(narrow: 255, wide: 18446744073709551615)))
+    return nothing

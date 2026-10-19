@@ -1,14 +1,78 @@
 //! Jett's backend-neutral control-flow graph representation.
 
+mod actor_handlers;
+
+mod field_updates;
+pub use field_updates::validate_field_updates;
+mod actor_graph;
+pub use actor_graph::{
+    native_graph_metadata_expression, native_graph_metadata_local, validate_native_actor_graphs,
+};
 mod analysis;
+mod breakpoint_regions;
+mod call_owner_generations;
+mod call_ownership;
+mod ordinary_borrowed_sums;
+mod temporary_local_views;
+pub use ordinary_borrowed_sums::{
+    OrdinaryBorrowedSumProjection, OrdinarySumPayloadPath, OrdinarySumProjectionSite,
+};
+mod resource_ownership;
+pub use resource_ownership::{
+    GraphHookProjectionProof, GraphSourceEdgeProof, GraphStorageProof, ResourceArgumentEffect,
+    ResourceArgumentSyntax, ResourceBorrowedSumProjection, ResourceCallActual, ResourceCallFormal,
+    ResourceCallNode, ResourceCallOperand, ResourceCallRegion, ResourceCallRegionId,
+    ResourceCallResult, ResourceCarrierChild, ResourceCarrierConstructor, ResourceCarrierEdge,
+    ResourceCarrierField, ResourceCarrierFunctionPlan, ResourceCarrierGeneration,
+    ResourceCarrierIndex, ResourceCarrierIteration, ResourceCarrierLoan, ResourceCarrierLoanId,
+    ResourceCarrierLoanSource, ResourceCarrierNode, ResourceCarrierObservation,
+    ResourceCarrierOperation, ResourceCarrierOperationId, ResourceCarrierOperationRole,
+    ResourceCarrierProjectionPath, ResourceCarrierShape, ResourceCarrierShapeId,
+    ResourceCarrierSlot, ResourceCarrierSlotId, ResourceCarrierState, ResourceCarrierValue,
+    ResourceCarrierVariant, ResourceCompanionPlan, ResourceCompletion, ResourceConstructorField,
+    ResourceConstructorId, ResourceConstructorNode, ResourceConstructorRegion,
+    ResourceEntryScopePlan, ResourceFrame, ResourceFrameId, ResourceFrameRole,
+    ResourceFunctionPlan, ResourceLexicalExit, ResourceLexicalExitId, ResourceLexicalExitKind,
+    ResourceLexicalExitPlan, ResourceLoan, ResourceLoanId, ResourceLoanSource,
+    ResourceNamedCallableProof, ResourceNativeSuiteInvocation, ResourceOccupancy,
+    ResourceOperation, ResourceOperationId, ResourceOperationRole, ResourceOwnerSlot,
+    ResourceOwnerSlotId, ResourceOwnershipPlan, ResourcePath, ResourcePosition, ResourceShape,
+    ResourceSite, ResourceSlotStorage, ResourceSumPayloadPath, native_graph_hook_projection,
+    native_graph_source_edge, native_graph_storage_for_constructor,
+    native_graph_storage_for_expression, native_graph_storage_for_formal,
+    native_graph_storage_for_local, native_graph_storage_for_return,
+    native_graph_storage_has_records, validate_resource_ownership,
+    validate_resource_ownership_for_entry,
+};
+#[cfg(test)]
+mod resource_manifest_tests;
+pub use call_owner_generations::{
+    CallGenerationSlot, CallGenerationStoragePlan, CallOwnerEscrowId, CallOwnerGenerationId,
+};
+pub use call_ownership::{CallerAcquisitions, SourceAcquisition};
+mod call_views;
+pub mod copy_values;
+mod generated_functions;
+mod reflected_callable;
+pub use reflected_callable::validate_reflected_callable_plans;
+mod handlers;
+mod iteration_views;
+mod match_bindings;
+pub use generated_functions::prepare_native_generated_functions;
+mod sequences;
+pub use sequences::prepare_native_sequences;
+mod uninhabited_sums;
+pub use uninhabited_sums::prepare_native_uninhabited_sums;
+pub mod move_values;
 
 pub use analysis::{AnalysisError, ControlFlowGraph};
+pub use jett_hir::{FunctionId, Local, LocalId, Param, ParamMode};
 
 use jett_common::Span;
-use jett_hir::{self as hir, Expression, FunctionIdentity, LocalId, VariantId};
-use jett_types::TypeId;
+use jett_hir::{self as hir, Expression, FieldId, FunctionIdentity, VariantId};
+use jett_types::{Type, TypeId, TypeInterner};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlockId(u32);
 
 impl BlockId {
@@ -19,16 +83,64 @@ impl BlockId {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
+    pub resource_manifest: hir::ResourceManifest,
     pub functions: Vec<Function>,
+    pub equality_methods: std::collections::HashMap<TypeId, FunctionId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
+    pub id: FunctionId,
     pub identity: FunctionIdentity,
+    pub debug_kind: hir::FunctionDebugKind,
+    pub params: Vec<Param>,
+    pub capture_count: usize,
     pub return_type: TypeId,
+    pub locals: Vec<Local>,
     pub entry: BlockId,
     pub blocks: Vec<BasicBlock>,
     pub span: Span,
+    // Only canonical MIR preparation can authenticate a removed success edge.
+    prepared_absent_successes: Vec<uninhabited_sums::PreparedAbsentSuccess>,
+    prepared_present_successes: Vec<uninhabited_sums::PreparedPresentSuccess>,
+    prepared_view_iterations: Vec<iteration_views::PreparedViewIteration>,
+    original_view_iterations: Vec<iteration_views::OriginalIteration>,
+    match_bindings: Option<match_bindings::Witness>,
+    breakpoint_regions: Vec<breakpoint_regions::BreakpointRegion>,
+    call_owner_generations: Vec<call_owner_generations::CallOwnerGeneration>,
+    resource_lowering: Option<resource_ownership::ResourceLoweringWitness>,
+    ordinary_borrowed_sums: Option<ordinary_borrowed_sums::Witness>,
+    temporary_local_views: Option<temporary_local_views::Witness>,
+    reflected_callable: Option<reflected_callable::Witness>,
+    actor_graph: Option<actor_graph::Witness>,
+    field_updates: Option<field_updates::Witness>,
+    actor_handler: Option<actor_handlers::Witness>,
+    actor_state_views: Vec<hir::ActorStateView>,
+    actor_message_source: bool,
+}
+
+impl Function {
+    /// Look up a local through the canonical dense local table.
+    pub fn local(&self, id: LocalId) -> Option<&Local> {
+        self.locals
+            .get(id.index() as usize)
+            .filter(|local| local.id == id)
+    }
+
+    /// Look up the parameter metadata associated with a local, if any.
+    pub fn parameter_for_local(&self, id: LocalId) -> Option<&Param> {
+        self.params.iter().find(|param| param.local == id)
+    }
+
+    /// Whether a local holds a view parameter or nonowning local alias.
+    pub fn is_view_local(&self, id: LocalId) -> bool {
+        hir::is_borrowed_local(&self.locals, &self.params, id)
+    }
+
+    /// The stable backing local of a direct or forwarded local view.
+    pub fn view_root(&self, id: LocalId) -> Option<LocalId> {
+        hir::local_view_root(&self.locals, id)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -43,16 +155,174 @@ pub struct Statement {
     pub kind: StatementKind,
     pub span: Span,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SequencePart {
+    Element,
+    Key,
+    Value,
+}
+/// Internal producer preflight; it has no source spelling or payload observer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReflectedContainerKind {
+    List,
+    Set,
+    Map,
+    Optional,
+    Result,
+}
+impl ReflectedContainerKind {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::List => "reflected field refinement: expected a ready list value",
+            Self::Set => "reflected field refinement: expected a ready set value",
+            Self::Map => "reflected field refinement: expected a ready map value",
+            Self::Optional => "reflected field refinement: expected a ready optional value",
+            Self::Result => "reflected field refinement: expected a ready result value",
+        }
+    }
+    pub fn matches_type(self, types: &TypeInterner, ty: TypeId) -> bool {
+        if ty.index() as usize >= types.len() {
+            return false;
+        }
+        matches!(
+            (self, types.resolve(ty)),
+            (Self::List, jett_types::Type::List(_))
+                | (Self::Set, jett_types::Type::Set(_))
+                | (Self::Map, jett_types::Type::Map(..))
+                | (Self::Optional, jett_types::Type::Optional(_))
+                | (Self::Result, jett_types::Type::Result(..))
+        )
+    }
+}
+/// One checked struct-field step in a borrowed sequence projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SequenceField {
+    pub owner_type: TypeId,
+    pub field: FieldId,
+}
+
+/// A sequence owned by a local, or borrowed through a checked struct-field path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SequenceSource {
+    Local(LocalId),
+    Projected {
+        owner: LocalId,
+        path: Vec<SequenceField>,
+        ty: TypeId,
+    },
+}
+
+impl SequenceSource {
+    pub fn root(&self) -> LocalId {
+        match self {
+            Self::Local(local) => *local,
+            Self::Projected { owner, .. } => *owner,
+        }
+    }
+
+    pub fn ty(&self, function: &Function) -> Option<TypeId> {
+        match self {
+            Self::Local(local) => function.local(*local).map(|local| local.ty),
+            Self::Projected { ty, .. } => Some(*ty),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StatementKind {
+    /// Private constructor-owned lexical loan retirement; copied IDs grant nothing.
+    ResourceLexicalExit(ResourceLexicalExitId),
+    /// Constructor-authenticated Resource operation whose actuals span CFG blocks.
+    ResourceCall(ResourceCallNode),
+    ResourceConstructor(ResourceConstructorNode),
+    /// Empty, internal generation escrow; this is not an initialized Jett value.
+    OpenCallOwnerGeneration {
+        generation: CallOwnerGenerationId,
+        root: LocalId,
+    },
+    /// Transfer the old owner once, after the independent RHS has been acquired.
+    ReplaceCallOwnerGeneration {
+        generation: CallOwnerGenerationId,
+        root: LocalId,
+        rhs_owner: LocalId,
+    },
+    /// End the matching captured generation after its last call loan.
+    CloseCallOwnerGeneration {
+        generation: CallOwnerGenerationId,
+    },
+    /// A compiler-internal, call-bounded borrow with an exact eager borrow proof.
+    /// Unlike a source Let alias, only this typed statement grants End authority.
+    BeginCallView {
+        local: LocalId,
+        value: Expression,
+    },
+    /// End only the matching internal loan; the borrowed slot owns no destructor.
+    EndCallView {
+        local: LocalId,
+    },
+    /// Reject a changed wrapper's outer pending depth before any producer predicate.
+    ReflectedContainerReady {
+        source: LocalId,
+        kind: ReflectedContainerKind,
+    },
+    /// Private produced-return preflight, authenticated by its callable witness.
+    ReflectedValueReady {
+        source: LocalId,
+        inspect_pending: bool,
+    },
+    SequenceLength {
+        source: SequenceSource,
+        target: LocalId,
+    },
+    SequenceGet {
+        /// Transfer an initialized element from an exclusively owned iterator.
+        consume: bool,
+        source: SequenceSource,
+        index: LocalId,
+        target: LocalId,
+        part: SequencePart,
+    },
+    IterationBorrow {
+        source: SequenceSource,
+        token: LocalId,
+        start: bool,
+    },
+    /// Read a sum discriminant without consuming its owner.
+    SumTag {
+        source: LocalId,
+        target: LocalId,
+    },
+    /// Consume the sum and transfer only its selected initialized payload.
+    SumTake {
+        source: LocalId,
+        target: LocalId,
+        success: bool,
+    },
     Let {
         local: LocalId,
         value: Expression,
     },
+    /// Evaluate a checked refinement predicate and materialize either an empty
+    /// success string or the interpreter-compatible failure message.
+    CheckRefinement {
+        local: LocalId,
+        call: Expression,
+        type_name: String,
+    },
     Assign {
         target: Expression,
         value: Expression,
+    },
+    /// Check the fixed, sealed owner path before acquiring any RHS value.
+    PrepareFieldUpdate {
+        place: hir::FieldUpdatePlace,
+        begin: bool,
+    },
+    /// Commit only after RHS staging; old field retirement follows transfer.
+    UpdateField {
+        target: Expression,
+        value: Expression,
+        place: hir::FieldUpdatePlace,
     },
     Evaluate(Expression),
     HandleDefault(Expression),
@@ -61,13 +331,27 @@ pub enum StatementKind {
         message: Option<Expression>,
     },
     Trace(LocalId),
-    Breakpoint(Option<Expression>),
+    Breakpoint {
+        condition: Option<Expression>,
+        bindings: Vec<LocalId>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Terminator {
     pub kind: TerminatorKind,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReflectedTypeDispatchArm {
+    /// Canonical position exported by the checker for stable diagnostics.
+    pub iteration_index: usize,
+    /// Canonical concrete type identity matched against the runtime `TypeInfo`.
+    pub bound_type: TypeId,
+    /// Checker-owned structural identity for native runtime selection.
+    pub reflection_identity: String,
+    pub target: BlockId,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -93,6 +377,14 @@ pub enum TerminatorKind {
         body: BlockId,
         exit: BlockId,
     },
+    /// Select exactly one checker-specialized arm by source-visible reflected type
+    /// identity. `otherwise` is a defensive edge for malformed runtime
+    /// `TypeInfo` values and normally leads to `Unreachable`.
+    ReflectedTypeDispatch {
+        type_info: Expression,
+        arms: Vec<ReflectedTypeDispatchArm>,
+        otherwise: BlockId,
+    },
     Unreachable,
 }
 
@@ -110,67 +402,47 @@ pub struct ValidationError {
 
 /// Validate structural MIR invariants before a backend consumes the program.
 pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
+    if let Err(message) = actor_graph::validate_native_actor_graphs(program) {
+        return Err(vec![ValidationError {
+            span: program
+                .functions
+                .first()
+                .map_or(Span::new(jett_common::FileId::new(0), 0, 0), |f| f.span),
+            message,
+        }]);
+    }
     let mut errors = Vec::new();
-    for function in &program.functions {
-        if function.entry.index() as usize >= function.blocks.len() {
+    let mut function_ids = std::collections::HashSet::new();
+    for (index, function) in program.functions.iter().enumerate() {
+        if let Err(message) = actor_handlers::validate(function) {
+            errors.push(ValidationError {
+                span: function.span,
+                message,
+            });
+        }
+        if function.id.index() as usize != index {
             errors.push(ValidationError {
                 span: function.span,
                 message: format!(
-                    "function entry block {} is out of range",
-                    function.entry.index()
+                    "function at index {index} has noncanonical ID {}",
+                    function.id.index()
                 ),
             });
         }
-        for (index, block) in function.blocks.iter().enumerate() {
-            if block.id.index() as usize != index {
-                errors.push(ValidationError {
-                    span: function.span,
-                    message: format!(
-                        "block at index {index} has noncanonical ID {}",
-                        block.id.index()
-                    ),
-                });
-            }
-            let block_count = function.blocks.len();
-            let mut check_target = |target: BlockId, edge: &str| {
-                if target.index() as usize >= block_count {
-                    errors.push(ValidationError {
-                        span: function.span,
-                        message: format!("{edge} target {} is out of range", target.index()),
-                    });
-                }
-            };
-            match &block.terminator.kind {
-                TerminatorKind::Goto(target) => check_target(*target, "goto"),
-                TerminatorKind::Branch {
-                    then_block,
-                    else_block,
-                    ..
-                } => {
-                    check_target(*then_block, "branch then");
-                    check_target(*else_block, "branch else");
-                }
-                TerminatorKind::Switch {
-                    variants,
-                    otherwise,
-                    ..
-                } => {
-                    for (variant, target, _) in variants {
-                        check_target(*target, &format!("switch variant {}", variant.index()));
-                    }
-                    if let Some(target) = otherwise {
-                        check_target(*target, "switch otherwise");
-                    }
-                }
-                TerminatorKind::ForEach { body, exit, .. } => {
-                    check_target(*body, "for body");
-                    check_target(*exit, "for exit");
-                }
-                TerminatorKind::Return(_)
-                | TerminatorKind::Respond(_)
-                | TerminatorKind::Unreachable => {}
-            }
+        if !function_ids.insert(function.id) {
+            errors.push(ValidationError {
+                span: function.span,
+                message: format!("multiple functions use ID {}", function.id.index()),
+            });
         }
+        FunctionValidator {
+            function,
+            functions: &program.functions,
+            function_count: program.functions.len(),
+            resource_manifest: &program.resource_manifest,
+            errors: &mut errors,
+        }
+        .validate();
     }
     if errors.is_empty() {
         Ok(())
@@ -179,8 +451,956 @@ pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
     }
 }
 
-pub fn lower(program: &hir::Program) -> Result<Program, Vec<LowerError>> {
-    if let Err(errors) = hir::validate(program) {
+/// Conservative operational refusal until the separate Resource CFG plan exists.
+pub(crate) fn resource_type_pending(types: &TypeInterner, ty: TypeId) -> bool {
+    fn visit(
+        types: &TypeInterner,
+        ty: TypeId,
+        seen: &mut std::collections::HashSet<TypeId>,
+    ) -> bool {
+        if ty.index() as usize >= types.len() {
+            return true;
+        }
+        if !seen.insert(ty) {
+            return false;
+        }
+        match types.resolve(ty) {
+            Type::Resource(_) => true,
+            Type::List(inner)
+            | Type::Set(inner)
+            | Type::Optional(inner)
+            | Type::Secret(inner)
+            | Type::Refinement { base: inner, .. } => visit(types, *inner, seen),
+            Type::Map(key, value) | Type::Result(key, value) => {
+                visit(types, *key, seen) || visit(types, *value, seen)
+            }
+            Type::Function {
+                params,
+                return_type,
+                ..
+            } => {
+                params.iter().any(|ty| visit(types, *ty, seen)) || visit(types, *return_type, seen)
+            }
+            Type::Struct(id) => types
+                .resolve_struct(*id)
+                .fields
+                .iter()
+                .any(|(_, ty)| visit(types, *ty, seen)),
+            Type::Enum(id) => types
+                .resolve_enum(*id)
+                .variants
+                .iter()
+                .any(|variant| variant.fields.iter().any(|(_, ty)| visit(types, *ty, seen))),
+            Type::Machine(id) | Type::MachineState { machine: id, .. } => types
+                .resolve_machine(*id)
+                .states
+                .iter()
+                .any(|state| state.fields.iter().any(|(_, ty)| visit(types, *ty, seen))),
+            _ => false,
+        }
+    }
+    visit(types, ty, &mut std::collections::HashSet::new())
+}
+
+struct FunctionValidator<'function, 'errors> {
+    function: &'function Function,
+    functions: &'function [Function],
+    function_count: usize,
+    resource_manifest: &'function hir::ResourceManifest,
+    errors: &'errors mut Vec<ValidationError>,
+}
+
+/// Validate every invocation before preparation, including unused bodies and
+/// disconnected blocks. Metadata origins must never become execution liveness.
+pub fn validate_call_ownership(
+    program: &Program,
+    types: &TypeInterner,
+) -> Result<(), Vec<ValidationError>> {
+    validate(program)?;
+    validate_reflected_callable_plans(program, types)?;
+    let mut errors = Vec::new();
+    if let Err(message) = program.resource_manifest.validate(types) {
+        // Type bounds are a prerequisite for custody and invocation queries.
+        // A malformed type cannot establish that a Resource witness is needed.
+        return Err(vec![ValidationError {
+            span: Span::new(jett_common::FileId::new(0), 0, 0),
+            message,
+        }]);
+    }
+    let validation = call_ownership::ProgramValidation::new(program);
+    for function in &program.functions {
+        if let Err(message) = actor_handlers::validate(function) {
+            errors.push(ValidationError {
+                span: function.span,
+                message,
+            });
+        }
+        if let Err(message) = ordinary_borrowed_sums::validate(function, types) {
+            errors.push(ValidationError {
+                span: function.span,
+                message,
+            });
+            continue;
+        }
+        if let Err(message) = validation.validate_function(function, types) {
+            errors.push(ValidationError {
+                span: function.span,
+                message,
+            });
+        }
+    }
+    // Custody queries depend on valid invocation and original type metadata.
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    if let Err(mut witness_errors) = resource_ownership::validate_witnesses(program, types) {
+        errors.append(&mut witness_errors);
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+/// Acquire a function's sealed source ownership evidence before native lowering.
+pub fn validate_caller_acquisitions<'a>(
+    program: &Program,
+    function: &'a Function,
+    types: &TypeInterner,
+) -> Result<CallerAcquisitions<'a>, String> {
+    let acquisitions = call_ownership::validate_function(program, function, types)?;
+    if acquisitions.resource_pending
+        || function
+            .locals
+            .iter()
+            .any(|local| resource_type_pending(types, local.ty))
+        || resource_type_pending(types, function.return_type)
+    {
+        return Err("pending ResourceOwnershipPlan: typed Resource nodes grant no ordinary move, copy, borrow or drop authority".into());
+    }
+    Ok(acquisitions)
+}
+
+impl FunctionValidator<'_, '_> {
+    fn validate(&mut self) {
+        let function = self.function;
+        if function.capture_count > function.params.len() {
+            self.error(
+                function.span,
+                "closure capture count exceeds function parameter count",
+            );
+        }
+        if function.entry.index() as usize >= function.blocks.len() {
+            self.error(
+                function.span,
+                format!(
+                    "function entry block {} is out of range",
+                    function.entry.index()
+                ),
+            );
+        }
+
+        let internal_call_views = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter_map(|statement| match statement.kind {
+                StatementKind::BeginCallView { local, .. } => Some(local),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+        for (index, local) in function.locals.iter().enumerate() {
+            if local.id.index() as usize != index {
+                self.error(
+                    local.span,
+                    format!(
+                        "local at index {index} has noncanonical ID {}",
+                        local.id.index()
+                    ),
+                );
+            }
+            if let Some(source) = local.view_source {
+                self.check_local(source, local.span, "local view source");
+                if source.index() >= local.id.index() || function.view_root(local.id).is_none() {
+                    self.error(local.span, "local view source must precede its binding");
+                }
+                let actor_state_view = function.actor_state_view(local.id).unwrap_or(false);
+                if local.mutable
+                    || (function.parameter_for_local(local.id).is_some() && !actor_state_view)
+                {
+                    self.error(
+                        local.span,
+                        "local view aliases must be immutable local bindings",
+                    );
+                }
+                if !actor_state_view
+                    && !internal_call_views.contains(&local.id)
+                    && let Some(root) = function.view_root(local.id)
+                    && function.local(root).is_some_and(|root| root.mutable)
+                    && function
+                        .parameter_for_local(root)
+                        .is_some_and(|parameter| parameter.mode == hir::ParamMode::View)
+                {
+                    self.error(
+                        local.span,
+                        "native local views require immutable view-parameter backing bindings",
+                    );
+                }
+            }
+        }
+
+        let mut parameter_locals = std::collections::HashSet::new();
+        for param in &function.params {
+            self.check_local(param.local, param.span, "parameter");
+            if !parameter_locals.insert(param.local) {
+                self.error(
+                    param.span,
+                    format!(
+                        "multiple parameters reference local {}",
+                        param.local.index()
+                    ),
+                );
+            }
+            if let Some(local) = function.local(param.local) {
+                let metadata_matches = local.name == param.name
+                    && local.ty == param.ty
+                    && local.mutable == param.mutable
+                    && local.span == param.span;
+                if !metadata_matches {
+                    self.error(
+                        param.span,
+                        format!(
+                            "parameter metadata does not match local {}",
+                            param.local.index()
+                        ),
+                    );
+                }
+            }
+        }
+
+        for (index, block) in function.blocks.iter().enumerate() {
+            if block.id.index() as usize != index {
+                self.error(
+                    function.span,
+                    format!(
+                        "block at index {index} has noncanonical ID {}",
+                        block.id.index()
+                    ),
+                );
+            }
+            for statement in &block.statements {
+                self.statement(statement);
+            }
+            self.terminator(&block.terminator);
+        }
+    }
+
+    fn error(&mut self, span: Span, message: impl Into<String>) {
+        self.errors.push(ValidationError {
+            span,
+            message: message.into(),
+        });
+    }
+
+    fn check_local(&mut self, local: LocalId, span: Span, context: &str) {
+        let local_count = self.function.locals.len();
+        if local.index() as usize >= local_count {
+            self.error(
+                span,
+                format!(
+                    "{context} references local {} outside function local table of length {local_count}",
+                    local.index()
+                ),
+            );
+        }
+    }
+
+    fn check_sequence_source(&mut self, source: &SequenceSource, span: Span) {
+        let root = source.root();
+        self.check_local(root, span, "sequence source");
+        if let SequenceSource::Projected { path, .. } = source {
+            if path.is_empty() {
+                self.error(span, "projected sequence has no field path");
+            } else if self
+                .function
+                .local(root)
+                .is_some_and(|local| local.ty != path[0].owner_type)
+            {
+                self.error(
+                    span,
+                    "projected sequence owner type does not match its local",
+                );
+            }
+        }
+    }
+
+    fn check_target(&mut self, target: BlockId, edge: &str) {
+        if target.index() as usize >= self.function.blocks.len() {
+            self.error(
+                self.function.span,
+                format!("{edge} target {} is out of range", target.index()),
+            );
+        }
+    }
+
+    fn check_function(&mut self, function: FunctionId, span: Span) {
+        if function.index() as usize >= self.function_count {
+            self.error(
+                span,
+                format!(
+                    "direct call references function {} outside function table of length {}",
+                    function.index(),
+                    self.function_count
+                ),
+            );
+        }
+    }
+
+    fn check_evaluation_order(&mut self, order: &[usize], argument_count: usize, span: Span) {
+        let mut seen = vec![false; argument_count];
+        let valid = order.len() == argument_count
+            && order
+                .iter()
+                .all(|&index| index < argument_count && !std::mem::replace(&mut seen[index], true));
+        if !valid {
+            self.error(
+                span,
+                "evaluation order must be a permutation of the operand indexes",
+            );
+        }
+    }
+
+    fn statement(&mut self, statement: &Statement) {
+        match &statement.kind {
+            StatementKind::ResourceLexicalExit(_) => {}
+            StatementKind::ResourceConstructor(node) => match node {
+                ResourceConstructorNode::Stage { value, .. } => self.expression(value),
+                ResourceConstructorNode::Commit { output, .. } => {
+                    self.check_local(*output, statement.span, "Resource constructor output")
+                }
+                _ => {}
+            },
+            StatementKind::ResourceCall(node) => match node {
+                ResourceCallNode::Stage {
+                    value, ordinary, ..
+                } => {
+                    self.expression(value);
+                    if let Some(local) = ordinary {
+                        self.check_local(*local, statement.span, "Resource call ordinary stage");
+                    }
+                }
+                ResourceCallNode::Invoke { output, .. } => {
+                    self.check_local(*output, statement.span, "Resource call output")
+                }
+                ResourceCallNode::Begin { .. } | ResourceCallNode::End { .. } => {}
+            },
+            StatementKind::OpenCallOwnerGeneration { root, .. } => {
+                self.check_local(*root, statement.span, "generation root")
+            }
+            StatementKind::ReplaceCallOwnerGeneration {
+                root, rhs_owner, ..
+            } => {
+                self.check_local(*root, statement.span, "generation root");
+                self.check_local(*rhs_owner, statement.span, "generation acquired RHS");
+            }
+            StatementKind::PrepareFieldUpdate { .. }
+            | StatementKind::CloseCallOwnerGeneration { .. } => {}
+            StatementKind::ReflectedContainerReady { source, .. }
+            | StatementKind::ReflectedValueReady { source, .. } => {
+                self.check_local(*source, statement.span, "reflected container source");
+            }
+            StatementKind::SequenceLength { source, target } => {
+                self.check_sequence_source(source, statement.span);
+                self.check_local(*target, statement.span, "sequence length");
+            }
+            StatementKind::SequenceGet {
+                source,
+                index,
+                target,
+                ..
+            } => {
+                self.check_sequence_source(source, statement.span);
+                self.check_local(*index, statement.span, "sequence index");
+                self.check_local(*target, statement.span, "sequence element");
+            }
+            StatementKind::IterationBorrow { source, token, .. } => {
+                self.check_sequence_source(source, statement.span);
+                self.check_local(*token, statement.span, "iteration loan token");
+            }
+
+            StatementKind::SumTag { source, target }
+            | StatementKind::SumTake { source, target, .. } => {
+                self.check_local(*source, statement.span, "sum source");
+                self.check_local(*target, statement.span, "sum target");
+            }
+
+            StatementKind::Let { local, value } | StatementKind::BeginCallView { local, value } => {
+                self.check_local(*local, statement.span, "let statement");
+                self.expression(value);
+            }
+            StatementKind::EndCallView { local } => {
+                self.check_local(*local, statement.span, "call view end");
+            }
+            StatementKind::CheckRefinement {
+                local,
+                call,
+                type_name,
+            } => {
+                self.check_local(*local, statement.span, "refinement error text");
+                self.expression(call);
+                let valid = if let hir::ExpressionKind::Call { function, args, .. } = &call.kind {
+                    self.functions
+                        .get(function.index() as usize)
+                        .is_some_and(|predicate| {
+                            hir::refinement_predicate_declaration_matches(
+                                &predicate.identity.declaration,
+                                type_name,
+                            ) && predicate.capture_count == 0
+                                && predicate.params.len() == 1
+                                && predicate.params[0].mode == ParamMode::Owned
+                                && predicate.return_type == jett_types::TypeInterner::BOOL
+                                && args.len() == 1
+                                && args[0].ty == predicate.params[0].ty
+                                && call.ty == jett_types::TypeInterner::BOOL
+                        })
+                } else {
+                    false
+                };
+                if !valid {
+                    self.error(
+                        statement.span,
+                        "refinement check does not call its exact predicate declaration",
+                    );
+                }
+            }
+            StatementKind::Assign { target, value }
+            | StatementKind::UpdateField { target, value, .. } => {
+                self.expression(target);
+                self.expression(value);
+            }
+            StatementKind::Evaluate(value) | StatementKind::HandleDefault(value) => {
+                self.expression(value);
+            }
+            StatementKind::Assert { condition, message } => {
+                self.expression(condition);
+                if let Some(message) = message {
+                    self.expression(message);
+                }
+            }
+            StatementKind::Trace(local) => {
+                self.check_local(*local, statement.span, "trace statement");
+            }
+            StatementKind::Breakpoint {
+                condition,
+                bindings,
+            } => {
+                if let Some(condition) = condition {
+                    self.expression(condition);
+                }
+                for binding in bindings {
+                    self.check_local(*binding, statement.span, "breakpoint binding");
+                }
+            }
+        }
+    }
+
+    fn terminator(&mut self, terminator: &Terminator) {
+        match &terminator.kind {
+            TerminatorKind::Return(value) => {
+                if let Some(value) = value {
+                    self.expression(value);
+                }
+            }
+            TerminatorKind::Respond(value) => self.expression(value),
+            TerminatorKind::Goto(target) => self.check_target(*target, "goto"),
+            TerminatorKind::Branch {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                self.expression(condition);
+                self.check_target(*then_block, "branch then");
+                self.check_target(*else_block, "branch else");
+            }
+            TerminatorKind::Switch {
+                scrutinee,
+                variants,
+                otherwise,
+            } => {
+                self.expression(scrutinee);
+                for (variant, target, bindings) in variants {
+                    self.check_target(*target, &format!("switch variant {}", variant.index()));
+                    for binding in bindings {
+                        self.check_local(*binding, terminator.span, "switch binding");
+                    }
+                }
+                if let Some(target) = otherwise {
+                    self.check_target(*target, "switch otherwise");
+                }
+            }
+            TerminatorKind::ForEach {
+                key,
+                value,
+                iterable,
+                body,
+                exit,
+                ..
+            } => {
+                self.check_local(*key, terminator.span, "for key");
+                if let Some(value) = value {
+                    self.check_local(*value, terminator.span, "for value");
+                }
+                self.expression(iterable);
+                self.check_target(*body, "for body");
+                self.check_target(*exit, "for exit");
+            }
+            TerminatorKind::ReflectedTypeDispatch {
+                type_info,
+                arms,
+                otherwise,
+            } => {
+                self.expression(type_info);
+                if arms.is_empty() {
+                    self.error(terminator.span, "reflected type dispatch has no arms");
+                }
+                let mut iteration_indexes = std::collections::HashSet::new();
+                let mut bound_types = std::collections::HashSet::new();
+                let mut targets = std::collections::HashSet::new();
+                for arm in arms {
+                    if arm.reflection_identity.is_empty() {
+                        self.error(
+                            terminator.span,
+                            "reflected type dispatch arm has no checked identity",
+                        );
+                    }
+                    if !iteration_indexes.insert(arm.iteration_index) {
+                        self.error(
+                            terminator.span,
+                            "reflected type dispatch contains a duplicate iteration index",
+                        );
+                    }
+                    if !bound_types.insert(&arm.reflection_identity) {
+                        self.error(
+                            terminator.span,
+                            "reflected type dispatch contains a duplicate reflected type identity",
+                        );
+                    }
+                    targets.insert(arm.target);
+                    self.check_target(arm.target, "reflected type dispatch arm");
+                }
+                if targets.contains(otherwise) {
+                    self.error(
+                        terminator.span,
+                        "reflected type dispatch otherwise target overlaps an arm target",
+                    );
+                }
+                self.check_target(*otherwise, "reflected type dispatch otherwise");
+            }
+            TerminatorKind::Unreachable => {}
+        }
+    }
+
+    fn hir_block(&mut self, block: &hir::Block) {
+        for statement in &block.statements {
+            self.hir_statement(statement);
+        }
+    }
+
+    fn hir_statement(&mut self, statement: &hir::Statement) {
+        match &statement.kind {
+            hir::StatementKind::Let { local, value } => {
+                self.check_local(*local, statement.span, "nested let statement");
+                self.expression(value);
+            }
+            hir::StatementKind::Assign { target, value }
+            | hir::StatementKind::UpdateField { target, value, .. } => {
+                self.expression(target);
+                self.expression(value);
+            }
+            hir::StatementKind::Return(value) => {
+                if let Some(value) = value {
+                    self.expression(value);
+                }
+            }
+            hir::StatementKind::HandleDefault(value)
+            | hir::StatementKind::Expression(value)
+            | hir::StatementKind::Respond(value) => self.expression(value),
+            hir::StatementKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                self.expression(condition);
+                self.hir_block(then_block);
+                if let Some(else_block) = else_block {
+                    self.hir_block(else_block);
+                }
+            }
+            hir::StatementKind::While { condition, body } => {
+                self.expression(condition);
+                self.hir_block(body);
+            }
+            hir::StatementKind::For {
+                key,
+                value,
+                iterable,
+                body,
+                ..
+            } => {
+                self.check_local(*key, statement.span, "nested for key");
+                if let Some(value) = value {
+                    self.check_local(*value, statement.span, "nested for value");
+                }
+                self.expression(iterable);
+                self.hir_block(body);
+            }
+            hir::StatementKind::Match { scrutinee, arms } => {
+                self.expression(scrutinee);
+                for arm in arms {
+                    for binding in &arm.bindings {
+                        self.check_local(*binding, arm.span, "nested match binding");
+                    }
+                    self.hir_block(&arm.body);
+                }
+            }
+            hir::StatementKind::Break | hir::StatementKind::Continue => {}
+            hir::StatementKind::Assert { condition, message } => {
+                self.expression(condition);
+                if let Some(message) = message {
+                    self.expression(message);
+                }
+            }
+            hir::StatementKind::Trace(local) => {
+                self.check_local(*local, statement.span, "nested trace statement");
+            }
+            hir::StatementKind::Breakpoint {
+                condition,
+                bindings,
+            } => {
+                if let Some(condition) = condition {
+                    self.expression(condition);
+                }
+                for binding in bindings {
+                    self.check_local(*binding, statement.span, "nested breakpoint binding");
+                }
+            }
+            hir::StatementKind::Scope(block) => self.hir_block(block),
+            hir::StatementKind::ReflectedTypeDispatch { type_info, arms } => {
+                self.expression(type_info);
+                let mut iteration_indexes = std::collections::HashSet::new();
+                let mut bound_types = std::collections::HashSet::new();
+                for arm in arms {
+                    if !iteration_indexes.insert(arm.iteration_index) {
+                        self.error(
+                            statement.span,
+                            "nested reflected type dispatch contains a duplicate iteration index",
+                        );
+                    }
+                    if !bound_types.insert(&arm.reflection_identity) {
+                        self.error(
+                            statement.span,
+                            "nested reflected type dispatch contains a duplicate reflected type identity",
+                        );
+                    }
+                    self.hir_block(&arm.body);
+                }
+                if arms.is_empty() {
+                    self.error(statement.span, "nested reflected type dispatch has no arms");
+                }
+            }
+        }
+    }
+
+    fn expression(&mut self, expression: &Expression) {
+        let ownership = match &expression.kind {
+            hir::ExpressionKind::Call { ownership, .. }
+            | hir::ExpressionKind::Intrinsic { ownership, .. }
+            | hir::ExpressionKind::IndirectCall { ownership, .. }
+            | hir::ExpressionKind::ResourceInvoke { ownership, .. } => Some(ownership),
+            _ => None,
+        };
+        if let Some(ownership) = ownership {
+            ownership
+                .metadata_local_ids(|id| self.check_local(id, expression.span, "caller ownership"));
+            ownership.metadata_function_ids(|id| self.check_function(id, expression.span));
+        }
+        match &expression.kind {
+            hir::ExpressionKind::ActorGraphImport(_) => self.error(
+                expression.span,
+                "actor graph import was not expanded at its activation",
+            ),
+            hir::ExpressionKind::ActorGraphStep { args, .. } => {
+                for arg in args {
+                    self.expression(arg);
+                }
+            }
+            hir::ExpressionKind::Local(local) => {
+                self.check_local(*local, expression.span, "expression");
+            }
+            hir::ExpressionKind::ResourceHookValue { hook } => {
+                if !self.resource_manifest.contains_hook(hook) {
+                    self.error(
+                        expression.span,
+                        "MIR Resource descriptor has no original manifest",
+                    );
+                }
+            }
+            hir::ExpressionKind::ResourceInvoke {
+                hook,
+                args,
+                evaluation_order,
+                ..
+            } => {
+                if !self.resource_manifest.contains_hook(hook) {
+                    self.error(
+                        expression.span,
+                        "MIR Resource invocation has no original manifest",
+                    );
+                }
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
+                for value in args {
+                    self.expression(value);
+                }
+            }
+            hir::ExpressionKind::FunctionRef(function) => {
+                self.check_function(*function, expression.span);
+            }
+            hir::ExpressionKind::ClosureRef { function, captures } => {
+                self.check_function(*function, expression.span);
+                for capture in captures {
+                    self.check_local(*capture, expression.span, "closure capture");
+                }
+            }
+            hir::ExpressionKind::Binary { left, right, .. } => {
+                self.expression(left);
+                self.expression(right);
+            }
+            hir::ExpressionKind::Unary { value, .. }
+            | hir::ExpressionKind::ResultOk(value)
+            | hir::ExpressionKind::ResultFail(value)
+            | hir::ExpressionKind::OptionalSome(value)
+            | hir::ExpressionKind::Comptime { value, .. }
+            | hir::ExpressionKind::Declassify(value)
+            | hir::ExpressionKind::Coarsen(value)
+            | hir::ExpressionKind::RefinementValidated(value)
+            | hir::ExpressionKind::DisplayResult(value)
+            | hir::ExpressionKind::EquatableResult(value)
+            | hir::ExpressionKind::RuntimeFailureMessage(value)
+            | hir::ExpressionKind::InterfaceType(value)
+            | hir::ExpressionKind::Run(value)
+            | hir::ExpressionKind::Join(value)
+            | hir::ExpressionKind::Cancel(value)
+            | hir::ExpressionKind::View(value)
+            | hir::ExpressionKind::Clone(value) => self.expression(value),
+            hir::ExpressionKind::FunctionAdapter { value, function } => {
+                self.check_function(*function, expression.span);
+                self.expression(value);
+            }
+            hir::ExpressionKind::InterfaceCoerce { value, adapters } => {
+                for entry in adapters {
+                    self.check_function(entry.function, expression.span);
+                }
+                self.expression(value);
+            }
+            hir::ExpressionKind::Call {
+                function,
+                args,
+                evaluation_order,
+                ..
+            } => {
+                self.check_function(*function, expression.span);
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
+                for argument in args {
+                    self.expression(argument);
+                }
+            }
+            hir::ExpressionKind::Intrinsic {
+                intrinsic,
+                field_validation,
+                args,
+                evaluation_order,
+                ..
+            } => {
+                match (
+                    hir::is_reflected_field_intrinsic(*intrinsic),
+                    field_validation,
+                ) {
+                    (true, Some(hir::ReflectedFieldValidation::Read))
+                    | (true, Some(hir::ReflectedFieldValidation::ReadCallable(_)))
+                    | (false, None) => {}
+                    _ => self.error(
+                        expression.span,
+                        "reflected selector proof plans were not lowered",
+                    ),
+                }
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
+                for argument in args {
+                    self.expression(argument);
+                }
+            }
+            hir::ExpressionKind::ActorSpawn {
+                args,
+                evaluation_order,
+                constructor,
+                ..
+            } => {
+                if let Some(constructor) = constructor {
+                    self.check_function(*constructor, expression.span);
+                }
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
+                for argument in args {
+                    self.expression(argument);
+                }
+            }
+            hir::ExpressionKind::IndirectCall {
+                callee,
+                args,
+                evaluation_order,
+                ..
+            } => {
+                self.expression(callee);
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
+                for argument in args {
+                    self.expression(argument);
+                }
+            }
+            hir::ExpressionKind::StructConstruct {
+                fields,
+                evaluation_order,
+                ..
+            }
+            | hir::ExpressionKind::BitfieldConstruct {
+                fields,
+                evaluation_order,
+                ..
+            }
+            | hir::ExpressionKind::EnumConstruct {
+                payloads: fields,
+                evaluation_order,
+                ..
+            } => {
+                self.check_evaluation_order(evaluation_order, fields.len(), expression.span);
+                for field in fields {
+                    self.expression(field);
+                }
+            }
+            hir::ExpressionKind::MachineConstruct { payloads, .. } => {
+                for payload in payloads {
+                    self.expression(payload);
+                }
+            }
+            hir::ExpressionKind::MachineTransition {
+                source, payloads, ..
+            } => {
+                self.expression(source);
+                for payload in payloads {
+                    self.expression(payload);
+                }
+            }
+            hir::ExpressionKind::ListConstruct { elements } => {
+                for element in elements {
+                    self.expression(element);
+                }
+            }
+            hir::ExpressionKind::MapConstruct { entries } => {
+                for entry in entries {
+                    self.expression(&entry.key);
+                    self.expression(&entry.value);
+                }
+            }
+            hir::ExpressionKind::Handle {
+                target,
+                error_local,
+                failure,
+                ..
+            } => {
+                self.expression(target);
+                if let Some(error_local) = error_local {
+                    self.check_local(*error_local, expression.span, "handle error binding");
+                }
+                self.hir_block(failure);
+            }
+            hir::ExpressionKind::StringInterpolation(parts) => {
+                for part in parts {
+                    if let hir::StringSegment::Value(value) = part {
+                        self.expression(value);
+                    }
+                }
+            }
+            hir::ExpressionKind::StateIs { value, .. } => self.expression(value),
+            hir::ExpressionKind::InlineFunction {
+                params,
+                view_params,
+                local_floor,
+                body,
+                ..
+            } => {
+                if *local_floor as usize > self.function.locals.len() {
+                    self.error(
+                        expression.span,
+                        "inline function local floor is out of range",
+                    );
+                }
+                for param in params {
+                    self.check_local(*param, expression.span, "inline function parameter");
+                }
+                for view_param in view_params {
+                    self.check_local(
+                        *view_param,
+                        expression.span,
+                        "inline function view parameter",
+                    );
+                    if !params.contains(view_param) {
+                        self.error(
+                            expression.span,
+                            "inline function view parameter is not a parameter",
+                        );
+                    }
+                }
+                self.hir_block(body);
+            }
+            hir::ExpressionKind::ActorMessage {
+                actor,
+                args,
+                evaluation_order,
+                handler,
+                ..
+            } => {
+                self.check_function(*handler, expression.span);
+                self.expression(actor);
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
+                for argument in args {
+                    self.expression(argument);
+                }
+            }
+            hir::ExpressionKind::Field { base, .. } => self.expression(base),
+            hir::ExpressionKind::Int(_)
+            | hir::ExpressionKind::Constant { .. }
+            | hir::ExpressionKind::Float(_)
+            | hir::ExpressionKind::String(_)
+            | hir::ExpressionKind::Bool(_)
+            | hir::ExpressionKind::Nothing
+            | hir::ExpressionKind::PropertyCaseContext(_)
+            | hir::ExpressionKind::RuntimeFailure(_)
+            | hir::ExpressionKind::OptionalNone => {}
+        }
+    }
+}
+
+pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Vec<LowerError>> {
+    hir::validate_actor_graph_execution(program, types).map_err(|message| {
+        vec![LowerError {
+            span: program
+                .functions
+                .first()
+                .map_or(Span::new(jett_common::FileId::new(0), 0, 0), |f| f.span),
+            message,
+        }]
+    })?;
+    if let Err(errors) =
+        hir::validate(program).and_then(|()| hir::validate_backend_types(program, types))
+    {
         return Err(errors
             .into_iter()
             .map(|error| LowerError {
@@ -189,32 +1409,274 @@ pub fn lower(program: &hir::Program) -> Result<Program, Vec<LowerError>> {
             })
             .collect());
     }
-    Ok(Program {
-        functions: program.functions.iter().map(lower_function).collect(),
-    })
+    let resource_execution =
+        resource_ownership::authenticate_original(program, types).map_err(|message| {
+            vec![LowerError {
+                span: program
+                    .functions
+                    .first()
+                    .map_or(Span::new(jett_common::FileId::new(0), 0, 0), |function| {
+                        function.span
+                    }),
+                message,
+            }]
+        })?;
+    let function_param_modes = program
+        .functions
+        .iter()
+        .map(|function| {
+            (
+                function.id,
+                function.params.iter().map(|param| param.mode).collect(),
+            )
+        })
+        .collect();
+    let mut lowered = Program {
+        resource_manifest: program.resource_manifest.clone(),
+        equality_methods: program.equality_methods.clone(),
+        functions: program
+            .functions
+            .iter()
+            .map(|function| {
+                lower_function(
+                    function,
+                    types,
+                    &function_param_modes,
+                    &program.resource_manifest,
+                    &program.resource_source,
+                    &resource_execution,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| vec![error])?,
+    };
+    reflected_callable::capture(
+        &mut lowered,
+        program,
+        &function_param_modes,
+        &resource_execution,
+    )
+    .map_err(|message| {
+        vec![LowerError {
+            span: program
+                .functions
+                .first()
+                .map_or(Span::new(jett_common::FileId::new(0), 0, 0), |function| {
+                    function.span
+                }),
+            message,
+        }]
+    })?;
+    temporary_local_views::capture(&mut lowered, program, types).map_err(|message| {
+        vec![LowerError {
+            span: program
+                .functions
+                .first()
+                .map_or(Span::new(jett_common::FileId::new(0), 0, 0), |function| {
+                    function.span
+                }),
+            message,
+        }]
+    })?;
+    validate_call_ownership(&lowered, types).map_err(|errors| {
+        errors
+            .into_iter()
+            .map(|error| LowerError {
+                span: error.span,
+                message: error.message,
+            })
+            .collect::<Vec<_>>()
+    })?;
+    Ok(lowered)
 }
 
-fn lower_function(function: &hir::Function) -> Function {
-    let mut builder = Builder::new(function.body.span);
+fn lower_function(
+    function: &hir::Function,
+    types: &TypeInterner,
+    function_param_modes: &std::collections::HashMap<FunctionId, Vec<ParamMode>>,
+    resource_manifest: &hir::ResourceManifest,
+    resource_source: &hir::ResourceSourceArchive,
+    resource_execution: &resource_ownership::ResourceExecutionClosure,
+) -> Result<Function, LowerError> {
+    lower_function_body(
+        function,
+        types,
+        function_param_modes,
+        resource_manifest,
+        resource_source,
+        resource_execution,
+    )
+}
+
+fn lower_function_body(
+    function: &hir::Function,
+    types: &TypeInterner,
+    function_param_modes: &std::collections::HashMap<FunctionId, Vec<ParamMode>>,
+    resource_manifest: &hir::ResourceManifest,
+    resource_source: &hir::ResourceSourceArchive,
+    resource_execution: &resource_ownership::ResourceExecutionClosure,
+) -> Result<Function, LowerError> {
+    let mut builder = Builder::new(function.body.span, types, function_param_modes);
+    builder.locals = function.locals.clone();
+    builder.ordinary_sum_capture = ordinary_borrowed_sums::Capture::authenticated(function, types)
+        .map_err(|message| LowerError {
+            span: function.span,
+            message,
+        })?;
+    builder.resource_capture = resource_ownership::Capture::authenticated(
+        function,
+        resource_manifest,
+        resource_source,
+        types,
+        resource_execution,
+    )
+    .map_err(|message| LowerError {
+        span: function.span,
+        message,
+    })?;
+    builder.view_params = function
+        .params
+        .iter()
+        .filter(|param| param.mode == ParamMode::View)
+        .map(|param| param.local)
+        .collect();
+    builder.view_params.extend(
+        function
+            .locals
+            .iter()
+            .filter(|local| local.view_source.is_some())
+            .map(|local| local.id),
+    );
     builder.lower_block(&function.body);
-    Function {
+    if let Some(error) = builder.resource_error.take() {
+        return Err(error);
+    }
+    if builder.open() && function.return_type == jett_types::TypeInterner::NOTHING {
+        builder.terminate(TerminatorKind::Return(None), function.body.span);
+    }
+    let breakpoint_capture = std::mem::take(&mut builder.breakpoint_capture);
+    let generation_capture = std::mem::take(&mut builder.generation_capture);
+    let resource_capture = std::mem::take(&mut builder.resource_capture);
+    let ordinary_sum_capture = std::mem::take(&mut builder.ordinary_sum_capture);
+    let match_capture = std::mem::take(&mut builder.match_capture);
+    let mut lowered = Function {
+        id: function.id,
         identity: function.identity.clone(),
+        debug_kind: function.debug_kind.clone(),
+        params: function.params.clone(),
+        capture_count: function.capture_count,
         return_type: function.return_type,
+        locals: builder.locals,
         entry: BlockId(0),
         blocks: builder.blocks,
         span: function.span,
-    }
+        prepared_absent_successes: Vec::new(),
+        prepared_present_successes: Vec::new(),
+        prepared_view_iterations: Vec::new(),
+        original_view_iterations: Vec::new(),
+        match_bindings: None,
+        breakpoint_regions: Vec::new(),
+        call_owner_generations: Vec::new(),
+        resource_lowering: None,
+        ordinary_borrowed_sums: None,
+        temporary_local_views: None,
+        reflected_callable: None,
+        actor_graph: None,
+        field_updates: None,
+        actor_handler: None,
+        actor_state_views: function.actor_state_views.clone(),
+        actor_message_source: hir::has_actor_messages(&function.body),
+    };
+    lowered.breakpoint_regions =
+        breakpoint_capture
+            .seal(&lowered)
+            .map_err(|message| LowerError {
+                span: function.span,
+                message,
+            })?;
+    lowered.call_owner_generations =
+        generation_capture
+            .seal(&lowered)
+            .map_err(|message| LowerError {
+                span: function.span,
+                message,
+            })?;
+    lowered.resource_lowering = resource_capture
+        .finish(&lowered, types)
+        .map_err(|message| LowerError {
+            span: function.span,
+            message,
+        })?;
+    lowered.ordinary_borrowed_sums =
+        ordinary_sum_capture
+            .finish(&lowered)
+            .map_err(|message| LowerError {
+                span: function.span,
+                message,
+            })?;
+    iteration_views::capture_original(&mut lowered, types);
+    lowered.match_bindings =
+        match_capture
+            .finish(&lowered, types)
+            .map_err(|message| LowerError {
+                span: function.span,
+                message,
+            })?;
+    lowered.actor_graph =
+        actor_graph::seal(function, &lowered, types).map_err(|message| LowerError {
+            span: function.span,
+            message,
+        })?;
+    lowered.actor_handler =
+        actor_handlers::seal(function, &lowered).map_err(|message| LowerError {
+            span: function.span,
+            message,
+        })?;
+    lowered.field_updates =
+        field_updates::seal(function, &lowered, types).map_err(|message| LowerError {
+            span: function.span,
+            message,
+        })?;
+    Ok(lowered)
 }
 
-struct Builder {
+#[derive(Clone)]
+struct Builder<'a> {
+    resource_error: Option<LowerError>,
+    types: &'a TypeInterner,
+    function_param_modes: &'a std::collections::HashMap<FunctionId, Vec<ParamMode>>,
     blocks: Vec<BasicBlock>,
     current: BlockId,
-    loops: Vec<(BlockId, BlockId)>,
+    loops: Vec<(BlockId, BlockId, usize, usize)>,
+    lexical_scopes: Vec<resource_ownership::LexicalScope>,
+    reflected_original_prefix: Option<Vec<usize>>,
+    call_view_scopes: Vec<Vec<LocalId>>,
+    field_update_scopes: Vec<(hir::FieldUpdatePlace, usize)>,
+    resource_call_scopes: Vec<ResourceCallRegionId>,
+    resource_constructor_scopes: Vec<ResourceConstructorId>,
+    resource_operation_scopes: Vec<resource_ownership::constructors::ResourceOperationRegion>,
+    locals: Vec<Local>,
+    handlers: Vec<(LocalId, BlockId)>,
+    view_params: Vec<LocalId>,
+    breakpoint_capture: breakpoint_regions::Capture,
+    generation_capture: call_owner_generations::Capture,
+    resource_capture: resource_ownership::Capture,
+    ordinary_sum_capture: ordinary_borrowed_sums::Capture,
+    match_capture: match_bindings::Capture,
+    reflected_produced_return: bool,
 }
 
-impl Builder {
-    fn new(span: Span) -> Self {
+impl<'a> Builder<'a> {
+    fn new(
+        span: Span,
+        types: &'a TypeInterner,
+        function_param_modes: &'a std::collections::HashMap<FunctionId, Vec<ParamMode>>,
+    ) -> Self {
         Self {
+            types,
+            function_param_modes,
+            lexical_scopes: Vec::new(),
+            reflected_original_prefix: None,
             blocks: vec![BasicBlock {
                 id: BlockId(0),
                 statements: Vec::new(),
@@ -225,6 +1687,21 @@ impl Builder {
             }],
             current: BlockId(0),
             loops: Vec::new(),
+            call_view_scopes: Vec::new(),
+            field_update_scopes: Vec::new(),
+            resource_call_scopes: Vec::new(),
+            resource_constructor_scopes: Vec::new(),
+            resource_operation_scopes: Vec::new(),
+            locals: Vec::new(),
+            handlers: Vec::new(),
+            view_params: Vec::new(),
+            resource_error: None,
+            breakpoint_capture: breakpoint_regions::Capture::default(),
+            generation_capture: call_owner_generations::Capture::default(),
+            resource_capture: resource_ownership::Capture::default(),
+            ordinary_sum_capture: ordinary_borrowed_sums::Capture::default(),
+            match_capture: match_bindings::Capture::default(),
+            reflected_produced_return: false,
         }
     }
 
@@ -238,6 +1715,9 @@ impl Builder {
                 span,
             },
         });
+        self.breakpoint_capture.block(id);
+        self.generation_capture.block(id);
+        self.resource_capture.block(id, span);
         id
     }
 
@@ -249,13 +1729,37 @@ impl Builder {
     }
 
     fn terminate(&mut self, kind: TerminatorKind, span: Span) {
-        self.blocks[self.current.index() as usize].terminator = Terminator { kind, span };
+        let value = Terminator { kind, span };
+        self.breakpoint_capture.terminator(self.current, &value);
+        self.generation_capture.terminator(self.current, &value);
+        self.resource_capture.terminator(self.current, &value);
+        self.blocks[self.current.index() as usize].terminator = value;
     }
 
     fn push(&mut self, kind: StatementKind, span: Span) {
+        let index = self.blocks[self.current.index() as usize].statements.len();
+        let value = Statement { kind, span };
+        self.breakpoint_capture
+            .statement(self.current, index, &value);
+        self.generation_capture
+            .statement(self.current, index, &value);
+        self.resource_capture.statement(self.current, index, &value);
+        if let StatementKind::ResourceConstructor(node) = &value.kind {
+            if let Some(site) = self.resource_capture.site(self.current, index) {
+                self.resource_capture
+                    .constructor_node(site, node, &self.locals);
+            }
+        }
+        if let StatementKind::ResourceCall(node) = &value.kind {
+            let site = self
+                .resource_capture
+                .site(self.current, index)
+                .expect("authenticated Resource node");
+            self.resource_capture.normalized_node(site, node);
+        }
         self.blocks[self.current.index() as usize]
             .statements
-            .push(Statement { kind, span });
+            .push(value);
     }
 
     fn close_to(&mut self, target: BlockId, span: Span) {
@@ -265,45 +1769,346 @@ impl Builder {
     }
 
     fn lower_block(&mut self, block: &hir::Block) {
+        let lexical = match self
+            .resource_capture
+            .lexical_scope_under(block, self.reflected_original_prefix.as_deref())
+        {
+            Ok(scope) => scope,
+            Err(message) => {
+                self.resource_error = Some(LowerError {
+                    span: block.span,
+                    message,
+                });
+                None
+            }
+        };
+        let entered = lexical.is_some();
+        if let Some(scope) = lexical {
+            self.lexical_scopes.push(scope);
+        }
         for statement in &block.statements {
             if !self.open() {
                 break;
             }
             self.lower_statement(statement);
         }
+        if entered {
+            if self.open() {
+                self.lower_lexical_exit(
+                    ResourceLexicalExitKind::Fallthrough,
+                    self.lexical_scopes.len() - 1,
+                    None,
+                    None,
+                    block.span,
+                );
+            }
+            self.lexical_scopes.pop();
+        }
+    }
+
+    fn lower_lexical_exit(
+        &mut self,
+        kind: ResourceLexicalExitKind,
+        floor: usize,
+        original: Option<&hir::Statement>,
+        target: Option<BlockId>,
+        span: Span,
+    ) {
+        let position = if kind == ResourceLexicalExitKind::Return {
+            ResourcePosition::Terminator
+        } else {
+            ResourcePosition::Statement(self.blocks[self.current.index() as usize].statements.len())
+        };
+        if let Some(id) = self.resource_capture.lexical_exit(
+            kind,
+            self.current,
+            position,
+            &self.lexical_scopes[floor..],
+            original,
+            target,
+        ) && kind != ResourceLexicalExitKind::Return
+        {
+            self.push(StatementKind::ResourceLexicalExit(id), span);
+        }
     }
 
     fn lower_statement(&mut self, statement: &hir::Statement) {
         match &statement.kind {
-            hir::StatementKind::Let { local, value } => self.push(
-                StatementKind::Let {
-                    local: *local,
-                    value: value.clone(),
-                },
-                statement.span,
-            ),
-            hir::StatementKind::Assign { target, value } => self.push(
-                StatementKind::Assign {
-                    target: target.clone(),
-                    value: value.clone(),
-                },
-                statement.span,
-            ),
+            hir::StatementKind::Let { local, value } => {
+                let seed = match self
+                    .resource_capture
+                    .borrowed_sum_seed(*local, value, self.types)
+                {
+                    Ok(seed) => seed,
+                    Err(message) => {
+                        self.resource_error = Some(LowerError {
+                            span: statement.span,
+                            message,
+                        });
+                        None
+                    }
+                };
+                let ordinary_seed = match self.ordinary_sum_capture.seed(*local, value) {
+                    Ok(seed) => seed,
+                    Err(message) => {
+                        self.resource_error = Some(LowerError {
+                            span: statement.span,
+                            message,
+                        });
+                        None
+                    }
+                };
+                let value = if let Some(seed) = ordinary_seed {
+                    self.lower_ordinary_borrowed_sum_handle(seed)
+                } else if let Some(seed) = seed {
+                    if let Some(scope) = self.lexical_scopes.last_mut() {
+                        scope.active.push(*local);
+                    }
+                    self.lower_borrowed_sum_handle(seed)
+                } else if let Some(metadata) = self.locals.get(local.index() as usize)
+                    && let Some(source) = metadata.view_source
+                    && let Some(origin) = self
+                        .locals
+                        .get(source.index() as usize)
+                        .filter(|origin| origin.id == source)
+                    && hir::validate_local_view_initializer(
+                        value,
+                        source,
+                        origin.ty,
+                        metadata.ty,
+                        self.types,
+                    )
+                    .is_ok()
+                    && (!resource_type_pending(self.types, metadata.ty)
+                        || hir::borrowed_sum_view_initializer(
+                            value,
+                            source,
+                            origin.ty,
+                            metadata.ty,
+                            self.types,
+                        )
+                        .is_ok_and(|handle| handle.is_none()))
+                {
+                    // Stable aliases contain only transparent reads. Taking an
+                    // owned snapshot would replace their checked backing local.
+                    value.clone()
+                } else {
+                    self.lower_value(value)
+                };
+                if let Some(header) = self.locals.get(local.index() as usize) {
+                    match self.resource_capture.bind_owned_declaration(
+                        statement,
+                        &value,
+                        header,
+                        self.current,
+                        self.blocks[self.current.index() as usize].statements.len(),
+                    ) {
+                        Ok(true) => {
+                            if let Some(scope) = self.lexical_scopes.last_mut() {
+                                scope.active.push(*local);
+                            }
+                        }
+                        Ok(false) => {}
+                        Err(message) => {
+                            self.resource_error = Some(LowerError {
+                                span: statement.span,
+                                message,
+                            });
+                        }
+                    }
+                }
+                self.push(
+                    StatementKind::Let {
+                        local: *local,
+                        value,
+                    },
+                    statement.span,
+                );
+            }
+            hir::StatementKind::UpdateField {
+                target,
+                value,
+                place,
+            } => {
+                self.push(
+                    StatementKind::PrepareFieldUpdate {
+                        place: place.clone(),
+                        begin: true,
+                    },
+                    statement.span,
+                );
+                self.field_update_scopes
+                    .push((place.clone(), self.loops.len()));
+                let value = self.lower_value(value);
+                self.field_update_scopes.pop();
+                let staged = self.temporary(value.ty, value.span);
+                self.push(
+                    StatementKind::Let {
+                        local: staged,
+                        value,
+                    },
+                    statement.span,
+                );
+                let value = Expression {
+                    kind: hir::ExpressionKind::Local(staged),
+                    ty: target.ty,
+                    span: statement.span,
+                };
+                self.push(
+                    StatementKind::UpdateField {
+                        target: target.clone(),
+                        value,
+                        place: place.clone(),
+                    },
+                    statement.span,
+                );
+            }
+            hir::StatementKind::Assign { target, value } => {
+                // Keep the current owner readable throughout the entire RHS.
+                let generation = match target.kind {
+                    hir::ExpressionKind::Local(root) => self
+                        .generation_capture
+                        .protected(root)
+                        .map(|generation| (generation, root)),
+                    _ => None,
+                };
+                let value = self.lower_value(value);
+                if let Some((generation, root)) = generation {
+                    let rhs_owner = self.temporary(value.ty, value.span);
+                    let acquired = (
+                        self.current,
+                        self.blocks[self.current.index() as usize].statements.len(),
+                    );
+                    self.push(
+                        StatementKind::Let {
+                            local: rhs_owner,
+                            value,
+                        },
+                        statement.span,
+                    );
+                    let replacement = (
+                        self.current,
+                        self.blocks[self.current.index() as usize].statements.len(),
+                    );
+                    self.generation_capture
+                        .replacement(generation, statement, rhs_owner, acquired, replacement)
+                        .expect("constructor-selected generation preserves its checked Assign");
+                    self.push(
+                        StatementKind::ReplaceCallOwnerGeneration {
+                            generation,
+                            root,
+                            rhs_owner,
+                        },
+                        statement.span,
+                    );
+                } else {
+                    self.push(
+                        StatementKind::Assign {
+                            target: target.clone(),
+                            value,
+                        },
+                        statement.span,
+                    );
+                }
+            }
             hir::StatementKind::Expression(value) => {
-                self.push(StatementKind::Evaluate(value.clone()), statement.span)
+                let value = self.lower_value(value);
+                self.push(StatementKind::Evaluate(value), statement.span);
             }
             hir::StatementKind::HandleDefault(value) => {
-                self.push(StatementKind::HandleDefault(value.clone()), statement.span)
+                let value = self.lower_value(value);
+                if let Some(&(local, continuation)) = self.handlers.last() {
+                    self.push(StatementKind::Let { local, value }, statement.span);
+                    self.terminate(TerminatorKind::Goto(continuation), statement.span);
+                } else {
+                    self.push(StatementKind::HandleDefault(value), statement.span);
+                }
             }
             hir::StatementKind::Return(value) => {
-                self.terminate(TerminatorKind::Return(value.clone()), statement.span)
+                // This branch abandons surrounding calls before the return
+                // operand may move their owner. Other CFG branches retain them.
+                let (resource_scopes, constructor_scopes, operation_scopes) =
+                    self.abandon_resource_calls(statement.span);
+                self.end_call_views_since(0, statement.span);
+                let abandoned = std::mem::take(&mut self.call_view_scopes);
+                let generations = self.generation_capture.suspend();
+                let value = value.as_ref().map(|v| self.lower_value(v));
+                self.call_view_scopes = abandoned;
+                self.generation_capture.restore(generations);
+                self.resource_call_scopes = resource_scopes;
+                self.resource_constructor_scopes = constructor_scopes;
+                self.resource_operation_scopes = operation_scopes;
+                self.lower_lexical_exit(
+                    ResourceLexicalExitKind::Return,
+                    0,
+                    Some(statement),
+                    None,
+                    statement.span,
+                );
+                self.terminate(TerminatorKind::Return(value), statement.span);
             }
             hir::StatementKind::Break => {
-                let target = self.loops.last().expect("validated break has a loop").1;
+                let abandoned = self
+                    .field_update_scopes
+                    .iter()
+                    .rev()
+                    .filter(|(_, depth)| *depth >= self.loops.len())
+                    .map(|(place, _)| place.clone())
+                    .collect::<Vec<_>>();
+                for place in abandoned {
+                    self.push(
+                        StatementKind::PrepareFieldUpdate {
+                            place,
+                            begin: false,
+                        },
+                        statement.span,
+                    );
+                }
+                if !self.resource_operation_scopes.is_empty() {
+                    self.resource_error = Some(LowerError { span: statement.span, message: "pending Resource call region: Break needs its exact operation-depth exit proof".into() });
+                }
+                let (_, target, depth, lexical_depth) =
+                    *self.loops.last().expect("validated break has a loop");
+                self.end_call_views_since(depth, statement.span);
+                self.lower_lexical_exit(
+                    ResourceLexicalExitKind::Break,
+                    lexical_depth,
+                    Some(statement),
+                    Some(target),
+                    statement.span,
+                );
                 self.terminate(TerminatorKind::Goto(target), statement.span);
             }
             hir::StatementKind::Continue => {
-                let target = self.loops.last().expect("validated continue has a loop").0;
+                let abandoned = self
+                    .field_update_scopes
+                    .iter()
+                    .rev()
+                    .filter(|(_, depth)| *depth >= self.loops.len())
+                    .map(|(place, _)| place.clone())
+                    .collect::<Vec<_>>();
+                for place in abandoned {
+                    self.push(
+                        StatementKind::PrepareFieldUpdate {
+                            place,
+                            begin: false,
+                        },
+                        statement.span,
+                    );
+                }
+                if !self.resource_operation_scopes.is_empty() {
+                    self.resource_error = Some(LowerError { span: statement.span, message: "pending Resource call region: Continue needs its exact operation-depth exit proof".into() });
+                }
+                let (target, _, depth, lexical_depth) =
+                    *self.loops.last().expect("validated continue has a loop");
+                self.end_call_views_since(depth, statement.span);
+                self.lower_lexical_exit(
+                    ResourceLexicalExitKind::Continue,
+                    lexical_depth,
+                    Some(statement),
+                    Some(target),
+                    statement.span,
+                );
                 self.terminate(TerminatorKind::Goto(target), statement.span);
             }
             hir::StatementKind::If {
@@ -324,23 +2129,66 @@ impl Builder {
             hir::StatementKind::Match { scrutinee, arms } => {
                 self.lower_match(scrutinee, arms, statement.span)
             }
-            hir::StatementKind::Assert { condition, message } => self.push(
-                StatementKind::Assert {
-                    condition: condition.clone(),
-                    message: message.clone(),
-                },
-                statement.span,
-            ),
+            hir::StatementKind::Assert { condition, message } => {
+                let condition = self.lower_value(condition);
+                self.push(
+                    StatementKind::Assert {
+                        condition,
+                        message: message.clone(),
+                    },
+                    statement.span,
+                );
+            }
             hir::StatementKind::Trace(local) => {
                 self.push(StatementKind::Trace(*local), statement.span)
             }
-            hir::StatementKind::Breakpoint(condition) => {
-                self.push(StatementKind::Breakpoint(condition.clone()), statement.span)
+            hir::StatementKind::Breakpoint {
+                condition,
+                bindings,
+            } => {
+                let capturing = condition.is_some();
+                if capturing {
+                    self.breakpoint_capture.begin(
+                        statement,
+                        self.current,
+                        self.blocks[self.current.index() as usize].statements.len(),
+                    );
+                }
+                let condition = condition.as_ref().map(|value| self.lower_value(value));
+                self.push(
+                    StatementKind::Breakpoint {
+                        condition,
+                        bindings: bindings.clone(),
+                    },
+                    statement.span,
+                );
+                if capturing {
+                    self.breakpoint_capture.end(
+                        self.current,
+                        self.blocks[self.current.index() as usize].statements.len() - 1,
+                    );
+                }
             }
             hir::StatementKind::Respond(value) => {
-                self.terminate(TerminatorKind::Respond(value.clone()), statement.span)
+                // Respond abandons the surrounding acquisition before evaluating
+                // its owned reply, while retaining its distinct actor exit kind.
+                let (resource_scopes, constructor_scopes, operation_scopes) =
+                    self.abandon_resource_calls(statement.span);
+                self.end_call_views_since(0, statement.span);
+                let abandoned = std::mem::take(&mut self.call_view_scopes);
+                let generations = self.generation_capture.suspend();
+                let value = self.lower_value(value);
+                self.call_view_scopes = abandoned;
+                self.generation_capture.restore(generations);
+                self.resource_call_scopes = resource_scopes;
+                self.resource_constructor_scopes = constructor_scopes;
+                self.resource_operation_scopes = operation_scopes;
+                self.terminate(TerminatorKind::Respond(value), statement.span)
             }
             hir::StatementKind::Scope(block) => self.lower_block(block),
+            hir::StatementKind::ReflectedTypeDispatch { type_info, arms } => {
+                self.lower_reflected_type_dispatch(type_info, arms, statement.span)
+            }
         }
     }
 
@@ -354,6 +2202,7 @@ impl Builder {
         let then_block = self.new_block(then_body.span);
         let else_span = else_body.map_or(statement_span, |body| body.span);
         let else_block = self.new_block(else_span);
+        let condition = self.lower_value(condition);
         self.terminate(
             TerminatorKind::Branch {
                 condition: condition.clone(),
@@ -388,7 +2237,14 @@ impl Builder {
         let body_block = self.new_block(body.span);
         let exit = self.new_block(statement_span);
         self.terminate(TerminatorKind::Goto(condition_block), statement_span);
+        self.loops.push((
+            condition_block,
+            exit,
+            self.call_view_scopes.len(),
+            self.lexical_scopes.len(),
+        ));
         self.current = condition_block;
+        let condition = self.lower_value(condition);
         self.terminate(
             TerminatorKind::Branch {
                 condition: condition.clone(),
@@ -397,7 +2253,6 @@ impl Builder {
             },
             condition.span,
         );
-        self.loops.push((condition_block, exit));
         self.current = body_block;
         self.lower_block(body);
         self.close_to(condition_block, body.span);
@@ -414,6 +2269,7 @@ impl Builder {
         body: &hir::Block,
         statement_span: Span,
     ) {
+        let iterable = self.lower_value(iterable);
         let header = self.new_block(iterable.span);
         let body_block = self.new_block(body.span);
         let exit = self.new_block(statement_span);
@@ -428,9 +2284,14 @@ impl Builder {
                 body: body_block,
                 exit,
             },
-            iterable.span,
+            statement_span,
         );
-        self.loops.push((header, exit));
+        self.loops.push((
+            header,
+            exit,
+            self.call_view_scopes.len(),
+            self.lexical_scopes.len(),
+        ));
         self.current = body_block;
         self.lower_block(body);
         self.close_to(header, body.span);
@@ -457,6 +2318,28 @@ impl Builder {
                 otherwise = Some(*block);
             }
         }
+        let borrowed =
+            match match_bindings::requires_snapshot(self.types, scrutinee, &self.view_params) {
+                Ok(borrowed) => borrowed,
+                Err(message) => {
+                    self.resource_error = Some(LowerError {
+                        span: statement_span,
+                        message,
+                    });
+                    return;
+                }
+            };
+        let scrutinee = self.lower_value(scrutinee);
+        let scrutinee = if borrowed {
+            Expression {
+                kind: hir::ExpressionKind::Clone(Box::new(scrutinee.clone())),
+                ty: scrutinee.ty,
+                span: scrutinee.span,
+            }
+        } else {
+            scrutinee.clone()
+        };
+        let match_header = self.current;
         self.terminate(
             TerminatorKind::Switch {
                 scrutinee: scrutinee.clone(),
@@ -466,11 +2349,33 @@ impl Builder {
             scrutinee.span,
         );
 
+        let selector = self.blocks[match_header.index() as usize]
+            .terminator
+            .clone();
+        let mut arm_regions = Vec::with_capacity(arms.len());
         let mut arm_exits = Vec::with_capacity(arms.len());
         for (arm, block) in arms.iter().zip(arm_blocks) {
+            let first_child = self.blocks.len();
             self.current = block;
             self.lower_block(&arm.body);
+            let region = std::iter::once(block)
+                .chain(self.blocks[first_child..].iter().map(|block| block.id))
+                .collect();
+            arm_regions.push((block, region));
             arm_exits.push((self.current, self.open(), arm.span));
+        }
+        if let Err(message) = self.match_capture.record(
+            match_header,
+            selector,
+            statement_span,
+            arm_regions,
+            &self.locals,
+            self.types,
+        ) {
+            self.resource_error = Some(LowerError {
+                span: statement_span,
+                message,
+            });
         }
 
         if arm_exits.iter().any(|(_, falls_through, _)| *falls_through) {
@@ -482,6 +2387,157 @@ impl Builder {
             self.current = join;
         }
     }
+
+    fn lower_reflected_type_dispatch(
+        &mut self,
+        type_info: &Expression,
+        arms: &[hir::ReflectedTypeArm],
+        statement_span: Span,
+    ) {
+        if let Some(proof) = self
+            .resource_capture
+            .reflected_field_dispatch(type_info, arms)
+        {
+            self.lower_reflected_field_dispatch(proof, statement_span);
+            return;
+        }
+        let arm_blocks = arms
+            .iter()
+            .map(|arm| self.new_block(arm.body.span))
+            .collect::<Vec<_>>();
+        let otherwise = self.new_block(statement_span);
+        let dispatch_arms = arms
+            .iter()
+            .zip(&arm_blocks)
+            .map(|(arm, target)| ReflectedTypeDispatchArm {
+                iteration_index: arm.iteration_index,
+                bound_type: arm.bound_type,
+                reflection_identity: arm.reflection_identity.clone(),
+                target: *target,
+            })
+            .collect();
+        self.terminate(
+            TerminatorKind::ReflectedTypeDispatch {
+                type_info: type_info.clone(),
+                arms: dispatch_arms,
+                otherwise,
+            },
+            type_info.span,
+        );
+
+        let mut arm_exits = Vec::with_capacity(arms.len());
+        for (arm, block) in arms.iter().zip(arm_blocks) {
+            self.current = block;
+            self.lower_block(&arm.body);
+            arm_exits.push((self.current, self.open(), arm.body.span));
+        }
+
+        if arm_exits.iter().any(|(_, falls_through, _)| *falls_through) {
+            let join = self.new_block(statement_span);
+            for (exit, _, span) in arm_exits {
+                self.current = exit;
+                self.close_to(join, span);
+            }
+            self.current = join;
+        }
+    }
+    fn lower_reflected_field_dispatch(
+        &mut self,
+        proof: hir::ReflectedFieldDispatchProof,
+        statement_span: Span,
+    ) {
+        let Some(key) = self.locals.get(proof.key().index() as usize).cloned() else {
+            self.resource_error = Some(LowerError {
+                span: statement_span,
+                message: "Resource reflected binder lost its dense header".into(),
+            });
+            return;
+        };
+        let arms = proof.arms();
+        let mut guards = vec![self.current];
+        for _ in 1..arms.len() {
+            guards.push(self.new_block(statement_span));
+        }
+        let dispatches = arms
+            .iter()
+            .map(|_| self.new_block(statement_span))
+            .collect::<Vec<_>>();
+        let targets = arms
+            .iter()
+            .map(|arm| self.new_block(arm.body.span))
+            .collect::<Vec<_>>();
+        let otherwise = self.new_block(statement_span);
+        let mut exits = Vec::new();
+        for (index, arm) in arms.iter().enumerate() {
+            let condition = match resource_ownership::reflected_fields::ordinal_guard(
+                &proof,
+                proof.type_info(),
+                index,
+            ) {
+                Ok(condition) => condition,
+                Err(message) => {
+                    self.resource_error = Some(LowerError {
+                        span: statement_span,
+                        message,
+                    });
+                    return;
+                }
+            };
+            self.current = guards[index];
+            self.terminate(
+                TerminatorKind::Branch {
+                    condition,
+                    then_block: dispatches[index],
+                    else_block: guards.get(index + 1).copied().unwrap_or(otherwise),
+                },
+                statement_span,
+            );
+            self.current = dispatches[index];
+            self.terminate(
+                TerminatorKind::ReflectedTypeDispatch {
+                    type_info: proof.type_info().clone(),
+                    arms: vec![ReflectedTypeDispatchArm {
+                        iteration_index: index,
+                        bound_type: arm.bound_type,
+                        reflection_identity: arm.reflection_identity.clone(),
+                        target: targets[index],
+                    }],
+                    otherwise,
+                },
+                proof.type_info().span,
+            );
+            self.current = targets[index];
+            let prefix = proof.arm_container_path(index).map(<[_]>::to_vec);
+            if prefix.is_none() {
+                self.resource_error = Some(LowerError {
+                    span: statement_span,
+                    message: "Resource reflected body lost its exact original Scope path".into(),
+                });
+                return;
+            }
+            let previous = std::mem::replace(&mut self.reflected_original_prefix, prefix);
+            self.lower_block(&arm.body);
+            self.reflected_original_prefix = previous;
+            exits.push((self.current, self.open(), arm.body.span));
+        }
+        if exits.iter().any(|(_, open, _)| *open) {
+            let join = self.new_block(statement_span);
+            for (exit, _, span) in exits {
+                self.current = exit;
+                self.close_to(join, span);
+            }
+            self.current = join;
+        }
+        if let Err(message) = self
+            .resource_capture
+            .capture_reflected_field_dispatch(proof, key, guards, dispatches, targets, otherwise)
+        {
+            self.resource_error = Some(LowerError {
+                span: statement_span,
+                message,
+            });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -491,6 +2547,46 @@ mod tests {
     use jett_common::{FileId, SourceOrigin};
 
     use super::*;
+
+    const REFLECTED_DISPATCH_SOURCE: &str = r#"namespace app
+struct User:
+    name: string
+    age: int64
+function reflected_names[T](view value: T) returns string:
+    mutable string output = ""
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            output = type.name[Field]()
+    return output
+function main() returns string:
+    User user = User(name: "Ada", age: 37)
+    return reflected_names[User](view user)
+"#;
+
+    const REFLECTED_CONTROL_FLOW_SOURCE: &str = r#"namespace app
+struct User:
+    name: string
+    age: int64
+function break_after_first[T]() returns string:
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            break
+    return "break"
+function continue_all[T]() returns string:
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            continue
+    return "continue"
+function return_first[T]() returns string:
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            return type.name[Field]()
+    return "empty"
+function main() returns string:
+    string broken = break_after_first[User]()
+    string continued = continue_all[User]()
+    return return_first[User]()
+"#;
 
     fn lower_source(source: &str) -> Program {
         let file = FileId::new(0);
@@ -517,7 +2613,7 @@ mod tests {
             &HashMap::from([(file, SourceOrigin::Project)]),
         )
         .expect("HIR lowering");
-        lower(&hir).expect("MIR lowering")
+        lower(&hir, &checked.interner).expect("MIR lowering")
     }
 
     fn reachable_blocks(function: &Function) -> HashSet<BlockId> {
@@ -550,12 +2646,500 @@ mod tests {
                     pending.push(*body);
                     pending.push(*exit);
                 }
+                TerminatorKind::ReflectedTypeDispatch {
+                    arms, otherwise, ..
+                } => {
+                    pending.extend(arms.iter().map(|arm| arm.target));
+                    pending.push(*otherwise);
+                }
                 TerminatorKind::Return(_)
                 | TerminatorKind::Respond(_)
                 | TerminatorKind::Unreachable => {}
             }
         }
         reachable
+    }
+
+    fn returned_expression(function: &mut Function) -> &mut Expression {
+        function
+            .blocks
+            .iter_mut()
+            .find_map(|block| match &mut block.terminator.kind {
+                TerminatorKind::Return(Some(value)) => Some(value),
+                _ => None,
+            })
+            .expect("expected a returned expression")
+    }
+
+    #[test]
+    fn preserves_function_ids_parameters_locals_and_call_order() {
+        let signature = lower_source(
+            r#"namespace app
+function combine(view left: int64, right: int64) returns int64:
+    int64 total = left + right
+    return total
+"#,
+        );
+        let function = &signature.functions[0];
+
+        assert_eq!(function.id.index(), 0);
+        assert_eq!(function.params.len(), 2);
+        assert_eq!(function.locals.len(), 3);
+        assert_eq!(function.params[0].mode, ParamMode::View);
+        assert_eq!(function.params[1].mode, ParamMode::Owned);
+        for parameter in &function.params {
+            assert_eq!(
+                function.parameter_for_local(parameter.local),
+                Some(parameter)
+            );
+            let local = function.local(parameter.local).expect("parameter local");
+            assert_eq!(local.name, parameter.name);
+            assert_eq!(local.ty, parameter.ty);
+            assert_eq!(local.mutable, parameter.mutable);
+            assert_eq!(local.span, parameter.span);
+        }
+        validate(&signature).expect("preserved signature must validate");
+
+        let mut calls = lower_source(
+            r#"namespace app
+function add(first: int64, second: int64) returns int64:
+    return first + second
+function call_add() returns int64:
+    return add(second: 2, first: 1)
+"#,
+        );
+        let callee_id = calls.functions[0].id;
+        let value = returned_expression(&mut calls.functions[1]);
+        let hir::ExpressionKind::Call {
+            function,
+            evaluation_order,
+            ..
+        } = &value.kind
+        else {
+            panic!("expected direct call");
+        };
+        assert_eq!(*function, callee_id);
+        assert_eq!(evaluation_order, &[1, 0]);
+        validate(&calls).expect("valid call order must validate");
+    }
+
+    #[test]
+    fn validation_rejects_noncanonical_and_duplicate_function_ids() {
+        let mut program = lower_source(
+            r#"namespace app
+function first() returns int64:
+    return 1
+function second() returns int64:
+    return 2
+"#,
+        );
+        program.functions[1].id = program.functions[0].id;
+
+        let errors = validate(&program).expect_err("duplicate function ID must be rejected");
+        let messages = errors
+            .iter()
+            .map(|error| error.message.as_str())
+            .collect::<Vec<_>>();
+        assert!(messages.contains(&"function at index 1 has noncanonical ID 0"));
+        assert!(messages.contains(&"multiple functions use ID 0"));
+    }
+
+    #[test]
+    fn validation_rejects_a_direct_call_outside_the_function_table() {
+        let mut program = lower_source(
+            r#"namespace app
+function callee() returns int64:
+    return 1
+function caller() returns int64:
+    return callee()
+function spare() returns int64:
+    return 2
+"#,
+        );
+        let removed_id = program.functions[2].id;
+        let value = returned_expression(&mut program.functions[1]);
+        let hir::ExpressionKind::Call { function, .. } = &mut value.kind else {
+            panic!("expected direct call");
+        };
+        *function = removed_id;
+        program.functions.pop();
+
+        let errors = validate(&program).expect_err("unknown direct call must be rejected");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0].message,
+            "direct call references function 2 outside function table of length 2"
+        );
+    }
+
+    #[test]
+    fn validation_rejects_a_non_permutation_evaluation_order() {
+        let mut program = lower_source(
+            r#"namespace app
+function add(first: int64, second: int64) returns int64:
+    return first + second
+function caller() returns int64:
+    return add(1, 2)
+"#,
+        );
+        let value = returned_expression(&mut program.functions[1]);
+        let hir::ExpressionKind::Call {
+            evaluation_order, ..
+        } = &mut value.kind
+        else {
+            panic!("expected direct call");
+        };
+        *evaluation_order = vec![0, 0];
+
+        let errors = validate(&program).expect_err("invalid order must be rejected");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0].message,
+            "evaluation order must be a permutation of the operand indexes"
+        );
+    }
+
+    #[test]
+    fn enum_payload_handlers_preserve_named_argument_evaluation_order() {
+        let mut program = lower_source(
+            r#"namespace app
+enum PairValue:
+    pair(left: int64, right: int64)
+function make(mutable seed: int64, missing: optional[int64]) returns PairValue:
+    return PairValue.pair(right: seed, left: missing handle:
+        seed = 9
+        default 5
+    )
+"#,
+        );
+        let returned = returned_expression(&mut program.functions[0]);
+        let hir::ExpressionKind::EnumConstruct {
+            payloads,
+            evaluation_order,
+            ..
+        } = &returned.kind
+        else {
+            panic!("expected enum construction after its payload handler");
+        };
+        assert_eq!(evaluation_order, &[1, 0]);
+        let hir::ExpressionKind::Local(right) = payloads[1].kind else {
+            panic!("expected saved right payload");
+        };
+        let function = &program.functions[0];
+        assert!(
+            matches!(
+                &function.blocks[function.entry.index() as usize].statements[0].kind,
+                StatementKind::Let {
+                    local,
+                    value: Expression { kind: hir::ExpressionKind::Local(source), .. },
+                } if *local == right && *source == function.params[0].local
+            ),
+            "the right payload must be saved before extracting the left payload's handler"
+        );
+        validate(&program).expect("lowered enum handler order must validate");
+    }
+
+    #[test]
+    fn validation_rejects_an_enum_payload_order_that_is_not_a_permutation() {
+        let mut program = lower_source(
+            r#"namespace app
+enum PairValue:
+    pair(left: int64, right: int64)
+function make() returns PairValue:
+    return PairValue.pair(right: 4, left: 9)
+"#,
+        );
+        let expression = returned_expression(&mut program.functions[0]);
+        let hir::ExpressionKind::EnumConstruct {
+            evaluation_order, ..
+        } = &mut expression.kind
+        else {
+            panic!("expected enum construction");
+        };
+        assert_eq!(evaluation_order, &[1, 0]);
+        *evaluation_order = vec![1, 1];
+        let errors = validate(&program).expect_err("invalid enum payload order must fail");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0].message,
+            "evaluation order must be a permutation of the operand indexes"
+        );
+    }
+
+    #[test]
+    fn validation_rejects_duplicate_and_mismatched_parameter_metadata() {
+        let program = lower_source(
+            r#"namespace app
+function first(left: int64, right: int64) returns int64:
+    return left
+"#,
+        );
+
+        let mut duplicate = program.clone();
+        duplicate.functions[0].params[1].local = duplicate.functions[0].params[0].local;
+        let errors = validate(&duplicate).expect_err("duplicate parameter local must be rejected");
+        let messages = errors
+            .iter()
+            .map(|error| error.message.as_str())
+            .collect::<Vec<_>>();
+        assert!(messages.contains(&"multiple parameters reference local 0"));
+        assert!(messages.contains(&"parameter metadata does not match local 0"));
+
+        let mut mismatch = program;
+        mismatch.functions[0].params[0].name = "renamed".to_string();
+        let errors = validate(&mismatch).expect_err("mismatched metadata must be rejected");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0].message,
+            "parameter metadata does not match local 0"
+        );
+    }
+
+    #[test]
+    fn validation_rejects_noncanonical_and_missing_parameter_locals() {
+        let program = lower_source(
+            r#"namespace app
+function first(left: int64, right: int64) returns int64:
+    return left
+"#,
+        );
+
+        let mut noncanonical = program.clone();
+        noncanonical.functions[0].locals[1].id = noncanonical.functions[0].locals[0].id;
+        let errors = validate(&noncanonical).expect_err("noncanonical local ID must be rejected");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message == "local at index 1 has noncanonical ID 0")
+        );
+
+        let mut missing = program;
+        missing.functions[0].locals.pop();
+        let errors = validate(&missing).expect_err("missing parameter local must be rejected");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0].message,
+            "parameter references local 1 outside function local table of length 1"
+        );
+    }
+
+    #[test]
+    fn lowers_reflected_type_dispatch_to_distinct_arm_blocks() {
+        let program = lower_source(REFLECTED_DISPATCH_SOURCE);
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "reflected_names")
+            .expect("concrete reflected function should lower");
+        let (dispatch_block, type_info, arms, otherwise) = function
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator.kind {
+                TerminatorKind::ReflectedTypeDispatch {
+                    type_info,
+                    arms,
+                    otherwise,
+                } => Some((block.id, type_info, arms, *otherwise)),
+                _ => None,
+            })
+            .expect("expected reflected type dispatch terminator");
+
+        assert!(matches!(type_info.kind, hir::ExpressionKind::Field { .. }));
+        assert_eq!(arms.len(), 2);
+        assert_eq!(
+            arms.iter()
+                .map(|arm| arm.iteration_index)
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+        assert_ne!(arms[0].bound_type, arms[1].bound_type);
+        assert_ne!(arms[0].target, arms[1].target);
+        assert!(arms.iter().all(|arm| arm.target != otherwise));
+        assert!(matches!(
+            function.blocks[otherwise.index() as usize].terminator.kind,
+            TerminatorKind::Unreachable
+        ));
+
+        let mut join = None;
+        for arm in arms {
+            let block = &function.blocks[arm.target.index() as usize];
+            let [
+                Statement {
+                    kind: StatementKind::Assign { value, .. },
+                    ..
+                },
+            ] = block.statements.as_slice()
+            else {
+                panic!("each reflected arm should contain its specialized assignment");
+            };
+            let hir::ExpressionKind::Intrinsic { type_arguments, .. } = &value.kind else {
+                panic!("expected specialized reflection intrinsic");
+            };
+            assert_eq!(type_arguments, &[arm.bound_type]);
+            let TerminatorKind::Goto(target) = block.terminator.kind else {
+                panic!("fallthrough arm should jump to the shared join");
+            };
+            assert_eq!(*join.get_or_insert(target), target);
+        }
+
+        validate(&program).expect("lowered reflected dispatch must validate");
+        let cfg = ControlFlowGraph::analyze(function).expect("reflected dispatch CFG");
+        assert_eq!(
+            cfg.successors(dispatch_block),
+            &[arms[0].target, arms[1].target, otherwise]
+        );
+    }
+
+    #[test]
+    fn validation_rejects_invalid_reflected_dispatch_selector_and_targets() {
+        let mut program = lower_source(REFLECTED_DISPATCH_SOURCE);
+        let function = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "reflected_names")
+            .expect("concrete reflected function should lower");
+        let TerminatorKind::ReflectedTypeDispatch {
+            type_info,
+            arms,
+            otherwise,
+        } = &mut function
+            .blocks
+            .iter_mut()
+            .find(|block| {
+                matches!(
+                    block.terminator.kind,
+                    TerminatorKind::ReflectedTypeDispatch { .. }
+                )
+            })
+            .expect("expected reflected dispatch")
+            .terminator
+            .kind
+        else {
+            unreachable!();
+        };
+        let bound_type = arms[0].bound_type;
+        type_info.kind = hir::ExpressionKind::Intrinsic {
+            intrinsic: hir::IntrinsicId::TypeName,
+            type_arguments: vec![bound_type],
+            reflection_arguments: Vec::new(),
+            refinement_predicates: Vec::new(),
+            field_validation: None,
+            args: Vec::new(),
+            evaluation_order: vec![0],
+            ownership: hir::CallOwnership::generated(
+                hir::GeneratedOperation::ReflectionMetadata {
+                    intrinsic: hir::IntrinsicId::TypeName,
+                },
+                &[],
+                &[],
+                &[],
+                TypeInterner::STRING,
+                &[],
+                &TypeInterner::new(),
+            )
+            .expect("closed metadata source"),
+        };
+        arms[0].target = BlockId(u32::MAX);
+        *otherwise = BlockId(u32::MAX - 1);
+
+        let errors = validate(&program).expect_err("invalid reflected dispatch must be rejected");
+        let messages = errors
+            .iter()
+            .map(|error| error.message.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            messages.contains(&"evaluation order must be a permutation of the operand indexes")
+        );
+        assert!(
+            messages.contains(&"reflected type dispatch arm target 4294967295 is out of range")
+        );
+        assert!(
+            messages
+                .contains(&"reflected type dispatch otherwise target 4294967294 is out of range")
+        );
+    }
+
+    #[test]
+    fn validation_rejects_duplicate_reflected_dispatch_arm_metadata() {
+        let mut program = lower_source(REFLECTED_DISPATCH_SOURCE);
+        let function = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "reflected_names")
+            .expect("concrete reflected function should lower");
+        let TerminatorKind::ReflectedTypeDispatch { arms, .. } = &mut function
+            .blocks
+            .iter_mut()
+            .find(|block| {
+                matches!(
+                    block.terminator.kind,
+                    TerminatorKind::ReflectedTypeDispatch { .. }
+                )
+            })
+            .expect("expected reflected dispatch")
+            .terminator
+            .kind
+        else {
+            unreachable!();
+        };
+        arms[1].iteration_index = arms[0].iteration_index;
+        arms[1].bound_type = arms[0].bound_type;
+        arms[1].reflection_identity = arms[0].reflection_identity.clone();
+
+        let errors = validate(&program).expect_err("duplicate arm metadata must be rejected");
+        let messages = errors
+            .iter()
+            .map(|error| error.message.as_str())
+            .collect::<Vec<_>>();
+        assert!(messages.contains(&"reflected type dispatch contains a duplicate iteration index"));
+        assert!(
+            messages
+                .contains(&"reflected type dispatch contains a duplicate reflected type identity")
+        );
+    }
+
+    #[test]
+    fn reflected_dispatch_preserves_return_break_and_continue_edges() {
+        let program = lower_source(REFLECTED_CONTROL_FLOW_SOURCE);
+        for (name, expected) in [
+            ("break_after_first", "break"),
+            ("continue_all", "continue"),
+            ("return_first", "return"),
+        ] {
+            let function = program
+                .functions
+                .iter()
+                .find(|function| function.identity.declaration.name == name)
+                .unwrap_or_else(|| panic!("concrete {name} function should lower"));
+            let (header, exit) = function
+                .blocks
+                .iter()
+                .find_map(|block| match block.terminator.kind {
+                    TerminatorKind::ForEach { exit, .. } => Some((block.id, exit)),
+                    _ => None,
+                })
+                .expect("expected reflected field loop");
+            let arms = function
+                .blocks
+                .iter()
+                .find_map(|block| match &block.terminator.kind {
+                    TerminatorKind::ReflectedTypeDispatch { arms, .. } => Some(arms),
+                    _ => None,
+                })
+                .expect("expected reflected dispatch");
+
+            assert_eq!(arms.len(), 2);
+            for arm in arms {
+                let terminator = &function.blocks[arm.target.index() as usize].terminator.kind;
+                match expected {
+                    "break" => assert_eq!(terminator, &TerminatorKind::Goto(exit)),
+                    "continue" => assert_eq!(terminator, &TerminatorKind::Goto(header)),
+                    "return" => assert!(matches!(terminator, TerminatorKind::Return(Some(_)))),
+                    _ => unreachable!(),
+                }
+            }
+        }
+        validate(&program).expect("reflected control-flow edges must validate");
     }
 
     #[test]
@@ -850,7 +3434,13 @@ actor Counter:
             respond 2
 "#,
         );
-        let handler = &program.functions[0];
+        let handler = program
+            .functions
+            .iter()
+            .find(|function| {
+                function.identity.declaration.kind == jett_hir::DeclarationKind::ActorHandler
+            })
+            .expect("actor handler MIR");
         assert_eq!(handler.blocks.len(), 3, "responding branches need no join");
         let cfg = ControlFlowGraph::analyze(handler).expect("valid handler CFG");
         for target in cfg.successors(handler.entry) {

@@ -22,7 +22,7 @@ function user_field_count() returns int64:
 
 function user_field_type(field_name: string) returns string:
     list[TypeField] fields = type.fields[User]()
-    string found = "missing"
+    mutable string found = "missing"
     for field in fields:
         if field.name == field_name:
             found = field.type_name
@@ -30,7 +30,7 @@ function user_field_type(field_name: string) returns string:
 
 function user_field_secret(field_name: string) returns bool:
     list[TypeField] fields = type.fields[User]()
-    bool found = false
+    mutable bool found = false
     for field in fields:
         if field.name == field_name:
             found = field.has_secret
@@ -38,7 +38,7 @@ function user_field_secret(field_name: string) returns bool:
 
 function user_field_serialize_name(field_name: string) returns string:
     list[TypeField] fields = type.fields[User]()
-    string found = "missing"
+    mutable string found = "missing"
     for field in fields:
         if field.name == field_name:
             found = field.serialize_name
@@ -46,7 +46,7 @@ function user_field_serialize_name(field_name: string) returns string:
 
 function pair_field_type(field_name: string) returns string:
     list[TypeField] fields = type.fields[Pair[int64, string]]()
-    string found = "missing"
+    mutable string found = "missing"
     for field in fields:
         if field.name == field_name:
             found = field.type_name
@@ -54,7 +54,7 @@ function pair_field_type(field_name: string) returns string:
 
 function api_field_serialize_name(field_name: string) returns string:
     list[TypeField] fields = type.fields[ApiResponse]()
-    string found = "missing"
+    mutable string found = "missing"
     for field in fields:
         if field.name == field_name:
             found = field.serialize_name
@@ -63,7 +63,7 @@ function api_field_serialize_name(field_name: string) returns string:
 function user_string_field_value(field_name: string) returns string:
     User user = User(id: "u1", age: 42, api_key: "secret-token")
     list[TypeField] fields = type.fields[User]()
-    string found = "missing"
+    mutable string found = "missing"
     for field in fields:
         if field.name == field_name:
             found = type.field_value[User, string](view user, view field)
@@ -72,7 +72,7 @@ function user_string_field_value(field_name: string) returns string:
 function user_age_field_value() returns int64:
     User user = User(id: "u1", age: 42, api_key: "secret-token")
     list[TypeField] fields = type.fields[User]()
-    int64 found = 0
+    mutable int64 found = 0
     for field in fields:
         if field.name == "age":
             found = type.field_value[User, int64](view user, view field)
@@ -81,7 +81,7 @@ function user_age_field_value() returns int64:
 function user_secret_field_redacted() returns string:
     User user = User(id: "u1", age: 42, api_key: "secret-token")
     list[TypeField] fields = type.fields[User]()
-    string found = "missing"
+    mutable string found = "missing"
     for field in fields:
         if field.name == "api_key":
             found = secret.redact(type.field_value[User, secret[string]](view user, view field))
@@ -90,7 +90,7 @@ function user_secret_field_redacted() returns string:
 function pair_first_field_value() returns int64:
     Pair[int64, string] pair = Pair[int64, string](first: 7, second: "seven")
     list[TypeField] fields = type.fields[Pair[int64, string]]()
-    int64 found = 0
+    mutable int64 found = 0
     for field in fields:
         if field.name == "first":
             found = type.field_value[Pair[int64, string], int64](view pair, view field)

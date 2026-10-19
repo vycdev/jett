@@ -1,0 +1,14 @@
+namespace app
+function inspect[T](view shape: map[string, T], raw: string) returns string:
+    use json
+    map[string, T] parsed = raw into json.parse[map[string, T]]() handle error:
+        return "decode-error:{error}"
+    return "length:{map.length[string, T](view parsed)}"
+function main(stdout: Stdout) returns nothing:
+    string valid = inspect(view map(), "{{}}")
+    Stdout.write(view stdout, "valid:{valid}\n")
+    string occupied = inspect(view map(), "{{\"x\":7}}")
+    Stdout.write(view stdout, "occupied:{occupied}\n")
+    string malformed = inspect(view map(), "{{")
+    Stdout.write(view stdout, "malformed:{malformed}\n")
+    return nothing

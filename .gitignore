@@ -1,6 +1,5 @@
 .todo
 /target
-Cargo.lock
 .claude
 __pycache__/
 *.pyc

@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    bytes data = run bytes.from_string("a")
+    int64 length = bytes.length(view data)
+    trace length
+    return nothing

@@ -1,0 +1,6 @@
+trace marker: string = positive
+trace marker: string = nonempty
+trace marker: string = strong
+trace marker: string = sibling
+trace extracted: app.Sibling = pending(pending(list(7)))
+trace source: app.Record = app.Record(values: pending(pending(list(7))))

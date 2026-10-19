@@ -1,0 +1,18 @@
+namespace app
+struct Inner:
+    value: int64
+actor Store(seed: int64):
+    mutable list[int64] owned = list(seed, seed + 1)
+    list[int64] immediate = view owned
+    list[int64] transitive = view immediate
+    mutable Inner inner = Inner(value: seed)
+    receive replace(values: list[int64]):
+        owned = values
+        inner.value = inner.value + 1
+    receive read responds string:
+        respond "{list.length(view immediate)}:{list.sum[int64](view transitive)}:{inner.value}"
+function main() returns nothing:
+    Store store = spawn Store(seed: 2)
+    send store.replace(list(9, 10))
+    string forbidden = ask store.read
+    return nothing

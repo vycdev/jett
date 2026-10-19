@@ -1,0 +1,171 @@
+namespace alpha
+export function value() returns int64:
+    return 1
+export function read_value() returns int64:
+    return alpha.value()
+export function make_reader() returns function() returns int64:
+    use alpha as selected
+    return function() returns int64: return selected.value()
+export function make_baked_reader() returns function() returns int64:
+    return comptime alpha.make_reader()
+namespace beta
+export function value() returns int64:
+    return 9
+namespace test
+struct CallbackHolder:
+    callback: function(int64) returns int64
+struct ViewHolder:
+    callback: function(view list[int64]) returns int64
+struct WriterHolder:
+    callback: function(view Stdout, string) returns nothing
+enum PairValue:
+    pair(left: int64, right: int64)
+enum Choice:
+    item(value: int64)
+    empty
+struct ChoiceMaker:
+    item: function(int64) returns Choice
+function increment(value: int64) returns int64:
+    return value + 1
+function double(value: int64) returns int64:
+    return value * 2
+function subtract(left: int64, right: int64) returns int64:
+    return left - right
+function generic_identity[T](value: T) returns T:
+    return value
+function make_choice(value: int64) returns Choice:
+    return Choice.item(value + 1)
+function check_variant_name_field() returns int64:
+    ChoiceMaker holder = ChoiceMaker(item: make_choice)
+    Choice selected = holder.item(4)
+    match selected:
+        item(value):
+            return value
+        empty:
+            return 0
+function make_offset(delta: int64) returns function(int64) returns int64:
+    return function(value: int64) returns int64: return value + delta
+function make_holder(delta: int64) returns CallbackHolder:
+    return CallbackHolder(callback: make_offset(delta))
+function make_count(delta: int64) returns function(view list[int64]) returns int64:
+    return function(view items: list[int64]) returns int64: return list.length[int64](view items) + delta
+function write(view stdout: Stdout, text: string) returns nothing:
+    Stdout.write(view stdout, text)
+    return nothing
+function make_writer() returns function(view Stdout, string) returns nothing:
+    return write
+function make_inline_writer() returns function(view Stdout, string) returns nothing:
+    return function(view stdout: Stdout, text: string) returns nothing:
+        Stdout.write(view stdout, text)
+        return nothing
+function check_effects(view stdout: Stdout) returns nothing:
+    function(view Stdout, string) returns nothing callback = write
+    (callback)(view stdout, "parenthesized effect\n")
+    make_writer()(view stdout, "returned effect\n")
+    WriterHolder holder = WriterHolder(callback: write)
+    holder.callback(view stdout, "field effect\n")
+    make_inline_writer()(view stdout, "inline effect\n")
+    function(view Stdout, string) returns nothing baked = comptime make_inline_writer()
+    (baked)(view stdout, "baked effect\n")
+    return nothing
+function argument_with_output() returns int64:
+    println("argument")
+    return 4
+function callee_with_output() returns function(int64) returns int64:
+    println("callee")
+    return increment
+function skip_callee() returns int64:
+    optional[int64] missing = none
+    return callee_with_output()(missing handle:
+        return 7
+    )
+function skip_call_after_owned_arguments() returns int64:
+    optional[function(list[string]) returns int64] missing = none
+    return(missing handle:
+        return 11
+    )(list("temporary", "owned"))
+function check_named_enum() returns int64:
+    PairValue value =(PairValue.pair)(right: 4, left: 9)
+    match value:
+        pair(left, right):
+            return left - right
+function check_selection() returns nothing:
+    mutable function(int64) returns int64 selected = increment
+    optional[int64] missing = none
+    int64 changed =(selected)(missing handle:
+        selected = double
+        default 4
+    )
+    println(changed)
+    mutable CallbackHolder holder = CallbackHolder(callback: increment)
+    optional[int64] no_value = none
+    int64 changed_field = holder.callback(no_value handle:
+        holder = CallbackHolder(callback: double)
+        default 6
+    )
+    println(changed_field)
+    optional[function(int64) returns int64] no_callback = none
+    int64 handled_callee =(no_callback handle:
+        default increment
+    )(argument_with_output())
+    println(handled_callee)
+    return nothing
+function check_views() returns nothing:
+    list[int64] items = list(1, 2, 3)
+    function(view list[int64]) returns int64 callback = make_count(10)
+    println((callback)(view items))
+    println(make_count(20)(view items))
+    ViewHolder holder = ViewHolder(callback: make_count(30))
+    println(holder.callback(view items))
+    println((callback)(((view items))))
+    println(make_count(40)((clone items)))
+    println(list.length[int64](view items))
+    return nothing
+function check_secret_results() returns nothing:
+    secret[int64] value = 4
+    secret[int64] direct = increment(clone value)
+    secret[int64] returned = make_offset(10)(clone value)
+    secret[int64] projected = make_holder(20).callback(clone value)
+    secret[int64] piped = value into(make_offset(30))
+    println(declassify direct, declassify returned, declassify projected, declassify piped)
+    return nothing
+function check_namespaces() returns nothing:
+    use alpha as original
+    use beta as alpha
+    println(original.read_value())
+    function() returns int64 reader = original.read_value
+    println((reader)())
+    println(original.make_reader()())
+    function() returns int64 baked = original.make_baked_reader()
+    println((baked)())
+    println(alpha.value())
+    return nothing
+function main(stdout: Stdout) returns nothing:
+    function(int64) returns int64 callback = increment
+    println((callback)(4))
+    println((increment)(4))
+    println(((subtract))(right: 3, left: 10))
+    println((generic_identity)[int64](8))
+    println((generic_identity)(9))
+    println(make_offset(10)(4))
+    CallbackHolder holder = make_holder(20)
+    println(holder.callback(4))
+    println((holder.callback)(5))
+    println(4 into holder.callback)
+    println(4 into(make_offset(70)))
+    println(make_holder(30).callback(4))
+    println((function(value: int64) returns int64: return value + 40)(4))
+    int64 baked = comptime make_offset(50)(4)
+    int64 baked_field = comptime make_holder(60).callback(4)
+    println(baked, baked_field)
+    println(callee_with_output()(argument_with_output()))
+    println(skip_callee())
+    println(skip_call_after_owned_arguments())
+    println(check_named_enum())
+    println(check_variant_name_field())
+    check_selection()
+    check_views()
+    check_secret_results()
+    check_namespaces()
+    check_effects(view stdout)
+    return nothing

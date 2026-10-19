@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    list[int64] items = run list(2, 1)
+    list[int64] sorted = list.sort[int64](items)
+    trace sorted
+    return nothing

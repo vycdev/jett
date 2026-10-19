@@ -1,0 +1,34 @@
+namespace app
+enum Direction:
+    north
+    south
+enum Shape:
+    point(x: int64, y: int64)
+    empty
+struct Profile:
+    name: string
+enum Event:
+    recorded(profile: Profile)
+    idle
+function parse_directions() returns string:
+    list[Direction] values = json.parse_exact[list[Direction]]("[\"north\",\"south\"]") handle error:
+        return error
+    return json.serialize[list[Direction]](view values)
+function parse_shapes() returns string:
+    list[Shape] values = json.parse_exact[list[Shape]]("[{{\"point\":[1,2]}},{{\"empty\":[]}}]") handle error:
+        return error
+    return json.serialize[list[Shape]](view values)
+function parse_mapping() returns string:
+    map[string, Direction] values = json.parse_exact[map[string, Direction]]("{{\"a\":\"north\",\"b\":\"south\"}}") handle error:
+        return error
+    return json.serialize[map[string, Direction]](view values)
+function parse_records() returns string:
+    list[Event] values = json.parse_exact[list[Event]]("[{{\"recorded\":[{{\"name\":\"Ada\"}}]},\"idle\"]") handle error:
+        return error
+    return json.serialize[list[Event]](view values)
+function main() returns nothing:
+    println(parse_directions())
+    println(parse_shapes())
+    println(parse_mapping())
+    println(parse_records())
+    return nothing

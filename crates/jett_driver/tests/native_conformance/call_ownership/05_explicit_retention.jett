@@ -1,0 +1,17 @@
+namespace call_probe
+export function count(view values: list[int64]) returns int64:
+    return list.length[int64](view values)
+namespace app
+function main(stdout: Stdout) returns nothing:
+    use call_probe
+    use call_probe as p
+    list[int64] values = list(1, 2)
+    function(view list[int64]) returns int64 callback = call_probe.count
+    int64 direct = call_probe.count(view values)
+    int64 aliased = p.count(view values)
+    int64 indirect = callback(view values)
+    int64 piped = values into view p.count()
+    int64 copied = call_probe.count(clone values)
+    int64 after = call_probe.count(view values)
+    Stdout.write(view stdout, "retained:{direct}:{aliased}:{indirect}:{piped}:{copied}:{after}\n")
+    return nothing

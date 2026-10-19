@@ -1,0 +1,19 @@
+namespace app
+type Count = int64
+struct IterationShape:
+    first: int64
+    second: int64
+    named: Count
+export function recursive_labels(depth: int64) returns string:
+    mutable string labels = ""
+    for field in type.fields[IterationShape]():
+        comptime type Element = field.type_info:
+            string field_before = field.name
+            string before = type.name[Element]()
+            mutable string inside = ""
+            if depth > 0:
+                inside = recursive_labels(depth - 1)
+            string field_after = field.name
+            string after = type.name[Element]()
+            labels = "{labels}{field_before}:{before}<{inside}>{field_after}:{after}|"
+    return labels

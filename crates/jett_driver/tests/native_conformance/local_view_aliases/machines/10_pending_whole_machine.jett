@@ -1,0 +1,10 @@
+namespace app
+machine Packet:
+    states:
+        ready(data: bytes, items: list[int64])
+function main(stdout: Stdout) returns nothing:
+    Packet at ready packet = run run Packet(ready, bytes.from_string("AB"), list(2, 3))
+    Stdout.write(view stdout, "before:whole\n")
+    bytes borrowed = view packet.data
+    bytes forwarded = borrowed
+    Stdout.write(view stdout, "after:{bytes.to_hex(view forwarded)}\n")

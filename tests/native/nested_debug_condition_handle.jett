@@ -1,0 +1,21 @@
+namespace app
+function maybe_flag(valid: bool) returns result[bool, string]:
+    if valid:
+        return ok(true)
+    return fail("missing")
+function main() returns nothing:
+    breakpoint(maybe_flag(true) handle error:
+        default false
+    )
+    breakpoint(maybe_flag(false) handle error:
+        default false
+    )
+    println("after")
+    return nothing
+verify handled_assertion:
+    assert(maybe_flag(true) handle error:
+        default false
+    )
+    assert(maybe_flag(false) handle error:
+        default true
+    )

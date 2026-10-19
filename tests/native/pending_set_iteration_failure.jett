@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    set[int64] values = run set.add[int64](set.new[int64](), 2)
+    for item in values:
+        trace item
+    return nothing

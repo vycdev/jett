@@ -1,0 +1,25 @@
+namespace app
+type Positive = int64 where value > 0
+function five() returns int64:
+    return 5
+function positive() returns Positive:
+    return 5
+struct Holder:
+    callback: function() returns int64
+function adapted(view holder: Holder) returns function() returns Positive:
+    for field in type.fields[Holder]():
+        return type.field_value[Holder, function() returns Positive](view holder, view field)
+    return positive
+actor Keeper(callback: function() returns Positive):
+    receive read responds Positive:
+        respond callback()
+function create() returns Keeper:
+    Holder holder = Holder(callback: five)
+    return spawn Keeper(callback: adapted(view holder))
+function observe() returns int64:
+    Keeper worker = comptime create()
+    Positive observed = ask worker.read
+    return coarsen observed
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "{observe()}\n{observe()}\n")
+    return nothing

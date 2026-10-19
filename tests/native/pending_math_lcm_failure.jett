@@ -1,0 +1,5 @@
+namespace app
+function main() returns nothing:
+    int64 value = math.lcm(run 8, 12)
+    trace value
+    return nothing

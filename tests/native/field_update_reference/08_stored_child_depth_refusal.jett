@@ -1,0 +1,12 @@
+namespace app
+struct Record:
+    pending: int64
+    label: string
+function main(stdout: Stdout) returns nothing:
+    mutable Record record = Record(pending: run run 17, label: "before")
+    record.label = "after"
+    int64 once = join record.pending handle error:
+        return nothing
+    Stdout.write(view stdout, "before:remaining-depth\n")
+    int64 forbidden = once + 1
+    Stdout.write(view stdout, "after-must-not-run:{forbidden}\n")

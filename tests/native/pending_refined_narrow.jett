@@ -1,0 +1,10 @@
+namespace app
+type Positive8 = int8 where value > 0
+function main() returns nothing:
+    int8 base = 7
+    int8 pending = run base
+    Positive8 refined = pending handle error:
+        println(error)
+        return nothing
+    trace refined
+    return nothing

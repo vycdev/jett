@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    string replacement = run "x"
+    string changed = string.replace("abc", "b", replacement)
+    trace changed
+    return nothing

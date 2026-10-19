@@ -1,0 +1,19 @@
+namespace app
+machine Packet:
+    states:
+        ready(data: bytes, items: list[int64])
+function duplicate_data(view packet: Packet at ready) returns bytes:
+    bytes borrowed = view packet.data
+    bytes forwarded = borrowed
+    return clone forwarded
+function duplicate_items(view packet: Packet at ready) returns list[int64]:
+    list[int64] borrowed = view packet.items
+    list[int64] forwarded = borrowed
+    return clone forwarded
+function main(stdout: Stdout) returns nothing:
+    Packet at ready packet = Packet(ready, bytes.from_string("AB"), list(2, 3))
+    bytes duplicate = bytes.concat(duplicate_data(view packet), bytes.from_string("C"))
+    mutable list[int64] items = duplicate_items(view packet)
+    items = list.append[int64](items, 7)
+    Stdout.write(view stdout, "bytes:{bytes.to_hex(view duplicate)}:{bytes.to_hex(view packet.data)}\n")
+    Stdout.write(view stdout, "items:{list.length(view items)}:{list.length(view packet.items)}\n")

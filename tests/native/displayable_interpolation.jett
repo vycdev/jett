@@ -1,0 +1,14 @@
+interface Displayable:
+    function display(view self: Displayable) returns string
+struct User:
+    name: string
+    function display(view self: User) returns string:
+        return "inherent:{self.name}"
+implement Displayable for User:
+    function display(view self: User) returns string:
+        return "user:{self.name}"
+function main() returns nothing:
+    User ada = User(name: "Ada")
+    println("Hello {ada}!")
+    println("Result {User(name: "Grace")}")
+    return nothing

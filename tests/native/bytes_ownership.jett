@@ -1,0 +1,15 @@
+function combine(first: bytes, second: bytes) returns bytes:
+    return bytes.concat(first, second)
+function observe(view value: bytes) returns int64:
+    return bytes.length(view value)
+function main() returns nothing:
+    bytes original = bytes.from_string("Hi")
+    bytes duplicate = clone original
+    bytes joined = combine(duplicate, bytes.from_string("!"))
+    println(observe(view original), bytes.to_hex(view joined))
+    mutable bytes current = bytes.new()
+    mutable int64 index = 0
+    while index < 3:
+        current = bytes.concat(current, bytes.from_string("x"))
+        index = index + 1
+    println(bytes.to_hex(view current), bytes.length(view original))

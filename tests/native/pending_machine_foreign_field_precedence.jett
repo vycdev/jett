@@ -1,0 +1,16 @@
+namespace app
+machine Session:
+    states:
+        first(value: int64)
+        second(value: int64)
+    transitions:
+        first to second
+function main() returns nothing:
+    Session session = run Session(first, 7)
+    TypeMachineState other = list.get[TypeMachineState](type.machine_states[Session](), 1) handle:
+        return nothing
+    TypeField foreign = list.get[TypeField](other.fields, 0) handle:
+        return nothing
+    int64 copied = type.machine_field_value[Session, int64](view session, view foreign)
+    println(copied)
+    return nothing

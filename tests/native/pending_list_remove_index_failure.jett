@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    list[int64] items = list(1)
+    list[int64] changed = list.remove_at[int64](items, run 0)
+    trace changed
+    return nothing

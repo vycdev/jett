@@ -1,0 +1,94 @@
+namespace app
+type NonEmpty = string where value != ""
+type Long = NonEmpty where string.char_count(value) >= 3
+type Positive = int64 where value > 0
+machine Session:
+    states:
+        guest
+        active(name: app.NonEmpty, alias: app.Long, note: string)
+    transitions:
+        guest to active
+machine Simple:
+    states:
+        empty
+        filled(code: app.Positive)
+    transitions:
+        empty to filled
+function create_bare(raw: string, raw_alias: string) returns result[Session, string]:
+    TypeMachineState state = list.get[TypeMachineState](type.machine_states[Session](), 1) handle:
+        return fail("missing state")
+    mutable TypeConstruction builder = type.construct_machine_start[Session](view state) handle error:
+        return fail(error)
+    TypeField name_field = list.get[TypeField](state.fields, 0) handle:
+        return fail("missing field")
+    builder = type.construct_put[Session, string](builder, view name_field, raw) handle error:
+        return fail(error)
+    TypeField alias_field = list.get[TypeField](state.fields, 1) handle:
+        return fail("missing field")
+    builder = type.construct_put[Session, string](builder, view alias_field, raw_alias) handle error:
+        return fail(error)
+    TypeField note_field = list.get[TypeField](state.fields, 2) handle:
+        return fail("missing field")
+    builder = type.construct_put[Session, string](builder, view note_field, "ready") handle error:
+        return fail(error)
+    return type.construct_finish[Session](builder)
+function create_qualified(raw: string) returns result[Session at active, string]:
+    TypeMachineState state = list.get[TypeMachineState](type.machine_states[Session](), 1) handle:
+        return fail("missing state")
+    mutable TypeConstruction builder = type.construct_machine_start[Session at active](view state) handle error:
+        return fail(error)
+    TypeField name_field = list.get[TypeField](state.fields, 0) handle:
+        return fail("missing field")
+    builder = type.construct_put[Session at active, string](builder, view name_field, raw) handle error:
+        return fail(error)
+    TypeField alias_field = list.get[TypeField](state.fields, 1) handle:
+        return fail("missing field")
+    builder = type.construct_put[Session at active, string](builder, view alias_field, "Agent") handle error:
+        return fail(error)
+    TypeField note_field = list.get[TypeField](state.fields, 2) handle:
+        return fail("missing field")
+    builder = type.construct_put[Session at active, string](builder, view note_field, "ready") handle error:
+        return fail(error)
+    return type.construct_finish[Session at active](builder)
+function describe_bare(raw: string, raw_alias: string) returns string:
+    Session session = create_bare(raw, raw_alias) handle error:
+        return error
+    if session at active:
+        return "{coarsen session.name}:{coarsen session.alias}:{session.note}"
+    return "guest"
+function describe_qualified(raw: string) returns string:
+    Session at active session = create_qualified(raw) handle error:
+        return error
+    return coarsen session.name
+function create_simple(raw: int64) returns result[Simple, string]:
+    TypeMachineState state = list.get[TypeMachineState](type.machine_states[Simple](), 1) handle:
+        return fail("missing state")
+    mutable TypeConstruction builder = type.construct_machine_start[Simple](view state) handle error:
+        return fail(error)
+    TypeField field = list.get[TypeField](state.fields, 0) handle:
+        return fail("missing field")
+    builder = type.construct_put[Simple, int64](builder, view field, raw) handle error:
+        return fail(error)
+    return type.construct_finish[Simple](builder)
+function describe_simple(raw: int64) returns string:
+    Simple value = create_simple(raw) handle error:
+        return error
+    return "filled"
+function describe_empty() returns string:
+    TypeMachineState state = list.get[TypeMachineState](type.machine_states[Simple](), 0) handle:
+        return "missing state"
+    TypeConstruction builder = type.construct_machine_start[Simple](view state) handle error:
+        return error
+    Simple value = type.construct_finish[Simple](builder) handle error:
+        return error
+    return "empty"
+function main() returns nothing:
+    println(describe_bare("Ada", "Agent"))
+    println(describe_bare("", "Agent"))
+    println(describe_bare("Ada", "Al"))
+    println(describe_qualified("Nia"))
+    println(describe_qualified(""))
+    println(describe_simple(7))
+    println(describe_simple(0))
+    println(describe_empty())
+    return nothing

@@ -1,0 +1,12 @@
+namespace app
+struct CallbackHolder:
+    callback: function() returns int64
+function five() returns int64:
+    return 5
+function main() returns nothing:
+    CallbackHolder holder = CallbackHolder(callback: five)
+    for field in type.fields[CallbackHolder]():
+        function() returns int64 observed = type.field_value[CallbackHolder, function() returns int64](view holder, view field)
+        int64 value = observed()
+        println(value)
+    return nothing

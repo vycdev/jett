@@ -1,0 +1,16 @@
+# ERROR: E0400 x3
+namespace test
+struct Payload:
+    value: string
+function some_moves_payload() returns int64:
+    Payload payload = Payload(value: "some")
+    optional[Payload] wrapped = some(payload)
+    return string.char_count(payload.value)
+function ok_moves_payload() returns int64:
+    Payload payload = Payload(value: "ok")
+    result[Payload, string] wrapped = ok(payload)
+    return string.char_count(payload.value) + 1
+function fail_moves_payload() returns int64:
+    Payload payload = Payload(value: "fail")
+    result[string, Payload] wrapped = fail(payload)
+    return string.char_count(payload.value) + 1
