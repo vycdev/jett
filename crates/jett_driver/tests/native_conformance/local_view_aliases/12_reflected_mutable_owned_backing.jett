@@ -1,0 +1,22 @@
+namespace app
+struct Packet:
+    data: bytes
+struct Metadata:
+    count: int64
+    enabled: bool
+function observe[T](view metadata: T, mutable packet: Packet, view stdout: Stdout) returns nothing:
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            bytes alias = view packet.data
+            comptime type Inner = type.info[Field]():
+                bytes forwarded = alias
+                bytes copied = clone forwarded
+                Stdout.write(view stdout, "{type.name[Inner]()}:{bytes.to_hex(view forwarded)}:{bytes.to_hex(view copied)}\n")
+    return nothing
+function main(stdout: Stdout) returns nothing:
+    mutable Packet direct = Packet(data: bytes.from_string("AB"))
+    comptime type Bound = type.info[int64]():
+        bytes direct_alias = view direct.data
+        Stdout.write(view stdout, "direct:{bytes.to_hex(view direct_alias)}\n")
+    Metadata metadata = Metadata(count: 1, enabled: true)
+    observe[Metadata](view metadata, Packet(data: bytes.from_string("CD")), view stdout)

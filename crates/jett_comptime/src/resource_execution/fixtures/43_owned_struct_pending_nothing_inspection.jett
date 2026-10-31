@@ -1,0 +1,21 @@
+namespace app
+struct PendingUnitEnvelope:
+    token: resource_probe.TestHandle
+    unit: nothing
+function expect(condition: bool) returns nothing:
+    use resource_companion_probe
+    if not condition:
+        resource_companion_probe.terminal_failure()
+    return nothing
+function retire_pending_unit(token: resource_probe.TestHandle) returns nothing:
+    PendingUnitEnvelope held = PendingUnitEnvelope(token: token, unit: run run nothing)
+    nothing once = join held.unit handle error:
+        return nothing
+    expect(once == nothing)
+    return nothing
+export function main(net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle token = resource_probe.create(view net, 1107) handle error:
+        return nothing
+    retire_pending_unit(token)
+    return nothing

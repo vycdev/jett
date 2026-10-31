@@ -1,0 +1,43 @@
+namespace app
+struct Inner:
+    value: int64
+struct Record:
+    inner: Inner
+    label: string
+function make() returns Record:
+    return Record(inner: Inner(value: 1), label: "before")
+function local() returns nothing:
+    mutable Record record = make()
+    (record).inner.value = 9
+function parameter(mutable record: Record) returns nothing:
+    record.label = "after"
+function next_value(view record: Record) returns int64:
+    return record.inner.value + 8
+function updated(mutable record: Record) returns Record:
+    record.inner.value = next_value(view record)
+    record.label = "after"
+    return record
+function main(stdout: Stdout) returns nothing:
+    local()
+    parameter(make())
+    Record original = make()
+    Record changed = updated(clone original)
+    Stdout.write(view stdout, "original:{original.inner.value}:{original.label}\n")
+    Stdout.write(view stdout, "changed:{changed.inner.value}:{changed.label}\n")
+verify called_updates:
+    local()
+    parameter(make())
+    Record original = make()
+    Record changed = updated(clone original)
+    assert original.inner.value == 1
+    assert original.label == "before"
+    assert changed.inner.value == 9
+    assert changed.label == "after"
+property owned_clone_is_independent:
+    given seed: int64
+    Record original = Record(inner: Inner(value: seed), label: "before")
+    Record changed = updated(clone original)
+    assert original.inner.value == seed
+    assert original.label == "before"
+    assert changed.inner.value == seed + 8
+    assert changed.label == "after"

@@ -1,0 +1,10 @@
+namespace app
+struct Record:
+    divisor: int64
+function invalid(mutable record: Record) returns int64:
+    if record.divisor != 0:
+        record.divisor = 0
+        return 8 / record.divisor
+    return 0
+function main() returns nothing:
+    int64 forbidden = invalid(Record(divisor: 2))

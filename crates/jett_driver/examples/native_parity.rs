@@ -1,0 +1,419 @@
+//! Exhaustive native fixture parity probe (separate from the full release audit).
+//! Usage: cargo run -p jett_driver --example native_parity -- LAUNCHER REPORT.json
+//! Every inventory row is attempted, irrespective of staged object_emit markers.
+#[path = "../tests/support/native_manifest_inputs.rs"]
+mod manifest_inputs;
+use manifest_inputs::{clock_samples, environment_snapshot, graphics_events, random_samples};
+
+use jett_common::FileId;
+use jett_driver::native::{self, NativeLauncherBundle};
+use jett_parser::ast::Item;
+use jett_runtime::clock::{ClockTestSample, TEST_SCRIPT_ENV, encode_test_script};
+use jett_runtime::environment::{self, EnvironmentTestSnapshot};
+use jett_runtime::graphics::{self, TestEvent as GraphicsTestEvent};
+use jett_runtime::random::{
+    RandomTestSample, TEST_SCRIPT_ENV as RANDOM_TEST_SCRIPT_ENV,
+    encode_test_script as encode_random_test_script,
+};
+use serde_json::{Value, json};
+use std::collections::BTreeSet;
+use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitCode, Output, Stdio};
+use std::time::{Duration, Instant};
+
+fn execute(
+    binary: &Path,
+    directory: &Path,
+    clock_samples: Option<&[ClockTestSample]>,
+    random_samples: Option<&[RandomTestSample]>,
+    environment_snapshot: Option<&EnvironmentTestSnapshot>,
+    graphics_events: Option<&[GraphicsTestEvent]>,
+) -> Result<Output, String> {
+    let mut command = Command::new(binary);
+    command
+        .current_dir(directory)
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(samples) = clock_samples {
+        command.env(TEST_SCRIPT_ENV, encode_test_script(samples));
+    }
+    if let Some(samples) = random_samples {
+        command.env(RANDOM_TEST_SCRIPT_ENV, encode_random_test_script(samples));
+    }
+    if let Some(snapshot) = environment_snapshot {
+        command.env(
+            environment::TEST_SNAPSHOT_ENV,
+            environment::encode_test_snapshot(snapshot),
+        );
+    }
+    if let Some(events) = graphics_events {
+        command.env(
+            graphics::TEST_SCRIPT_ENV,
+            graphics::encode_test_script(events),
+        );
+    }
+    let mut child = command.spawn().map_err(|e| e.to_string())?;
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let out = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        stdout.read_to_end(&mut b).map(|_| b)
+    });
+    let err = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        stderr.read_to_end(&mut b).map(|_| b)
+    });
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if start.elapsed() < Duration::from_secs(60) => {
+                std::thread::sleep(Duration::from_millis(10))
+            }
+            outcome => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = out.join();
+                let _ = err.join();
+                return Err(format!(
+                    "native execution failed or exceeded 60s: {outcome:?}"
+                ));
+            }
+        }
+    };
+    Ok(Output {
+        status,
+        stdout: out
+            .join()
+            .map_err(|_| "stdout reader panic")?
+            .map_err(|e| e.to_string())?,
+        stderr: err
+            .join()
+            .map_err(|_| "stderr reader panic")?
+            .map_err(|e| e.to_string())?,
+    })
+}
+
+fn behavior(
+    source: &Path,
+    binary: &Path,
+    directory: &Path,
+    expected_failure: bool,
+    clock_samples: Option<&[ClockTestSample]>,
+    random_samples: Option<&[RandomTestSample]>,
+    environment_snapshot: Option<&EnvironmentTestSnapshot>,
+    graphics_events: Option<&[GraphicsTestEvent]>,
+) -> Result<Value, String> {
+    let actual = execute(
+        binary,
+        directory,
+        clock_samples,
+        random_samples,
+        environment_snapshot,
+        graphics_events,
+    )?;
+    let stdout = String::from_utf8(actual.stdout).map_err(|e| e.to_string())?;
+    let stderr = String::from_utf8(actual.stderr).map_err(|e| e.to_string())?;
+    if usize::from(clock_samples.is_some())
+        + usize::from(random_samples.is_some())
+        + usize::from(environment_snapshot.is_some())
+        + usize::from(graphics_events.is_some())
+        > 1
+    {
+        return Err("multiple scripted capability providers in one fixture".into());
+    }
+    let oracle_result = if let Some(samples) = clock_samples {
+        jett_driver::run_file_capture_outcome_with_clock_test_samples(source, samples.to_vec())
+    } else if let Some(samples) = random_samples {
+        jett_driver::run_file_capture_outcome_with_random_test_samples(source, samples.to_vec())
+    } else if let Some(snapshot) = environment_snapshot {
+        jett_driver::run_file_capture_outcome_with_environment_test_snapshot(
+            source,
+            snapshot.clone(),
+        )
+    } else if let Some(events) = graphics_events {
+        jett_driver::run_file_capture_outcome_with_graphics_test_events(source, events.to_vec())
+    } else {
+        jett_driver::run_file_capture_outcome(source)
+    };
+    let (oracle, failure) = match oracle_result {
+        Ok(output) => (output, None),
+        Err(failure) => (failure.output, Some(failure.message)),
+    };
+    if failure.is_some() != expected_failure {
+        return Err("interpreter outcome contradicts manifest".into());
+    }
+    let mut expected_stderr = jett_driver::render_debug_events(&oracle.debug_events);
+    if let Some(message) = &failure {
+        expected_stderr.push_str(message);
+        expected_stderr.push('\n');
+    }
+    let expected_status = if failure.is_some() { 71 } else { 0 };
+    let matched = actual.status.code() == Some(expected_status)
+        && stdout == oracle.stdout
+        && stderr == expected_stderr;
+    let interpreter_debug = oracle
+        .debug_events
+        .iter()
+        .map(|event| json!({"kind": event.kind.as_str(), "text": &event.text}))
+        .collect::<Vec<_>>();
+    Ok(
+        json!({"behavior_matches":matched,"exit_code":actual.status.code(),"stdout":stdout,"stderr":stderr,
+                "interpreter_stdout":oracle.stdout,"interpreter_debug":interpreter_debug,"interpreter_failure":failure,
+                // Current scalar/string ABI destruction checks its live owning-value
+                // registry. Entry-failure 71 requires successful destruction; a leak
+                // overrides it with 72. Launcher tests enforce both outcomes. Future
+                // resource families also need finalizer/effect oracles before acceptance.
+                "failure_cleanup_verified":expected_failure && matched && actual.status.code() == Some(71),
+                "cleanup_contract":"native owning-value registry empty at checked context destruction"
+        }),
+    )
+}
+
+/// Discover suites from syntax, so adding a test block automatically extends
+/// the execution denominator even when its manifest row only names lowering.
+fn suite_counts(source: &str) -> [usize; 2] {
+    let parsed = jett_parser::parse(source, FileId::new(0));
+    let mut counts = [0, 0];
+    for item in &parsed.module.items {
+        match item {
+            Item::Verify(_) => counts[0] += 1,
+            Item::Property(_) => counts[1] += 1,
+            _ => {}
+        }
+    }
+    counts
+}
+
+fn suite_behavior(
+    source: &Path,
+    launcher: &NativeLauncherBundle,
+    property: bool,
+) -> Result<Value, String> {
+    if property {
+        let result = native::run_host_property_suite(
+            source,
+            launcher,
+            native::NativePropertyOptions::default(),
+        )
+        .map_err(|error| error.to_string())?;
+        let failure = result.failure.as_ref().map(|failure| json!({
+            "property": failure.name, "trial": failure.trial, "counterexample": failure.counterexample,
+        }));
+        return Ok(json!({
+            "passed": result.failure.is_none(),
+            "exit_code": if result.failure.is_none() { 0 } else { 71 },
+            "stdout": String::from_utf8_lossy(&result.stdout),
+            "stderr": String::from_utf8_lossy(&result.stderr),
+            "cleanup_verified": true,
+            "trials": result.trials,
+            "failure": failure,
+        }));
+    }
+    let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let binary = directory
+        .path()
+        .join(if cfg!(windows) { "suite.exe" } else { "suite" });
+    native::build_host_verify_suite_executable(source, launcher, &binary)
+        .map_err(|error| error.to_string())?;
+    let actual = execute(&binary, directory.path(), None, None, None, None)?;
+    Ok(json!({
+        "passed": actual.status.success(),
+        "exit_code": actual.status.code(),
+        "stdout": String::from_utf8_lossy(&actual.stdout),
+        "stderr": String::from_utf8_lossy(&actual.stderr),
+        "cleanup_verified": actual.status.success(),
+    }))
+}
+
+fn main() -> ExitCode {
+    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    assert_eq!(args.len(), 2, "usage: native_parity LAUNCHER REPORT.json");
+    let archive = fs::canonicalize(&args[0]).expect("launcher archive must exist");
+    let launcher = match native::host_target().as_str() {
+        native::LINUX_GNU_NATIVE_TARGET => NativeLauncherBundle::linux_gnu_v1(archive),
+        native::WINDOWS_MSVC_NATIVE_TARGET => NativeLauncherBundle::windows_msvc_static_v1(archive),
+        target => panic!("unsupported native execution host: {target}"),
+    };
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(root.join("tests/native_parity.json")).unwrap()).unwrap();
+    let fixtures = manifest["fixtures"].as_array().unwrap();
+    let paths = fixtures
+        .iter()
+        .map(|f| f["path"].as_str().unwrap().to_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(paths.len(), fixtures.len(), "duplicate manifest rows");
+    let discovered = ["run_pass", "runtime_fail"]
+        .into_iter()
+        .flat_map(|category| {
+            fs::read_dir(root.join("tests").join(category))
+                .unwrap()
+                .map(move |p| (category, p.unwrap().path()))
+        })
+        .filter(|(_, p)| p.extension().is_some_and(|e| e == "jett"))
+        .map(|(c, p)| format!("tests/{c}/{}", p.file_name().unwrap().to_str().unwrap()))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(paths, discovered, "no inventory omissions permitted");
+    let mut rows = Vec::new();
+    let (mut lower_pass, mut object_pass, mut main_pass, mut runtime_pass) = (0, 0, 0, 0);
+    let (mut lower_total, mut main_total, mut runtime_total) = (0, 0, 0);
+    let mut suite_total = [0, 0];
+    let mut suite_pass = [0, 0];
+    let mut suite_blocks = [0, 0];
+    for fixture in fixtures {
+        let path = fixture["path"].as_str().unwrap();
+        let obligations = fixture["obligations"].as_array().unwrap();
+        let lower = obligations.iter().any(|o| o == "lower");
+        let main = obligations.iter().any(|o| o == "main_execute");
+        let runtime = obligations.iter().any(|o| o == "runtime_contract");
+        lower_total += usize::from(lower);
+        main_total += usize::from(main);
+        runtime_total += usize::from(runtime);
+        let source = root.join(path);
+        let mut row = json!({"path":path,"obligations":obligations});
+        if lower {
+            let blocks = suite_counts(&fs::read_to_string(&source).expect("fixture source"));
+            for (index, label) in ["verify", "property"].into_iter().enumerate() {
+                if blocks[index] == 0 {
+                    continue;
+                }
+                suite_total[index] += 1;
+                suite_blocks[index] += blocks[index];
+                row[label] = match suite_behavior(&source, &launcher, index == 1) {
+                    Ok(result) => {
+                        suite_pass[index] += usize::from(result["passed"] == true);
+                        result
+                    }
+                    Err(error) => json!({"passed":false,"error":error}),
+                };
+                row[label]["blocks"] = json!(blocks[index]);
+                if index == 1 {
+                    row[label]["trials_per_block"] = json!(100);
+                }
+            }
+        }
+        match jett_driver::lower_file_for_native_tests(&source) {
+            Err(error) => row["lower_error"] = json!(error.to_string()),
+            Ok(lowered) => {
+                row["lowered"] = json!(true);
+                lower_pass += usize::from(lower);
+                match jett_codegen_cranelift::emit_host_object(&lowered.mir, &lowered.interner) {
+                    Ok(object) if !object.bytes.is_empty() && !object.symbols.is_empty() => {
+                        row["object_emitted"] = json!(true);
+                        row["object_bytes"] = json!(object.bytes.len());
+                        row["defined_symbols"] = json!(object.symbols.len());
+                        object_pass += usize::from(lower);
+                    }
+                    Ok(_) => {
+                        row["object_error"] = json!("empty object or no reachable code symbols")
+                    }
+                    Err(error) => row["object_error"] = json!(error.to_string()),
+                }
+            }
+        }
+        if main || runtime {
+            let directory = tempfile::tempdir().unwrap();
+            let output = directory.path().join(if cfg!(windows) {
+                "program.exe"
+            } else {
+                "program"
+            });
+            let isolated_source = directory.path().join("main.jett");
+            fs::copy(&source, &isolated_source).expect("copy inventory source");
+            match native::build_host_executable(&isolated_source, &launcher, &output) {
+                Err(error) => row["execution_error"] = json!(error.to_string()),
+                Ok(_) => {
+                    fs::remove_file(&isolated_source)
+                        .expect("remove linked source before execution");
+                    row["linked"] = json!(true);
+                    let failure = fixture["expected_outcome"] == "expected_failure";
+                    let samples = clock_samples(fixture).expect("valid Clock sample manifest");
+                    let random_samples =
+                        random_samples(fixture).expect("valid Random sample manifest");
+                    let environment_snapshot =
+                        environment_snapshot(fixture).expect("valid Environment snapshot manifest");
+                    let graphics_events =
+                        graphics_events(fixture).expect("valid Graphics event manifest");
+                    match behavior(
+                        &source,
+                        &output,
+                        directory.path(),
+                        failure,
+                        samples.as_deref(),
+                        random_samples.as_deref(),
+                        environment_snapshot.as_ref(),
+                        graphics_events.as_deref(),
+                    ) {
+                        Err(error) => row["execution_error"] = json!(error),
+                        Ok(result) => {
+                            let pass = execution_passes(&result, failure);
+                            main_pass += usize::from(main && pass);
+                            runtime_pass += usize::from(runtime && pass);
+                            row["execution"] = result;
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("{} / {}: {path}", rows.len() + 1, fixtures.len());
+        rows.push(row);
+        // Persist every batch; a failed or interrupted gate never erases evidence.
+        fs::write(
+            &args[1],
+            serde_json::to_vec_pretty(&json!({"complete":false,"fixtures":rows})).unwrap(),
+        )
+        .unwrap();
+    }
+    let counts = json!({"lower":[lower_pass,lower_total],"object":[object_pass,lower_total],
+        "main":[main_pass,main_total],"runtime_contract":[runtime_pass,runtime_total],
+        "verify":[suite_pass[0],suite_total[0]],"property":[suite_pass[1],suite_total[1]]});
+    let fixture_gates_complete = lower_pass == lower_total
+        && object_pass == lower_total
+        && main_pass == main_total
+        && runtime_pass == runtime_total
+        && suite_pass == suite_total;
+    let report = json!({"complete":false,"fixture_gates_complete":fixture_gates_complete,
+        "target":native::host_target(),"counts":counts,"fixtures":rows,
+        "suite_blocks":{"verify":suite_blocks[0],"property":suite_blocks[1]},
+        "pending_release_gates":["unresolved equality and erased-call contracts", "actor handles escaping comptime", "remaining semantic and value-composition audit", "full workspace and clean Linux GNU/Windows MSVC distribution at the release revision"]});
+    fs::write(&args[1], serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+    println!("{counts}");
+    // Successful fixture gates do not certify the outstanding release gates.
+    if fixture_gates_complete {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+fn execution_passes(result: &Value, expected_failure: bool) -> bool {
+    result["behavior_matches"] == true
+        && (!expected_failure || result["failure_cleanup_verified"] == true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn expected_failures_count_only_with_cleanup_evidence() {
+        let verified = json!({"behavior_matches":true, "failure_cleanup_verified":true});
+        assert!(execution_passes(&verified, true));
+        assert!(!execution_passes(
+            &json!({"behavior_matches":true, "failure_cleanup_verified":false}),
+            true
+        ));
+        assert!(!execution_passes(
+            &json!({"behavior_matches":false, "failure_cleanup_verified":true}),
+            true
+        ));
+        assert!(execution_passes(&json!({"behavior_matches":true}), false));
+    }
+}

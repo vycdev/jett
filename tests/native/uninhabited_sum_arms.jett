@@ -1,0 +1,355 @@
+namespace app
+type Count = int64
+type OtherCount = int64
+function identity[T](value: T) returns T:
+    return value
+function unwrap_optional[T](candidate: optional[T]) returns list[T]:
+    T item = candidate handle:
+        return list()
+    T copied = identity(item)
+    trace copied
+    breakpoint
+    return list(copied)
+function unwrap_result[T, E](candidate: result[T, E]) returns list[T]:
+    T item = candidate handle error:
+        trace error
+        return list()
+    trace item
+    return list(item)
+function collect_errors[T, E](candidate: result[T, E]) returns list[E]:
+    T item = candidate handle error:
+        E copied = identity(error)
+        trace copied
+        breakpoint
+        return list(copied)
+    trace item
+    return list()
+function captured_optional[T](candidate: optional[T]) returns list[T]:
+    T item = candidate handle:
+        return list()
+    function() returns T closure = function() returns T: return item
+    T copied = closure()
+    trace copied
+    breakpoint
+    return list(copied)
+function optional_with_default[T](candidate: optional[T], fallback: list[T]) returns list[T]:
+    T item = candidate handle:
+        default list.first[T](view fallback) handle: return list()
+    trace item
+    return list(item)
+function result_with_default[T, E](candidate: result[T, E], fallback: list[T]) returns list[T]:
+    T item = candidate handle error:
+        trace error
+        default list.first[T](view fallback) handle: return list()
+    trace item
+    return list(item)
+function reuse_optional[T](candidate: optional[T]) returns int64:
+    optional[T] saved = clone candidate
+    list[T] first = optional_with_default(saved, list())
+    list[T] second = optional_with_default(candidate, list())
+    return list.length[T](view first) + list.length[T](view second)
+function reuse_result[T, E](candidate: result[T, E]) returns int64:
+    result[T, E] saved = clone candidate
+    list[T] first = unwrap_result(saved)
+    list[T] second = unwrap_result(candidate)
+    return list.length[T](view first) + list.length[T](view second)
+function reuse_errors[T, E](candidate: result[T, E]) returns int64:
+    result[T, E] saved = clone candidate
+    list[E] first = collect_errors(saved)
+    list[E] second = collect_errors(candidate)
+    return list.length[E](view first) + list.length[E](view second)
+function handler_counts() returns string:
+    int64 absent = list.length(view unwrap_optional(none))
+    int64 failure = list.length(view unwrap_result(fail("bad")))
+    int64 success = list.length(view collect_errors(ok(8)))
+    return "{absent}:{failure}:{success}"
+function reuse_counts() returns string:
+    int64 absent = reuse_optional(none)
+    int64 failure = reuse_result(fail("reuse"))
+    int64 success = reuse_result(ok(8))
+    int64 errors = reuse_errors(ok(8))
+    return "{absent}:{failure}:{success}:{errors}"
+function default_counts() returns string:
+    int64 absent = list.length(view optional_with_default(none, list()))
+    int64 failure = list.length(view result_with_default(fail("default"), list()))
+    return "{absent}:{failure}"
+function transform_counts() returns string:
+    int64 reversed = list.length(view list.reverse(list()))
+    int64 skipped = list.length(view list.skip(list(), 1))
+    int64 taken = list.length(view list.take(list(), 1))
+    int64 flattened = list.length(view list.flatten(list(list(), list())))
+    int64 absent = list.length(view unwrap_optional(list.first(view list())))
+    return "{reversed}:{skipped}:{taken}:{flattened}:{absent}"
+function optional_source[T](values: list[T], view stdout: Stdout) returns optional[T]:
+    Stdout.write(view stdout, "optional source\n")
+    return list.first[T](view values)
+function result_source[T](values: list[T], view stdout: Stdout) returns result[T, string]:
+    Stdout.write(view stdout, "result source\n")
+    T item = list.first[T](view values) handle:
+        return fail("absent")
+    Stdout.write(view stdout, "unexpected success\n")
+    return ok(item)
+function effectful_handlers(view stdout: Stdout) returns nothing:
+    int64 absent = list.length(view unwrap_optional(optional_source(list(), view stdout)))
+    Stdout.write(view stdout, "effect optional:{absent}\n")
+    int64 failure = list.length(view unwrap_result(result_source(list(), view stdout)))
+    Stdout.write(view stdout, "effect failure:{failure}\n")
+function contextual_counts() returns string:
+    optional[Count] absent = none
+    result[Count, string] failure = fail("concrete")
+    result[Count, string] success = ok(8)
+    int64 absent_count = list.length(view unwrap_optional(absent))
+    int64 failure_count = list.length(view unwrap_result(failure))
+    int64 error_count = list.length(view collect_errors(success))
+    return "{absent_count}:{failure_count}:{error_count}"
+interface Named:
+    function name(view self: Named) returns string
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "number:{self}"
+function callback() returns int64:
+    return 9
+function callback_counts() returns string:
+    Named named = 8
+    int64 interface_count = list.length(view collect_errors(ok(named)))
+    int64 function_count = list.length(view collect_errors(ok(callback)))
+    int64 captured = list.length(view captured_optional(none))
+    return "{interface_count}:{function_count}:{captured}"
+function joined_optional[T](candidate: optional[T]) returns list[T]:
+    T item = candidate handle:
+        return list()
+    trace item
+    T once = join item handle error: return list()
+    trace once
+    T ready = join once handle error: return list()
+    trace ready
+    return list(ready)
+function joined_result[T, E](candidate: result[T, E]) returns list[T]:
+    T item = candidate handle error:
+        trace error
+        return list()
+    trace item
+    T once = join item handle error: return list()
+    trace once
+    T ready = join once handle error: return list()
+    trace ready
+    return list(ready)
+function pending_payload_counts() returns string:
+    int64 absent = list.length(view joined_optional(some(run run 6)))
+    int64 success = list.length(view joined_result(ok(run run 8)))
+    return "{absent}:{success}"
+function live_after_empty_loop() returns function(int64) returns int64:
+    for value in list():
+        function() returns int64 dead = function() returns int64: return value
+        int64 copied = dead()
+        trace copied
+        breakpoint
+    int64 offset = 30
+    return function(number: int64) returns int64: return offset + number
+function live_after_success[T, E](candidate: result[T, E], offset: int64) returns function(int64) returns int64:
+    T item = candidate handle error:
+        E captured = identity(error)
+        function() returns E dead = function() returns E: return captured
+        E copied = dead()
+        trace copied
+        breakpoint
+        return function(number: int64) returns int64: return number
+    return function(number: int64) returns int64: return offset + number
+function surviving_callbacks() returns string:
+    function(int64) returns int64 after_loop = live_after_empty_loop()
+    function(int64) returns int64 after_success = live_after_success(ok(8), 40)
+    return "{after_loop(7)}:{after_success(9)}"
+function present_values[T](candidate: optional[T]) returns list[T]:
+    T item = candidate handle: return list()
+    return list(item)
+function successful_values[T, E](candidate: result[T, E]) returns list[T]:
+    T item = candidate handle error: return list()
+    return list(item)
+function collect_optionals[T](candidates: list[optional[T]]) returns list[T]:
+    mutable list[T] output = list()
+    for candidate in candidates:
+        output = list.concat[T](output, present_values[T](candidate))
+    return output
+function collect_results[T, E](candidates: list[result[T, E]]) returns list[T]:
+    mutable list[T] output = list()
+    for candidate in candidates:
+        output = list.concat[T](output, successful_values[T, E](candidate))
+    return output
+function values_text[T](values: list[T]) returns string:
+    mutable string text = ""
+    for value in values:
+        text = "{text}{value},"
+    return text
+function mixed_sum_values() returns string:
+    string absent_first = values_text(collect_optionals(list(none, some(7))))
+    string present_first = values_text(collect_optionals(list(some(7), none)))
+    string success_first = values_text(collect_results(list(ok(8), fail("bad"))))
+    string failure_first = values_text(collect_results(list(fail("bad"), ok(8))))
+    return "{absent_first}:{present_first}:{success_first}:{failure_first}"
+function nested_map_values[K, V](maps: list[map[K, V]]) returns list[V]:
+    mutable list[V] output = list()
+    for entries in maps:
+        for key, value in entries:
+            output = list.append[V](output, value)
+    return output
+function mixed_nested_values() returns string:
+    string empty_list_first = values_text(list.flatten(list(list(), list(9))))
+    string empty_list_last = values_text(list.flatten(list(list(9), list())))
+    string empty_map_first = values_text(nested_map_values(list(map(), map("key": 10))))
+    string empty_map_last = values_text(nested_map_values(list(map("key": 10), map())))
+    return "{empty_list_first}:{empty_list_last}:{empty_map_first}:{empty_map_last}"
+function make_absent[T](values: list[T]) returns function() returns optional[T]:
+    return function() returns optional[T]: return none
+function present() returns optional[int64]:
+    return some(7)
+function collect_callbacks[T](callbacks: list[function() returns optional[T]]) returns list[T]:
+    mutable list[T] output = list()
+    for callback in callbacks:
+        output = list.concat[T](output, present_values[T](callback()))
+    return output
+function mixed_callback_values() returns string:
+    string absent_first = values_text(collect_callbacks(list(make_absent(list()), present)))
+    string present_first = values_text(collect_callbacks(list(present, make_absent(list()))))
+    return "{absent_first}:{present_first}"
+function decorated_rows[T](rows: list[list[T]], extra: T) returns string:
+    mutable string text = ""
+    for row in rows:
+        list[T] augmented = list.append[T](clone row, clone extra)
+        list[T] ordered = list.sort[T](augmented)
+        T first = list.get[T](view ordered, 0) handle: return "missing"
+        text = "{text}{first}:{list.length[T](view ordered)}:{list.length[T](view row)};"
+    return text
+function mixed_string_rows() returns string:
+    string empty_first = decorated_rows(list(list(), list("zebra", "apple")), "added")
+    string empty_last = decorated_rows(list(list("zebra", "apple"), list()), "added")
+    return "{empty_first}|{empty_last}"
+function make_empty[T](view values: list[T]) returns function() returns list[T]:
+    return function() returns list[T]: return list()
+function words() returns list[string]:
+    return list("zebra", "apple")
+function callback_rows[T](callbacks: list[function() returns list[T]]) returns list[list[T]]:
+    mutable list[list[T]] output = list()
+    for callback in callbacks:
+        output = list.append[list[T]](output, callback())
+    return output
+function mixed_row_callbacks() returns string:
+    string empty_first = decorated_rows(callback_rows(list(make_empty(view list()), words)), "added")
+    string empty_last = decorated_rows(callback_rows(list(words, make_empty(view list()))), "added")
+    return "{empty_first}|{empty_last}"
+function defaulted[T](candidate: optional[T]) returns string:
+    int64 found = candidate handle: default 7
+    list[T] original = present_values(candidate)
+    return "{found}:{list.length[T](view original)}"
+function defaulted_view[T](view candidate: optional[T]) returns string:
+    int64 found = candidate handle: default 7
+    list[T] original = present_values(clone candidate)
+    return "{found}:{list.length[T](view original)}"
+function source_optional[T](view values: list[T]) returns optional[T]:
+    return list.first[T](view values)
+function defaulted_call[T](values: list[T]) returns string:
+    int64 found = source_optional[T](view values) handle: default 7
+    return "{found}:{list.length[T](view values)}"
+function nested_owned[T](candidate: optional[list[T]]) returns string:
+    list[string] found = candidate handle: default list("fallback")
+    list[string] ordered = list.sort[string](list.append[string](found, "added"))
+    string first = list.get[string](view ordered, 0) handle: return "missing"
+    list[list[T]] original = present_values(candidate)
+    list[T] row = list.get[list[T]](view original, 0) handle: default list()
+    return "{first}:{list.length[string](view ordered)}:{list.length[list[T]](view original)}:{list.length[T](view row)}"
+function nested_view[T](view candidate: optional[list[T]]) returns string:
+    list[string] found = candidate handle: default list("fallback")
+    list[string] ordered = list.sort[string](list.append[string](found, "added"))
+    string first = list.get[string](view ordered, 0) handle: return "missing"
+    list[list[T]] original = present_values(clone candidate)
+    list[T] row = list.get[list[T]](view original, 0) handle: default list()
+    return "{first}:{list.length[string](view ordered)}:{list.length[list[T]](view original)}:{list.length[T](view row)}"
+function second[T](first: T, second: T) returns T:
+    return second
+function repeated_values() returns string:
+    string present = values_text(present_values(second(none, some(7))))
+    string absent = values_text(present_values(second(some(7), none)))
+    string words_second = decorated_rows(list(second(list(), list("zebra", "apple"))), "added")
+    string empty_second = decorated_rows(list(second(list("zebra", "apple"), list())), "added")
+    string callback_second = decorated_rows(callback_rows(list(second(make_empty(view list()), words))), "added")
+    string empty_callback_second = decorated_rows(callback_rows(list(second(words, make_empty(view list())))), "added")
+    return "{present}:{absent}|{words_second}|{empty_second}|{callback_second}|{empty_callback_second}"
+function boundary_controls() returns string:
+    string owned = defaulted(none)
+    string borrowed = defaulted_view(view none)
+    string called = defaulted_call(list())
+    string nested = nested_owned(some(list()))
+    string nested_borrowed = nested_view(view some(list()))
+    return "local={owned};view={borrowed};call={called};nested={nested}|{nested_borrowed};second={repeated_values()}"
+function describe[T](view first: T, view last: T) returns string:
+    return type.name[T]()
+function outer[T](view empty: list[T]) returns string:
+    string empty_first = describe(view empty, view list(7))
+    string empty_last = describe(view list(7), view empty)
+    return "{empty_first}:{empty_last}"
+function payload_name[T](view candidate: optional[T]) returns string:
+    return type.name[T]()
+function payload_describe[T](view first: optional[T], view last: optional[T]) returns string:
+    return type.name[T]()
+function reflection_controls() returns string:
+    Count count = 7
+    OtherCount other_count = 8
+    optional[Count] named = some(clone count)
+    optional[OtherCount] other_named = some(clone other_count)
+    string literal_first = describe(view list(), view list(7))
+    string literal_last = describe(view list(7), view list())
+    string first_alias = payload_describe(view named, view other_named)
+    string other_alias = payload_describe(view other_named, view named)
+    string named_first_alias = payload_describe(last: view other_named, first: view named)
+    string named_other_alias = payload_describe(last: view named, first: view other_named)
+    return "outer={outer(view list())};literal={literal_first}:{literal_last};payload={payload_name(view named)};root={describe(view count, view other_count)};aliases={first_alias}:{other_alias}:{named_first_alias}:{named_other_alias}"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "handlers:{handler_counts()}\n")
+    Stdout.write(view stdout, "reuse:{reuse_counts()}:default:{default_counts()}\n")
+    Stdout.write(view stdout, "transforms:{transform_counts()}\n")
+    effectful_handlers(view stdout)
+    Stdout.write(view stdout, "context:{contextual_counts()}:callbacks:{callback_counts()}\n")
+    string baked_handlers = comptime handler_counts()
+    string baked_reuse = comptime reuse_counts()
+    string baked_transforms = comptime transform_counts()
+    Stdout.write(view stdout, "baked:{baked_handlers}:{baked_reuse}:{baked_transforms}\n")
+    Stdout.write(view stdout, "payloads:{pending_payload_counts()}\n")
+    Stdout.write(view stdout, "surviving:{surviving_callbacks()}\n")
+    Stdout.write(view stdout, "mixed-sums:{mixed_sum_values()}\n")
+    Stdout.write(view stdout, "mixed-nested:{mixed_nested_values()}\n")
+    Stdout.write(view stdout, "mixed-callbacks:{mixed_callback_values()}\n")
+    Stdout.write(view stdout, "mixed-rows:{mixed_string_rows()}\n")
+    Stdout.write(view stdout, "mixed-row-callbacks:{mixed_row_callbacks()}\n")
+    Stdout.write(view stdout, "boundary:{boundary_controls()}\n")
+    Stdout.write(view stdout, "reflection:{reflection_controls()}\n")
+verify uninhabited_handlers:
+    assert handler_counts() == "0:0:0"
+    assert transform_counts() == "0:0:0:0:0"
+    assert list.length(view captured_optional(none)) == 0
+    string baked_handlers = comptime handler_counts()
+    string baked_reuse = comptime reuse_counts()
+    assert baked_handlers == "0:0:0"
+    assert baked_reuse == "0:0:2:0"
+    assert surviving_callbacks() == "37:49"
+    assert mixed_sum_values() == "7,:7,:8,:8,"
+    assert mixed_nested_values() == "9,:9,:10,:10,"
+    assert mixed_callback_values() == "7,:7,"
+    assert mixed_string_rows() == "added:1:0;added:3:2;|added:3:2;added:1:0;"
+    assert mixed_row_callbacks() == "added:1:0;added:3:2;|added:3:2;added:1:0;"
+    assert boundary_controls() == "local=7:0;view=7:0;call=7:0;nested=added:1:1:0|added:1:1:0;second=7,:|added:3:2;|added:1:0;|added:3:2;|added:1:0;"
+    assert reflection_controls() == "outer=list[int64]:list[int64];literal=list[int64]:list[int64];payload=app.Count;root=int64;aliases=app.Count:app.OtherCount:app.Count:app.OtherCount"
+property uninhabited_handler_trials:
+    given seed: int64
+    assert seed + list.length(view unwrap_optional(none)) == seed
+    assert list.length(view unwrap_result(fail("bad"))) == 0
+    assert list.length(view collect_errors(ok(8))) == 0
+    function(int64) returns int64 after_loop = live_after_empty_loop()
+    function(int64) returns int64 after_success = live_after_success(ok(8), 40)
+    assert after_loop(seed) == seed + 30
+    assert after_success(seed) == seed + 40
+    assert mixed_sum_values() == "7,:7,:8,:8,"
+    assert mixed_nested_values() == "9,:9,:10,:10,"
+    assert mixed_callback_values() == "7,:7,"
+    assert mixed_string_rows() == "added:1:0;added:3:2;|added:3:2;added:1:0;"
+    assert mixed_row_callbacks() == "added:1:0;added:3:2;|added:3:2;added:1:0;"
+    assert boundary_controls() == "local=7:0;view=7:0;call=7:0;nested=added:1:1:0|added:1:1:0;second=7,:|added:3:2;|added:1:0;|added:3:2;|added:1:0;"
+    assert reflection_controls() == "outer=list[int64]:list[int64];literal=list[int64]:list[int64];payload=app.Count;root=int64;aliases=app.Count:app.OtherCount:app.Count:app.OtherCount"

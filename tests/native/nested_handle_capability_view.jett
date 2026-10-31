@@ -1,0 +1,18 @@
+namespace app
+function write(view stdout: Stdout, text: string) returns nothing:
+    Stdout.write(view stdout, text)
+function main(stdout: Stdout) returns nothing:
+    optional[string] direct_missing = none
+    write(view stdout, direct_missing handle:
+        default "direct\n"
+    )
+    optional[string] intrinsic_missing = none
+    Stdout.write(view stdout, intrinsic_missing handle:
+        default "intrinsic\n"
+    )
+    function(view Stdout, string) returns nothing callback = write
+    optional[string] indirect_missing = none
+    callback(view stdout, indirect_missing handle:
+        default "indirect\n"
+    )
+    return nothing

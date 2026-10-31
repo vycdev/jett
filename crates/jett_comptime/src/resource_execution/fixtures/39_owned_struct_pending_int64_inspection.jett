@@ -1,0 +1,22 @@
+namespace app
+struct PendingEnvelope:
+    token: resource_probe.TestHandle
+    marker: int64
+function expect(condition: bool) returns nothing:
+    use resource_companion_probe
+    if not condition:
+        resource_companion_probe.terminal_failure()
+    return nothing
+function retire_pending(token: resource_probe.TestHandle) returns nothing:
+    PendingEnvelope held = PendingEnvelope(token: token, marker: run run 17)
+    int64 once = join held.marker handle error:
+        expect(false)
+        return nothing
+    expect(once == 17)
+    return nothing
+export function main(net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle token = resource_probe.create(view net, 1103) handle error:
+        return nothing
+    retire_pending(token)
+    return nothing

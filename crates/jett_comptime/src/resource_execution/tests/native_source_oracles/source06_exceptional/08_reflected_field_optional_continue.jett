@@ -1,0 +1,26 @@
+namespace app
+struct IterationShape:
+    first: int64
+    second: int64
+export function main(net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle owner = resource_probe.create(view net, 871) handle error:
+        return nothing
+    optional[resource_probe.TestHandle] held = some(owner)
+    mutable int64 total = 0
+    for field in type.fields[IterationShape]():
+        comptime type Element = field.type_info:
+            resource_probe.TestHandle token = view((view held) handle:
+                return nothing
+            )
+            Element observed = resource_probe.borrow(view net, view token) handle error:
+                return nothing
+            total = total + observed
+            continue
+        total = total + 1000
+    if total != 34:
+        int64 ignored = resource_probe.terminal_label()
+    resource_probe.TestHandle final_token = held handle:
+        return nothing
+    resource_probe.close(final_token)
+    return nothing

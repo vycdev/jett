@@ -1,26 +1,65 @@
+#[path = "resource_execution/capture.rs"]
+mod resource_capture;
+#[path = "resource_execution/interpreter_transport.rs"]
+mod resource_transport;
+use crate::resource_execution::{
+    EvaluatedValue, PreparedReflectedFieldIteration, ResourceTransport,
+};
+
+use crate::checked_types::{
+    CheckedExpressionTypes, CheckedFunctionTypes, CheckedScopedTypes, select_scoped_types,
+};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use rand::{RngCore, SeedableRng, rngs::StdRng};
 use subtle::ConstantTimeEq;
 use unicode_segmentation::UnicodeSegmentation;
 
 use jett_common::{FileId, Span, is_json_raw_facade, json_public_bridge_spec};
+use jett_intrinsics::IntrinsicId;
 use jett_parser::ast::{
     ActorDef, BinOp, BitfieldDef, BitfieldFieldKind, Block, CallArg, EnumDef, Expr, FunctionDef,
     Ident, ImplementBlock, InterfaceDecl, Item, MachineDef, Module, Param, Pattern, PipelineStep,
     PipelineStepHandle, Stmt, StringPart, StructDef, TypeAlias, TypeExpr, UnaryOp,
 };
+pub use jett_runtime::clock::ClockTestSample;
+#[cfg(test)]
+use jett_runtime::clock::raw_wall_clock_sample;
+use jett_runtime::clock::{checked_clock_milliseconds, production_wall_clock_sample};
+use jett_runtime::crypto::{hmac_sha256_digest, md5_digest, sha256_digest, sha512_digest};
+use jett_runtime::csv::{csv_quote_field, parse_csv_records, parse_csv_with_header};
+use jett_runtime::encoding::{
+    base64_decode, base64_encode, encoding_hex_decode, percent_decode, percent_encode,
+};
+use jett_runtime::environment::LaunchEnvironmentSnapshot;
+pub use jett_runtime::environment::{
+    EnvironmentTestEntry, EnvironmentTestSnapshot, EnvironmentTestText,
+};
+use jett_runtime::math::{float_average, float_midpoint};
+use jett_runtime::random::RandomProvider;
+pub use jett_runtime::random::RandomTestSample;
+#[cfg(test)]
+use jett_runtime::random::unbiased_bounded_offset;
 use jett_types::{
     ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo,
     ReflectionMachineInfo, ReflectionMachineStateInfo, ReflectionMachineTransitionInfo,
     ReflectionMetadata, ReflectionTypeInfo, ReflectionVariantInfo,
 };
 
-use crate::value::Value;
+use crate::debug::{DebugEvent, DebugEventKind};
+use crate::value::{ClosureScopedTypeBinding, ClosureTypeArgument, ClosureTypeContext, Value};
 
+pub mod actor_graph;
+mod actor_handlers;
+mod debug;
+mod field_updates;
+mod generic_inference;
 mod graphics;
+mod interface_arguments;
+mod nominal_types;
+mod reflected_callables;
+mod temporary_local_views;
 
 use graphics::GraphicsProvider;
 pub use graphics::{GraphicsTestEvent, GraphicsTestObservation};
@@ -118,6 +157,296 @@ macro_rules! require_args {
     };
 }
 
+// Closed decline sets for the specialized intrinsic dispatchers. These are
+// deliberately exhaustive: extending IntrinsicId must update each dispatcher.
+macro_rules! non_type_arg_intrinsics {
+    () => {
+        IntrinsicId::BitfieldFromBytes
+            | IntrinsicId::BitfieldToBytes
+            | IntrinsicId::BytesConcat
+            | IntrinsicId::BytesFromHex
+            | IntrinsicId::BytesFromString
+            | IntrinsicId::BytesGet
+            | IntrinsicId::BytesLength
+            | IntrinsicId::BytesNew
+            | IntrinsicId::BytesSlice
+            | IntrinsicId::BytesToHex
+            | IntrinsicId::BytesToString
+            | IntrinsicId::ClockNow
+            | IntrinsicId::CryptoHmacSha256
+            | IntrinsicId::CryptoMd5
+            | IntrinsicId::CryptoSha256
+            | IntrinsicId::CryptoSha512
+            | IntrinsicId::CsvParse
+            | IntrinsicId::CsvParseWithHeader
+            | IntrinsicId::CsvStringify
+            | IntrinsicId::EncodingBase64Decode
+            | IntrinsicId::EncodingBase64Encode
+            | IntrinsicId::EncodingFormDecode
+            | IntrinsicId::EncodingFormEncode
+            | IntrinsicId::EncodingHexDecode
+            | IntrinsicId::EncodingUrlDecode
+            | IntrinsicId::EncodingUrlEncode
+            | IntrinsicId::EnvironmentArgs
+            | IntrinsicId::EnvironmentGet
+            | IntrinsicId::FilesystemReadFile
+            | IntrinsicId::FilesystemWriteFile
+            | IntrinsicId::Float32FromFloat64
+            | IntrinsicId::Float64FromInt64
+            | IntrinsicId::Float64FromString
+            | IntrinsicId::GraphicsRun
+            | IntrinsicId::Int64FromFloat64
+            | IntrinsicId::Int64FromString
+            | IntrinsicId::ListAppend
+            | IntrinsicId::ListGetClone
+            | IntrinsicId::ListGroupBy
+            | IntrinsicId::ListInsertAt
+            | IntrinsicId::ListIsSorted
+            | IntrinsicId::ListLength
+            | IntrinsicId::ListNew
+            | IntrinsicId::ListRemoveAt
+            | IntrinsicId::ListSort
+            | IntrinsicId::ListSortBy
+            | IntrinsicId::ListSortByIndex
+            | IntrinsicId::ListSum
+            | IntrinsicId::ListSwap
+            | IntrinsicId::LogEmit
+            | IntrinsicId::MapFromLists
+            | IntrinsicId::MapGet
+            | IntrinsicId::MapHas
+            | IntrinsicId::MapInsert
+            | IntrinsicId::MapLength
+            | IntrinsicId::MapNew
+            | IntrinsicId::MapRemove
+            | IntrinsicId::MathAbs
+            | IntrinsicId::MathAverage
+            | IntrinsicId::MathCeil
+            | IntrinsicId::MathClamp
+            | IntrinsicId::MathCos
+            | IntrinsicId::MathE
+            | IntrinsicId::MathFactorial
+            | IntrinsicId::MathFloor
+            | IntrinsicId::MathGcd
+            | IntrinsicId::MathKernelAbs
+            | IntrinsicId::MathKernelMax
+            | IntrinsicId::MathKernelMin
+            | IntrinsicId::MathLcm
+            | IntrinsicId::MathLog
+            | IntrinsicId::MathLog10
+            | IntrinsicId::MathLog2
+            | IntrinsicId::MathMax
+            | IntrinsicId::MathMedian
+            | IntrinsicId::MathMin
+            | IntrinsicId::MathMod
+            | IntrinsicId::MathPi
+            | IntrinsicId::MathPow
+            | IntrinsicId::MathRound
+            | IntrinsicId::MathSin
+            | IntrinsicId::MathSqrt
+            | IntrinsicId::MathTan
+            | IntrinsicId::Print
+            | IntrinsicId::Println
+            | IntrinsicId::RandomBool
+            | IntrinsicId::RandomBounded
+            | IntrinsicId::RandomUnitFloat64
+            | IntrinsicId::Range
+            | IntrinsicId::SecretCompare
+            | IntrinsicId::SecretRedact
+            | IntrinsicId::SetAdd
+            | IntrinsicId::SetContains
+            | IntrinsicId::SetLength
+            | IntrinsicId::SetNew
+            | IntrinsicId::SetRemove
+            | IntrinsicId::StdoutWrite
+            | IntrinsicId::StringCharCount
+            | IntrinsicId::StringChars
+            | IntrinsicId::StringCount
+            | IntrinsicId::StringFromBool
+            | IntrinsicId::StringFromFloat64
+            | IntrinsicId::StringFromInt64
+            | IntrinsicId::StringFromUint64
+            | IntrinsicId::StringIndexOf
+            | IntrinsicId::StringIsAlpha
+            | IntrinsicId::StringIsNumeric
+            | IntrinsicId::StringJoin
+            | IntrinsicId::StringLines
+            | IntrinsicId::StringLower
+            | IntrinsicId::StringRepeat
+            | IntrinsicId::StringReplace
+            | IntrinsicId::StringSlice
+            | IntrinsicId::StringSlugify
+            | IntrinsicId::StringSplit
+            | IntrinsicId::StringToLowerFirst
+            | IntrinsicId::StringToUpperFirst
+            | IntrinsicId::StringTrim
+            | IntrinsicId::StringTrimEnd
+            | IntrinsicId::StringTrimStart
+            | IntrinsicId::StringUpper
+            | IntrinsicId::StringWords
+            | IntrinsicId::TestMockClock
+            | IntrinsicId::TestMockEnvironment
+            | IntrinsicId::TestMockRandom
+            | IntrinsicId::Uint64FromString
+            | IntrinsicId::UuidNew
+    };
+}
+
+macro_rules! non_higher_order_intrinsics {
+    () => {
+        IntrinsicId::BitfieldFromBytes
+            | IntrinsicId::BitfieldToBytes
+            | IntrinsicId::BytesConcat
+            | IntrinsicId::BytesFromHex
+            | IntrinsicId::BytesFromString
+            | IntrinsicId::BytesGet
+            | IntrinsicId::BytesLength
+            | IntrinsicId::BytesNew
+            | IntrinsicId::BytesSlice
+            | IntrinsicId::BytesToHex
+            | IntrinsicId::BytesToString
+            | IntrinsicId::ClockNow
+            | IntrinsicId::CryptoHmacSha256
+            | IntrinsicId::CryptoMd5
+            | IntrinsicId::CryptoSha256
+            | IntrinsicId::CryptoSha512
+            | IntrinsicId::CsvParse
+            | IntrinsicId::CsvParseWithHeader
+            | IntrinsicId::CsvStringify
+            | IntrinsicId::EncodingBase64Decode
+            | IntrinsicId::EncodingBase64Encode
+            | IntrinsicId::EncodingFormDecode
+            | IntrinsicId::EncodingFormEncode
+            | IntrinsicId::EncodingHexDecode
+            | IntrinsicId::EncodingUrlDecode
+            | IntrinsicId::EncodingUrlEncode
+            | IntrinsicId::EnvironmentArgs
+            | IntrinsicId::EnvironmentGet
+            | IntrinsicId::FilesystemReadFile
+            | IntrinsicId::FilesystemWriteFile
+            | IntrinsicId::Float32FromFloat64
+            | IntrinsicId::Float64FromInt64
+            | IntrinsicId::Float64FromString
+            | IntrinsicId::Int64FromFloat64
+            | IntrinsicId::Int64FromString
+            | IntrinsicId::JsonParse
+            | IntrinsicId::JsonParseExact
+            | IntrinsicId::JsonSerialize
+            | IntrinsicId::JsonSerializePublic
+            | IntrinsicId::ListAppend
+            | IntrinsicId::ListGetClone
+            | IntrinsicId::ListInsertAt
+            | IntrinsicId::ListIsSorted
+            | IntrinsicId::ListLength
+            | IntrinsicId::ListNew
+            | IntrinsicId::ListRemoveAt
+            | IntrinsicId::ListSort
+            | IntrinsicId::ListSortByIndex
+            | IntrinsicId::ListSwap
+            | IntrinsicId::LogEmit
+            | IntrinsicId::MapFromLists
+            | IntrinsicId::MapGet
+            | IntrinsicId::MapHas
+            | IntrinsicId::MapInsert
+            | IntrinsicId::MapLength
+            | IntrinsicId::MapNew
+            | IntrinsicId::MapRemove
+            | IntrinsicId::MathAbs
+            | IntrinsicId::MathAverage
+            | IntrinsicId::MathCeil
+            | IntrinsicId::MathClamp
+            | IntrinsicId::MathCos
+            | IntrinsicId::MathE
+            | IntrinsicId::MathFactorial
+            | IntrinsicId::MathFloor
+            | IntrinsicId::MathGcd
+            | IntrinsicId::MathKernelAbs
+            | IntrinsicId::MathKernelMax
+            | IntrinsicId::MathKernelMin
+            | IntrinsicId::MathLcm
+            | IntrinsicId::MathLog
+            | IntrinsicId::MathLog10
+            | IntrinsicId::MathLog2
+            | IntrinsicId::MathMax
+            | IntrinsicId::MathMedian
+            | IntrinsicId::MathMin
+            | IntrinsicId::MathMod
+            | IntrinsicId::MathPi
+            | IntrinsicId::MathPow
+            | IntrinsicId::MathRound
+            | IntrinsicId::MathSin
+            | IntrinsicId::MathSqrt
+            | IntrinsicId::MathTan
+            | IntrinsicId::Print
+            | IntrinsicId::Println
+            | IntrinsicId::RandomBool
+            | IntrinsicId::RandomBounded
+            | IntrinsicId::RandomUnitFloat64
+            | IntrinsicId::Range
+            | IntrinsicId::SecretCompare
+            | IntrinsicId::SecretRedact
+            | IntrinsicId::SetAdd
+            | IntrinsicId::SetContains
+            | IntrinsicId::SetLength
+            | IntrinsicId::SetNew
+            | IntrinsicId::SetRemove
+            | IntrinsicId::StdoutWrite
+            | IntrinsicId::StringCharCount
+            | IntrinsicId::StringChars
+            | IntrinsicId::StringCount
+            | IntrinsicId::StringFromBool
+            | IntrinsicId::StringFromFloat64
+            | IntrinsicId::StringFromInt64
+            | IntrinsicId::StringFromUint64
+            | IntrinsicId::StringIndexOf
+            | IntrinsicId::StringIsAlpha
+            | IntrinsicId::StringIsNumeric
+            | IntrinsicId::StringJoin
+            | IntrinsicId::StringLines
+            | IntrinsicId::StringLower
+            | IntrinsicId::StringRepeat
+            | IntrinsicId::StringReplace
+            | IntrinsicId::StringSlice
+            | IntrinsicId::StringSlugify
+            | IntrinsicId::StringSplit
+            | IntrinsicId::StringToLowerFirst
+            | IntrinsicId::StringToUpperFirst
+            | IntrinsicId::StringTrim
+            | IntrinsicId::StringTrimEnd
+            | IntrinsicId::StringTrimStart
+            | IntrinsicId::StringUpper
+            | IntrinsicId::StringWords
+            | IntrinsicId::TestMockClock
+            | IntrinsicId::TestMockEnvironment
+            | IntrinsicId::TestMockRandom
+            | IntrinsicId::TypeArg
+            | IntrinsicId::TypeBitfieldFields
+            | IntrinsicId::TypeBitfieldLayout
+            | IntrinsicId::TypeConstructFinish
+            | IntrinsicId::TypeConstructMachineStart
+            | IntrinsicId::TypeConstructPut
+            | IntrinsicId::TypeConstructStart
+            | IntrinsicId::TypeConstructVariantStart
+            | IntrinsicId::TypeFieldValue
+            | IntrinsicId::TypeFields
+            | IntrinsicId::TypeHasSecret
+            | IntrinsicId::TypeInfo
+            | IntrinsicId::TypeKind
+            | IntrinsicId::TypeKindTag
+            | IntrinsicId::TypeMachineFieldValue
+            | IntrinsicId::TypeMachineLayout
+            | IntrinsicId::TypeMachineStateValue
+            | IntrinsicId::TypeMachineStates
+            | IntrinsicId::TypeMachineTransitions
+            | IntrinsicId::TypeName
+            | IntrinsicId::TypePrimitiveTag
+            | IntrinsicId::TypeVariantFieldValue
+            | IntrinsicId::TypeVariantValue
+            | IntrinsicId::TypeVariants
+            | IntrinsicId::Uint64FromString
+            | IntrinsicId::UuidNew
+    };
+}
+
 // ---------------------------------------------------------------------------
 // Environment
 // ---------------------------------------------------------------------------
@@ -133,16 +462,36 @@ pub type Environment = HashMap<String, Value>;
 /// the recursive interpreter.
 #[derive(Debug)]
 enum Signal {
-    Return(Value),
+    Return(Value, Option<String>),
+    ResourceReturn(EvaluatedValue, Option<String>),
     Default(Value),
+    ResourceDefault(EvaluatedValue),
     Respond(Value),
     Break,
     Continue,
 }
 
+#[derive(Debug, Clone)]
+enum ProducedValueStep {
+    Typed,
+    Sequence(usize),
+    MapKey(usize),
+    MapValue(usize),
+    Some,
+    Ok,
+    Fail,
+}
+
+struct ProducedRefinementCheck {
+    path: Vec<ProducedValueStep>,
+    requested: TypeExpr,
+    source: Option<String>,
+}
+
 #[derive(Debug)]
 enum ExprFlow {
     Value(Value),
+    Resource(EvaluatedValue),
     Signal(Signal),
 }
 
@@ -150,6 +499,12 @@ macro_rules! value_or_signal {
     ($self:expr, $expr:expr) => {
         match $self.eval_expr_flow($expr)? {
             ExprFlow::Value(value) => value,
+            ExprFlow::Resource(_) => {
+                return Err(
+                    "Resource operand has no checked ownership transport for this operation"
+                        .to_string(),
+                )
+            }
             ExprFlow::Signal(signal) => return Ok(ExprFlow::Signal(signal)),
         }
     };
@@ -273,7 +628,24 @@ struct ReflectionMachineTransition {
     target: String,
 }
 
+#[derive(Clone)]
+struct RegisteredFunction {
+    definition: Arc<FunctionDef>,
+    namespace: Option<String>,
+    trusted_stdlib: bool,
+}
+
 pub struct Interpreter {
+    temporary_local_views: Option<temporary_local_views::Context>,
+    field_update_context: Option<field_updates::FieldUpdateContext>,
+    /// One existing checked entry may start ordinary executable identity.
+    /// Source callees then require their authenticated caller context.
+    field_update_entry_allowed: bool,
+    resource_transport: Option<ResourceTransport>,
+    retained_resource_program: Option<(
+        Arc<jett_typecheck::CheckedResourceProgram>,
+        crate::ExecutionPurpose,
+    )>,
     /// Stack of lexical scopes. The last element is the innermost scope.
     scopes: Vec<Environment>,
     /// Runtime type annotations for variables declared in the matching scope.
@@ -281,9 +653,7 @@ pub struct Interpreter {
     /// Stack of block-scoped namespace aliases introduced by `use`.
     namespace_alias_scopes: Vec<HashMap<String, String>>,
     /// User-defined functions available for calling.
-    functions: HashMap<String, Arc<FunctionDef>>,
-    /// Function registry entries that came from compiler-shipped stdlib files.
-    trusted_stdlib_functions: HashSet<String>,
+    functions: HashMap<String, RegisteredFunction>,
     /// Registered user-defined structs available for construction and field access.
     structs: HashMap<String, StructDef>,
     /// Registered user-defined bitfields available for construction and field access.
@@ -292,6 +662,10 @@ pub struct Interpreter {
     enums: HashMap<String, EnumDef>,
     /// Interface dotted name -> concrete runtime type -> concrete dotted function name.
     interface_methods: HashMap<String, HashMap<String, String>>,
+    /// Concrete implementation owners requiring identity across interface erasure.
+    interface_owners: HashSet<String>,
+    /// Interface names participate in canonical type argument qualification.
+    interfaces: HashSet<String>,
     /// Registered type alias base expressions.
     type_alias_bases: HashMap<String, TypeExpr>,
     /// Registered type aliases: name -> (base_type_name, optional constraint).
@@ -302,12 +676,20 @@ pub struct Interpreter {
     actor_defs: HashMap<String, ActorDef>,
     /// Active generic type argument substitutions for interpreted generic functions.
     type_arg_scopes: Vec<HashMap<String, TypeExpr>>,
+    scoped_type_bindings: Vec<ClosureScopedTypeBinding>,
+    /// Ordered arguments of the lexical function, retained by nested closures.
+    current_type_arguments: Vec<TypeExpr>,
     /// Namespace of the qualified function body currently executing.
     current_namespace: Option<String>,
+    /// First scope belonging to the current function or closure invocation.
+    /// The initial global environment remains visible across calls.
+    lexical_scope_floor: usize,
     /// Whether the current function body came from compiler-shipped stdlib source.
     current_function_trusted_stdlib: bool,
     /// Trusted field metadata currently produced by direct `type.fields[T]()` loops.
     reflected_field_scopes: Vec<HashMap<String, ReflectedFieldBinding>>,
+    /// Private selectors for exact checked Source For iterations; never Value authority.
+    checked_reflected_fields: Vec<PreparedReflectedFieldIteration>,
     /// Trusted TypeInfo metadata currently produced by direct reflected `args` loops.
     reflected_type_info_scopes: Vec<HashMap<String, ReflectedTypeInfoBinding>>,
     /// Trusted TypeVariant metadata currently produced by direct `type.variants[T]()` loops.
@@ -318,16 +700,26 @@ pub struct Interpreter {
     reflection_metadata: Option<Arc<ReflectionMetadata>>,
     /// Checked expression type names keyed by source span, when supplied by
     /// the driver after type checking.
-    checked_expression_types: Option<Arc<HashMap<Span, String>>>,
+    checked_expression_types: Option<Arc<CheckedExpressionTypes>>,
+    active_checked_function: Option<Arc<CheckedFunctionTypes>>,
+    active_checked_scope: Option<Arc<CheckedScopedTypes>>,
+    active_reflected_capture_origin: Option<crate::value::closure_capture::OriginalClosureOwner>,
+    /// Checked source identities prove invariants only in checked invocation trees.
+    /// Raw callers may supply aggregate payloads with stale refined children.
+    allow_checked_refinement_proofs: bool,
+    breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
     /// Values produced for explicit `comptime` expressions by the build.
-    explicit_comptime_values: Option<Arc<HashMap<Span, Value>>>,
+    explicit_comptime_values: Option<Arc<crate::ExplicitComptimeValues>>,
+    /// Compiler-produced immutable constants, separate from runtime scopes.
+    constants: HashMap<String, Value>,
+    constant_types: HashMap<String, TypeExpr>,
     /// Live actor instances keyed by unique ID.
     actor_instances: HashMap<u64, ActorInstance>,
     /// Next actor instance ID.
     next_actor_id: u64,
-    /// Recorded debug output lines (`trace`, `breakpoint`).
-    debug_output: Vec<String>,
-    /// Whether debug output should print as the program runs.
+    /// Ordered compiler-owned debug events, separate from application stdout.
+    debug_events: Vec<DebugEvent>,
+    /// Whether captured events should also emit to diagnostic stderr.
     emit_runtime_debug: bool,
     /// Optional captured stdout for driver tests.
     stdout_capture: Option<String>,
@@ -343,219 +735,9 @@ pub struct Interpreter {
     graphics_session_active: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RandomTestSample {
-    Bounded(u64),
-    Unit53(u64),
-    Boolean(bool),
-}
-
-enum RandomProvider {
-    Production(StdRng),
-    Scripted(std::collections::VecDeque<RandomTestSample>),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClockTestSample {
-    Wall {
-        unix_seconds: i128,
-        subsecond_nanoseconds: u32,
-    },
-    Unavailable,
-}
-
 enum ClockProvider {
     Production,
     Scripted(std::collections::VecDeque<ClockTestSample>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EnvironmentTestText {
-    Unicode(String),
-    InvalidUnicode,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnvironmentTestEntry {
-    pub name: EnvironmentTestText,
-    pub value: EnvironmentTestText,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnvironmentTestSnapshot {
-    pub arguments: Vec<EnvironmentTestText>,
-    pub entries: Vec<EnvironmentTestEntry>,
-}
-
-#[derive(Debug, Clone)]
-enum FrozenLaunchText {
-    Unicode(String),
-    InvalidUnicode,
-}
-
-#[derive(Debug, Clone)]
-struct FrozenEnvironmentEntry {
-    name: FrozenLaunchText,
-    value: FrozenLaunchText,
-}
-
-#[derive(Debug, Clone)]
-struct LaunchEnvironmentSnapshot {
-    arguments: Vec<String>,
-    entries: Vec<FrozenEnvironmentEntry>,
-}
-
-impl LaunchEnvironmentSnapshot {
-    fn production() -> Result<Self, String> {
-        let arguments = std::env::args_os()
-            .skip(1)
-            .map(frozen_launch_text_from_os)
-            .map(|argument| match argument {
-                FrozenLaunchText::Unicode(argument) => Ok(argument),
-                FrozenLaunchText::InvalidUnicode => {
-                    Err("Environment: argument is not valid Unicode".to_string())
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let entries = std::env::vars_os()
-            .map(|(name, value)| FrozenEnvironmentEntry {
-                name: frozen_launch_text_from_os(name),
-                value: frozen_launch_text_from_os(value),
-            })
-            .collect();
-        Ok(Self { arguments, entries })
-    }
-
-    fn injected(snapshot: EnvironmentTestSnapshot) -> Result<Self, String> {
-        let arguments = snapshot
-            .arguments
-            .into_iter()
-            .map(|argument| match argument {
-                EnvironmentTestText::Unicode(argument) => Ok(argument),
-                EnvironmentTestText::InvalidUnicode => {
-                    Err("Environment: argument is not valid Unicode".to_string())
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let entries = snapshot
-            .entries
-            .into_iter()
-            .map(|entry| FrozenEnvironmentEntry {
-                name: match entry.name {
-                    EnvironmentTestText::Unicode(name) => FrozenLaunchText::Unicode(name),
-                    EnvironmentTestText::InvalidUnicode => FrozenLaunchText::InvalidUnicode,
-                },
-                value: match entry.value {
-                    EnvironmentTestText::Unicode(value) => FrozenLaunchText::Unicode(value),
-                    EnvironmentTestText::InvalidUnicode => FrozenLaunchText::InvalidUnicode,
-                },
-            })
-            .collect();
-        Ok(Self { arguments, entries })
-    }
-
-    fn get(&self, key: &str) -> Result<Option<String>, String> {
-        if key.is_empty() || key.contains('=') || key.contains('\0') {
-            return Err("Environment.get: invalid variable name".to_string());
-        }
-        let matching_entry = self.entries.iter().find(|entry| match &entry.name {
-            FrozenLaunchText::Unicode(name) => environment_names_equal(name, key),
-            FrozenLaunchText::InvalidUnicode => false,
-        });
-        match matching_entry.map(|entry| &entry.value) {
-            None => Ok(None),
-            Some(FrozenLaunchText::Unicode(value)) => Ok(Some(value.clone())),
-            Some(FrozenLaunchText::InvalidUnicode) => {
-                Err("Environment.get: value is not valid Unicode".to_string())
-            }
-        }
-    }
-}
-
-fn frozen_launch_text_from_os(value: std::ffi::OsString) -> FrozenLaunchText {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStringExt;
-        return match String::from_utf8(value.into_vec()) {
-            Ok(value) => FrozenLaunchText::Unicode(value),
-            Err(_) => FrozenLaunchText::InvalidUnicode,
-        };
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        return match String::from_utf16(&value.encode_wide().collect::<Vec<_>>()) {
-            Ok(value) => FrozenLaunchText::Unicode(value),
-            Err(_) => FrozenLaunchText::InvalidUnicode,
-        };
-    }
-}
-
-fn environment_names_equal(captured: &str, requested: &str) -> bool {
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
-
-        let captured = captured.encode_utf16().collect::<Vec<_>>();
-        let requested = requested.encode_utf16().collect::<Vec<_>>();
-        let result = unsafe {
-            CompareStringOrdinal(
-                captured.as_ptr(),
-                captured.len() as i32,
-                requested.as_ptr(),
-                requested.len() as i32,
-                1,
-            )
-        };
-        result == CSTR_EQUAL
-    }
-    #[cfg(not(windows))]
-    {
-        captured == requested
-    }
-}
-
-fn unbiased_bounded_offset(width: u64, mut next_word: impl FnMut() -> u64) -> u64 {
-    debug_assert!(width > 0);
-    let rejection_threshold = width.wrapping_neg() % width;
-    loop {
-        let word = next_word();
-        if word >= rejection_threshold {
-            return word % width;
-        }
-    }
-}
-
-fn checked_clock_milliseconds(unix_seconds: i128, nanoseconds: u32) -> Result<i64, String> {
-    if nanoseconds >= 1_000_000_000 {
-        return Err("Clock.now: invalid test sample".to_string());
-    }
-    let milliseconds = unix_seconds
-        .checked_mul(1_000)
-        .and_then(|value| value.checked_add(i128::from(nanoseconds / 1_000_000)))
-        .ok_or_else(|| "Clock.now: timestamp is outside int64 millisecond range".to_string())?;
-    i64::try_from(milliseconds)
-        .map_err(|_| "Clock.now: timestamp is outside int64 millisecond range".to_string())
-}
-
-fn raw_wall_clock_sample(value: std::time::SystemTime) -> (i128, u32) {
-    match value.duration_since(std::time::UNIX_EPOCH) {
-        Ok(duration) => (i128::from(duration.as_secs()), duration.subsec_nanos()),
-        Err(error) => {
-            let duration = error.duration();
-            let seconds = i128::from(duration.as_secs());
-            let nanoseconds = duration.subsec_nanos();
-            if nanoseconds == 0 {
-                (-seconds, 0)
-            } else {
-                (-seconds - 1, 1_000_000_000 - nanoseconds)
-            }
-        }
-    }
-}
-
-fn production_wall_clock_sample() -> (i128, u32) {
-    raw_wall_clock_sample(std::time::SystemTime::now())
 }
 
 /// Runtime state of a spawned actor instance.
@@ -566,38 +748,56 @@ struct ActorInstance {
     state: HashMap<String, Value>,
     /// Capability values passed at spawn time.
     capabilities: HashMap<String, Value>,
+    checked_origin: Option<crate::resource_execution::CheckedActorInstanceOrigin>,
 }
 
 impl Interpreter {
     /// Create a new interpreter with an empty global scope.
     pub fn new() -> Self {
         Self {
+            temporary_local_views: None,
+            field_update_context: None,
+            field_update_entry_allowed: false,
+            resource_transport: None,
+            retained_resource_program: None,
             scopes: vec![HashMap::new()],
             variable_type_scopes: vec![HashMap::new()],
             namespace_alias_scopes: vec![HashMap::new()],
             functions: HashMap::new(),
-            trusted_stdlib_functions: HashSet::new(),
             structs: HashMap::new(),
             bitfields: HashMap::new(),
             enums: HashMap::new(),
             interface_methods: HashMap::new(),
+            interface_owners: HashSet::new(),
+            interfaces: HashSet::new(),
             type_alias_bases: HashMap::new(),
             type_aliases: HashMap::new(),
             machines: HashMap::new(),
             actor_defs: HashMap::new(),
             type_arg_scopes: Vec::new(),
+            scoped_type_bindings: Vec::new(),
+            current_type_arguments: Vec::new(),
             current_namespace: None,
+            lexical_scope_floor: 0,
             current_function_trusted_stdlib: false,
             reflected_field_scopes: Vec::new(),
+            checked_reflected_fields: Vec::new(),
             reflected_type_info_scopes: Vec::new(),
             reflected_variant_scopes: Vec::new(),
             reflected_machine_state_scopes: Vec::new(),
             reflection_metadata: None,
             checked_expression_types: None,
+            active_checked_function: None,
+            active_checked_scope: None,
+            active_reflected_capture_origin: None,
+            allow_checked_refinement_proofs: true,
+            breakpoint_exclusions: Arc::new(HashMap::new()),
             explicit_comptime_values: None,
+            constants: HashMap::new(),
+            constant_types: HashMap::new(),
             actor_instances: HashMap::new(),
             next_actor_id: 0,
-            debug_output: Vec::new(),
+            debug_events: Vec::new(),
             emit_runtime_debug: false,
             stdout_capture: None,
             random_provider: None,
@@ -608,7 +808,7 @@ impl Interpreter {
         }
     }
 
-    /// Create an interpreter that emits debug output during execution.
+    /// Create an interpreter that captures events and also emits them to stderr.
     pub fn new_runtime() -> Self {
         let mut interp = Self::new();
         interp.emit_runtime_debug = true;
@@ -617,24 +817,19 @@ impl Interpreter {
 
     /// Initialize one production generator for this runtime context.
     pub fn initialize_random_provider(&mut self) -> Result<(), String> {
-        let mut seed = <StdRng as SeedableRng>::Seed::default();
-        rand::rngs::OsRng
-            .try_fill_bytes(seed.as_mut())
-            .map_err(|_| "Random: entropy unavailable".to_string())?;
-        self.random_provider = Some(RandomProvider::Production(StdRng::from_seed(seed)));
+        self.random_provider = Some(RandomProvider::production().map_err(str::to_owned)?);
         Ok(())
     }
 
     /// Install deterministic normalized samples for runtime conformance tests.
     pub fn set_random_test_samples(&mut self, samples: Vec<RandomTestSample>) {
-        self.random_provider = Some(RandomProvider::Scripted(samples.into()));
+        self.random_provider = Some(RandomProvider::scripted(samples.into()));
     }
 
     pub fn random_test_samples_remaining(&self) -> Option<usize> {
-        match &self.random_provider {
-            Some(RandomProvider::Scripted(samples)) => Some(samples.len()),
-            _ => None,
-        }
+        self.random_provider
+            .as_ref()
+            .and_then(RandomProvider::scripted_samples_remaining)
     }
 
     /// Install the system wall clock for this runtime context.
@@ -656,7 +851,8 @@ impl Interpreter {
 
     /// Freeze this process's launch data for one runtime context.
     pub fn initialize_environment_provider(&mut self) -> Result<(), String> {
-        self.launch_environment = Some(LaunchEnvironmentSnapshot::production()?);
+        self.launch_environment =
+            Some(LaunchEnvironmentSnapshot::production().map_err(str::to_owned)?);
         Ok(())
     }
 
@@ -665,7 +861,8 @@ impl Interpreter {
         &mut self,
         snapshot: EnvironmentTestSnapshot,
     ) -> Result<(), String> {
-        self.launch_environment = Some(LaunchEnvironmentSnapshot::injected(snapshot)?);
+        self.launch_environment =
+            Some(LaunchEnvironmentSnapshot::injected(snapshot).map_err(str::to_owned)?);
         Ok(())
     }
 
@@ -675,18 +872,40 @@ impl Interpreter {
     }
 
     /// Attach checked expression type names produced by the typechecker.
-    pub fn set_checked_expression_types(&mut self, types: Arc<HashMap<Span, String>>) {
+    pub fn set_checked_expression_types(&mut self, types: Arc<CheckedExpressionTypes>) {
         self.checked_expression_types = Some(types);
     }
 
     /// Attach values produced for explicit `comptime` expressions by the build.
-    pub fn set_explicit_comptime_values(&mut self, values: Arc<HashMap<Span, Value>>) {
+    pub fn set_explicit_comptime_values(&mut self, values: Arc<crate::ExplicitComptimeValues>) {
         self.explicit_comptime_values = Some(values);
     }
 
-    /// Drain any debug lines recorded so far.
+    /// Drain every debug event in its original execution order.
+    pub fn take_debug_events(&mut self) -> Vec<DebugEvent> {
+        std::mem::take(&mut self.debug_events)
+    }
+
+    /// Legacy trace/breakpoint line drain.
+    ///
+    /// This drains the canonical event buffer and discards Print/Println
+    /// events. Capture entrypoints must use `take_debug_events` instead.
+    /// Embedded newlines remain intact; only the observation's final
+    /// intentional newline is removed from each legacy line.
     pub fn take_debug_output(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.debug_output)
+        self.take_debug_events()
+            .into_iter()
+            .filter_map(|event| match event.kind {
+                DebugEventKind::Trace | DebugEventKind::Breakpoint => {
+                    let mut text = event.text;
+                    if text.ends_with('\n') {
+                        text.pop();
+                    }
+                    Some(text)
+                }
+                DebugEventKind::Print | DebugEventKind::Println => None,
+            })
+            .collect()
     }
 
     /// Capture runtime stdout writes instead of printing them directly.
@@ -705,18 +924,41 @@ impl Interpreter {
     // -- Scope management ---------------------------------------------------
 
     fn push_scope(&mut self) {
+        if let Some(context) = &mut self.temporary_local_views {
+            context.push_scope();
+        }
+        if let Some(context) = &mut self.field_update_context {
+            context.push_scope();
+        }
+        if let Some(transport) = &mut self.resource_transport {
+            transport.push_scope();
+        }
         self.scopes.push(HashMap::new());
         self.variable_type_scopes.push(HashMap::new());
         self.namespace_alias_scopes.push(HashMap::new());
     }
 
     fn pop_scope(&mut self) {
+        if let Some(context) = &mut self.temporary_local_views {
+            context.pop_scope();
+        }
+        if let Some(context) = &mut self.field_update_context {
+            context.pop_scope();
+        }
+        if let Some(transport) = &mut self.resource_transport {
+            transport.pop_scope();
+        }
         self.scopes.pop();
         self.variable_type_scopes.pop();
         self.namespace_alias_scopes.pop();
     }
 
     fn set_variable(&mut self, name: &str, value: Value) {
+        if let Some(context) = &mut self.field_update_context
+            && let Some(index) = self.scopes.len().checked_sub(1)
+        {
+            context.notice_write(index, name);
+        }
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name.to_string(), value);
         }
@@ -730,12 +972,23 @@ impl Interpreter {
     }
 
     fn get_variable(&self, name: &str) -> Option<&Value> {
-        for scope in self.scopes.iter().rev() {
+        for (index, scope) in self.scopes.iter().enumerate().rev() {
+            if index != 0 && index < self.lexical_scope_floor {
+                continue;
+            }
             if let Some(v) = scope.get(name) {
+                if self
+                    .temporary_local_views
+                    .as_ref()
+                    .is_some_and(|context| context.placeholder(index, name))
+                {
+                    return None;
+                }
                 return Some(v);
             }
         }
-        None
+        self.registry_name(&self.constants, name)
+            .and_then(|name| self.constants.get(&name))
     }
 
     /// Locate an existing struct field without cloning its enclosing values.
@@ -745,7 +998,8 @@ impl Interpreter {
             Expr::Ident(ident) => self.get_variable(&ident.name),
             Expr::Paren(inner, _) | Expr::View(inner, _) => self.borrowed_struct_place(inner),
             Expr::FieldAccess(base, field, _) => {
-                let Value::Struct { fields, .. } = self.borrowed_struct_place(base)? else {
+                let Value::Struct { fields, .. } = self.borrowed_struct_place(base)?.payload()
+                else {
                     return None;
                 };
                 fields
@@ -757,18 +1011,25 @@ impl Interpreter {
     }
 
     fn get_variable_type(&self, name: &str) -> Option<&TypeExpr> {
-        for scope in self.variable_type_scopes.iter().rev() {
+        for (index, scope) in self.variable_type_scopes.iter().enumerate().rev() {
+            if index != 0 && index < self.lexical_scope_floor {
+                continue;
+            }
             if let Some(ty) = scope.get(name) {
                 return Some(ty);
             }
         }
-        None
+        self.registry_name(&self.constant_types, name)
+            .and_then(|name| self.constant_types.get(&name))
     }
 
     /// Reassign an existing variable in the nearest enclosing scope that
     /// contains it.  Returns `Err` if the variable was never declared.
     fn assign_variable(&mut self, name: &str, value: Value) -> Result<(), String> {
         for index in (0..self.scopes.len()).rev() {
+            if index != 0 && index < self.lexical_scope_floor {
+                continue;
+            }
             if self.scopes[index].contains_key(name) {
                 let ty = self.variable_type_scopes[index].get(name).cloned();
                 let value = if let Some(ty) = ty {
@@ -777,16 +1038,21 @@ impl Interpreter {
                     value
                 };
                 self.scopes[index].insert(name.to_string(), value);
+                if let Some(context) = &mut self.field_update_context {
+                    context.notice_write(index, name);
+                }
                 return Ok(());
             }
         }
         Err(format!("undefined variable '{name}'"))
     }
 
-    fn emit_debug_line(&mut self, line: String) {
-        self.debug_output.push(line.clone());
-        if self.emit_runtime_debug {
-            println!("{line}");
+    fn emit_debug_event(&mut self, kind: DebugEventKind, text: String) {
+        self.debug_events.push(DebugEvent { kind, text });
+        if self.emit_runtime_debug
+            && let Some(event) = self.debug_events.last()
+        {
+            eprint!("{}", event.text);
         }
     }
 
@@ -798,40 +1064,24 @@ impl Interpreter {
         }
     }
 
-    fn write_stdout_line(&mut self, text: &str) {
-        if let Some(capture) = self.stdout_capture.as_mut() {
-            capture.push_str(text);
-            capture.push('\n');
-        } else {
-            println!("{text}");
-        }
-    }
-
     fn trace_variable(&mut self, name: &str) -> Result<(), String> {
         let value = self
             .get_variable(name)
             .cloned()
             .ok_or_else(|| format!("undefined variable '{name}'"))?;
         let label = self.debug_binding_label(name, &value);
-        self.emit_debug_line(format!("trace {label}"));
+        self.emit_debug_event(DebugEventKind::Trace, format!("trace {label}\n"));
         Ok(())
     }
 
     fn debug_binding_label(&self, name: &str, value: &Value) -> String {
-        self.get_variable_type(name)
-            .map(|ty| format!("{name}: {} = {value}", type_expr_display(ty)))
+        let ty = self.get_variable_type(name);
+        let value = self.format_debug_value(value, ty);
+        ty.map(|ty| format!("{name}: {} = {value}", type_expr_display(ty)))
             .unwrap_or_else(|| format!("{name} = {value}"))
     }
 
-    fn function_namespace(name: &str) -> Option<String> {
-        name.rsplit_once('.')
-            .map(|(namespace, _)| namespace.to_string())
-    }
-
     fn current_qualified_name(&self, name: &str) -> Option<String> {
-        if name.contains('.') {
-            return None;
-        }
         self.current_namespace
             .as_ref()
             .map(|namespace| format!("{namespace}.{name}"))
@@ -860,7 +1110,7 @@ impl Interpreter {
             })
     }
 
-    fn use_bound_name(path: &str, alias: Option<&Ident>) -> String {
+    pub(crate) fn use_bound_name(path: &str, alias: Option<&Ident>) -> String {
         alias
             .map(|ident| ident.name.clone())
             .unwrap_or_else(|| path.rsplit('.').next().unwrap_or(path).to_string())
@@ -876,38 +1126,134 @@ impl Interpreter {
         let (prefix, suffix) = name.split_once('.')?;
         self.namespace_alias_scopes
             .iter()
+            .enumerate()
             .rev()
-            .find_map(|scope| scope.get(prefix))
+            .filter(|(index, _)| *index == 0 || *index >= self.lexical_scope_floor)
+            .find_map(|(_, scope)| scope.get(prefix))
             .map(|target| format!("{target}.{suffix}"))
     }
 
+    fn visible_namespace_aliases(&self) -> HashMap<String, String> {
+        let mut aliases = HashMap::new();
+        for (index, scope) in self.namespace_alias_scopes.iter().enumerate() {
+            if index != 0 && index < self.lexical_scope_floor {
+                continue;
+            }
+            aliases.extend(
+                scope
+                    .iter()
+                    .map(|(name, target)| (name.clone(), target.clone())),
+            );
+        }
+        aliases
+    }
+
+    fn with_resolved_type_aliases<T>(&mut self, action: impl FnOnce(&mut Self) -> T) -> T {
+        let blank_aliases = vec![HashMap::new(); self.namespace_alias_scopes.len()];
+        let saved_aliases = std::mem::replace(&mut self.namespace_alias_scopes, blank_aliases);
+        let result = action(self);
+        self.namespace_alias_scopes = saved_aliases;
+        result
+    }
+
     fn runtime_name(&self, name: &str) -> String {
-        self.registry_name(&self.functions, name)
+        self.registry_name(&self.interface_methods, name)
+            .or_else(|| self.registry_name(&self.functions, name))
+            .or_else(|| self.type_alias_method_name(name))
             .or_else(|| self.expand_namespace_alias_name(name))
             .unwrap_or_else(|| name.to_string())
     }
 
-    fn hit_breakpoint(&mut self) {
+    fn type_alias_method_name(&self, name: &str) -> Option<String> {
+        let (owner, method) = name.rsplit_once('.')?;
+        let alias = self.registry_name(&self.type_alias_bases, owner)?;
+        // Refinements have their own implementation identity.
+        if !matches!(self.type_aliases.get(&alias), Some(None)) {
+            return None;
+        }
+        let owner = self
+            .declared_interface_alias_target_name(&alias, &mut HashSet::new())
+            .unwrap_or_else(|| {
+                let namespace =
+                    Self::type_name_namespace(&alias).or(self.current_namespace.as_deref());
+                let base = self
+                    .substitute_type_expr_in_namespace(&self.type_alias_bases[&alias], namespace);
+                self.concrete_type_display(&base)
+            });
+        let method = format!("{owner}.{method}");
+        (self.functions.contains_key(&method) || self.interface_methods.contains_key(&method))
+            .then_some(method)
+    }
+
+    fn declared_interface_alias_target_name(
+        &self,
+        alias: &str,
+        aliases: &mut HashSet<String>,
+    ) -> Option<String> {
+        if !matches!(self.type_aliases.get(alias), Some(None)) || !aliases.insert(alias.to_string())
+        {
+            return None;
+        }
+        let TypeExpr::Named(target) = self.type_alias_bases.get(alias)? else {
+            return None;
+        };
+        // Namespace aliases and type bindings belong to the calling function;
+        // neither can change the static target of a namespace declaration.
+        let owner = if target.name.contains('.') {
+            target.name.clone()
+        } else {
+            Self::type_name_namespace(alias)
+                .map(|namespace| format!("{namespace}.{}", target.name))
+                .filter(|name| self.type_name_is_registered(name))
+                .unwrap_or_else(|| target.name.clone())
+        };
+        if self.interfaces.contains(&owner) {
+            Some(owner)
+        } else {
+            self.declared_interface_alias_target_name(&owner, aliases)
+        }
+    }
+
+    pub fn set_breakpoint_exclusions(&mut self, exclusions: Arc<HashMap<Span, HashSet<String>>>) {
+        self.breakpoint_exclusions = exclusions;
+    }
+
+    fn hit_breakpoint(&mut self, span: Span) {
         let mut bindings = BTreeMap::new();
-        for (scope, type_scope) in self.scopes.iter().zip(self.variable_type_scopes.iter()) {
+        for (index, (scope, type_scope)) in self
+            .scopes
+            .iter()
+            .zip(self.variable_type_scopes.iter())
+            .enumerate()
+        {
+            if index != 0 && index < self.lexical_scope_floor {
+                continue;
+            }
             for (name, value) in scope {
                 bindings.insert(name.clone(), (value.clone(), type_scope.get(name).cloned()));
             }
         }
 
+        if let Some(excluded) = self.breakpoint_exclusions.get(&span) {
+            bindings.retain(|name, _| !excluded.contains(name));
+        }
         if bindings.is_empty() {
-            self.emit_debug_line("breakpoint hit".to_string());
+            self.emit_debug_event(DebugEventKind::Breakpoint, "breakpoint hit\n".into());
             return;
         }
 
         let fields: Vec<String> = bindings
             .into_iter()
             .map(|(name, (value, ty))| {
+                let value = self.format_debug_value(&value, ty.as_ref());
                 ty.map(|ty| format!("{name}: {} = {value}", type_expr_display(&ty)))
                     .unwrap_or_else(|| format!("{name} = {value}"))
             })
             .collect();
-        self.emit_debug_line(format!("breakpoint hit: {}", fields.join(", ")));
+        self.emit_debug_event(
+            DebugEventKind::Breakpoint,
+            format!("breakpoint hit: {}\n", fields.join(", ")),
+        );
     }
 
     // -- Public scope management (for property-based testing) ---------------
@@ -932,17 +1278,24 @@ impl Interpreter {
 
     /// Register a function definition so it can be called later.
     pub fn register_function(&mut self, func: &FunctionDef) {
-        self.register_function_named(&func.name.name, func, func.span.file.is_stdlib());
+        self.register_function_in_namespace(None, func);
     }
 
-    fn register_function_named(&mut self, name: &str, func: &FunctionDef, trusted_stdlib: bool) {
-        self.functions
-            .insert(name.to_string(), Arc::new(func.clone()));
-        if trusted_stdlib {
-            self.trusted_stdlib_functions.insert(name.to_string());
-        } else {
-            self.trusted_stdlib_functions.remove(name);
-        }
+    fn register_function_named(
+        &mut self,
+        name: &str,
+        namespace: Option<&str>,
+        func: &FunctionDef,
+        trusted_stdlib: bool,
+    ) {
+        self.functions.insert(
+            name.to_string(),
+            RegisteredFunction {
+                definition: Arc::new(func.clone()),
+                namespace: namespace.map(str::to_string),
+                trusted_stdlib,
+            },
+        );
     }
 
     /// Register a function under its canonical runtime name.
@@ -951,10 +1304,11 @@ impl Interpreter {
         match namespace {
             Some(namespace) => self.register_function_named(
                 &format!("{namespace}.{}", func.name.name),
+                Some(namespace),
                 func,
                 trusted_stdlib,
             ),
-            None => self.register_function_named(&func.name.name, func, trusted_stdlib),
+            None => self.register_function_named(&func.name.name, None, func, trusted_stdlib),
         }
     }
 
@@ -965,13 +1319,29 @@ impl Interpreter {
         for item in &module.items {
             Self::update_current_namespace(item, &mut current_file, &mut current_namespace);
             match item {
+                Item::VarDecl(decl) => {
+                    if let Some(value) = self
+                        .explicit_comptime_values
+                        .as_ref()
+                        .and_then(|values| values.constant(decl.name.span))
+                        .cloned()
+                    {
+                        self.register_constant_in_namespace(
+                            current_namespace.as_deref(),
+                            decl,
+                            value,
+                        );
+                    }
+                }
                 Item::Function(func) => {
                     self.register_function_in_namespace(current_namespace.as_deref(), func)
                 }
                 Item::TypeAlias(alias) => {
                     self.register_type_alias_in_namespace(current_namespace.as_deref(), alias);
                 }
-                Item::Interface(interface) => self.register_interface(interface),
+                Item::Interface(interface) => {
+                    self.register_interface_in_namespace(current_namespace.as_deref(), interface);
+                }
                 Item::Implement(block) => {
                     self.register_implement_block_in_namespace(current_namespace.as_deref(), block)
                 }
@@ -993,6 +1363,21 @@ impl Interpreter {
                 _ => {}
             }
         }
+    }
+
+    pub(crate) fn register_constant_in_namespace(
+        &mut self,
+        namespace: Option<&str>,
+        declaration: &jett_parser::ast::VarDecl,
+        value: Value,
+    ) {
+        let name = namespace.map_or_else(
+            || declaration.name.name.clone(),
+            |namespace| format!("{namespace}.{}", declaration.name.name),
+        );
+        let ty = self.substitute_type_expr_in_namespace(&declaration.ty, namespace);
+        self.constant_types.insert(name.clone(), ty);
+        self.constants.insert(name, value);
     }
 
     fn item_file(item: &Item) -> FileId {
@@ -1034,24 +1419,23 @@ impl Interpreter {
     /// Register a user-defined struct so it can be constructed and its methods
     /// called with dotted syntax like `Point.total(view p)`.
     pub fn register_struct(&mut self, strukt: &StructDef) {
-        self.structs
-            .insert(strukt.name.name.clone(), strukt.clone());
-
-        for method in &strukt.methods {
-            self.functions.insert(
-                format!("{}.{}", strukt.name.name, method.name.name),
-                Arc::new(method.clone()),
-            );
-        }
+        self.register_struct_in_namespace(None, strukt);
     }
 
     pub fn register_struct_in_namespace(&mut self, namespace: Option<&str>, strukt: &StructDef) {
-        if let Some(namespace) = namespace {
-            let mut qualified = strukt.clone();
-            qualified.name.name = format!("{namespace}.{}", strukt.name.name);
-            self.register_struct(&qualified);
-        } else {
-            self.register_struct(strukt);
+        let owner_name = namespace
+            .map(|namespace| format!("{namespace}.{}", strukt.name.name))
+            .unwrap_or_else(|| strukt.name.name.clone());
+        let mut qualified = strukt.clone();
+        qualified.name.name = owner_name.clone();
+        self.structs.insert(owner_name.clone(), qualified);
+        for method in &strukt.methods {
+            self.register_function_named(
+                &format!("{owner_name}.{}", method.name.name),
+                namespace,
+                method,
+                method.span.file.is_stdlib(),
+            );
         }
     }
 
@@ -1108,9 +1492,27 @@ impl Interpreter {
         }
     }
 
-    /// Register an interface declaration. Interfaces carry no runtime state,
-    /// but keeping the entry point makes module registration symmetric.
-    pub fn register_interface(&mut self, _interface: &InterfaceDecl) {}
+    /// Retain interface names and declared dispatch slots before implementations
+    /// are registered, so methods can also be used as named function values.
+    pub fn register_interface(&mut self, interface: &InterfaceDecl) {
+        self.register_interface_in_namespace(None, interface);
+    }
+
+    pub fn register_interface_in_namespace(
+        &mut self,
+        namespace: Option<&str>,
+        interface: &InterfaceDecl,
+    ) {
+        let owner_name = namespace
+            .map(|namespace| format!("{namespace}.{}", interface.name.name))
+            .unwrap_or_else(|| interface.name.name.clone());
+        self.interfaces.insert(owner_name.clone());
+        for method in &interface.methods {
+            self.interface_methods
+                .entry(format!("{owner_name}.{}", method.name.name))
+                .or_default();
+        }
+    }
 
     /// Register an `implement Interface for Type` block so interface-qualified
     /// calls can dispatch to the concrete method body at runtime.
@@ -1123,24 +1525,49 @@ impl Interpreter {
         namespace: Option<&str>,
         block: &ImplementBlock,
     ) {
-        let interface_name = block.interface_name.name.clone();
-        let local_owner_name = type_expr_name(&block.for_type);
-        let owner_name = namespace
-            .filter(|_| !local_owner_name.contains('.'))
-            .map(|namespace| format!("{namespace}.{local_owner_name}"))
-            .filter(|qualified| self.structs.contains_key(qualified))
-            .unwrap_or(local_owner_name);
+        let interface_name = self
+            .expand_type_ident(&block.interface_name, namespace)
+            .name;
+        let owner_type = self.substitute_type_expr_in_namespace(&block.for_type, namespace);
+        let owner_type = self.concrete_type_expr(&owner_type, &mut HashSet::new());
+        let concrete_owner = type_expr_display(&owner_type);
+        let base_owner = concrete_owner.split('[').next().unwrap_or(&concrete_owner);
+        let owner_name = concrete_owner.clone();
+        self.interface_owners.insert(owner_name.clone());
+        let base_owner = if self.structs.contains_key(base_owner) {
+            base_owner
+        } else {
+            &owner_name
+        };
 
         for method in &block.methods {
             let concrete_name = format!("{}.{}", owner_name, method.name.name);
             let interface_method_name = format!("{}.{}", interface_name, method.name.name);
-
-            self.functions
-                .insert(concrete_name.clone(), Arc::new(method.clone()));
+            let implementation_name = format!("{owner_name} as {interface_method_name}");
+            self.register_function_named(
+                &implementation_name,
+                namespace,
+                method,
+                method.span.file.is_stdlib(),
+            );
+            let has_inherent = self.structs.get(base_owner).is_some_and(|owner| {
+                owner
+                    .methods
+                    .iter()
+                    .any(|candidate| candidate.name.name == method.name.name)
+            });
+            if !has_inherent {
+                self.register_function_named(
+                    &concrete_name,
+                    namespace,
+                    method,
+                    method.span.file.is_stdlib(),
+                );
+            }
             self.interface_methods
                 .entry(interface_method_name)
                 .or_default()
-                .insert(owner_name.clone(), concrete_name);
+                .insert(owner_name.clone(), implementation_name);
         }
     }
 
@@ -1188,25 +1615,124 @@ impl Interpreter {
     /// Check a value against a refinement type's constraint.
     /// Returns `Ok(())` if valid, or `Err(message)` if the constraint fails.
     fn check_refinement(&mut self, type_name: &str, value: &Value) -> Result<(), String> {
+        self.check_refinement_from_source(type_name, value, None)
+    }
+
+    fn check_refinement_from_resolved_source(
+        &mut self,
+        type_name: &str,
+        value: &Value,
+        source_type: Option<&str>,
+    ) -> Result<(), String> {
+        self.with_resolved_type_aliases(|interpreter| {
+            interpreter.check_refinement_from_source(type_name, value, source_type)
+        })
+    }
+
+    /// Reuse only an original checked expression's established refinement.
+    /// A runtime `Typed` label is not proof: property shrinking and raw API
+    /// callers can retain that label while replacing the payload.
+    fn check_refinement_from_source(
+        &mut self,
+        type_name: &str,
+        value: &Value,
+        source_type: Option<&str>,
+    ) -> Result<(), String> {
+        let source_type = source_type.filter(|_| self.allow_checked_refinement_proofs);
         let type_name = self
             .registry_name(&self.type_aliases, type_name)
             .unwrap_or_else(|| type_name.to_string());
 
+        let mut resolved = value;
+        while let Value::Pending(inner) = resolved {
+            resolved = inner;
+        }
+        if source_type.is_none()
+            && matches!(value, Value::Pending(_))
+            && matches!(resolved, Value::Typed { type_name: owner, .. } if *owner == type_name)
+        {
+            // Preserve the metadata-free API's existing pending behavior.
+            // Checked boundaries instead use the original expression type,
+            // including the proof deliberately removed by an explicit coarsen.
+            return Ok(());
+        }
+
+        if !self.type_aliases.contains_key(&type_name) {
+            return Ok(());
+        }
+
+        // Recursion reaches only the destination's actual ancestor chain.
+        // An unrelated refinement with the same carrier never reaches this
+        // equality, and an explicit coarsen contributes its checked output.
+        if source_type == Some(type_name.as_str()) {
+            return Ok(());
+        }
+
+        // Predicates use declaration facts, never the validating caller's
+        // lexical names or checked generic/reflection specialization.
+        let saved_namespace = std::mem::replace(
+            &mut self.current_namespace,
+            Self::type_name_namespace(&type_name).map(str::to_owned),
+        );
+        let saved_floor = std::mem::replace(&mut self.lexical_scope_floor, self.scopes.len());
+        let saved_arguments = std::mem::take(&mut self.current_type_arguments);
+        let saved_type_scopes = std::mem::take(&mut self.type_arg_scopes);
+        let saved_bindings = std::mem::take(&mut self.scoped_type_bindings);
+        let saved_function = self.active_checked_function.take();
+        let saved_scope = self.active_checked_scope.take();
+        let saved_trusted = self.current_function_trusted_stdlib;
+        self.current_function_trusted_stdlib = self
+            .type_aliases
+            .get(&type_name)
+            .and_then(Option::as_ref)
+            .is_some_and(|definition| definition.constraint.span().file.is_stdlib());
+
+        let saved_proofs = self.allow_checked_refinement_proofs;
+        self.allow_checked_refinement_proofs &= source_type.is_some();
+        let result = self.check_refinement_in_declaration(&type_name, value, source_type);
+        self.allow_checked_refinement_proofs = saved_proofs;
+
+        self.current_function_trusted_stdlib = saved_trusted;
+        self.active_checked_scope = saved_scope;
+        self.active_checked_function = saved_function;
+        self.scoped_type_bindings = saved_bindings;
+        self.type_arg_scopes = saved_type_scopes;
+        self.current_type_arguments = saved_arguments;
+        self.lexical_scope_floor = saved_floor;
+        self.current_namespace = saved_namespace;
+        result
+    }
+
+    fn check_refinement_in_declaration(
+        &mut self,
+        type_name: &str,
+        value: &Value,
+        source_type: Option<&str>,
+    ) -> Result<(), String> {
+        // A predicate's `value` has the base type. Rechecking a value that
+        // already carries an interface-backed refinement must not dispatch
+        // through that refinement again while validating its own predicate.
+        let coarsened = self
+            .interfaces
+            .contains(self.primitive_base_type_name(type_name).as_ref())
+            .then(|| self.coarsen_interface_value(value.clone()));
+        let value = coarsened.as_ref().unwrap_or(value);
+
         let constraint_value_ty = self
             .type_alias_bases
-            .get(&type_name)
+            .get(type_name)
             .cloned()
             .map(|base_ty| {
                 let namespace =
-                    Self::type_name_namespace(&type_name).or(self.current_namespace.as_deref());
-                self.substitute_type_expr_in_namespace(&base_ty, namespace)
+                    Self::type_name_namespace(type_name).or(self.current_namespace.as_deref());
+                self.qualify_declared_type_expr(&base_ty, namespace)
             });
         if let Some(base_ty) = &constraint_value_ty {
             let base_type_name = type_expr_name(base_ty);
-            self.check_refinement(&base_type_name, value)?;
+            self.check_refinement_from_resolved_source(&base_type_name, value, source_type)?;
         }
 
-        let def = match self.type_aliases.get(&type_name) {
+        let def = match self.type_aliases.get(type_name) {
             Some(Some(def)) => def.clone(),
             Some(None) => return Ok(()), // simple alias, no constraint
             None => return Ok(()),       // not a known type alias
@@ -1214,7 +1740,16 @@ impl Interpreter {
 
         self.push_scope();
         if let Some(base_ty) = constraint_value_ty {
-            self.set_variable_with_type("value", value.clone(), base_ty);
+            let predicate_ty = self.resolved_inference_base_type(&base_ty);
+            let predicate_ty = match predicate_ty {
+                TypeExpr::Generic(name, mut args, _)
+                    if name.name == "secret" && args.len() == 1 =>
+                {
+                    args.remove(0)
+                }
+                ty => ty,
+            };
+            self.set_variable_with_type("value", value.clone(), predicate_ty);
         } else {
             self.set_variable("value", value.clone());
         }
@@ -1245,12 +1780,15 @@ impl Interpreter {
         &mut self,
         type_name: &str,
         value: Value,
+        source_type: Option<&str>,
         bind_name: Option<&Ident>,
         body: &Block,
     ) -> Result<ExprFlow, String> {
-        match self.check_refinement(type_name, &value) {
+        match self.check_refinement_from_resolved_source(type_name, &value, source_type) {
             Ok(()) => Ok(ExprFlow::Value(value)),
-            Err(message) => self.exec_handle_block(bind_name, Some(Value::String(message)), body),
+            Err(message) => {
+                self.exec_handle_block(bind_name, Some(Value::String(message)), body, None)
+            }
         }
     }
 
@@ -1260,7 +1798,34 @@ impl Interpreter {
         value: Value,
     ) -> Result<Value, String> {
         let primitive_type_name = self.primitive_base_type_name(type_name);
+        let value = if matches!(
+            primitive_type_name.as_ref(),
+            "int8"
+                | "int16"
+                | "int32"
+                | "int64"
+                | "uint8"
+                | "uint16"
+                | "uint32"
+                | "uint64"
+                | "float32"
+                | "float64"
+                | "bool"
+                | "string"
+                | "bytes"
+                | "nothing"
+        ) {
+            value.into_payload()
+        } else {
+            value
+        };
         match primitive_type_name.as_ref() {
+            // Value::Float64 is an f64 carrier, not permission to retain f64
+            // precision in a checked float32 expression or typed boundary.
+            "float32" => match value {
+                Value::Float64(value) => Ok(Value::Float64((value as f32) as f64)),
+                other => Ok(other),
+            },
             "int8" => Self::normalize_sized_integer(
                 &primitive_type_name,
                 value,
@@ -1339,7 +1904,7 @@ impl Interpreter {
             };
             let namespace =
                 Self::type_name_namespace(&alias_name).or(self.current_namespace.as_deref());
-            let base_ty = self.substitute_type_expr_in_namespace(base_ty, namespace);
+            let base_ty = self.qualify_declared_type_expr(base_ty, namespace);
             current = Self::unwrapped_secret_type_expr_name(&base_ty);
         }
 
@@ -1406,7 +1971,207 @@ impl Interpreter {
     }
 
     fn normalize_value_for_type(&self, ty: &TypeExpr, value: Value) -> Result<Value, String> {
-        self.normalize_value_for_type_name(&type_expr_name(ty), value)
+        let name = self.concrete_type_display(ty);
+        let value = self.normalize_value_for_type_name(&name, value)?;
+        Ok(self.retain_checked_identity(&name, value))
+    }
+
+    fn normalize_value_for_resolved_type(
+        &mut self,
+        ty: &TypeExpr,
+        value: Value,
+    ) -> Result<Value, String> {
+        self.with_resolved_type_aliases(|interpreter| {
+            let name = interpreter.resolved_concrete_type_display(ty);
+            let value = interpreter.normalize_value_for_type_name(&name, value)?;
+            Ok(interpreter.retain_checked_identity(&name, value))
+        })
+    }
+
+    fn normalize_and_validate_value(
+        &mut self,
+        ty: &TypeExpr,
+        value: Value,
+    ) -> Result<Value, String> {
+        self.normalize_and_validate_value_from_source(ty, value, None)
+    }
+
+    fn normalize_and_validate_value_from_source(
+        &mut self,
+        ty: &TypeExpr,
+        value: Value,
+        source_type: Option<&str>,
+    ) -> Result<Value, String> {
+        // Every caller resolves its written target in the owning lexical
+        // context first. Canonical owners must not pass through local namespace
+        // aliases again during normalization, predicate lookup, or identity
+        // retention. Preserve the stack shape for predicates' own imports.
+        let declaration_aliases = vec![HashMap::new(); self.namespace_alias_scopes.len()];
+        let caller_aliases =
+            std::mem::replace(&mut self.namespace_alias_scopes, declaration_aliases);
+        let result = (|| {
+            let ty = self.resolve_installed_type_expr(ty);
+            let name = self.resolved_concrete_type_display(&ty);
+            let value = self.normalize_value_for_type_name(&name, value)?;
+            // A written view describes the access mode, not a separate
+            // refinement owner. Keep its existing normalization and retained
+            // identity while checking the underlying declared invariant.
+            let validation_name = Self::refinement_validation_owner(&name);
+            let source_type = source_type.map(Self::refinement_validation_owner);
+            self.check_refinement_from_source(validation_name, &value, source_type)?;
+            // Attach the destination's nominal identity only after its invariant
+            // holds, especially when the incoming value is still pending.
+            Ok(self.retain_checked_identity(&name, value))
+        })();
+        self.namespace_alias_scopes = caller_aliases;
+        result
+    }
+
+    fn refinement_validation_owner(mut name: &str) -> &str {
+        while let Some(inner) = name.strip_prefix("view ") {
+            name = inner;
+        }
+        name
+    }
+
+    fn retain_checked_identity(&self, name: &str, value: Value) -> Value {
+        if !matches!(
+            self.primitive_base_type_name(name).as_ref(),
+            "int8"
+                | "int16"
+                | "int32"
+                | "int64"
+                | "uint8"
+                | "uint16"
+                | "uint32"
+                | "uint64"
+                | "float32"
+                | "float64"
+                | "bool"
+                | "string"
+                | "bytes"
+                | "nothing"
+        ) {
+            return self.retain_aggregate_identity(name, value);
+        }
+        if let Value::Pending(inner) = value {
+            return Value::Pending(Box::new(self.retain_checked_identity(name, *inner)));
+        }
+        if !matches!(
+            value.payload(),
+            Value::Int64(_)
+                | Value::Uint64(_)
+                | Value::Float64(_)
+                | Value::Bool(_)
+                | Value::String(_)
+                | Value::Bytes(_)
+                | Value::Nothing
+        ) {
+            return value;
+        }
+        if value.primitive_carrier_name() == Some(name) {
+            return value;
+        }
+        let name = if matches!(
+            name,
+            "int8" | "int16" | "int32" | "uint8" | "uint16" | "uint32" | "float32"
+        ) {
+            name.to_owned()
+        } else {
+            Self::debug_type(name)
+                .map(|ty| self.concrete_type_display(&ty))
+                .unwrap_or_else(|| name.to_owned())
+        };
+        let value = value.into_payload();
+        if value.primitive_carrier_name() == Some(name.as_str()) {
+            value
+        } else {
+            Value::Typed {
+                type_name: name,
+                value: Box::new(value),
+            }
+        }
+    }
+
+    fn retain_aggregate_identity(&self, name: &str, value: Value) -> Value {
+        if !matches!(value, Value::Typed { .. } | Value::Pending(_))
+            && !self.interface_owners.contains(name)
+            && !self.type_aliases.contains_key(name)
+        {
+            return value;
+        }
+        let base = self.primitive_base_type_name(name);
+        if self.interfaces.contains(base.as_ref()) && self.type_name_has_refinement(name) {
+            if let Value::Pending(inner) = value {
+                return Value::Pending(Box::new(self.retain_aggregate_identity(name, *inner)));
+            }
+            let canonical = Self::debug_type(name)
+                .map(|ty| self.concrete_type_display(&ty))
+                .unwrap_or_else(|| name.to_owned());
+            if runtime_type_name(&value).as_deref() == Some(canonical.as_str()) {
+                return value;
+            }
+            // The underlying erased value still needs its own concrete owner
+            // when the refinement is explicitly coarsened later.
+            return Value::Typed {
+                type_name: canonical,
+                value: Box::new(value),
+            };
+        }
+        let owner = base.split('[').next().unwrap_or(&base);
+        let owner = owner
+            .split_once(" at ")
+            .map_or(owner, |(machine, _)| machine);
+        let is_concrete = base.starts_with("function(")
+            || matches!(
+                owner,
+                "list" | "map" | "set" | "optional" | "result" | "TypeConstruction" | "function"
+            )
+            || self.structs.contains_key(owner)
+            || self.enums.contains_key(owner)
+            || self.machines.contains_key(owner)
+            || self.bitfields.contains_key(owner)
+            || self.actor_defs.contains_key(owner)
+            || jett_types::CapabilityKind::from_name(owner).is_some();
+        // An interface destination retains the incoming concrete owner. A
+        // concrete conversion replaces it, including covariant containers.
+        if !is_concrete {
+            return value;
+        }
+        if let Value::Pending(inner) = value {
+            return Value::Pending(Box::new(self.retain_aggregate_identity(name, *inner)));
+        }
+        let canonical = Self::debug_type(name)
+            .map(|ty| self.concrete_type_display(&ty))
+            .unwrap_or_else(|| name.to_owned());
+        let value = value.into_payload();
+        if self.interface_owners.contains(&canonical)
+            && runtime_type_name(&value).as_deref() != Some(canonical.as_str())
+        {
+            Value::Typed {
+                type_name: canonical,
+                value: Box::new(value),
+            }
+        } else {
+            value
+        }
+    }
+
+    fn coarsen_interface_value(&self, value: Value) -> Value {
+        match value {
+            Value::Pending(inner) => Value::Pending(Box::new(self.coarsen_interface_value(*inner))),
+            Value::Typed { type_name, value }
+                if self.type_name_has_refinement(&type_name)
+                    && self
+                        .interfaces
+                        .contains(self.primitive_base_type_name(&type_name).as_ref()) =>
+            {
+                // Expression normalization restores the checked ancestor if
+                // coarsen targets an intermediate refinement in the chain.
+                self.coarsen_interface_value(*value)
+            }
+            value => value,
+        }
     }
 
     fn type_name_has_refinement(&self, type_name: &str) -> bool {
@@ -1418,8 +2183,7 @@ impl Interpreter {
             Some(None) => self.type_alias_bases.get(&type_name).is_some_and(|base| {
                 let namespace =
                     Self::type_name_namespace(&type_name).or(self.current_namespace.as_deref());
-                let base_name =
-                    type_expr_name(&self.substitute_type_expr_in_namespace(base, namespace));
+                let base_name = type_expr_name(&self.qualify_declared_type_expr(base, namespace));
                 self.type_name_has_refinement(&base_name)
             }),
             None => false,
@@ -1437,11 +2201,17 @@ impl Interpreter {
     /// Evaluate an expression, returning its [`Value`].
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<Value, String> {
         match self.eval_expr_flow(expr)? {
-            ExprFlow::Value(value) => Ok(value),
+            ExprFlow::Value(value) if !value.contains_live_resource_or_grant() => Ok(value),
+            ExprFlow::Value(_) | ExprFlow::Resource(_) => {
+                Err("raw expression API cannot export live Resource custody".to_string())
+            }
+            ExprFlow::Signal(Signal::ResourceReturn(..) | Signal::ResourceDefault(..)) => {
+                Err("Resource control flow cannot escape raw expression evaluation".to_string())
+            }
             ExprFlow::Signal(Signal::Default(_)) => {
                 Err("`default` can only be used inside a `handle` block".to_string())
             }
-            ExprFlow::Signal(Signal::Return(_)) => {
+            ExprFlow::Signal(Signal::Return(..)) => {
                 Err("`return` cannot escape expression evaluation".to_string())
             }
             ExprFlow::Signal(Signal::Break) => {
@@ -1469,22 +2239,396 @@ impl Interpreter {
         result
     }
 
+    /// Evaluate a closed expression with only its lexically visible `use`
+    /// aliases. The temporary scope is removed even when evaluation fails.
+    pub(crate) fn eval_expr_in_namespace_with_aliases(
+        &mut self,
+        namespace: Option<&str>,
+        aliases: &HashMap<String, String>,
+        expr: &Expr,
+    ) -> Result<Value, String> {
+        self.push_scope();
+        for (name, target) in aliases {
+            self.set_namespace_alias(name.clone(), target.clone());
+        }
+        let result = self.eval_expr_in_namespace(namespace, expr);
+        self.pop_scope();
+        result
+    }
+
+    pub(crate) fn eval_closed_comptime_expression(
+        &mut self,
+        namespace: Option<&str>,
+        aliases: &HashMap<String, String>,
+        expression: &Expr,
+        parameters: &[String],
+        function: Option<Arc<CheckedFunctionTypes>>,
+        checked_scope: Option<Arc<CheckedScopedTypes>>,
+        bindings: Vec<ClosureScopedTypeBinding>,
+    ) -> Result<Value, String> {
+        let mut arguments = Vec::new();
+        let mut parameter_scope = HashMap::new();
+        if let Some(function) = &function {
+            if function.type_arguments.len() != parameters.len() {
+                return Err(
+                    "checked comptime type argument arity differs from its declaration".into(),
+                );
+            }
+            for (index, (parameter, canonical)) in
+                parameters.iter().zip(&function.type_arguments).enumerate()
+            {
+                let name = function
+                    .type_argument_reflections
+                    .get(index)
+                    .map_or(canonical.as_str(), |info| info.type_name.as_str());
+                let ty = Self::simple_type_expr_from_name(name, expression.span())
+                    .ok_or_else(|| format!("cannot reconstruct checked comptime type `{name}`"))?;
+                arguments.push(ty.clone());
+                parameter_scope.insert(parameter.clone(), ty);
+            }
+        }
+        let mut scopes = vec![parameter_scope];
+        for binding in &bindings {
+            let name = binding
+                .reflection
+                .as_ref()
+                .map_or(binding.canonical_name.as_str(), |info| {
+                    info.type_name.as_str()
+                });
+            let ty = Self::simple_type_expr_from_name(name, expression.span())
+                .ok_or_else(|| format!("cannot reconstruct checked lexical type `{name}`"))?;
+            scopes.push(HashMap::from([(binding.name.clone(), ty)]));
+        }
+        let saved_arguments = std::mem::replace(&mut self.current_type_arguments, arguments);
+        let saved_function = std::mem::replace(&mut self.active_checked_function, function);
+        let saved_scope = std::mem::replace(&mut self.active_checked_scope, checked_scope);
+        let saved_bindings = std::mem::replace(&mut self.scoped_type_bindings, bindings);
+        let saved_scopes = std::mem::replace(&mut self.type_arg_scopes, scopes);
+        let result = self.eval_expr_in_namespace_with_aliases(namespace, aliases, expression);
+        self.type_arg_scopes = saved_scopes;
+        self.scoped_type_bindings = saved_bindings;
+        self.active_checked_scope = saved_scope;
+        self.active_checked_function = saved_function;
+        self.current_type_arguments = saved_arguments;
+        result
+    }
+
     fn eval_expr_flow(&mut self, expr: &Expr) -> Result<ExprFlow, String> {
-        let flow = self.eval_expr_flow_inner(expr)?;
+        if self.resource_transport.is_some() {
+            if let Some(flow) = self.eval_resource_transport(expr)? {
+                return Ok(flow);
+            }
+        }
+        // Only the original checked call route can return a custody envelope.
+        // Retain that caller fact before actuals or a callee switch body cursors.
+        let checked_resource_call = match (&self.resource_transport, expr) {
+            (Some(transport), Expr::Call(..) | Expr::GenericCall(..))
+                if transport.checked_source_active =>
+            {
+                transport
+                    .checked
+                    .has_invocation(expr.span())
+                    .map_err(|error| error.to_string())?
+            }
+            _ => false,
+        };
+        // Source calls can recurse through many small stdlib functions. Dispatch
+        // them before entering the general expression match, whose aggregate
+        // temporaries otherwise remain on the stack throughout each call.
+        let flow = match expr {
+            Expr::Call(callee, args, span) => self.eval_call_flow(callee, &[], args, *span),
+            Expr::GenericCall(callee, type_args, args, span) => {
+                self.eval_call_flow(callee, type_args, args, *span)
+            }
+            _ => self.eval_expr_flow_inner(expr),
+        }?;
         match flow {
             ExprFlow::Value(value) => Ok(ExprFlow::Value(
                 self.normalize_value_for_checked_expr(expr, value)?,
             )),
+            ExprFlow::Resource(value) if checked_resource_call => Ok(ExprFlow::Resource(value)),
+            ExprFlow::Resource(_) => {
+                Err("Resource transport escaped its checked expression boundary".to_string())
+            }
             ExprFlow::Signal(signal) => Ok(ExprFlow::Signal(signal)),
         }
     }
 
-    fn normalize_value_for_checked_expr(&self, expr: &Expr, value: Value) -> Result<Value, String> {
-        let Some(type_name) = self
-            .checked_expression_types
+    fn exec_comptime_type_bind(
+        &mut self,
+        bind: &jett_parser::ast::ComptimeTypeBindStmt,
+    ) -> Result<Option<Signal>, String> {
+        if self
+            .resource_transport
             .as_ref()
-            .and_then(|types| types.get(&expr.span()))
+            .is_some_and(|transport| transport.checked_source_active)
+        {
+            return self.exec_checked_resource_type_bind(bind);
+        }
+        let prepared_field_scope = self.checked_field_scope_body(bind)?;
+        let (bound_type_expr, bound_type, reflection, checked_scope) = if let Some((
+            _,
+            projection,
+            reflection,
+        )) = &prepared_field_scope
+        {
+            let expression =
+                Self::simple_type_expr_from_name(&reflection.type_name, bind.value.span())
+                    .ok_or("checked field scope has no canonical interpreter syntax")?;
+            (
+                expression,
+                projection.bound_type.clone(),
+                Some(reflection.clone()),
+                Some(projection.clone()),
+            )
+        } else {
+            let bound_type_expr = if let Some(bound_type_expr) =
+                comptime_type_info_binding(&bind.value)
+            {
+                self.substitute_type_expr(bound_type_expr)
+            } else if let Some((source_ty, index)) = comptime_type_arg_binding(&bind.value) {
+                let source_ty = self.substitute_type_expr(source_ty);
+                self.with_resolved_type_aliases(|interpreter| {
+                    interpreter
+                        .checked_type_info_arg_types(&source_ty)
+                        .unwrap_or_else(|| interpreter.type_info_arg_types(&source_ty))
+                })
+                .get(index)
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "`comptime type` type.arg index {index} is out of range for type '{}'",
+                        type_expr_display(&source_ty)
+                    )
+                })?
+            } else if let Some(field_name) = reflected_field_type_info_binding(&bind.value) {
+                self.bound_reflected_field_type(field_name)?
+            } else if let Some(info_name) = reflected_type_info_binding(&bind.value) {
+                self.bound_reflected_type_info_type(info_name)?
+            } else {
+                return Err("`comptime type` currently requires a direct `type.info[T]()` initializer or trusted reflected metadata".to_string());
+            };
+            let (bound_type, reflection, checked_scope) =
+                self.with_resolved_type_aliases(|interpreter| {
+                    let bound_type = interpreter.resolved_concrete_type_display(&bound_type_expr);
+                    let reflection = Some(interpreter.reflection_type_argument(&bound_type_expr)?);
+                    let checked_scope = interpreter.checked_scoped_types(
+                        bind.span,
+                        &bound_type,
+                        reflection.as_ref(),
+                    )?;
+                    Ok::<_, String>((bound_type, reflection, checked_scope))
+                })?;
+            (bound_type_expr, bound_type, reflection, checked_scope)
+        };
+        let field_body = prepared_field_scope
+            .as_ref()
+            .map(|(reference, _, _)| reference);
+        let saved_field_cursor = self.enter_checked_field_body(field_body)?;
+        let saved_checked_scope = std::mem::replace(&mut self.active_checked_scope, checked_scope);
+        self.scoped_type_bindings.push(ClosureScopedTypeBinding {
+            name: bind.name.name.clone(),
+            canonical_name: bound_type,
+            reflection,
+        });
+        let mut scope = HashMap::new();
+        scope.insert(bind.name.name.clone(), bound_type_expr);
+        self.type_arg_scopes.push(scope);
+        let result = self.exec_block_inner(&bind.body);
+        self.active_checked_scope = saved_checked_scope;
+        self.scoped_type_bindings.pop();
+        self.type_arg_scopes.pop();
+        let field_restore = self.restore_checked_field_body(saved_field_cursor);
+        match (result, field_restore) {
+            (Err(error), _) | (_, Err(error)) => Err(error),
+            (Ok(value), Ok(())) => Ok(value),
+        }
+    }
+
+    fn checked_expression_type(&self, span: Span) -> Option<&String> {
+        self.active_checked_scope
+            .as_ref()
+            .and_then(|types| types.expressions.get(&span))
+            .or_else(|| {
+                self.active_checked_function
+                    .as_ref()
+                    .and_then(|types| types.expressions.get(&span))
+            })
+            .or_else(|| {
+                self.checked_expression_types
+                    .as_ref()
+                    .and_then(|types| types.get(&span))
+            })
+    }
+
+    fn checked_refinement_source_type(&self, span: Span) -> Option<&String> {
+        self.allow_checked_refinement_proofs
+            .then(|| self.checked_expression_type(span))
+            .flatten()
+    }
+
+    fn checked_sum_success_type(source_type: Option<&str>, span: Span) -> Option<String> {
+        let TypeExpr::Generic(owner, arguments, _) =
+            Self::simple_type_expr_from_name(source_type?, span)?
         else {
+            return None;
+        };
+        match (owner.name.as_str(), arguments.as_slice()) {
+            ("optional", [success]) | ("result", [success, _]) => Some(type_expr_display(success)),
+            // Secret and nominal refinements are not transparent sum owners.
+            _ => None,
+        }
+    }
+
+    fn join_preserves_result(&self, expression: &Expr) -> Option<bool> {
+        if let Some(name) = self.checked_expression_type(expression.span()) {
+            // Checked names are canonical and already select the concrete
+            // generic/reflected body. Secret and nominal refinement wrappers
+            // must not be erased when selecting the outer join result.
+            return Some(matches!(
+                Self::simple_type_expr_from_name(name, expression.span()),
+                Some(TypeExpr::Generic(owner, args, _))
+                    if owner.name == "result" && args.len() == 2
+            ));
+        }
+        if let Some(ty) = self.call_argument_type(expression) {
+            return Some(self.declared_join_type_is_result(&ty));
+        }
+        match expression {
+            Expr::Run(inner, _)
+            | Expr::Clone(inner, _)
+            | Expr::Paren(inner, _)
+            | Expr::View(inner, _) => self.join_preserves_result(inner),
+            _ => None,
+        }
+    }
+
+    fn declared_join_type_is_result(&self, ty: &TypeExpr) -> bool {
+        let mut ty = self.substitute_type_expr(ty);
+        let mut aliases = HashSet::new();
+        loop {
+            match ty {
+                TypeExpr::Generic(owner, args, _) => {
+                    return owner.name == "result" && args.len() == 2;
+                }
+                TypeExpr::View(inner, _) => ty = *inner,
+                TypeExpr::Named(ref name) => {
+                    let Some(alias) = self.registry_name(&self.type_alias_bases, &name.name) else {
+                        return false;
+                    };
+                    if !matches!(self.type_aliases.get(&alias), Some(None))
+                        || !aliases.insert(alias.clone())
+                    {
+                        return false;
+                    }
+                    let Some(base) = self.type_alias_bases.get(&alias) else {
+                        return false;
+                    };
+                    let namespace =
+                        Self::type_name_namespace(&alias).or(self.current_namespace.as_deref());
+                    ty = self.substitute_type_expr_in_namespace(base, namespace);
+                }
+                TypeExpr::StateQualified(..) | TypeExpr::Function(..) => return false,
+            }
+        }
+    }
+
+    fn checked_scoped_types(
+        &self,
+        span: Span,
+        bound_type: &str,
+        reflection: Option<&ReflectionTypeInfo>,
+    ) -> Result<Option<Arc<CheckedScopedTypes>>, String> {
+        let bindings = if let Some(scope) = &self.active_checked_scope {
+            &scope.bindings
+        } else if let Some(function) = &self.active_checked_function {
+            &function.bindings
+        } else if let Some(types) = &self.checked_expression_types {
+            &types.bindings
+        } else {
+            return Ok(None);
+        };
+        select_scoped_types(bindings, span, bound_type, reflection)
+    }
+
+    fn reflection_type_argument(&self, ty: &TypeExpr) -> Result<ReflectionTypeInfo, String> {
+        if let Some(info) = self.checked_type_info(ty) {
+            return Ok(info.clone());
+        }
+        let name = type_expr_display(ty);
+        if let Some(info) = self
+            .scoped_type_bindings
+            .iter()
+            .rev()
+            .filter_map(|binding| binding.reflection.as_ref())
+            .find(|info| info.type_name == name)
+        {
+            return Ok(info.clone());
+        }
+        // Nested source spellings such as list[Alias] may have no global
+        // TypeInfo entry. Retain their source metadata for callee selection.
+        Self::reflection_info_from_value(&self.type_info_value(ty))
+    }
+
+    fn captured_type_arguments(&mut self, args: &[TypeExpr]) -> Vec<ClosureTypeArgument> {
+        self.with_resolved_type_aliases(|interpreter| {
+            args.iter()
+                .map(|ty| {
+                    let ty = interpreter.resolve_installed_type_expr(ty);
+                    ClosureTypeArgument {
+                        canonical_name: interpreter.resolved_concrete_type_display(&ty),
+                        reflection: interpreter.reflection_type_argument(&ty).ok(),
+                        ty,
+                    }
+                })
+                .collect()
+        })
+    }
+
+    fn normalize_value_for_checked_expr(
+        &mut self,
+        expr: &Expr,
+        value: Value,
+    ) -> Result<Value, String> {
+        self.with_resolved_type_aliases(|interpreter| {
+            interpreter.normalize_value_for_checked_expr_resolved(expr, value)
+        })
+    }
+
+    fn normalize_value_for_checked_expr_resolved(
+        &self,
+        expr: &Expr,
+        value: Value,
+    ) -> Result<Value, String> {
+        if let Some(type_name) = self.resource_companion_expression_name(expr)? {
+            return self.normalize_resource_companion_expression(expr, &type_name, value);
+        }
+        // A live binding also has its invocation's type when a compiler-owned
+        // facade has no checked source instance. Other expressions use the
+        // selected body map rather than another generic instantiation.
+        let mut binding_expr = expr;
+        while let Expr::View(inner, _) | Expr::Paren(inner, _) = binding_expr {
+            binding_expr = inner;
+        }
+        let binding_type = if let Expr::Ident(ident) = binding_expr {
+            self.get_variable_type(&ident.name)
+                .map(|ty| self.resolved_concrete_type_display(ty))
+        } else {
+            None
+        };
+        let checked_type = self
+            .checked_expression_type(expr.span())
+            .map(String::as_str);
+        // A state guard narrows an expression without changing the binding's
+        // declared type. Keep that checked owner when the value is erased.
+        let narrowed_state = binding_type.as_deref().and_then(|binding| {
+            checked_type.filter(|checked| {
+                checked
+                    .strip_prefix(binding)
+                    .is_some_and(|suffix| suffix.starts_with(" at "))
+            })
+        });
+        let Some(type_name) = narrowed_state.or(binding_type.as_deref()).or(checked_type) else {
             return Ok(value);
         };
         if matches!(
@@ -1496,13 +2640,135 @@ impl Interpreter {
                 _
             ) | Expr::Unary(UnaryOp::Neg, _, _)
         ) {
-            self.wrap_integer_value_for_type_name(type_name, value)
+            self.wrap_integer_value_for_type_name(type_name, value.into_payload())
         } else {
             self.normalize_value_for_type_name(type_name, value)
         }
+        .map(|value| self.retain_checked_identity(type_name, value))
+    }
+
+    fn actor_identity_equal(&self, left: u64, right: u64) -> Result<bool, String> {
+        let left_actor = self
+            .actor_instances
+            .get(&left)
+            .ok_or_else(|| format!("actor equality: unknown actor instance #{left}"))?;
+        let right_actor = self
+            .actor_instances
+            .get(&right)
+            .ok_or_else(|| format!("actor equality: unknown actor instance #{right}"))?;
+        if left_actor.type_name != right_actor.type_name {
+            return Err("actor equality requires matching nominal actor types".into());
+        }
+        Ok(left == right)
+    }
+
+    fn enum_payload_equal(&mut self, left: &Value, right: &Value) -> Result<bool, String> {
+        let mut work = vec![(left, right)];
+        while let Some((left, right)) = work.pop() {
+            let (left, right) = (left.payload(), right.payload());
+            match (left, right) {
+                (
+                    Value::Struct {
+                        type_name: a,
+                        fields: af,
+                        ..
+                    },
+                    Value::Struct {
+                        type_name: b,
+                        fields: bf,
+                        ..
+                    },
+                ) => {
+                    if a != b {
+                        return Ok(false);
+                    }
+                    if self.bitfields.contains_key(a) {
+                        if af.len() != bf.len() {
+                            return Ok(false);
+                        }
+                        for ((an, av), (bn, bv)) in af.iter().zip(bf).rev() {
+                            if an != bn {
+                                return Ok(false);
+                            }
+                            work.push((av, bv));
+                        }
+                    } else {
+                        let equal = self.call_function_with_type_args(
+                            "Equatable.equals",
+                            &[],
+                            vec![left.clone(), right.clone()],
+                        )?;
+                        match equal.into_payload() {
+                            Value::Bool(true) => {}
+                            Value::Bool(false) => return Ok(false),
+                            _ => return Err("Equatable.equals must return bool".into()),
+                        }
+                    }
+                }
+                (
+                    Value::Enum {
+                        type_name: a,
+                        variant: av,
+                        fields: af,
+                    },
+                    Value::Enum {
+                        type_name: b,
+                        variant: bv,
+                        fields: bf,
+                    },
+                )
+                | (
+                    Value::Machine {
+                        type_name: a,
+                        state: av,
+                        fields: af,
+                    },
+                    Value::Machine {
+                        type_name: b,
+                        state: bv,
+                        fields: bf,
+                    },
+                ) => {
+                    if a != b || av != bv || af.len() != bf.len() {
+                        return Ok(false);
+                    }
+                    work.extend(af.iter().zip(bf).rev());
+                }
+                (Value::List(a), Value::List(b)) | (Value::Set(a), Value::Set(b)) => {
+                    if a.len() != b.len() {
+                        return Ok(false);
+                    }
+                    work.extend(a.iter().zip(b).rev());
+                }
+                (Value::Map(a), Value::Map(b)) => {
+                    if a.len() != b.len() {
+                        return Ok(false);
+                    }
+                    for ((ak, av), (bk, bv)) in a.iter().zip(b).rev() {
+                        work.push((av, bv));
+                        work.push((ak, bk));
+                    }
+                }
+                (Value::Pending(a), Value::Pending(b))
+                | (Value::OptionalSome(a), Value::OptionalSome(b))
+                | (Value::ResultOk(a), Value::ResultOk(b))
+                | (Value::ResultFail(a), Value::ResultFail(b)) => work.push((a, b)),
+                (Value::Actor(left), Value::Actor(right)) => {
+                    if !self.actor_identity_equal(*left, *right)? {
+                        return Ok(false);
+                    }
+                }
+                _ if left != right => return Ok(false),
+                _ => {}
+            }
+        }
+        Ok(true)
     }
 
     fn eval_expr_flow_inner(&mut self, expr: &Expr) -> Result<ExprFlow, String> {
+        if let Some(flow) = self.eval_temporary_read(expr)? {
+            return Ok(flow);
+        }
         match expr {
             // Literals
             Expr::IntLiteral(n, _) => {
@@ -1523,7 +2789,7 @@ impl Interpreter {
                         StringPart::Literal(s) => result.push_str(s),
                         StringPart::Expr(expr) => {
                             let val = value_or_signal!(self, expr);
-                            result.push_str(&val.to_string());
+                            result.push_str(&self.display_interpolation_value(expr, val)?);
                         }
                     }
                 }
@@ -1564,15 +2830,41 @@ impl Interpreter {
             Expr::Paren(inner, _) => self.eval_expr_flow(inner),
             Expr::View(inner, _) => self.eval_expr_flow(inner),
             Expr::Comptime(inner, span) => {
-                if let Some(value) = self
-                    .explicit_comptime_values
-                    .as_ref()
-                    .and_then(|values| values.get(span))
-                {
-                    Ok(ExprFlow::Value(value.clone()))
-                } else {
-                    self.eval_expr_flow(inner)
+                if let Some(values) = &self.explicit_comptime_values {
+                    if let Some(transport) = &self.resource_transport {
+                        if transport.checked_source_active {
+                            let identity = transport
+                                .checked
+                                .original_comptime_key(expr)
+                                .map_err(|error| error.to_string())?;
+                            let value = values.checked_get(&identity).cloned()
+                                .ok_or_else(|| "explicit comptime expression has no exact checked original value".to_string())?;
+                            let graph = values.checked_actor_graph(&identity).cloned();
+                            return graph
+                                .as_deref()
+                                .map_or(Ok(value), |graph| self.instantiate_actor_graph(graph))
+                                .map(ExprFlow::Value);
+                        }
+                    }
+                    let mut context = crate::ComptimeContext::from_checked(
+                        self.active_checked_function.as_deref(),
+                    );
+                    context.scoped_type_bindings = self.scoped_type_bindings.clone();
+                    let value = values.get(*span, &context).cloned()
+                        .ok_or_else(|| "explicit comptime expression has no evaluated value for its checked type context".to_string())?;
+                    let graph = values.actor_graph(*span, &context).cloned();
+                    if graph.is_none() && actor_graph::contains_actor(&value) {
+                        return Err(
+                            "explicit comptime actor value has no private checked frozen graph"
+                                .into(),
+                        );
+                    }
+                    return graph
+                        .as_deref()
+                        .map_or(Ok(value), |graph| self.instantiate_actor_graph(graph))
+                        .map(ExprFlow::Value);
                 }
+                self.eval_expr_flow(inner)
             }
             Expr::Declassify(inner, _) => self.eval_expr_flow(inner),
 
@@ -1582,14 +2874,14 @@ impl Interpreter {
                 // Short-circuit for logical operators
                 match op {
                     BinOp::And => {
-                        if let Value::Bool(false) = left {
+                        if let Value::Bool(false) = left.payload() {
                             return Ok(ExprFlow::Value(Value::Bool(false)));
                         }
                         let right = value_or_signal!(self, rhs);
                         return Ok(ExprFlow::Value(eval_binary_op(&left, *op, &right)?));
                     }
                     BinOp::Or => {
-                        if let Value::Bool(true) = left {
+                        if let Value::Bool(true) = left.payload() {
                             return Ok(ExprFlow::Value(Value::Bool(true)));
                         }
                         let right = value_or_signal!(self, rhs);
@@ -1599,8 +2891,32 @@ impl Interpreter {
                 }
                 let right = value_or_signal!(self, rhs);
                 if matches!(op, BinOp::Eq | BinOp::NotEq)
+                    && let (Value::Actor(left), Value::Actor(right)) =
+                        (left.payload(), right.payload())
+                {
+                    let equal = self.actor_identity_equal(*left, *right)?;
+                    return Ok(ExprFlow::Value(Value::Bool(if *op == BinOp::Eq {
+                        equal
+                    } else {
+                        !equal
+                    })));
+                }
+                if matches!(op, BinOp::Eq | BinOp::NotEq)
                     && matches!(
-                        (&left, &right),
+                        (left.payload(), right.payload()),
+                        (Value::Enum { .. }, Value::Enum { .. })
+                    )
+                {
+                    let equal = self.enum_payload_equal(&left, &right)?;
+                    return Ok(ExprFlow::Value(Value::Bool(if *op == BinOp::Eq {
+                        equal
+                    } else {
+                        !equal
+                    })));
+                }
+                if matches!(op, BinOp::Eq | BinOp::NotEq)
+                    && matches!(
+                        (left.payload(), right.payload()),
                         (Value::Struct { .. }, Value::Struct { .. })
                     )
                 {
@@ -1626,7 +2942,7 @@ impl Interpreter {
             Expr::Unary(op, operand, _) => match op {
                 UnaryOp::Not => {
                     let val = value_or_signal!(self, operand);
-                    match val {
+                    match val.into_payload() {
                         Value::Bool(b) => Ok(ExprFlow::Value(Value::Bool(!b))),
                         _ => Err("'not' requires a boolean operand".to_string()),
                     }
@@ -1635,9 +2951,9 @@ impl Interpreter {
             },
 
             // Function / method calls
-            Expr::Call(callee, args, _) => self.eval_call_flow(callee, &[], args),
-            Expr::GenericCall(callee, type_args, args, _) => {
-                self.eval_call_flow(callee, type_args, args)
+            Expr::Call(callee, args, span) => self.eval_call_flow(callee, &[], args, *span),
+            Expr::GenericCall(callee, type_args, args, span) => {
+                self.eval_call_flow(callee, type_args, args, *span)
             }
 
             // List construction
@@ -1660,17 +2976,24 @@ impl Interpreter {
             }
 
             Expr::Handle(target, bind_name, body, _) => {
+                let target_type = self
+                    .checked_expression_type(target.span())
+                    .and_then(|name| Self::debug_type(name))
+                    .or_else(|| self.debug_expression_type(target))
+                    .map(|ty| self.substitute_type_expr(&ty));
                 let target_value = value_or_signal!(self, target);
-                match target_value {
+                self.check_handle_receiver(&target_value, target_type.as_ref())?;
+                match target_value.into_payload() {
                     Value::ResultOk(value) => Ok(ExprFlow::Value(*value)),
-                    Value::ResultFail(error) => {
-                        self.exec_handle_block(bind_name.as_ref(), Some(*error), body)
-                    }
+                    Value::ResultFail(error) => self.exec_handle_block(
+                        bind_name.as_ref(),
+                        Some(*error),
+                        body,
+                        self.debug_expression_args(target).get(1),
+                    ),
                     Value::OptionalSome(value) => Ok(ExprFlow::Value(*value)),
-                    Value::OptionalNone => self.exec_handle_block(None, None, body),
-                    other => Err(format!(
-                        "handle block requires a result or optional value, got {other}"
-                    )),
+                    Value::OptionalNone => self.exec_handle_block(None, None, body, None),
+                    _ => unreachable!("sum receiver checked before wrapper consumption"),
                 }
             }
 
@@ -1685,12 +3008,20 @@ impl Interpreter {
 
             // Field access: struct field access, or enum variant like `Color.red`
             Expr::FieldAccess(obj, field, _) => {
-                if let Some(name) = Self::dotted_expr_name(expr) {
-                    if let Some(function) = self.registry_name(&self.functions, &name) {
+                if !self.is_value_call_target(expr)
+                    && let Some(name) = Self::dotted_expr_name(expr)
+                {
+                    let function = self.runtime_name(&name);
+                    if self.interface_methods.contains_key(&function) {
+                        return Ok(ExprFlow::Value(Value::NamedFunction(function)));
+                    }
+                    if self.functions.contains_key(&function) {
                         return Ok(ExprFlow::Value(Value::NamedFunction(function)));
                     }
                 }
-                if let Some(owner_name) = Self::dotted_expr_name(obj) {
+                if !self.is_value_call_target(expr)
+                    && let Some(owner_name) = Self::dotted_expr_name(obj)
+                {
                     if let Some(enum_name) = self.registry_name(&self.enums, &owner_name) {
                         return Ok(ExprFlow::Value(Value::Enum {
                             type_name: enum_name,
@@ -1702,10 +3033,14 @@ impl Interpreter {
                 if let Some(value) = self.borrowed_struct_place(expr) {
                     return Ok(ExprFlow::Value(value.clone()));
                 }
+                let receiver_type = self
+                    .checked_expression_type(obj.span())
+                    .and_then(|name| Self::debug_type(name))
+                    .or_else(|| self.debug_expression_type(obj));
                 match obj.as_ref() {
                     Expr::Ident(ident) => {
                         if let Some(value) = self.get_variable(&ident.name).cloned() {
-                            self.eval_value_field_access(value, &field.name)
+                            self.eval_value_field_access(value, &field.name, receiver_type.as_ref())
                         } else {
                             // Treat as enum variant: Type.variant
                             if let Some(enum_name) = self.registry_name(&self.enums, &ident.name) {
@@ -1725,26 +3060,42 @@ impl Interpreter {
                     }
                     _ => {
                         let base = value_or_signal!(self, obj);
-                        self.eval_value_field_access(base, &field.name)
+                        self.eval_value_field_access(base, &field.name, receiver_type.as_ref())
                     }
                 }
             }
 
-            // Coarsen: strip refinement type, returning the underlying value.
-            // In the interpreter, the value is already the base type at
-            // runtime, so coarsen is a no-op.
-            Expr::Coarsen(inner, _) => self.eval_expr_flow(inner),
+            // Preserve the underlying erased owner when removing refinement
+            // metadata. Checked normalization restores a requested ancestor.
+            Expr::Coarsen(inner, _) => {
+                let value = value_or_signal!(self, inner);
+                Ok(ExprFlow::Value(self.coarsen_interface_value(value)))
+            }
 
             // Pipeline: `expr into f into g(extra)`
             // Evaluate the initial expression, then for each step, call the
             // function with the accumulated value as the first argument plus
             // any extra args.
             Expr::Pipeline(initial, steps, _) => {
+                let mut value_type = self.debug_expression_type(initial);
                 let mut value = value_or_signal!(self, initial);
                 for step in steps {
-                    value = match self.eval_pipeline_step(&step, value)? {
+                    let result_type = self.debug_pipeline_result_type(step, value_type.as_ref());
+                    let args = self.debug_type_args(result_type.as_ref());
+                    value = match self.eval_pipeline_step(
+                        &step,
+                        value,
+                        result_type.as_ref(),
+                        args.get(1),
+                    )? {
                         ExprFlow::Value(next) => next,
+                        ExprFlow::Resource(_) => return Err("Resource operand has no checked ownership transport for this operation".to_string()),
                         ExprFlow::Signal(signal) => return Ok(ExprFlow::Signal(signal)),
+                    };
+                    value_type = if step.handle.is_some() {
+                        args.first().cloned()
+                    } else {
+                        result_type
                     };
                 }
                 Ok(ExprFlow::Value(value))
@@ -1753,11 +3104,11 @@ impl Interpreter {
             // State check: `expr at state_name`
             Expr::At(expr, state_name, _) => {
                 let val = value_or_signal!(self, expr);
-                match val {
+                match val.into_payload() {
                     Value::Machine { state, .. } => {
                         Ok(ExprFlow::Value(Value::Bool(state == state_name.name)))
                     }
-                    _ => Err(format!("'at' requires a machine value, got {val}")),
+                    other => Err(format!("'at' requires a machine value, got {other}")),
                 }
             }
 
@@ -1766,88 +3117,9 @@ impl Interpreter {
                 self.eval_expr_flow(inner)
             }
 
-            Expr::Spawn(inner, _) => {
-                // `spawn ActorType(cap1: val1, ...)` — create a new actor instance.
-                let (source_actor_name, args) = match inner.as_ref() {
-                    Expr::Call(callee, args, _) => match callee.as_ref() {
-                        Expr::Ident(ident) => (ident.name.clone(), args),
-                        Expr::FieldAccess(_, _, _) => {
-                            let name = Self::dotted_expr_name(callee)
-                                .ok_or_else(|| "spawn: expected actor type name".to_string())?;
-                            (name, args)
-                        }
-                        _ => return Err("spawn: expected actor type name".to_string()),
-                    },
-                    _ => return Err("spawn: expected call expression".to_string()),
-                };
-                let actor_name = self
-                    .registry_name(&self.actor_defs, &source_actor_name)
-                    .unwrap_or(source_actor_name);
+            Expr::Spawn(_, _) => self.eval_spawn_flow(expr),
 
-                let actor_def = self
-                    .actor_defs
-                    .get(&actor_name)
-                    .ok_or_else(|| format!("unknown actor type '{actor_name}'"))?
-                    .clone();
-
-                // Evaluate capability args.
-                let mut capabilities = HashMap::new();
-                let parameter_indices =
-                    Self::actor_argument_parameters(args, &actor_def.capability_params)?;
-                for (arg, index) in args.iter().zip(parameter_indices) {
-                    let param = &actor_def.capability_params[index];
-                    let val = value_or_signal!(self, &arg.value);
-                    let param_ty = self.substitute_type_expr(&param.ty);
-                    let val = self.normalize_value_for_type(&param_ty, val)?;
-                    capabilities.insert(param.name.name.clone(), val);
-                }
-
-                // Evaluate state field initializers in a temp scope with capabilities in scope.
-                self.push_scope();
-                for (name, val) in &capabilities {
-                    if let Some(param) = actor_def
-                        .capability_params
-                        .iter()
-                        .find(|param| param.name.name == *name)
-                    {
-                        let param_ty = self.substitute_type_expr(&param.ty);
-                        self.set_variable_with_type(name, val.clone(), param_ty);
-                    } else {
-                        self.set_variable(name, val.clone());
-                    }
-                }
-                let mut state = HashMap::new();
-                for field in &actor_def.state_fields {
-                    let val = value_or_signal!(self, &field.value);
-                    let field_ty = self.substitute_type_expr(&field.ty);
-                    let val = self.normalize_value_for_type(&field_ty, val)?;
-                    state.insert(field.name.name.clone(), val);
-                }
-                self.pop_scope();
-
-                let id = self.next_actor_id;
-                self.next_actor_id += 1;
-                self.actor_instances.insert(
-                    id,
-                    ActorInstance {
-                        type_name: actor_name.clone(),
-                        state,
-                        capabilities,
-                    },
-                );
-
-                Ok(ExprFlow::Value(Value::Actor(id)))
-            }
-
-            Expr::Send(inner, _) => {
-                self.eval_actor_message(inner, false)?;
-                Ok(ExprFlow::Value(Value::Nothing))
-            }
-
-            Expr::Ask(inner, _) => {
-                let val = self.eval_actor_message(inner, true)?;
-                Ok(ExprFlow::Value(val))
-            }
+            Expr::Send(_, _) | Expr::Ask(_, _) => self.eval_actor_message_flow(expr),
 
             // Structured concurrency — sequential simulation:
             // `run call` evaluates immediately and wraps in Pending.
@@ -1859,16 +3131,34 @@ impl Interpreter {
             // `join pending` unwraps the Pending, returning result[T, error]
             // so that a `handle error:` block can handle failures.
             Expr::Join(inner, _) => {
+                let preserves_result = self.join_preserves_result(inner);
                 let val = value_or_signal!(self, inner);
+                let was_pending = matches!(&val, Value::Pending(_));
                 let result = match val {
-                    Value::Pending(inner_val) => match *inner_val {
-                        Value::ResultOk(_) | Value::ResultFail(_) => *inner_val,
-                        other => Value::ResultOk(Box::new(other)),
-                    },
                     Value::Nothing => {
                         Value::ResultFail(Box::new(Value::String("task was cancelled".to_string())))
                     }
-                    other => Value::ResultOk(Box::new(other)),
+                    other => {
+                        let joined = match other {
+                            Value::Pending(value) => *value,
+                            value => value,
+                        };
+                        // Raw interpreter callers may provide neither checked
+                        // nor declared types. Preserve their historical fallback;
+                        // checked source never selects behavior from its payload.
+                        let preserves_result = preserves_result.unwrap_or_else(|| {
+                            was_pending
+                                && matches!(
+                                    joined.payload(),
+                                    Value::ResultOk(_) | Value::ResultFail(_)
+                                )
+                        });
+                        if preserves_result {
+                            joined
+                        } else {
+                            Value::ResultOk(Box::new(joined))
+                        }
+                    }
                 };
                 Ok(ExprFlow::Value(result))
             }
@@ -1880,21 +3170,9 @@ impl Interpreter {
                 Ok(ExprFlow::Value(Value::Nothing))
             }
 
-            Expr::InlineFn(params, _return_type, body, _) => {
-                // Capture the current environment (all visible variables) for closure semantics.
-                let mut captures = HashMap::new();
-                for scope in &self.scopes {
-                    for (name, value) in scope {
-                        captures.insert(name.clone(), value.clone());
-                    }
-                }
-                Ok(ExprFlow::Value(Value::Function {
-                    params: params.clone(),
-                    body: body.clone(),
-                    captures,
-                    namespace: self.current_namespace.clone(),
-                }))
-            }
+            Expr::InlineFn(params, return_type, body, _) => Ok(ExprFlow::Value(
+                self.capture_closure(params, return_type.as_ref(), body)?,
+            )),
 
             // Unsupported expressions produce a clear error.
             _ => Err(format!(
@@ -1902,6 +3180,191 @@ impl Interpreter {
                 std::mem::discriminant(expr)
             )),
         }
+    }
+
+    fn eval_spawn_flow_unchecked(&mut self, inner: &Expr) -> Result<ExprFlow, String> {
+        // `spawn ActorType(cap1: val1, ...)` — create a new actor instance.
+        let (source_actor_name, args) = match inner {
+            Expr::Call(callee, args, _) => match callee.as_ref() {
+                Expr::Ident(ident) => (ident.name.clone(), args),
+                Expr::FieldAccess(_, _, _) => {
+                    let name = Self::dotted_expr_name(callee)
+                        .ok_or_else(|| "spawn: expected actor type name".to_string())?;
+                    (name, args)
+                }
+                _ => return Err("spawn: expected actor type name".to_string()),
+            },
+            _ => return Err("spawn: expected call expression".to_string()),
+        };
+        let actor_name = self
+            .registry_name(&self.actor_defs, &source_actor_name)
+            .unwrap_or(source_actor_name);
+
+        let actor_def = self
+            .actor_defs
+            .get(&actor_name)
+            .ok_or_else(|| format!("unknown actor type '{actor_name}'"))?
+            .clone();
+
+        let checked_initializers = self
+            .resource_transport
+            .as_ref()
+            .filter(|transport| transport.checked_source_active)
+            .map(|transport| {
+                transport
+                    .checked
+                    .prepare_actor_initializers(&actor_def)
+                    .map_err(|error| error.to_string())
+            })
+            .transpose()?;
+
+        // Evaluate capability args.
+        let mut capabilities = HashMap::new();
+        let parameter_indices =
+            Self::actor_argument_parameters(args, &actor_def.capability_params)?;
+        for (arg, index) in args.iter().zip(parameter_indices) {
+            let param = &actor_def.capability_params[index];
+            let val = value_or_signal!(self, &arg.value);
+            let param_ty = self.substitute_type_expr(&param.ty);
+            let val = self.normalize_value_for_type(&param_ty, val)?;
+            capabilities.insert(param.name.name.clone(), val);
+        }
+
+        // Evaluate state field initializers in a temp scope with capabilities in scope.
+        self.push_scope();
+        for (name, val) in &capabilities {
+            if let Some(param) = actor_def
+                .capability_params
+                .iter()
+                .find(|param| param.name.name == *name)
+            {
+                let param_ty = self.substitute_type_expr(&param.ty);
+                self.set_variable_with_type(name, val.clone(), param_ty);
+            } else {
+                self.set_variable(name, val.clone());
+            }
+        }
+        let mut state = HashMap::new();
+        for (field_index, field) in actor_def.state_fields.iter().enumerate() {
+            let val = if let Some(references) = &checked_initializers {
+                match self.eval_checked_actor_initializer(&references[field_index])? {
+                    ExprFlow::Value(value) => value,
+                    ExprFlow::Signal(signal) => return Ok(ExprFlow::Signal(signal)),
+                    ExprFlow::Resource(_) => {
+                        return Err("actor Resource custody has no checked transport proof".into());
+                    }
+                }
+            } else {
+                value_or_signal!(self, &field.value)
+            };
+            let field_ty = self.substitute_type_expr(&field.ty);
+            let val = self.normalize_value_for_type(&field_ty, val)?;
+            state.insert(field.name.name.clone(), val);
+        }
+        self.pop_scope();
+
+        let id = self.next_actor_id;
+        self.next_actor_id += 1;
+        self.actor_instances.insert(
+            id,
+            ActorInstance {
+                type_name: actor_name.clone(),
+                state,
+                capabilities,
+                checked_origin: None,
+            },
+        );
+
+        Ok(ExprFlow::Value(Value::Actor(id)))
+    }
+
+    fn capture_closure(
+        &mut self,
+        params: &[Param],
+        return_type: Option<&TypeExpr>,
+        body: &Block,
+    ) -> Result<Value, String> {
+        // Opaque carriers require custody before any capture copy.
+        // Ordinary lexical captures preserve their existing semantics.
+        let mut captures = HashMap::new();
+        for (index, scope) in self.scopes.iter().enumerate() {
+            if index != 0 && index < self.lexical_scope_floor {
+                continue;
+            }
+            for (name, value) in scope {
+                if value.contains_live_resource_or_grant() {
+                    let referenced = self
+                        .resource_transport
+                        .as_ref()
+                        .and_then(|transport| {
+                            transport.captured_resource_reference(name, body.span)
+                        })
+                        .unwrap_or_else(|| {
+                            resource_capture::raw_closure_uses_binding(params, body, name)
+                        });
+                    if referenced {
+                        return Err(
+                            "opaque capture has no checked custody transport proof".to_string()
+                        );
+                    }
+                    continue;
+                }
+                captures.insert(name.clone(), value.clone());
+            }
+        }
+        if let Some((checked, purpose)) = &self.retained_resource_program
+            && matches!(
+                purpose,
+                crate::ExecutionPurpose::ExplicitComptime
+                    | crate::ExecutionPurpose::NamespaceConstant
+            )
+        {
+            crate::value::closure_capture::validate_required_capture_environment(
+                checked,
+                params,
+                return_type,
+                body,
+                &captures,
+            )?;
+        }
+        let capture_types = captures
+            .keys()
+            .filter_map(|name| {
+                self.get_variable_type(name)
+                    .map(|ty| (name.clone(), ty.clone()))
+            })
+            .collect();
+        let type_arguments = self.current_type_arguments.clone();
+        let captured_arguments = self.captured_type_arguments(&type_arguments);
+        let mut value = Value::Function {
+            type_context: Box::new(ClosureTypeContext {
+                return_type: return_type.cloned(),
+                checked_scope: self.active_checked_scope.clone(),
+                scoped_type_bindings: self.scoped_type_bindings.clone(),
+                checked_function: self.active_checked_function.clone(),
+                bindings: self
+                    .type_arg_scopes
+                    .iter()
+                    .flat_map(|scope| scope.iter())
+                    .map(|(name, ty)| (name.clone(), self.resolve_installed_type_expr(ty)))
+                    .collect(),
+                arguments: captured_arguments,
+                reflected_capture: None,
+            }),
+            params: params.to_vec(),
+            body: body.clone(),
+            captures,
+            capture_types,
+            namespace_aliases: self.visible_namespace_aliases(),
+            namespace: self.current_namespace.clone(),
+        };
+        if let Some(origin) = &self.active_reflected_capture_origin {
+            let proof = crate::value::closure_capture::CheckedClosureCapture::seal(origin, &value);
+            if let Value::Function { type_context, .. } = &mut value {
+                type_context.reflected_capture = proof;
+            }
+        }
+        Ok(value)
     }
 
     fn eval_negation_flow(&mut self, operand: &Expr) -> Result<ExprFlow, String> {
@@ -1918,7 +3381,7 @@ impl Interpreter {
         }
 
         let val = value_or_signal!(self, operand);
-        match val {
+        match val.into_payload() {
             Value::Int64(n) => Ok(ExprFlow::Value(Value::Int64(n.wrapping_neg()))),
             Value::Float64(n) => Ok(ExprFlow::Value(Value::Float64(-n))),
             _ => Err("unary '-' requires a numeric operand".to_string()),
@@ -1952,50 +3415,85 @@ impl Interpreter {
         args: &[CallArg],
         piped: bool,
     ) -> Result<Option<Vec<usize>>, String> {
-        if args.iter().all(|arg| arg.name.is_none()) {
+        let callee = Self::unparenthesized(callee);
+        if self.is_value_call_target(callee) || args.iter().all(|arg| arg.name.is_none()) {
             return Ok(None);
         }
-        let Some(source_name) = Self::dotted_expr_name(callee) else {
-            return Ok(None);
-        };
-        let name = self.runtime_name(&source_name);
-        let Some(function) = self.functions.get(&name) else {
+        let Some((callable, parameter_names)) = self.source_call_parameters(callee) else {
             return Ok(None);
         };
         let offset = usize::from(piped);
-        if function.params.len() != args.len() + offset {
+        if parameter_names.len() != args.len() + offset {
             return Err(format!(
-                "function '{name}' argument count does not match parameter count"
+                "{callable} argument count does not match parameter count"
             ));
         }
-        let mut order = vec![None; function.params.len()];
+        let mut order = vec![None; parameter_names.len()];
         if piped {
             order[0] = Some(0);
         }
         for (index, arg) in args.iter().enumerate() {
             let source_index = index + offset;
             let parameter_index = match &arg.name {
-                Some(argument_name) => function
-                    .params
+                Some(argument_name) => parameter_names
                     .iter()
-                    .position(|param| param.name.name == argument_name.name)
+                    .position(|param| *param == argument_name.name)
                     .ok_or_else(|| {
-                        format!(
-                            "unknown argument '{}' for function '{name}'",
-                            argument_name.name
-                        )
+                        format!("unknown argument '{}' for {callable}", argument_name.name)
                     })?,
-                None => source_index,
+                None => order
+                    .iter()
+                    .position(Option::is_none)
+                    .ok_or_else(|| format!("too many arguments for {callable}"))?,
             };
             if order[parameter_index].replace(source_index).is_some() {
-                return Err(format!("duplicate argument for function '{name}'"));
+                return Err(format!("duplicate argument for {callable}"));
             }
         }
         order
             .into_iter()
             .collect::<Option<Vec<_>>>()
             .map(Some)
-            .ok_or_else(|| format!("missing argument for function '{name}'"))
+            .ok_or_else(|| format!("missing argument for {callable}"))
+    }
+
+    fn source_call_parameters(&self, callee: &Expr) -> Option<(String, Vec<&str>)> {
+        if let Some(source_name) = Self::dotted_expr_name(callee) {
+            let name = self.runtime_name(&source_name);
+            if let Some(function) = self.functions.get(&name) {
+                return Some((
+                    format!("function '{name}'"),
+                    function
+                        .definition
+                        .params
+                        .iter()
+                        .map(|param| param.name.name.as_str())
+                        .collect(),
+                ));
+            }
+        }
+        let (owner, variant_name) = match callee {
+            Expr::EnumVariant(owner, variant, _) => (owner.name.clone(), variant.name.as_str()),
+            Expr::FieldAccess(owner, variant, _) => {
+                (Self::dotted_expr_name(owner)?, variant.name.as_str())
+            }
+            _ => return None,
+        };
+        let enum_name = self.registry_name(&self.enums, &owner)?;
+        let variant = self
+            .enums
+            .get(&enum_name)?
+            .variants
+            .iter()
+            .find(|variant| variant.name.name == variant_name)?;
+        Some((
+            format!("enum variant '{enum_name}.{variant_name}'"),
+            variant
+                .fields
+                .iter()
+                .map(|field| field.name.name.as_str())
+                .collect(),
+        ))
     }
 
     fn reorder_function_arguments<T>(
@@ -2026,8 +3524,8 @@ impl Interpreter {
         let function = self.generic_function_for_inference(callee, type_args)?;
         let mut inferred = HashMap::new();
         for (param, actual) in function.params.iter().zip(actual_types) {
-            let actual = self.inference_base_type(actual);
-            Self::infer_type_arguments(&param.ty, &actual, &function.type_params, &mut inferred);
+            let actual = self.resolved_inference_base_type(actual);
+            self.infer_type_arguments(&param.ty, &actual, &function.type_params, &mut inferred);
         }
         function
             .type_params
@@ -2041,7 +3539,8 @@ impl Interpreter {
         callee: &Expr,
         type_args: &[TypeExpr],
     ) -> Option<&FunctionDef> {
-        if !type_args.is_empty() {
+        let callee = Self::unparenthesized(callee);
+        if self.is_value_call_target(callee) || !type_args.is_empty() {
             return None;
         }
         let source_name = match callee {
@@ -2050,51 +3549,53 @@ impl Interpreter {
             _ => None,
         }?;
         let function_name = self.runtime_name(&source_name);
-        let function = self.functions.get(&function_name)?;
+        let function = &self.functions.get(&function_name)?.definition;
         (!function.type_params.is_empty()).then_some(function.as_ref())
     }
 
-    fn inference_base_type(&self, ty: &TypeExpr) -> TypeExpr {
-        let mut current = self.substitute_type_expr(ty);
+    fn resolved_inference_base_type(&self, ty: &TypeExpr) -> TypeExpr {
+        let mut current = ty.clone();
         let mut seen = HashSet::new();
         loop {
             let TypeExpr::Named(ident) = &current else {
                 return current;
             };
-            let Some(alias_name) = self.registry_name(&self.type_alias_bases, &ident.name) else {
+            let alias_name = ident.name.clone();
+            let Some(base) = self.type_alias_bases.get(&alias_name) else {
                 return current;
             };
             if !seen.insert(alias_name.clone()) {
                 return current;
             }
-            let Some(base) = self.type_alias_bases.get(&alias_name) else {
-                return current;
-            };
             let namespace =
                 Self::type_name_namespace(&alias_name).or(self.current_namespace.as_deref());
-            current = self.substitute_type_expr_in_namespace(base, namespace);
+            current = self.qualify_declared_type_expr(base, namespace);
         }
     }
 
     fn call_argument_type(&self, expression: &Expr) -> Option<TypeExpr> {
-        match expression {
+        let source = Self::type_witness_source(expression);
+        match source {
             Expr::Ident(argument) if self.get_variable_type(&argument.name).is_some() => {
                 self.get_variable_type(&argument.name).cloned()
             }
-            Expr::InlineFn(params, return_type, _, span) => Some(TypeExpr::Function(
-                params.iter().map(|param| param.ty.clone()).collect(),
-                Box::new(return_type.clone().unwrap_or_else(|| {
-                    TypeExpr::Named(Ident {
-                        name: "nothing".to_string(),
-                        span: *span,
-                    })
-                })),
-                *span,
-            )),
-            _ => self.named_function_argument_type(expression).or_else(|| {
-                self.checked_expression_types
-                    .as_ref()
-                    .and_then(|types| types.get(&expression.span()))
+            Expr::InlineFn(params, return_type, _, span) => Some(
+                self.substitute_type_expr(&TypeExpr::Function(
+                    params
+                        .iter()
+                        .map(|param| Self::type_witness_parameter(param, param.ty.clone()))
+                        .collect(),
+                    Box::new(return_type.clone().unwrap_or_else(|| {
+                        TypeExpr::Named(Ident {
+                            name: "nothing".to_string(),
+                            span: *span,
+                        })
+                    })),
+                    *span,
+                )),
+            ),
+            _ => self.named_function_argument_type(source).or_else(|| {
+                self.checked_expression_type(expression.span())
                     .and_then(|type_name| {
                         Self::simple_type_expr_from_name(type_name, expression.span())
                     })
@@ -2103,29 +3604,34 @@ impl Interpreter {
     }
 
     fn named_function_argument_type(&self, expression: &Expr) -> Option<TypeExpr> {
-        if let Expr::Ident(ident) = expression
-            && self.get_variable(&ident.name).is_some()
-        {
+        let expression = Self::type_witness_source(expression);
+        if self.is_value_call_target(expression) {
             // Captures can omit runtime type metadata and shadow a namespaced
             // function. Their checked expression type remains authoritative.
             return None;
         }
         let source_name = Self::dotted_expr_name(expression)?;
         let name = self.registry_name(&self.functions, &source_name)?;
-        let function = self.functions.get(&name)?;
+        let registered = self.functions.get(&name)?;
+        let function = &registered.definition;
         if !function.type_params.is_empty() {
             return None;
         }
-        let namespace = Self::function_namespace(&name);
+        let namespace = registered.namespace.as_deref();
         let params = function
             .params
             .iter()
-            .map(|param| self.substitute_type_expr_in_namespace(&param.ty, namespace.as_deref()))
+            .map(|param| {
+                Self::type_witness_parameter(
+                    param,
+                    self.qualify_declared_type_expr(&param.ty, namespace),
+                )
+            })
             .collect();
         let return_type = function
             .return_type
             .as_ref()
-            .map(|ty| self.substitute_type_expr_in_namespace(ty, namespace.as_deref()))
+            .map(|ty| self.qualify_declared_type_expr(ty, namespace))
             .unwrap_or_else(|| {
                 TypeExpr::Named(Ident {
                     name: "nothing".to_string(),
@@ -2140,6 +3646,7 @@ impl Interpreter {
     }
 
     fn infer_type_arguments(
+        &self,
         expected: &TypeExpr,
         actual: &TypeExpr,
         type_params: &[Ident],
@@ -2149,38 +3656,69 @@ impl Interpreter {
             (TypeExpr::Named(expected), actual)
                 if type_params.iter().any(|param| param.name == expected.name) =>
             {
-                inferred
-                    .entry(expected.name.clone())
-                    .or_insert_with(|| actual.clone());
+                match inferred.get(&expected.name) {
+                    Some(previous) => {
+                        if let Some(merged) = self.merge_inferred_never(previous, actual, false) {
+                            inferred.insert(expected.name.clone(), merged);
+                        }
+                    }
+                    None => {
+                        inferred.insert(expected.name.clone(), actual.clone());
+                    }
+                }
             }
             (
                 TypeExpr::Generic(expected_owner, expected_args, _),
                 TypeExpr::Generic(actual_owner, actual_args, _),
             ) if expected_owner.name == actual_owner.name => {
                 for (expected, actual) in expected_args.iter().zip(actual_args) {
-                    Self::infer_type_arguments(expected, actual, type_params, inferred);
+                    self.infer_type_arguments(expected, actual, type_params, inferred);
                 }
             }
+            (TypeExpr::View(expected, _), TypeExpr::View(actual, _)) => {
+                self.infer_type_arguments(expected, actual, type_params, inferred);
+            }
             (TypeExpr::View(expected, _), actual) => {
-                Self::infer_type_arguments(expected, actual, type_params, inferred);
+                self.infer_type_arguments(expected, actual, type_params, inferred);
             }
             (expected, TypeExpr::View(actual, _)) => {
-                Self::infer_type_arguments(expected, actual, type_params, inferred);
+                self.infer_type_arguments(expected, actual, type_params, inferred);
             }
             (
                 TypeExpr::Function(expected_params, expected_return, _),
                 TypeExpr::Function(actual_params, actual_return, _),
             ) => {
                 for (expected, actual) in expected_params.iter().zip(actual_params) {
-                    Self::infer_type_arguments(expected, actual, type_params, inferred);
+                    self.infer_type_arguments(expected, actual, type_params, inferred);
                 }
-                Self::infer_type_arguments(expected_return, actual_return, type_params, inferred);
+                self.infer_type_arguments(expected_return, actual_return, type_params, inferred);
             }
             _ => {}
         }
     }
 
     fn simple_type_expr_from_name(type_name: &str, span: Span) -> Option<TypeExpr> {
+        if let Some(inner) = type_name.strip_prefix("view ") {
+            return Some(TypeExpr::View(
+                Box::new(Self::simple_type_expr_from_name(inner, span)?),
+                span,
+            ));
+        }
+        if let Some((params, result)) = Self::split_function_type_display(type_name) {
+            let params = if params.is_empty() {
+                Vec::new()
+            } else {
+                Self::split_type_display_args(params)
+                    .into_iter()
+                    .map(|param| Self::simple_type_expr_from_name(param.trim(), span))
+                    .collect::<Option<Vec<_>>>()?
+            };
+            return Some(TypeExpr::Function(
+                params,
+                Box::new(Self::simple_type_expr_from_name(result, span)?),
+                span,
+            ));
+        }
         if let Some((owner, args)) = Self::split_generic_type_display(type_name) {
             let args = Self::split_type_display_args(args)
                 .into_iter()
@@ -2201,16 +3739,56 @@ impl Interpreter {
         }))
     }
 
+    fn unparenthesized(mut expression: &Expr) -> &Expr {
+        while let Expr::Paren(inner, _) = expression {
+            expression = inner;
+        }
+        expression
+    }
+
+    /// Locals and computed expressions denote values; an unbound dotted root
+    /// can instead denote a namespace, type, or registered function.
+    fn is_value_call_target(&self, expression: &Expr) -> bool {
+        match expression {
+            Expr::Ident(ident) => self.get_variable(&ident.name).is_some(),
+            Expr::FieldAccess(base, _, _) => self.is_value_call_target(base),
+            Expr::EnumVariant(_, _, _) => false,
+            _ => true,
+        }
+    }
+
     fn eval_call_flow(
         &mut self,
         callee: &Expr,
         type_args: &[TypeExpr],
         args: &[CallArg],
+        call_span: Span,
     ) -> Result<ExprFlow, String> {
+        if let Some(transport) = &self.resource_transport {
+            if transport.checked_source_active {
+                if transport
+                    .checked
+                    .source_call_dispatch(callee, args, call_span)
+                    .map_err(|error| error.to_string())?
+                {
+                    return self.eval_resource_call(callee, type_args, args, call_span);
+                }
+            }
+        }
+        if let Some(flow) = self.eval_temporary_call(callee, type_args, args, call_span)? {
+            return Ok(flow);
+        }
+        // Only a fact at this actual result can be reused after the call; an
+        // unrelated installed map must not alter metadata-free API validation.
+        let checked_producer = self.checked_refinement_source_type(call_span).is_some();
+        let checked_field_owner =
+            self.checked_field_intrinsic_owner(callee, type_args, args, call_span)?;
+        let callee = Self::unparenthesized(callee);
         // Check for machine construction/transition BEFORE evaluating args,
         // since state-name arguments are bare identifiers (not variables) and
         // would fail evaluation.
         match callee {
+            _ if self.is_value_call_target(callee) => {}
             Expr::Ident(ident) if self.registry_name(&self.structs, &ident.name).is_some() => {}
             Expr::Ident(ident) => {
                 if let Some(machine_name) = self.registry_name(&self.machines, &ident.name) {
@@ -2248,20 +3826,77 @@ impl Interpreter {
             args,
             argument_order.as_deref(),
         );
-        let type_args = inferred_type_args.as_deref().unwrap_or(type_args);
 
-        let mut arg_values = Vec::with_capacity(args.len());
-        for arg in args {
-            arg_values.push(value_or_signal!(self, &arg.value));
+        // Constructor and intrinsic parameters belong to the selected call. Resolve
+        // actual arguments in the caller before evaluating nested expressions.
+        let mut resolved_type_args = inferred_type_args.unwrap_or_else(|| {
+            type_args
+                .iter()
+                .map(|ty| self.substitute_type_expr(ty))
+                .collect()
+        });
+        if let Some(owner) = checked_field_owner {
+            let selected = resolved_type_args
+                .first_mut()
+                .ok_or("checked field intrinsic lost its selected owner operand")?;
+            *selected = owner;
         }
-        let arg_values = Self::reorder_function_arguments(arg_values, argument_order.as_deref())?;
+        // Capture caller facts before evaluating any argument or entering a
+        // nested generic/reflected body. Reorder each witness with its value;
+        // destination parameter types never supply caller proof.
+        let debug_print_kind = self.debug_print_call_kind(callee);
+        let debug_argument_types = if debug_print_kind.is_some() {
+            Self::reorder_function_arguments(
+                args.iter()
+                    .map(|arg| self.debug_print_expression_type(&arg.value))
+                    .collect(),
+                argument_order.as_deref(),
+            )?
+        } else {
+            Vec::new()
+        };
+        let argument_source_types: Vec<_> = args
+            .iter()
+            .map(|arg| {
+                self.checked_refinement_source_type(arg.value.span())
+                    .cloned()
+            })
+            .collect();
+        let mut evaluated_args = Vec::with_capacity(args.len());
+        for (arg, source_type) in args.iter().zip(argument_source_types) {
+            evaluated_args.push((value_or_signal!(self, &arg.value), source_type));
+        }
+        let (arg_values, argument_source_types): (Vec<_>, Vec<_>) =
+            Self::reorder_function_arguments(evaluated_args, argument_order.as_deref())?
+                .into_iter()
+                .unzip();
+
+        if let Some(kind) = debug_print_kind {
+            return Ok(ExprFlow::Value(self.emit_typed_debug_print(
+                kind,
+                &arg_values,
+                &debug_argument_types,
+            )));
+        }
+        if self.is_value_call_target(callee) {
+            let function = value_or_signal!(self, callee);
+            return Ok(ExprFlow::Value(self.call_fn_value_from_source(
+                function,
+                arg_values,
+                Some(&argument_source_types),
+            )?));
+        }
 
         match callee {
             Expr::Ident(ident) => {
                 if let Some(name) = self.registry_name(&self.structs, &ident.name) {
-                    return Ok(ExprFlow::Value(
-                        self.construct_struct(&name, args, arg_values)?,
-                    ));
+                    return Ok(ExprFlow::Value(self.construct_struct(
+                        &name,
+                        &resolved_type_args,
+                        args,
+                        arg_values,
+                        &argument_source_types,
+                    )?));
                 }
                 if let Some(name) = self.registry_name(&self.bitfields, &ident.name) {
                     return Ok(ExprFlow::Value(
@@ -2271,8 +3906,11 @@ impl Interpreter {
                 let name = self
                     .registry_name(&self.functions, &ident.name)
                     .unwrap_or_else(|| ident.name.clone());
-                Ok(ExprFlow::Value(self.call_function_with_type_args(
-                    &name, type_args, arg_values,
+                Ok(ExprFlow::Value(self.call_function_from_resolved_source(
+                    &name,
+                    &resolved_type_args,
+                    arg_values,
+                    Some(&argument_source_types),
                 )?))
             }
             // Handle enum variant construction: Type.variant(args)
@@ -2294,8 +3932,10 @@ impl Interpreter {
                     if let Some(struct_name) = self.registry_name(&self.structs, name) {
                         return Ok(ExprFlow::Value(self.construct_struct(
                             &struct_name,
+                            &resolved_type_args,
                             args,
                             arg_values,
+                            &argument_source_types,
                         )?));
                     }
                     if let Some(bitfield_name) = self.registry_name(&self.bitfields, name) {
@@ -2306,21 +3946,30 @@ impl Interpreter {
                         )?));
                     }
                     // Try higher-order built-ins first (require &mut self).
-                    if let Some(result) = self.call_higher_order_builtin(name, &arg_values) {
+                    if let Some(result) = self.call_higher_order_builtin_with_type_args(
+                        name,
+                        &resolved_type_args,
+                        &arg_values,
+                        checked_producer,
+                    ) {
                         return Ok(ExprFlow::Value(result?));
                     }
                     let runtime_name = self.runtime_name(name);
                     if self.is_trusted_stdlib_first_function(&runtime_name) {
-                        return Ok(ExprFlow::Value(self.call_user_function_with_type_args(
+                        return Ok(ExprFlow::Value(self.call_user_function_from_source(
                             &runtime_name,
-                            type_args,
+                            &resolved_type_args,
                             arg_values,
+                            Some(&argument_source_types),
                         )?));
                     }
                     // Try type-reflection built-ins before ordinary built-ins.
-                    if let Some(result) =
-                        self.call_builtin_with_type_args(name, type_args, &arg_values)
-                    {
+                    if let Some(result) = self.call_builtin_with_type_args_from_source(
+                        name,
+                        &resolved_type_args,
+                        &arg_values,
+                        checked_producer,
+                    ) {
                         return Ok(ExprFlow::Value(result?));
                     }
                     if let Some(result) = self.call_builtin(name, &arg_values) {
@@ -2332,10 +3981,11 @@ impl Interpreter {
                             .resolve_interface_dispatch(&runtime_name, &arg_values)
                             .is_some()
                     {
-                        return Ok(ExprFlow::Value(self.call_function_with_type_args(
+                        return Ok(ExprFlow::Value(self.call_function_from_resolved_source(
                             &runtime_name,
-                            type_args,
+                            &resolved_type_args,
                             arg_values,
+                            Some(&argument_source_types),
                         )?));
                     }
                 }
@@ -2360,13 +4010,30 @@ impl Interpreter {
                     }
                 }
                 match dotted {
-                    Some(name) => Ok(ExprFlow::Value(
-                        self.call_function_with_type_args(&name, type_args, arg_values)?,
-                    )),
-                    None => Err("only named function calls are supported in comptime".to_string()),
+                    Some(name) => Ok(ExprFlow::Value(self.call_function_from_resolved_source(
+                        &name,
+                        &resolved_type_args,
+                        arg_values,
+                        Some(&argument_source_types),
+                    )?)),
+                    None => {
+                        let function = value_or_signal!(self, callee);
+                        Ok(ExprFlow::Value(self.call_fn_value_from_source(
+                            function,
+                            arg_values,
+                            Some(&argument_source_types),
+                        )?))
+                    }
                 }
             }
-            _ => Err("only named function calls are supported in comptime".to_string()),
+            _ => {
+                let function = value_or_signal!(self, callee);
+                Ok(ExprFlow::Value(self.call_fn_value_from_source(
+                    function,
+                    arg_values,
+                    Some(&argument_source_types),
+                )?))
+            }
         }
     }
 
@@ -2412,10 +4079,29 @@ impl Interpreter {
         })
     }
 
+    fn check_handle_receiver(&self, value: &Value, ty: Option<&TypeExpr>) -> Result<(), String> {
+        if matches!(
+            value.payload(),
+            Value::ResultOk(_)
+                | Value::ResultFail(_)
+                | Value::OptionalSome(_)
+                | Value::OptionalNone
+        ) {
+            return Ok(());
+        }
+        // Observe the original wrappers without joining a pending receiver.
+        Err(format!(
+            "handle block requires a result or optional value, got {}",
+            self.format_debug_value(value, ty)
+        ))
+    }
+
     fn eval_pipeline_step(
         &mut self,
         step: &PipelineStep,
         piped_value: Value,
+        result_type: Option<&TypeExpr>,
+        error_type: Option<&TypeExpr>,
     ) -> Result<ExprFlow, String> {
         let flow = self.eval_pipeline_step_call(step, piped_value)?;
         let Some(handle) = &step.handle else {
@@ -2423,26 +4109,36 @@ impl Interpreter {
         };
         let value = match flow {
             ExprFlow::Value(value) => value,
+            ExprFlow::Resource(_) => {
+                return Err(
+                    "Resource operand has no checked ownership transport for this operation"
+                        .to_string(),
+                );
+            }
             ExprFlow::Signal(signal) => return Ok(ExprFlow::Signal(signal)),
         };
-        self.eval_pipeline_step_handle(value, handle)
+        self.eval_pipeline_step_handle(value, handle, result_type, error_type)
     }
 
     fn eval_pipeline_step_handle(
         &mut self,
         step_value: Value,
         handle: &PipelineStepHandle,
+        result_type: Option<&TypeExpr>,
+        error_type: Option<&TypeExpr>,
     ) -> Result<ExprFlow, String> {
-        match step_value {
+        self.check_handle_receiver(&step_value, result_type)?;
+        match step_value.into_payload() {
             Value::ResultOk(value) => Ok(ExprFlow::Value(*value)),
-            Value::ResultFail(error) => {
-                self.exec_handle_block(handle.error_name.as_ref(), Some(*error), &handle.body)
-            }
+            Value::ResultFail(error) => self.exec_handle_block(
+                handle.error_name.as_ref(),
+                Some(*error),
+                &handle.body,
+                error_type,
+            ),
             Value::OptionalSome(value) => Ok(ExprFlow::Value(*value)),
-            Value::OptionalNone => self.exec_handle_block(None, None, &handle.body),
-            other => Err(format!(
-                "handle block requires a result or optional value, got {other}"
-            )),
+            Value::OptionalNone => self.exec_handle_block(None, None, &handle.body, None),
+            _ => unreachable!("sum receiver checked before wrapper consumption"),
         }
     }
 
@@ -2451,6 +4147,11 @@ impl Interpreter {
         step: &PipelineStep,
         piped_value: Value,
     ) -> Result<ExprFlow, String> {
+        // The step fact describes its input, not its result. Its presence only
+        // establishes checked execution for fresh intrinsic producers; their
+        // validation target still comes from the selected actual type argument.
+        let checked_producer = self.checked_refinement_source_type(step.span).is_some();
+        let checked_field_owner = self.checked_field_pipeline_intrinsic_owner(step)?;
         let function = match &step.function {
             Expr::View(inner, _) => inner.as_ref(),
             _ => &step.function,
@@ -2460,13 +4161,12 @@ impl Interpreter {
             Expr::Call(callee, args, _) => (callee, &[], args),
             _ => (function, &[], &step.extra_args),
         };
+        let function = Self::unparenthesized(function);
         let argument_order = self.source_function_argument_order(function, extra_args, true)?;
 
         let mut actual_types = Vec::with_capacity(extra_args.len() + 1);
         if let Some(piped_type) = self
-            .checked_expression_types
-            .as_ref()
-            .and_then(|types| types.get(&step.span))
+            .checked_expression_type(step.span)
             .and_then(|type_name| Self::simple_type_expr_from_name(type_name, step.span))
         {
             actual_types.push(piped_type);
@@ -2486,63 +4186,155 @@ impl Interpreter {
         }
         let inferred_type_args =
             self.inferred_user_function_type_args_from_types(function, type_args, &actual_types);
-        let type_args = inferred_type_args.as_deref().unwrap_or(type_args);
 
-        // Build argument list: piped value first, then extra args.
-        let mut arg_values = vec![piped_value];
-        for arg in extra_args {
-            arg_values.push(value_or_signal!(self, &arg.value));
+        let mut resolved_type_args = inferred_type_args.unwrap_or_else(|| {
+            type_args
+                .iter()
+                .map(|ty| self.substitute_type_expr(ty))
+                .collect()
+        });
+        if let Some(owner) = checked_field_owner {
+            let selected = resolved_type_args
+                .first_mut()
+                .ok_or("checked field intrinsic lost its selected owner operand")?;
+            *selected = owner;
         }
-        let arg_values = Self::reorder_function_arguments(arg_values, argument_order.as_deref())?;
+
+        // step.span records the checked inbound type, including a previous
+        // step's handled success type. Capture extra argument facts before any
+        // evaluation, then permute each proof together with its value.
+        let debug_print_kind = self.debug_print_call_kind(function);
+        let debug_argument_types = if debug_print_kind.is_some() {
+            let mut types = vec![
+                self.checked_expression_type(step.span)
+                    .and_then(|name| Self::debug_type(name))
+                    .map(|ty| self.substitute_type_expr(&ty)),
+            ];
+            types.extend(
+                extra_args
+                    .iter()
+                    .map(|arg| self.debug_print_expression_type(&arg.value)),
+            );
+            Self::reorder_function_arguments(types, argument_order.as_deref())?
+        } else {
+            Vec::new()
+        };
+        let mut evaluated_args = vec![(
+            piped_value,
+            self.checked_refinement_source_type(step.span).cloned(),
+        )];
+        let extra_source_types: Vec<_> = extra_args
+            .iter()
+            .map(|arg| {
+                self.checked_refinement_source_type(arg.value.span())
+                    .cloned()
+            })
+            .collect();
+        for (arg, source_type) in extra_args.iter().zip(extra_source_types) {
+            evaluated_args.push((value_or_signal!(self, &arg.value), source_type));
+        }
+        let (arg_values, argument_source_types): (Vec<_>, Vec<_>) =
+            Self::reorder_function_arguments(evaluated_args, argument_order.as_deref())?
+                .into_iter()
+                .unzip();
+
+        if let Some(kind) = debug_print_kind {
+            return Ok(ExprFlow::Value(self.emit_typed_debug_print(
+                kind,
+                &arg_values,
+                &debug_argument_types,
+            )));
+        }
+        if self.is_value_call_target(function) {
+            let function = value_or_signal!(self, function);
+            return Ok(ExprFlow::Value(self.call_fn_value_from_source(
+                function,
+                arg_values,
+                Some(&argument_source_types),
+            )?));
+        }
 
         // Resolve the function name from the expression.
         match function {
+            Expr::EnumVariant(type_name, variant, _) => {
+                let enum_name = self
+                    .registry_name(&self.enums, &type_name.name)
+                    .unwrap_or_else(|| type_name.name.clone());
+                Ok(ExprFlow::Value(self.construct_enum_variant(
+                    &enum_name,
+                    &variant.name,
+                    arg_values,
+                )?))
+            }
             Expr::Ident(ident) => {
                 let name = self
                     .registry_name(&self.functions, &ident.name)
                     .unwrap_or_else(|| ident.name.clone());
-                Ok(ExprFlow::Value(self.call_function_with_type_args(
-                    &name, type_args, arg_values,
+                Ok(ExprFlow::Value(self.call_function_from_resolved_source(
+                    &name,
+                    &resolved_type_args,
+                    arg_values,
+                    Some(&argument_source_types),
                 )?))
             }
             Expr::FieldAccess(obj, field, _) => {
                 let dotted = Self::extract_dotted_name(obj, &field.name);
                 if let Some(ref name) = dotted {
                     // Check higher-order builtins first (need &mut self).
-                    if let Some(result) = self.call_higher_order_builtin(name, &arg_values) {
+                    if let Some(result) = self.call_higher_order_builtin_with_type_args(
+                        name,
+                        &resolved_type_args,
+                        &arg_values,
+                        checked_producer,
+                    ) {
                         return Ok(ExprFlow::Value(result?));
                     }
                     let runtime_name = self.runtime_name(name);
                     if self.is_trusted_stdlib_first_function(&runtime_name) {
-                        return Ok(ExprFlow::Value(self.call_user_function_with_type_args(
+                        return Ok(ExprFlow::Value(self.call_user_function_from_source(
                             &runtime_name,
-                            type_args,
+                            &resolved_type_args,
                             arg_values,
+                            Some(&argument_source_types),
                         )?));
                     }
-                    if let Some(result) =
-                        self.call_builtin_with_type_args(name, type_args, &arg_values)
-                    {
+                    if let Some(result) = self.call_builtin_with_type_args_from_source(
+                        name,
+                        &resolved_type_args,
+                        &arg_values,
+                        checked_producer,
+                    ) {
                         return Ok(ExprFlow::Value(result?));
                     }
                     if let Some(result) = self.call_builtin(name, &arg_values) {
                         return Ok(ExprFlow::Value(result?));
                     }
                     if self.functions.contains_key(runtime_name.as_str()) {
-                        return Ok(ExprFlow::Value(self.call_function_with_type_args(
+                        return Ok(ExprFlow::Value(self.call_function_from_resolved_source(
                             &runtime_name,
-                            type_args,
+                            &resolved_type_args,
                             arg_values,
+                            Some(&argument_source_types),
                         )?));
                     }
+                }
+                if let Some(owner_name) = Self::dotted_expr_name(obj)
+                    && let Some(enum_name) = self.registry_name(&self.enums, &owner_name)
+                {
+                    return Ok(ExprFlow::Value(self.construct_enum_variant(
+                        &enum_name,
+                        &field.name,
+                        arg_values,
+                    )?));
                 }
                 match dotted {
                     Some(name) => {
                         let runtime_name = self.runtime_name(&name);
-                        Ok(ExprFlow::Value(self.call_function_with_type_args(
+                        Ok(ExprFlow::Value(self.call_function_from_resolved_source(
                             &runtime_name,
-                            type_args,
+                            &resolved_type_args,
                             arg_values,
+                            Some(&argument_source_types),
                         )?))
                     }
                     None => {
@@ -2559,23 +4351,28 @@ impl Interpreter {
         bind_name: Option<&Ident>,
         bind_value: Option<Value>,
         body: &Block,
+        bind_type: Option<&TypeExpr>,
     ) -> Result<ExprFlow, String> {
         self.push_scope();
         if let (Some(name), Some(value)) = (bind_name, bind_value) {
-            self.set_variable(&name.name, value);
+            self.set_inferred_debug_binding(name, value, bind_type);
         }
 
-        let mut signal = None;
-        for stmt in &body.stmts {
-            if let Some(next) = self.exec_stmt_inner(stmt)? {
-                signal = Some(next);
-                break;
+        let result = (|| {
+            let mut signal = None;
+            for stmt in &body.stmts {
+                if let Some(next) = self.exec_stmt_inner(stmt)? {
+                    signal = Some(next);
+                    break;
+                }
             }
-        }
+            Ok::<_, String>(signal)
+        })();
         self.pop_scope();
-
-        match signal {
+        self.check_resource_cleanup()?;
+        match result? {
             Some(Signal::Default(value)) => Ok(ExprFlow::Value(value)),
+            Some(Signal::ResourceDefault(value)) => Ok(ExprFlow::Resource(value)),
             Some(other) => Ok(ExprFlow::Signal(other)),
             None => Err("handle block must end with return or default".to_string()),
         }
@@ -2586,96 +4383,167 @@ impl Interpreter {
     /// Execute a single statement.  Returns `Ok(None)` for normal flow, or
     /// a [`Signal`] if control flow must be altered.
     fn exec_stmt_inner(&mut self, stmt: &Stmt) -> Result<Option<Signal>, String> {
+        if let (Some(transport), Stmt::VarDecl(declaration)) = (&self.resource_transport, stmt) {
+            let fact = transport
+                .checked
+                .binding(declaration.name.span)
+                .map_err(|error| error.to_string())?;
+            if transport
+                .checked
+                .type_contains_resource(fact.ty)
+                .map_err(|error| error.to_string())?
+            {
+                // A sealed named descriptor has a Resource signature but no
+                // physical Resource payload or capture environment.
+                if declaration.mutable
+                    || fact.mutable
+                    || transport
+                        .checked
+                        .prepare_named_callable(&declaration.value)
+                        .map_err(|error| error.to_string())?
+                        .is_none()
+                {
+                    return self.exec_resource_binding(declaration);
+                }
+            }
+        }
         match stmt {
             Stmt::VarDecl(decl) => {
+                if let Some(result) = self.exec_temporary_binding(decl)? {
+                    return Ok(result);
+                }
                 let declared_ty = self.substitute_type_expr(&decl.ty);
                 let type_name = type_expr_name(&declared_ty);
                 let val = if self.type_aliases.contains_key(&type_name) {
                     match &decl.value {
                         Expr::Handle(target, bind_name, body, _) => {
+                            let source_type =
+                                self.checked_refinement_source_type(target.span()).cloned();
+                            let success_source_type = Self::checked_sum_success_type(
+                                source_type.as_deref(),
+                                target.span(),
+                            );
+                            let target_type = self.debug_expression_type(target);
                             let target_value = match self.eval_expr_flow(target)? {
                                 ExprFlow::Value(value) => value,
+                                ExprFlow::Resource(_) => return Err("Resource operand has no checked ownership transport for this operation".to_string()),
                                 ExprFlow::Signal(signal) => return Ok(Some(signal)),
                             };
-                            let flow = match target_value {
-                                Value::ResultOk(value) | Value::OptionalSome(value) => self
-                                    .finish_refinement_boundary(
+                            let sum_payload = matches!(
+                                target_value.payload(),
+                                Value::ResultOk(_)
+                                    | Value::ResultFail(_)
+                                    | Value::OptionalSome(_)
+                                    | Value::OptionalNone
+                            );
+                            let handles_sum = self.with_resolved_type_aliases(|interpreter| {
+                                let refines_whole_sum = interpreter.type_name_has_refinement(&type_name)
+                                    && target_type.as_ref().is_some_and(|ty| {
+                                        interpreter.resolved_concrete_type_display(
+                                            &interpreter.resolved_inference_base_type(&declared_ty),
+                                        ) == interpreter.resolved_concrete_type_display(
+                                            &interpreter.resolved_inference_base_type(ty),
+                                        )
+                                    });
+                                sum_payload && !refines_whole_sum
+                                    && target_type.as_ref().is_none_or(|ty| {
+                                        !interpreter.type_name_has_refinement(&interpreter.resolved_concrete_type_display(ty))
+                                            && matches!(interpreter.resolved_inference_base_type(ty), TypeExpr::Generic(name, _, _)
+                                                if matches!(name.name.as_str(), "result" | "optional"))
+                                    })
+                            });
+                            let flow = if !handles_sum {
+                                self.finish_refinement_boundary(
+                                    &type_name,
+                                    target_value,
+                                    source_type.as_deref(),
+                                    bind_name.as_ref(),
+                                    body,
+                                )?
+                            } else {
+                                match target_value.into_payload() {
+                                    Value::ResultOk(value) | Value::OptionalSome(value) => self
+                                        .finish_refinement_boundary(
+                                            &type_name,
+                                            *value,
+                                            success_source_type.as_deref(),
+                                            bind_name.as_ref(),
+                                            body,
+                                        )?,
+                                    Value::ResultFail(error) => self.exec_handle_block(
+                                        bind_name.as_ref(),
+                                        Some(*error),
+                                        body,
+                                        self.debug_expression_args(target).get(1),
+                                    )?,
+                                    Value::OptionalNone => {
+                                        self.exec_handle_block(None, None, body, None)?
+                                    }
+                                    value => self.finish_refinement_boundary(
                                         &type_name,
-                                        *value,
+                                        value,
+                                        source_type.as_deref(),
                                         bind_name.as_ref(),
                                         body,
                                     )?,
-                                Value::ResultFail(error) => {
-                                    self.exec_handle_block(bind_name.as_ref(), Some(*error), body)?
                                 }
-                                Value::OptionalNone => self.exec_handle_block(None, None, body)?,
-                                value => self.finish_refinement_boundary(
-                                    &type_name,
-                                    value,
-                                    bind_name.as_ref(),
-                                    body,
-                                )?,
                             };
                             match flow {
                                 ExprFlow::Value(value) => value,
+                                ExprFlow::Resource(_) => return Err("Resource operand has no checked ownership transport for this operation".to_string()),
                                 ExprFlow::Signal(signal) => return Ok(Some(signal)),
                             }
                         }
                         _ => {
+                            let source_type = self
+                                .checked_refinement_source_type(decl.value.span())
+                                .cloned();
                             let val = match self.eval_expr_flow(&decl.value)? {
                                 ExprFlow::Value(value) => value,
+                                ExprFlow::Resource(_) => return Err("Resource operand has no checked ownership transport for this operation".to_string()),
                                 ExprFlow::Signal(signal) => return Ok(Some(signal)),
                             };
-                            self.check_refinement(&type_name, &val)?;
+                            self.check_refinement_from_resolved_source(
+                                &type_name,
+                                &val,
+                                source_type.as_deref(),
+                            )?;
                             val
                         }
                     }
                 } else {
                     match self.eval_expr_flow(&decl.value)? {
                         ExprFlow::Value(value) => value,
+                        ExprFlow::Resource(_) => return Err("Resource operand has no checked ownership transport for this operation".to_string()),
                         ExprFlow::Signal(signal) => return Ok(Some(signal)),
                     }
                 };
-                let val = self.normalize_value_for_type(&declared_ty, val)?;
+                let val = self.normalize_value_for_resolved_type(&declared_ty, val)?;
                 self.set_variable_with_type(&decl.name.name, val, declared_ty);
+                self.install_checked_field_binding(&decl.name)?;
                 Ok(None)
             }
 
-            Stmt::ComptimeTypeBind(bind) => {
-                let bound_type_expr = if let Some(bound_type_expr) =
-                    comptime_type_info_binding(&bind.value)
-                {
-                    self.substitute_type_expr(bound_type_expr)
-                } else if let Some((source_ty, index)) = comptime_type_arg_binding(&bind.value) {
-                    let source_ty = self.substitute_type_expr(source_ty);
-                    self.checked_type_info_arg_types(&source_ty)
-                        .unwrap_or_else(|| self.type_info_arg_types(&source_ty))
-                        .get(index)
-                        .cloned()
-                        .ok_or_else(|| {
-                            format!(
-                                "`comptime type` type.arg index {index} is out of range for type '{}'",
-                                type_expr_display(&source_ty)
-                            )
-                        })?
-                } else if let Some(field_name) = reflected_field_type_info_binding(&bind.value) {
-                    self.bound_reflected_field_type(field_name)?
-                } else if let Some(info_name) = reflected_type_info_binding(&bind.value) {
-                    self.bound_reflected_type_info_type(info_name)?
-                } else {
-                    return Err("`comptime type` currently requires a direct `type.info[T]()` initializer or trusted reflected metadata".to_string());
-                };
-                let mut scope = HashMap::new();
-                scope.insert(bind.name.name.clone(), bound_type_expr);
-                self.type_arg_scopes.push(scope);
-                let result = self.exec_block_inner(&bind.body);
-                self.type_arg_scopes.pop();
-                result
-            }
+            Stmt::ComptimeTypeBind(bind) => self.exec_comptime_type_bind(bind),
 
             Stmt::Assign(assign) => {
+                if self
+                    .resource_transport
+                    .as_ref()
+                    .is_some_and(|transport| transport.checked_source_active)
+                    && self.resource_type_at(assign.target.span())?
+                {
+                    return self.exec_resource_assignment(assign);
+                }
+                if field_updates::is_projected_target(&assign.target) {
+                    return self.exec_checked_field_assignment(assign);
+                }
                 let val = match self.eval_expr_flow(&assign.value)? {
                     ExprFlow::Value(value) => value,
+                    ExprFlow::Resource(_) => return Err(
+                        "Resource operand has no checked ownership transport for this operation"
+                            .to_string(),
+                    ),
                     ExprFlow::Signal(signal) => return Ok(Some(signal)),
                 };
                 match &assign.target {
@@ -2698,19 +4566,44 @@ impl Interpreter {
             }
 
             Stmt::Return(ret) => {
+                if let Some(transport) = self
+                    .resource_transport
+                    .as_mut()
+                    .filter(|transport| transport.checked_source_active)
+                {
+                    transport
+                        .retire_return_operations()
+                        .map_err(|error| error.to_string())?;
+                }
+                let source_type = ret.value.as_ref().and_then(|expression| {
+                    self.checked_refinement_source_type(expression.span())
+                        .cloned()
+                });
                 let val = match &ret.value {
                     Some(expr) => match self.eval_expr_flow(expr)? {
                         ExprFlow::Value(value) => value,
+                        ExprFlow::Resource(mut value) => {
+                            self.resource_transport
+                                .as_mut()
+                                .ok_or("missing checked Resource transport")?
+                                .preserve_return(&mut value)
+                                .map_err(|error| error.to_string())?;
+                            return Ok(Some(Signal::ResourceReturn(value, source_type)));
+                        }
                         ExprFlow::Signal(signal) => return Ok(Some(signal)),
                     },
                     None => Value::Nothing,
                 };
-                Ok(Some(Signal::Return(val)))
+                Ok(Some(Signal::Return(val, source_type)))
             }
 
             Stmt::If(if_stmt) => {
                 let cond = match self.eval_expr_flow(&if_stmt.condition)? {
                     ExprFlow::Value(value) => value,
+                    ExprFlow::Resource(_) => return Err(
+                        "Resource operand has no checked ownership transport for this operation"
+                            .to_string(),
+                    ),
                     ExprFlow::Signal(signal) => return Ok(Some(signal)),
                 };
                 if is_truthy(&cond)? {
@@ -2719,6 +4612,7 @@ impl Interpreter {
                 for (else_if_cond, else_if_block) in &if_stmt.else_ifs {
                     let val = match self.eval_expr_flow(else_if_cond)? {
                         ExprFlow::Value(value) => value,
+                        ExprFlow::Resource(_) => return Err("Resource operand has no checked ownership transport for this operation".to_string()),
                         ExprFlow::Signal(signal) => return Ok(Some(signal)),
                     };
                     if is_truthy(&val)? {
@@ -2732,8 +4626,25 @@ impl Interpreter {
             }
 
             Stmt::For(for_stmt) => {
-                let reflected_field_bindings =
-                    self.reflected_field_loop_bindings(&for_stmt.iterable)?;
+                let checked_field_loop = self.prepare_checked_resource_field_loop(for_stmt)?;
+                let reflected_field_bindings = match &checked_field_loop {
+                    Some(proof) => {
+                        let owner_type = proof.owner_name();
+                        Some(
+                            proof
+                                .fields()
+                                .map(|field| ReflectedFieldBinding {
+                                    index: field.index,
+                                    owner_type: owner_type.clone(),
+                                    owner_member: None,
+                                    name: field.name.clone(),
+                                    ty: Self::reflection_type_info_type_expr(&field.type_info),
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                    }
+                    None => self.reflected_field_loop_bindings(&for_stmt.iterable)?,
+                };
                 let reflected_variant_bindings =
                     self.reflected_variant_loop_bindings(&for_stmt.iterable)?;
                 let reflected_machine_state_bindings =
@@ -2744,16 +4655,53 @@ impl Interpreter {
                     self.reflected_machine_field_loop_owner(&for_stmt.iterable)?;
                 let reflected_type_info_bindings =
                     self.reflected_type_info_arg_loop_bindings(&for_stmt.iterable)?;
-                let iterable = match self.eval_expr_flow(&for_stmt.iterable)? {
+                let item_types = self.debug_expression_args(&for_stmt.iterable);
+                let iterable = match self.eval_checked_absent_for_iterable(for_stmt)? {
                     ExprFlow::Value(value) => value,
+                    ExprFlow::Resource(_) => return Err(
+                        "Resource operand has no checked ownership transport for this operation"
+                            .to_string(),
+                    ),
                     ExprFlow::Signal(signal) => return Ok(Some(signal)),
                 };
-                match iterable {
+                let absent_bindings = self.prepare_absent_for_bindings(for_stmt, &iterable)?;
+                match iterable.into_payload() {
                     Value::List(items) => {
+                        if let Some(proof) = &checked_field_loop {
+                            proof
+                                .validate_count(items.len())
+                                .map_err(|error| error.to_string())?;
+                        }
                         for (index, item) in items.into_iter().enumerate() {
+                            // Every fallible proof join precedes lexical or debug mutation.
+                            let checked_field_item = checked_field_loop
+                                .as_ref()
+                                .map(|proof| proof.iteration(index))
+                                .transpose()
+                                .map_err(|error| error.to_string())?;
+                            if let Some(proof) = &checked_field_item {
+                                proof
+                                    .validate_value(&item)
+                                    .map_err(|error| error.to_string())?;
+                            }
+                            self.validate_absent_generated_debug_binding(
+                                absent_bindings.as_ref(),
+                                &for_stmt.variable,
+                                0,
+                                &item,
+                            )?;
                             self.push_scope();
                             let loop_item = item.clone();
-                            self.set_variable(&for_stmt.variable.name, item);
+                            if let Err(error) = self.set_absent_generated_debug_binding(
+                                absent_bindings.as_ref(),
+                                &for_stmt.variable,
+                                0,
+                                item,
+                                item_types.first(),
+                            ) {
+                                self.pop_scope();
+                                return Err(error);
+                            }
 
                             let pushed_field_scope = reflected_field_bindings
                                 .as_ref()
@@ -2823,7 +4771,14 @@ impl Interpreter {
                                 })
                                 .is_some();
 
+                            let pushed_checked_field = checked_field_item.is_some();
+                            if let Some(proof) = checked_field_item {
+                                self.checked_reflected_fields.push(proof);
+                            }
                             let signal = self.exec_block_inner(&for_stmt.body);
+                            if pushed_checked_field {
+                                self.checked_reflected_fields.pop();
+                            }
                             if pushed_type_info_scope {
                                 self.reflected_type_info_scopes.pop();
                             }
@@ -2855,9 +4810,10 @@ impl Interpreter {
                     Value::String(s) => {
                         for ch in s.chars() {
                             self.push_scope();
-                            self.set_variable(
-                                &for_stmt.variable.name,
+                            self.set_inferred_debug_binding(
+                                &for_stmt.variable,
                                 Value::String(ch.to_string()),
+                                item_types.first(),
                             );
                             let signal = self.exec_block_inner(&for_stmt.body)?;
                             self.pop_scope();
@@ -2871,13 +4827,42 @@ impl Interpreter {
                     }
                     Value::Map(entries) => {
                         for (key, val) in entries {
-                            self.push_scope();
-                            self.set_variable(&for_stmt.variable.name, key);
-                            if let Some(ref val_var) = for_stmt.value_variable {
-                                self.set_variable(&val_var.name, val);
+                            self.validate_absent_generated_debug_binding(
+                                absent_bindings.as_ref(),
+                                &for_stmt.variable,
+                                0,
+                                &key,
+                            )?;
+                            if let Some(value) = &for_stmt.value_variable {
+                                self.validate_absent_generated_debug_binding(
+                                    absent_bindings.as_ref(),
+                                    value,
+                                    1,
+                                    &val,
+                                )?;
                             }
-                            let signal = self.exec_block_inner(&for_stmt.body)?;
+                            self.push_scope();
+                            let signal = (|| {
+                                self.set_absent_generated_debug_binding(
+                                    absent_bindings.as_ref(),
+                                    &for_stmt.variable,
+                                    0,
+                                    key,
+                                    item_types.first(),
+                                )?;
+                                if let Some(ref val_var) = for_stmt.value_variable {
+                                    self.set_absent_generated_debug_binding(
+                                        absent_bindings.as_ref(),
+                                        val_var,
+                                        1,
+                                        val,
+                                        item_types.get(1),
+                                    )?;
+                                }
+                                self.exec_block_inner(&for_stmt.body)
+                            })();
                             self.pop_scope();
+                            let signal = signal?;
                             match signal {
                                 Some(Signal::Break) => break,
                                 Some(Signal::Continue) => continue,
@@ -2889,7 +4874,11 @@ impl Interpreter {
                     Value::Set(items) => {
                         for item in items {
                             self.push_scope();
-                            self.set_variable(&for_stmt.variable.name, item);
+                            self.set_inferred_debug_binding(
+                                &for_stmt.variable,
+                                item,
+                                item_types.first(),
+                            );
                             let signal = self.exec_block_inner(&for_stmt.body)?;
                             self.pop_scope();
                             match signal {
@@ -2913,6 +4902,7 @@ impl Interpreter {
                 loop {
                     let cond = match self.eval_expr_flow(&while_stmt.condition)? {
                         ExprFlow::Value(value) => value,
+                        ExprFlow::Resource(_) => return Err("Resource operand has no checked ownership transport for this operation".to_string()),
                         ExprFlow::Signal(signal) => return Ok(Some(signal)),
                     };
                     if !is_truthy(&cond)? {
@@ -2932,29 +4922,69 @@ impl Interpreter {
             }
 
             Stmt::Match(match_stmt) => {
+                let owner_type = self.debug_expression_type(&match_stmt.expr);
                 let val = match self.eval_expr_flow(&match_stmt.expr)? {
                     ExprFlow::Value(value) => value,
+                    ExprFlow::Resource(_) => return Err(
+                        "Resource operand has no checked ownership transport for this operation"
+                            .to_string(),
+                    ),
                     ExprFlow::Signal(signal) => return Ok(Some(signal)),
                 };
-                let (variant_name, fields) = match &val {
+                let (variant_name, fields) = match val.payload() {
                     Value::Enum {
                         variant, fields, ..
                     } => (variant.clone(), fields.clone()),
                     _ => return Err(format!("match requires an enum value, got {val}")),
                 };
 
-                for arm in &match_stmt.arms {
+                for (arm_index, arm) in match_stmt.arms.iter().enumerate() {
                     match &arm.pattern {
                         Pattern::Ident(ident) => {
                             if ident.name == variant_name {
+                                self.prepare_absent_match_bindings(match_stmt, arm_index, &val)?;
                                 return self.exec_block_inner(&arm.body);
                             }
                         }
                         Pattern::Variant(name, bindings) => {
                             if name.name == variant_name {
+                                let absent_bindings = self
+                                    .prepare_absent_match_bindings(match_stmt, arm_index, &val)?;
+                                if absent_bindings
+                                    .as_ref()
+                                    .is_some_and(|proof| proof.binding_count() != fields.len())
+                                {
+                                    return Err("resource value lost its checked payload custody"
+                                        .to_string());
+                                }
+                                for (index, (binding, field)) in
+                                    bindings.iter().zip(&fields).enumerate()
+                                {
+                                    self.validate_absent_generated_debug_binding(
+                                        absent_bindings.as_ref(),
+                                        binding,
+                                        index,
+                                        field,
+                                    )?;
+                                }
                                 self.push_scope();
-                                for (binding, field_val) in bindings.iter().zip(fields.iter()) {
-                                    self.set_variable(&binding.name, field_val.clone());
+                                let field_types = owner_type
+                                    .as_ref()
+                                    .map(|ty| self.debug_fields(ty, Some((&variant_name, false))))
+                                    .unwrap_or_default();
+                                for (index, (binding, field_val)) in
+                                    bindings.iter().zip(fields.iter()).enumerate()
+                                {
+                                    if let Err(error) = self.set_absent_generated_debug_binding(
+                                        absent_bindings.as_ref(),
+                                        binding,
+                                        index,
+                                        field_val.clone(),
+                                        field_types.get(index).map(|(_, ty)| ty),
+                                    ) {
+                                        self.pop_scope();
+                                        return Err(error);
+                                    }
                                 }
                                 let result = self.exec_block_inner(&arm.body);
                                 self.pop_scope();
@@ -2962,6 +4992,7 @@ impl Interpreter {
                             }
                         }
                         Pattern::Other(_) => {
+                            self.prepare_absent_match_bindings(match_stmt, arm_index, &val)?;
                             return self.exec_block_inner(&arm.body);
                         }
                     }
@@ -2976,12 +5007,24 @@ impl Interpreter {
             }
             Stmt::Expr(expr_stmt) => match self.eval_expr_flow(&expr_stmt.expr)? {
                 ExprFlow::Value(_) => Ok(None),
+                ExprFlow::Resource(value) => {
+                    self.resource_transport
+                        .as_mut()
+                        .ok_or("missing checked Resource transport")?
+                        .discard_value(value)
+                        .map_err(|error| error.to_string())?;
+                    Ok(None)
+                }
                 ExprFlow::Signal(signal) => Ok(Some(signal)),
             },
 
             Stmt::Assert(assert_stmt) => {
                 let cond = match self.eval_expr_flow(&assert_stmt.condition)? {
                     ExprFlow::Value(value) => value,
+                    ExprFlow::Resource(_) => return Err(
+                        "Resource operand has no checked ownership transport for this operation"
+                            .to_string(),
+                    ),
                     ExprFlow::Signal(signal) => return Ok(Some(signal)),
                 };
                 match cond {
@@ -2991,6 +5034,11 @@ impl Interpreter {
                             match self.eval_expr_flow(msg_expr)? {
                                 ExprFlow::Value(Value::String(s)) => s,
                                 ExprFlow::Value(other) => other.to_string(),
+                                ExprFlow::Resource(_) => {
+                                    return Err(
+                                        "Resource cannot become an assertion message".to_string()
+                                    );
+                                }
                                 ExprFlow::Signal(signal) => return Ok(Some(signal)),
                             }
                         } else {
@@ -3014,6 +5062,9 @@ impl Interpreter {
                         ExprFlow::Value(other) => {
                             return Err(format!("breakpoint condition must be bool, got {other}"));
                         }
+                        ExprFlow::Resource(_) => {
+                            return Err("Resource cannot become a breakpoint condition".to_string());
+                        }
                         ExprFlow::Signal(signal) => return Ok(Some(signal)),
                     }
                 } else {
@@ -3021,7 +5072,7 @@ impl Interpreter {
                 };
 
                 if should_break {
-                    self.hit_breakpoint();
+                    self.hit_breakpoint(breakpoint_stmt.span);
                 }
                 Ok(None)
             }
@@ -3046,7 +5097,12 @@ impl Interpreter {
     /// public-facing result.
     pub fn exec_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
         match self.exec_stmt_inner(stmt)? {
-            None | Some(Signal::Break) | Some(Signal::Continue) | Some(Signal::Return(_)) => Ok(()),
+            None | Some(Signal::Break) | Some(Signal::Continue) | Some(Signal::Return(..)) => {
+                Ok(())
+            }
+            Some(Signal::ResourceReturn(..) | Signal::ResourceDefault(..)) => {
+                Err("raw statement API cannot export live Resource custody".to_string())
+            }
             Some(Signal::Default(_)) => {
                 Err("`default` can only be used inside a `handle` block".to_string())
             }
@@ -3060,23 +5116,51 @@ impl Interpreter {
 
     /// Execute a block (list of statements), propagating control-flow signals.
     fn exec_block_inner(&mut self, block: &Block) -> Result<Option<Signal>, String> {
+        self.exec_block_with_temporary_output(block)
+            .map(temporary_local_views::BlockOutput::into_signal)
+    }
+
+    fn exec_block_with_temporary_output(
+        &mut self,
+        block: &Block,
+    ) -> Result<temporary_local_views::BlockOutput, String> {
         self.push_scope();
-        let mut result = None;
-        for stmt in &block.stmts {
-            if let Some(signal) = self.exec_stmt_inner(stmt)? {
-                result = Some(signal);
-                break;
+        let activation = match self.begin_temporary_block(block) {
+            Ok(activation) => activation,
+            Err(error) => {
+                self.pop_scope();
+                self.check_resource_cleanup()?;
+                return Err(error);
             }
-        }
+        };
+        let result = (|| {
+            for stmt in &block.stmts {
+                if let Some(signal) = self.exec_stmt_inner(stmt)? {
+                    return Ok(Some(signal));
+                }
+            }
+            Ok(None)
+        })();
+        let result = self.acquire_temporary_output(activation, result);
+        let local_cleanup = self.complete_temporary_block(activation);
         self.pop_scope();
-        Ok(result)
+        // Preserve the pre-existing Resource-cleanup precedence over a primary
+        // block error. Ordinary retirement cannot replace an existing error.
+        self.check_resource_cleanup()?;
+        match (result, local_cleanup) {
+            (Err(error), _) | (_, Err(error)) => Err(error),
+            (Ok(result), Ok(())) => Ok(result),
+        }
     }
 
     /// Execute a block, returning the value produced by a `return` statement
     /// (if any).
     pub fn exec_block(&mut self, block: &Block) -> Result<Option<Value>, String> {
         match self.exec_block_inner(block)? {
-            Some(Signal::Return(v)) => Ok(Some(v)),
+            Some(Signal::Return(v, _)) if !v.contains_live_resource_or_grant() => Ok(Some(v)),
+            Some(Signal::Return(..) | Signal::ResourceReturn(..) | Signal::ResourceDefault(..)) => {
+                Err("raw block API cannot export live Resource custody".to_string())
+            }
             Some(Signal::Default(_)) => {
                 Err("`default` can only be used inside a `handle` block".to_string())
             }
@@ -3142,7 +5226,11 @@ impl Interpreter {
     ///
     /// When `is_ask` is true, a `respond value` inside the handler returns
     /// `value` as the result; for `send` the result is always `nothing`.
-    fn eval_actor_message(&mut self, inner: &Expr, is_ask: bool) -> Result<Value, String> {
+    fn eval_actor_message_unchecked(
+        &mut self,
+        inner: &Expr,
+        is_ask: bool,
+    ) -> Result<Value, String> {
         // Decompose `actor_expr.handler_name` or `actor_expr.handler_name(args)`.
         let (actor_expr, handler_name, call_args) = match inner {
             Expr::Call(callee, args, _) => match callee.as_ref() {
@@ -3162,12 +5250,18 @@ impl Interpreter {
         // Evaluate actor handle.
         let actor_val = match self.eval_expr_flow(actor_expr)? {
             ExprFlow::Value(v) => v,
+            ExprFlow::Resource(_) => {
+                return Err(
+                    "Resource operand has no checked ownership transport for this operation"
+                        .to_string(),
+                );
+            }
             ExprFlow::Signal(s) => {
                 return Err(format!("send/ask: actor expression returned signal: {s:?}"));
             }
         };
-        let actor_id = match actor_val {
-            Value::Actor(id) => id,
+        let actor_id = match actor_val.payload() {
+            Value::Actor(id) => *id,
             _ => return Err(format!("send/ask: expected actor value, got {actor_val}")),
         };
 
@@ -3177,6 +5271,10 @@ impl Interpreter {
             for arg in args {
                 let val = match self.eval_expr_flow(&arg.value)? {
                     ExprFlow::Value(v) => v,
+                    ExprFlow::Resource(_) => return Err(
+                        "Resource operand has no checked ownership transport for this operation"
+                            .to_string(),
+                    ),
                     ExprFlow::Signal(s) => {
                         return Err(format!("send/ask: arg expression returned signal: {s:?}"));
                     }
@@ -3215,65 +5313,85 @@ impl Interpreter {
             normalized_args[index] = self.normalize_value_for_type(&param_ty, value)?;
         }
 
-        // Execute handler body in a new scope with state + caps + params.
+        // An actor handler is a separate lexical call frame.
+        // Its real original handler-origin/ownership adapter is still pending.
+        let saved_field_cursor = self.enter_checked_field_body(None)?;
+        let scope_base = self.scopes.len();
+        let saved_floor = std::mem::replace(&mut self.lexical_scope_floor, scope_base);
         self.push_scope();
-        for (name, val) in &state_snapshot {
-            if let Some(field) = actor_def
-                .state_fields
-                .iter()
-                .find(|field| field.name.name == *name)
-            {
-                let field_ty = self.substitute_type_expr(&field.ty);
-                self.set_variable_with_type(name, val.clone(), field_ty);
-            } else {
-                self.set_variable(name, val.clone());
-            }
-        }
-        for (name, val) in &caps_snapshot {
-            if let Some(param) = actor_def
-                .capability_params
-                .iter()
-                .find(|param| param.name.name == *name)
-            {
-                let param_ty = self.substitute_type_expr(&param.ty);
-                self.set_variable_with_type(name, val.clone(), param_ty);
-            } else {
-                self.set_variable(name, val.clone());
-            }
-        }
-        for (param, val) in handler.params.iter().zip(normalized_args) {
-            let param_ty = self.substitute_type_expr(&param.ty);
-            self.set_variable_with_type(&param.name.name, val, param_ty);
-        }
-
-        // Execute the handler body, collecting signals.
-        let mut respond_value = Value::Nothing;
-        for stmt in &handler.body.stmts {
-            match self.exec_stmt_inner(stmt)? {
-                Some(Signal::Respond(val)) => {
-                    respond_value = val;
-                    break;
+        let outcome = (|| -> Result<_, String> {
+            for (name, val) in &state_snapshot {
+                if let Some(field) = actor_def
+                    .state_fields
+                    .iter()
+                    .find(|field| field.name.name == *name)
+                {
+                    let field_ty = self.substitute_type_expr(&field.ty);
+                    self.set_variable_with_type(name, val.clone(), field_ty);
+                } else {
+                    self.set_variable(name, val.clone());
                 }
-                Some(Signal::Return(_)) => break,
-                Some(Signal::Break) | Some(Signal::Continue) => break,
-                Some(Signal::Default(_)) => break,
-                None => {}
             }
-        }
-
-        // Collect updated state field values before popping scope.
-        let mut updated_state = state_snapshot;
-        for field in &actor_def.state_fields {
-            let name = &field.name.name;
-            // Check innermost scope(s) for the updated value.
-            if let Some(val) = self.scopes.last().and_then(|s| s.get(name)).cloned() {
-                let field_ty = self.substitute_type_expr(&field.ty);
-                let val = self.normalize_value_for_type(&field_ty, val)?;
-                updated_state.insert(name.clone(), val);
+            for (name, val) in &caps_snapshot {
+                if let Some(param) = actor_def
+                    .capability_params
+                    .iter()
+                    .find(|param| param.name.name == *name)
+                {
+                    let param_ty = self.substitute_type_expr(&param.ty);
+                    self.set_variable_with_type(name, val.clone(), param_ty);
+                } else {
+                    self.set_variable(name, val.clone());
+                }
             }
-        }
+            for (param, val) in handler.params.iter().zip(normalized_args) {
+                let param_ty = self.substitute_type_expr(&param.ty);
+                self.set_variable_with_type(&param.name.name, val, param_ty);
+            }
 
-        self.pop_scope();
+            // Execute the handler body, collecting signals.
+            let mut respond_value = Value::Nothing;
+            for stmt in &handler.body.stmts {
+                match self.exec_stmt_inner(stmt)? {
+                    Some(Signal::Respond(val)) => {
+                        respond_value = val;
+                        break;
+                    }
+                    Some(Signal::ResourceReturn(..) | Signal::ResourceDefault(..)) => {
+                        return Err(
+                            "actor Resource custody has no checked transport proof".to_string()
+                        );
+                    }
+                    Some(Signal::Return(..)) => break,
+                    Some(Signal::Break) | Some(Signal::Continue) => break,
+                    Some(Signal::Default(_)) => break,
+                    None => {}
+                }
+            }
+
+            // Collect updated state field values before popping scope.
+            let mut updated_state = state_snapshot;
+            for field in &actor_def.state_fields {
+                let name = &field.name.name;
+                // Check innermost scope(s) for the updated value.
+                if let Some(val) = self.scopes.last().and_then(|s| s.get(name)).cloned() {
+                    let field_ty = self.substitute_type_expr(&field.ty);
+                    let val = self.normalize_value_for_type(&field_ty, val)?;
+                    updated_state.insert(name.clone(), val);
+                }
+            }
+
+            Ok((respond_value, updated_state))
+        })();
+        while self.scopes.len() > scope_base {
+            self.pop_scope();
+        }
+        self.lexical_scope_floor = saved_floor;
+        let field_restore = self.restore_checked_field_body(saved_field_cursor);
+        let (mut respond_value, updated_state) = match (outcome, field_restore) {
+            (Err(error), _) | (_, Err(error)) => return Err(error),
+            (Ok(value), Ok(())) => value,
+        };
 
         // Write updated state back to the actor instance.
         if let Some(instance) = self.actor_instances.get_mut(&actor_id) {
@@ -3291,13 +5409,18 @@ impl Interpreter {
         }
     }
 
-    fn call_bitfield_builtin(&self, name: &str, args: &[Value]) -> Option<Result<Value, String>> {
-        let (source_bitfield_name, method_name) = name.rsplit_once('.')?;
+    fn call_bitfield_builtin(
+        &self,
+        intrinsic: IntrinsicId,
+        name: &str,
+        args: &[Value],
+    ) -> Option<Result<Value, String>> {
+        let (source_bitfield_name, _) = name.rsplit_once('.')?;
         let bitfield_name = self.registry_name(&self.bitfields, source_bitfield_name)?;
 
-        match method_name {
-            "to_bytes" => Some(self.bitfield_to_bytes(&bitfield_name, args)),
-            "from_bytes" => Some(self.bitfield_from_bytes(&bitfield_name, args)),
+        match intrinsic {
+            IntrinsicId::BitfieldToBytes => Some(self.bitfield_to_bytes(&bitfield_name, args)),
+            IntrinsicId::BitfieldFromBytes => Some(self.bitfield_from_bytes(&bitfield_name, args)),
             _ => None,
         }
     }
@@ -3348,7 +5471,13 @@ impl Interpreter {
         bitfield: &BitfieldDef,
         value: &Value,
     ) -> Result<Vec<u8>, String> {
-        let Value::Struct { type_name, fields } = value else {
+        let value = value.payload();
+        let Value::Struct {
+            concrete_type: _,
+            type_name,
+            fields,
+        } = value
+        else {
             return Err(format!(
                 "{}.to_bytes expects a {} value",
                 bitfield.name.name, bitfield.name.name
@@ -3507,6 +5636,7 @@ impl Interpreter {
         }
 
         Ok(Value::Struct {
+            concrete_type: None,
             type_name: bitfield.name.name.clone(),
             fields,
         })
@@ -3701,7 +5831,7 @@ impl Interpreter {
             ));
         }
 
-        let numeric = match value {
+        let numeric = match value.payload() {
             Value::Int64(int_value) if *int_value >= 0 => *int_value as u64,
             Value::Int64(int_value) => {
                 return Err(format!(
@@ -3763,11 +5893,12 @@ impl Interpreter {
     }
 
     fn value_to_byte_list(&self, value: &Value) -> Result<Vec<u8>, String> {
+        let value = value.payload();
         match value {
             Value::Bytes(bytes) => Ok(bytes.clone()),
             Value::List(items) => items
                 .iter()
-                .map(|item| match item {
+                .map(|item| match item.payload() {
                     Value::Int64(value) if (0..=255).contains(value) => Ok(*value as u8),
                     Value::Int64(value) => Err(format!("byte value out of range: {}", value)),
                     other => Err(format!("payload expects list[uint8], found {}", other)),
@@ -3843,55 +5974,106 @@ impl Interpreter {
         Some(value)
     }
 
+    #[cfg(test)]
     fn call_builtin_with_type_args(
         &mut self,
         name: &str,
         type_args: &[TypeExpr],
         args: &[Value],
     ) -> Option<Result<Value, String>> {
-        let is_typed_builtin = matches!(
-            name,
-            "type.name"
-                | "type.kind"
-                | "type.kind_tag"
-                | "type.primitive_tag"
-                | "type.has_secret"
-                | "type.info"
-                | "type.arg"
-                | "type.fields"
-                | "type.bitfield_layout"
-                | "type.bitfield_fields"
-                | "type.machine_layout"
-                | "type.machine_states"
-                | "type.machine_transitions"
-                | "type.machine_state_value"
-                | "type.variants"
-                | "type.variant_value"
-                | "type.field_value"
-                | "type.machine_field_value"
-                | "type.variant_field_value"
-                | "type.construct_start"
-                | "type.construct_variant_start"
-                | "type.construct_machine_start"
-                | "type.construct_put"
-                | "type.construct_finish"
-                | "json.parse"
-                | "json.parse_exact"
-                | "json.serialize"
-                | "json.serialize_public"
-        );
-        if !is_typed_builtin {
-            return None;
+        let resolved_type_args: Vec<_> = type_args
+            .iter()
+            .map(|ty| self.substitute_type_expr(ty))
+            .collect();
+        // Preserve metadata-free declaration lookup in its caller context.
+        // Only the checked AST path owns already-canonical field metadata.
+        self.call_builtin_with_resolved_type_args(name, &resolved_type_args, args, false)
+    }
+
+    /// Type arguments already name their selected caller-resolved owners.
+    fn call_builtin_with_type_args_from_source(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: &[Value],
+        checked_producer: bool,
+    ) -> Option<Result<Value, String>> {
+        let intrinsic = IntrinsicId::from_callable_name(name)?;
+        // JSON facades execute source bodies and keep their lexical imports.
+        // Reflection leaves consume canonical type names; caller aliases must
+        // not reinterpret the prefix of an already-selected owner.
+        // Metadata-free field readers still resolve declaration field spelling
+        // through their existing lexical lookup. This is distinct from the
+        // canonical type arguments used by pure metadata operations.
+        let lexical_field_lookup = matches!(
+            intrinsic,
+            IntrinsicId::TypeFieldValue
+                | IntrinsicId::TypeMachineFieldValue
+                | IntrinsicId::TypeVariantFieldValue
+        ) && (!checked_producer
+            || !self.allow_checked_refinement_proofs);
+        if lexical_field_lookup
+            || matches!(
+                intrinsic,
+                IntrinsicId::JsonParse
+                    | IntrinsicId::JsonParseExact
+                    | IntrinsicId::JsonSerialize
+                    | IntrinsicId::JsonSerializePublic
+            )
+        {
+            return self.call_builtin_with_resolved_type_args(
+                name,
+                type_args,
+                args,
+                checked_producer,
+            );
         }
-        let expected_type_arg_count = if matches!(
-            name,
-            "type.field_value" | "type.machine_field_value" | "type.variant_field_value"
-        ) {
-            2
-        } else if matches!(name, "type.construct_put") {
-            2
-        } else {
-            1
+        let blank_aliases = vec![HashMap::new(); self.namespace_alias_scopes.len()];
+        let saved_aliases = std::mem::replace(&mut self.namespace_alias_scopes, blank_aliases);
+        let result =
+            self.call_builtin_with_resolved_type_args(name, type_args, args, checked_producer);
+        self.namespace_alias_scopes = saved_aliases;
+        result
+    }
+
+    fn call_builtin_with_resolved_type_args(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: &[Value],
+        checked_producer: bool,
+    ) -> Option<Result<Value, String>> {
+        let intrinsic = IntrinsicId::from_callable_name(name)?;
+        let expected_type_arg_count = match intrinsic {
+            IntrinsicId::TypeFieldValue
+            | IntrinsicId::TypeMachineFieldValue
+            | IntrinsicId::TypeVariantFieldValue
+            | IntrinsicId::TypeConstructPut => 2,
+            IntrinsicId::TypeName
+            | IntrinsicId::TypeKind
+            | IntrinsicId::TypeKindTag
+            | IntrinsicId::TypePrimitiveTag
+            | IntrinsicId::TypeHasSecret
+            | IntrinsicId::TypeInfo
+            | IntrinsicId::TypeArg
+            | IntrinsicId::TypeFields
+            | IntrinsicId::TypeBitfieldLayout
+            | IntrinsicId::TypeBitfieldFields
+            | IntrinsicId::TypeMachineLayout
+            | IntrinsicId::TypeMachineStates
+            | IntrinsicId::TypeMachineTransitions
+            | IntrinsicId::TypeMachineStateValue
+            | IntrinsicId::TypeVariants
+            | IntrinsicId::TypeVariantValue
+            | IntrinsicId::TypeConstructStart
+            | IntrinsicId::TypeConstructVariantStart
+            | IntrinsicId::TypeConstructMachineStart
+            | IntrinsicId::TypeConstructFinish
+            | IntrinsicId::JsonParse
+            | IntrinsicId::JsonParseExact
+            | IntrinsicId::JsonSerialize
+            | IntrinsicId::JsonSerializePublic => 1,
+            non_type_arg_intrinsics!() => return None,
         };
         if type_args.len() != expected_type_arg_count {
             return Some(Err(format!(
@@ -3900,12 +6082,12 @@ impl Interpreter {
             )));
         }
 
-        let ty = self.substitute_type_expr(&type_args[0]);
+        let ty = type_args[0].clone();
         if let Some(error) = self.missing_checked_type_info_error(&ty) {
             return Some(Err(error));
         }
-        Some(match name {
-            "type.name" => {
+        Some(match intrinsic {
+            IntrinsicId::TypeName => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -3915,7 +6097,7 @@ impl Interpreter {
                         .unwrap_or_else(|| type_expr_display(&ty)),
                 ))
             }
-            "type.kind" => {
+            IntrinsicId::TypeKind => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -3925,7 +6107,7 @@ impl Interpreter {
                         .to_string(),
                 ))
             }
-            "type.kind_tag" => {
+            IntrinsicId::TypeKindTag => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -3934,7 +6116,7 @@ impl Interpreter {
                     .unwrap_or_else(|| self.type_expr_kind(&ty));
                 Ok(Self::type_kind_tag_value(kind))
             }
-            "type.primitive_tag" => {
+            IntrinsicId::TypePrimitiveTag => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -3943,7 +6125,7 @@ impl Interpreter {
                     .map(|info| Self::primitive_tag_value(info.primitive_tag.as_deref()))
                     .unwrap_or_else(|| self.type_primitive_tag_value(&ty)))
             }
-            "type.has_secret" => {
+            IntrinsicId::TypeHasSecret => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -3952,7 +6134,7 @@ impl Interpreter {
                         .unwrap_or_else(|| self.type_expr_has_secret(&ty)),
                 ))
             }
-            "type.info" => {
+            IntrinsicId::TypeInfo => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -3960,7 +6142,7 @@ impl Interpreter {
                     .checked_type_info_value(&ty)
                     .unwrap_or_else(|| self.type_info_value(&ty)))
             }
-            "type.arg" => {
+            IntrinsicId::TypeArg => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
@@ -3985,7 +6167,7 @@ impl Interpreter {
                 };
                 Ok(self.type_info_value(arg_ty))
             }
-            "type.construct_start" => {
+            IntrinsicId::TypeConstructStart => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -3996,32 +6178,32 @@ impl Interpreter {
                     fields: Vec::new(),
                 })
             }
-            "type.construct_variant_start" => {
+            IntrinsicId::TypeConstructVariantStart => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
                 self.reflected_construct_variant_start(&ty, &args[0])
             }
-            "type.construct_machine_start" => {
+            IntrinsicId::TypeConstructMachineStart => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
                 self.reflected_construct_machine_start(&ty, &args[0])
             }
-            "type.construct_put" => {
+            IntrinsicId::TypeConstructPut => {
                 if let Some(err) = check_args(name, 3, args) {
                     return Some(err);
                 }
-                let expected_field_ty = self.substitute_type_expr(&type_args[1]);
+                let expected_field_ty = type_args[1].clone();
                 self.reflected_construct_put(&ty, &expected_field_ty, &args[0], &args[1], &args[2])
             }
-            "type.construct_finish" => {
+            IntrinsicId::TypeConstructFinish => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
                 self.reflected_construct_finish(&ty, &args[0])
             }
-            "type.fields" => {
+            IntrinsicId::TypeFields => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -4044,7 +6226,7 @@ impl Interpreter {
                         .collect(),
                 ))
             }
-            "type.bitfield_layout" => {
+            IntrinsicId::TypeBitfieldLayout => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -4059,7 +6241,7 @@ impl Interpreter {
                 }
                 Ok(self.type_bitfield_value(self.type_expr_bitfield(&ty)))
             }
-            "type.bitfield_fields" => {
+            IntrinsicId::TypeBitfieldFields => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -4080,7 +6262,7 @@ impl Interpreter {
                         .collect(),
                 ))
             }
-            "type.machine_layout" => {
+            IntrinsicId::TypeMachineLayout => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -4095,7 +6277,7 @@ impl Interpreter {
                 }
                 Ok(self.type_machine_value(&type_expr_name(&ty), self.type_expr_machine(&ty)))
             }
-            "type.machine_states" => {
+            IntrinsicId::TypeMachineStates => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -4119,7 +6301,7 @@ impl Interpreter {
                         .collect(),
                 ))
             }
-            "type.machine_transitions" => {
+            IntrinsicId::TypeMachineTransitions => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -4143,13 +6325,13 @@ impl Interpreter {
                         .collect(),
                 ))
             }
-            "type.machine_state_value" => {
+            IntrinsicId::TypeMachineStateValue => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
                 self.reflected_machine_state_value(&args[0], &ty)
             }
-            "type.variants" => {
+            IntrinsicId::TypeVariants => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -4172,44 +6354,62 @@ impl Interpreter {
                         .collect(),
                 ))
             }
-            "type.variant_value" => {
+            IntrinsicId::TypeVariantValue => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
                 self.reflected_variant_value(&args[0], &ty)
             }
-            "type.field_value" => {
+            IntrinsicId::TypeFieldValue => {
                 if let Some(err) = check_args(name, 2, args) {
                     return Some(err);
                 }
-                let expected_field_ty = self.substitute_type_expr(&type_args[1]);
-                self.reflected_field_value(&args[0], &ty, &args[1], &expected_field_ty)
+                let expected_field_ty = type_args[1].clone();
+                self.reflected_field_value(
+                    &args[0],
+                    &ty,
+                    &args[1],
+                    &expected_field_ty,
+                    checked_producer,
+                )
             }
-            "type.machine_field_value" => {
+            IntrinsicId::TypeMachineFieldValue => {
                 if let Some(err) = check_args(name, 2, args) {
                     return Some(err);
                 }
-                let expected_field_ty = self.substitute_type_expr(&type_args[1]);
-                self.reflected_machine_field_value(&args[0], &ty, &args[1], &expected_field_ty)
+                let expected_field_ty = type_args[1].clone();
+                self.reflected_machine_field_value(
+                    &args[0],
+                    &ty,
+                    &args[1],
+                    &expected_field_ty,
+                    checked_producer,
+                )
             }
-            "type.variant_field_value" => {
+            IntrinsicId::TypeVariantFieldValue => {
                 if let Some(err) = check_args(name, 2, args) {
                     return Some(err);
                 }
-                let expected_field_ty = self.substitute_type_expr(&type_args[1]);
-                self.reflected_variant_field_value(&args[0], &ty, &args[1], &expected_field_ty)
+                let expected_field_ty = type_args[1].clone();
+                self.reflected_variant_field_value(
+                    &args[0],
+                    &ty,
+                    &args[1],
+                    &expected_field_ty,
+                    checked_producer,
+                )
             }
-            "json.parse" | "json.parse_exact" => {
+            IntrinsicId::JsonParse | IntrinsicId::JsonParseExact => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
                 self.call_trusted_json_public_bridge(name, type_args, args)
             }
-            "json.serialize" | "json.serialize_public" => {
+            IntrinsicId::JsonSerialize | IntrinsicId::JsonSerializePublic => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
-                if name == "json.serialize"
+                if intrinsic == IntrinsicId::JsonSerialize
                     && self
                         .checked_type_has_secret(&ty)
                         .unwrap_or_else(|| self.type_expr_has_secret(&ty))
@@ -4221,7 +6421,7 @@ impl Interpreter {
                 }
                 self.call_trusted_json_public_bridge(name, type_args, args)
             }
-            _ => return None,
+            non_type_arg_intrinsics!() => return None,
         })
     }
 
@@ -4254,6 +6454,71 @@ impl Interpreter {
             .find_map(|scope| scope.get(name).cloned())
     }
 
+    /// Installed arguments already have their lexical declaration identity.
+    /// Follow binding-name chains without resolving terminal names as source
+    /// spellings again. The cycle guard also bounds metadata-free API maps.
+    fn resolve_installed_type_expr(&self, ty: &TypeExpr) -> TypeExpr {
+        self.resolve_installed_type_expr_with_map(ty, &HashMap::new(), &mut HashSet::new())
+    }
+
+    fn resolve_installed_type_expr_with_map(
+        &self,
+        ty: &TypeExpr,
+        substitutions: &HashMap<String, TypeExpr>,
+        seen: &mut HashSet<String>,
+    ) -> TypeExpr {
+        match ty {
+            TypeExpr::Named(ident) => {
+                // This is a canonical value, so an exact registered terminal
+                // remains its selected type even if a caller binding uses the
+                // same name. Written source substitution resolves its binding
+                // before entering here and retains lexical priority.
+                if self.type_name_is_registered(&ident.name) {
+                    return ty.clone();
+                }
+                if let Some(bound) = substitutions
+                    .get(&ident.name)
+                    .cloned()
+                    .or_else(|| self.current_type_binding(&ident.name))
+                    && seen.insert(ident.name.clone())
+                {
+                    let resolved =
+                        self.resolve_installed_type_expr_with_map(&bound, substitutions, seen);
+                    seen.remove(&ident.name);
+                    resolved
+                } else {
+                    ty.clone()
+                }
+            }
+            TypeExpr::Generic(ident, args, span) => TypeExpr::Generic(
+                ident.clone(),
+                args.iter()
+                    .map(|arg| self.resolve_installed_type_expr_with_map(arg, substitutions, seen))
+                    .collect(),
+                *span,
+            ),
+            TypeExpr::View(inner, span) => TypeExpr::View(
+                Box::new(self.resolve_installed_type_expr_with_map(inner, substitutions, seen)),
+                *span,
+            ),
+            TypeExpr::StateQualified(inner, state, span) => TypeExpr::StateQualified(
+                Box::new(self.resolve_installed_type_expr_with_map(inner, substitutions, seen)),
+                state.clone(),
+                *span,
+            ),
+            TypeExpr::Function(params, result, span) => TypeExpr::Function(
+                params
+                    .iter()
+                    .map(|param| {
+                        self.resolve_installed_type_expr_with_map(param, substitutions, seen)
+                    })
+                    .collect(),
+                Box::new(self.resolve_installed_type_expr_with_map(result, substitutions, seen)),
+                *span,
+            ),
+        }
+    }
+
     fn substitute_type_expr(&self, ty: &TypeExpr) -> TypeExpr {
         self.substitute_type_expr_in_namespace(ty, self.current_namespace.as_deref())
     }
@@ -4266,7 +6531,7 @@ impl Interpreter {
         match ty {
             TypeExpr::Named(ident) => {
                 if let Some(bound) = self.current_type_binding(&ident.name) {
-                    self.substitute_type_expr_in_namespace(&bound, namespace)
+                    self.resolve_installed_type_expr(&bound)
                 } else {
                     TypeExpr::Named(self.expand_type_ident(ident, namespace))
                 }
@@ -4299,10 +6564,18 @@ impl Interpreter {
     }
 
     fn expand_type_ident(&self, ident: &Ident, namespace: Option<&str>) -> Ident {
-        let mut expanded = ident.clone();
         if let Some(name) = self.expand_namespace_alias_name(&ident.name) {
+            let mut expanded = ident.clone();
             expanded.name = name;
-        } else if !ident.name.contains('.') && !Self::is_builtin_type_name(&ident.name) {
+            expanded
+        } else {
+            self.qualify_declared_type_ident(ident, namespace)
+        }
+    }
+
+    fn qualify_declared_type_ident(&self, ident: &Ident, namespace: Option<&str>) -> Ident {
+        let mut expanded = ident.clone();
+        if !ident.name.contains('.') && !Self::is_builtin_type_name(&ident.name) {
             if let Some(namespace) = namespace {
                 let qualified = format!("{namespace}.{}", ident.name);
                 if self.type_name_is_registered(&qualified) {
@@ -4311,6 +6584,40 @@ impl Interpreter {
             }
         }
         expanded
+    }
+
+    /// Namespace-level alias bases are declaration templates, not references
+    /// to a validating caller's generic bindings or local namespace imports.
+    fn qualify_declared_type_expr(&self, ty: &TypeExpr, namespace: Option<&str>) -> TypeExpr {
+        match ty {
+            TypeExpr::Named(ident) => {
+                TypeExpr::Named(self.qualify_declared_type_ident(ident, namespace))
+            }
+            TypeExpr::Generic(ident, args, span) => TypeExpr::Generic(
+                self.qualify_declared_type_ident(ident, namespace),
+                args.iter()
+                    .map(|arg| self.qualify_declared_type_expr(arg, namespace))
+                    .collect(),
+                *span,
+            ),
+            TypeExpr::View(inner, span) => TypeExpr::View(
+                Box::new(self.qualify_declared_type_expr(inner, namespace)),
+                *span,
+            ),
+            TypeExpr::StateQualified(inner, state, span) => TypeExpr::StateQualified(
+                Box::new(self.qualify_declared_type_expr(inner, namespace)),
+                state.clone(),
+                *span,
+            ),
+            TypeExpr::Function(params, result, span) => TypeExpr::Function(
+                params
+                    .iter()
+                    .map(|param| self.qualify_declared_type_expr(param, namespace))
+                    .collect(),
+                Box::new(self.qualify_declared_type_expr(result, namespace)),
+                *span,
+            ),
+        }
     }
 
     fn is_builtin_type_name(name: &str) -> bool {
@@ -4336,24 +6643,13 @@ impl Interpreter {
 
     fn type_name_is_registered(&self, name: &str) -> bool {
         self.structs.contains_key(name)
+            || self.interfaces.contains(name)
             || self.bitfields.contains_key(name)
             || self.enums.contains_key(name)
             || self.type_alias_bases.contains_key(name)
             || self.type_aliases.contains_key(name)
             || self.machines.contains_key(name)
             || self.actor_defs.contains_key(name)
-    }
-
-    fn substitute_type_expr_with_map(
-        &self,
-        ty: &TypeExpr,
-        substitutions: &HashMap<String, TypeExpr>,
-    ) -> TypeExpr {
-        self.substitute_type_expr_with_map_in_namespace(
-            ty,
-            substitutions,
-            self.current_namespace.as_deref(),
-        )
     }
 
     fn substitute_type_expr_with_map_in_namespace(
@@ -4369,10 +6665,10 @@ impl Interpreter {
                     .cloned()
                     .or_else(|| self.current_type_binding(&ident.name))
                 {
-                    self.substitute_type_expr_with_map_in_namespace(
+                    self.resolve_installed_type_expr_with_map(
                         &bound,
                         substitutions,
-                        namespace,
+                        &mut HashSet::new(),
                     )
                 } else {
                     TypeExpr::Named(self.expand_type_ident(ident, namespace))
@@ -4487,24 +6783,7 @@ impl Interpreter {
     }
 
     fn type_kind_tag_value(kind: &str) -> Value {
-        let variant = match kind {
-            "primitive" => "primitive_type",
-            "alias" => "alias_type",
-            "refinement" => "refinement_type",
-            "struct" => "struct_type",
-            "bitfield" => "bitfield_type",
-            "enum" => "enum_type",
-            "list" => "list_type",
-            "set" => "set_type",
-            "map" => "map_type",
-            "optional" => "optional_type",
-            "result" => "result_type",
-            "secret" => "secret_type",
-            "function" => "function_type",
-            "machine" => "machine_type",
-            "machine_state" => "machine_state_type",
-            _ => "unknown_type",
-        };
+        let variant = ReflectionTypeInfo::kind_tag_variant(kind);
         Value::Enum {
             type_name: "TypeKind".to_string(),
             variant: variant.to_string(),
@@ -4962,6 +7241,7 @@ impl Interpreter {
             .map(|(index, transition)| Self::type_machine_transition_value(index, transition))
             .collect();
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeMachine".to_string(),
             fields: vec![
                 ("states".to_string(), Value::List(states)),
@@ -4990,6 +7270,7 @@ impl Interpreter {
             })
             .collect();
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeMachineState".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(index as i64)),
@@ -5009,6 +7290,7 @@ impl Interpreter {
         transition: ReflectionMachineTransition,
     ) -> Value {
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeMachineTransition".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(index as i64)),
@@ -5110,6 +7392,7 @@ impl Interpreter {
         let has_secret = self.type_expr_has_secret(&field.ty);
         let type_info = self.type_info_value(&field.ty);
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeField".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(index as i64)),
@@ -5139,7 +7422,7 @@ impl Interpreter {
     }
 
     fn reflected_field_loop_bindings(
-        &self,
+        &mut self,
         iterable: &Expr,
     ) -> Result<Option<Vec<ReflectedFieldBinding>>, String> {
         let Some(owner_ty) = comptime_type_fields_binding(iterable) else {
@@ -5166,7 +7449,7 @@ impl Interpreter {
         }
 
         Ok(Some(
-            self.type_expr_fields(&owner_ty)
+            self.with_resolved_type_aliases(|interpreter| interpreter.type_expr_fields(&owner_ty))
                 .into_iter()
                 .enumerate()
                 .map(|(index, field)| ReflectedFieldBinding {
@@ -5513,7 +7796,7 @@ impl Interpreter {
     }
 
     fn reflected_type_info_arg_loop_bindings(
-        &self,
+        &mut self,
         iterable: &Expr,
     ) -> Result<Option<Vec<ReflectedTypeInfoBinding>>, String> {
         let Some(source_ty) = reflected_type_info_args_source(iterable) else {
@@ -5534,13 +7817,14 @@ impl Interpreter {
                 ty
             }
         };
-        Ok(Some(
-            self.checked_type_info_arg_types(&ty)
-                .unwrap_or_else(|| self.type_info_arg_types(&ty))
+        Ok(Some(self.with_resolved_type_aliases(|interpreter| {
+            interpreter
+                .checked_type_info_arg_types(&ty)
+                .unwrap_or_else(|| interpreter.type_info_arg_types(&ty))
                 .into_iter()
                 .map(|ty| ReflectedTypeInfoBinding { ty })
-                .collect(),
-        ))
+                .collect()
+        })))
     }
 
     fn bound_reflected_field_type(&self, field_name: &str) -> Result<TypeExpr, String> {
@@ -5587,7 +7871,7 @@ impl Interpreter {
                 metadata.type_name
             ));
         }
-        Ok(Some(self.substitute_type_expr(&binding.ty)))
+        Ok(Some(binding.ty.clone()))
     }
 
     fn bound_reflected_type_info_type(&self, info_name: &str) -> Result<TypeExpr, String> {
@@ -5621,7 +7905,7 @@ impl Interpreter {
         if type_name != expected_type_name {
             return Err("`comptime type` reflected TypeInfo metadata no longer matches the trusted `args` loop item".to_string());
         }
-        Ok(Some(self.substitute_type_expr(&binding.ty)))
+        Ok(Some(binding.ty.clone()))
     }
 
     fn type_info_arg_types(&self, ty: &TypeExpr) -> Vec<TypeExpr> {
@@ -5634,7 +7918,12 @@ impl Interpreter {
             TypeExpr::Named(ident) if self.type_aliases.contains_key(&ident.name) => self
                 .type_alias_bases
                 .get(&ident.name)
-                .map(|base_ty| vec![self.substitute_type_expr(base_ty)])
+                .map(|base_ty| {
+                    vec![self.qualify_declared_type_expr(
+                        base_ty,
+                        Self::type_name_namespace(&ident.name),
+                    )]
+                })
                 .unwrap_or_default(),
             TypeExpr::Generic(_, args, _) => args
                 .iter()
@@ -5662,23 +7951,24 @@ impl Interpreter {
             return type_name.to_string();
         }
 
-        if let Some(base_ty) = self.type_alias_bases.get(type_name) {
+        let compared = if let Some(base_ty) = self.type_alias_bases.get(type_name) {
             let namespace =
                 Self::type_name_namespace(type_name).or(self.current_namespace.as_deref());
             let base_ty = self.substitute_type_expr_in_namespace(base_ty, namespace);
-            return self.reflection_compare_type_expr_inner(&base_ty, visited);
-        }
-
-        if let Some((owner, args)) = Self::split_generic_type_display(type_name) {
+            self.reflection_compare_type_expr_inner(&base_ty, visited)
+        } else if let Some((owner, args)) = Self::split_generic_type_display(type_name) {
             let owner = self.reflection_compare_type_name_inner(owner, visited);
             let args = Self::split_type_display_args(args)
                 .into_iter()
                 .map(|arg| self.reflection_compare_type_name_inner(arg.trim(), visited))
                 .collect::<Vec<_>>();
-            return format!("{owner}[{}]", args.join(", "));
-        }
-
-        type_name.to_string()
+            format!("{owner}[{}]", args.join(", "))
+        } else {
+            type_name.to_string()
+        };
+        // Only an active expansion is a cycle; sibling arguments are independent.
+        visited.remove(type_name);
+        compared
     }
 
     fn reflection_compare_type_expr(&self, ty: &TypeExpr) -> String {
@@ -5734,6 +8024,25 @@ impl Interpreter {
 
     fn reflection_type_name_matches_expr(&self, actual: &str, expected: &TypeExpr) -> bool {
         self.reflection_compare_type_name(actual) == self.reflection_compare_type_expr(expected)
+    }
+
+    fn split_function_type_display(type_name: &str) -> Option<(&str, &str)> {
+        let rest = type_name.strip_prefix("function(")?;
+        let mut depth = 1;
+        for (index, ch) in rest.char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let result = rest[index + 1..].strip_prefix(" returns ")?;
+                        return (!result.is_empty()).then_some((&rest[..index], result));
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     fn split_generic_type_display(type_name: &str) -> Option<(&str, &str)> {
@@ -5792,6 +8101,7 @@ impl Interpreter {
             .map(|(index, field)| self.type_bitfield_field_value(index, field))
             .collect();
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeBitfield".to_string(),
             fields: vec![
                 (
@@ -5810,6 +8120,7 @@ impl Interpreter {
             .map(|ty| Value::OptionalSome(Box::new(self.type_info_value(ty))))
             .unwrap_or(Value::OptionalNone);
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeBitfieldField".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(index as i64)),
@@ -5847,6 +8158,7 @@ impl Interpreter {
             .collect::<Vec<_>>();
 
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeVariant".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(index as i64)),
@@ -6015,6 +8327,14 @@ impl Interpreter {
     }
 
     fn checked_type_fields_value(&self, ty: &TypeExpr) -> Option<Value> {
+        if self
+            .reflection_metadata
+            .as_ref()?
+            .get_source_type_info(&type_expr_display(ty))
+            .is_some_and(|info| !matches!(info.kind.as_str(), "struct" | "bitfield"))
+        {
+            return Some(Value::List(Vec::new()));
+        }
         let fields = self.checked_type_fields(ty)?;
         let owner_type = type_expr_display(ty);
         Some(Value::List(
@@ -6025,12 +8345,14 @@ impl Interpreter {
         ))
     }
 
-    fn reflection_field_info_value(
+    /// Encode checked field metadata for reflection and native constant baking.
+    pub fn reflection_field_info_value(
         owner_type: &str,
         owner_member: Option<&str>,
         field: &ReflectionFieldInfo,
     ) -> Value {
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeField".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(field.index as i64)),
@@ -6109,6 +8431,7 @@ impl Interpreter {
             .map(Self::reflection_bitfield_field_info_value)
             .collect();
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeBitfield".to_string(),
             fields: vec![
                 (
@@ -6127,6 +8450,7 @@ impl Interpreter {
             .map(|info| Value::OptionalSome(Box::new(Self::reflection_type_info_value(info))))
             .unwrap_or(Value::OptionalNone);
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeBitfieldField".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(field.index as i64)),
@@ -6202,6 +8526,7 @@ impl Interpreter {
             .map(Self::reflection_machine_transition_info_value)
             .collect();
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeMachine".to_string(),
             fields: vec![
                 ("states".to_string(), Value::List(states)),
@@ -6210,7 +8535,8 @@ impl Interpreter {
         }
     }
 
-    fn reflection_machine_state_info_value(
+    /// Encode checked state metadata without evaluating source code.
+    pub fn reflection_machine_state_info_value(
         owner_type: &str,
         state: &ReflectionMachineStateInfo,
     ) -> Value {
@@ -6221,6 +8547,7 @@ impl Interpreter {
             .map(|field| Self::reflection_field_info_value(owner_type, Some(owner_member), field))
             .collect();
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeMachineState".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(state.index as i64)),
@@ -6239,6 +8566,7 @@ impl Interpreter {
         transition: &ReflectionMachineTransitionInfo,
     ) -> Value {
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeMachineTransition".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(transition.index as i64)),
@@ -6279,7 +8607,11 @@ impl Interpreter {
         ))
     }
 
-    fn reflection_variant_info_value(owner_type: &str, variant: &ReflectionVariantInfo) -> Value {
+    /// Encode checked variant metadata without evaluating source code.
+    pub fn reflection_variant_info_value(
+        owner_type: &str,
+        variant: &ReflectionVariantInfo,
+    ) -> Value {
         let owner_member = variant.name.as_str();
         let fields = variant
             .fields
@@ -6287,6 +8619,7 @@ impl Interpreter {
             .map(|field| Self::reflection_field_info_value(owner_type, Some(owner_member), field))
             .collect();
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeVariant".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(variant.index as i64)),
@@ -6312,6 +8645,7 @@ impl Interpreter {
             .map(Self::reflection_type_info_value)
             .collect();
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeInfo".to_string(),
             fields: vec![
                 (
@@ -6358,6 +8692,7 @@ impl Interpreter {
         };
 
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeInfo".to_string(),
             fields: vec![
                 (
@@ -6386,12 +8721,14 @@ impl Interpreter {
     }
 
     fn reflected_field_value(
-        &self,
+        &mut self,
         value: &Value,
         owner_ty: &TypeExpr,
         field_metadata: &Value,
         expected_field_ty: &TypeExpr,
+        checked_producer: bool,
     ) -> Result<Value, String> {
+        let value = value.payload();
         let metadata = Self::type_field_metadata_for(field_metadata, "type.field_value")?;
         let expected_owner = type_expr_display(owner_ty);
         Self::validate_field_metadata_owner(&metadata, &expected_owner, None, "type.field_value")?;
@@ -6460,24 +8797,35 @@ impl Interpreter {
         };
 
         let expected_type_name = type_expr_display(expected_field_ty);
-        if !self.reflection_type_name_matches_expr(&actual_type_name, expected_field_ty) {
+        if !self.reflection_type_name_matches_expr(&actual_type_name, expected_field_ty)
+            && !(checked_producer
+                && self.allow_checked_refinement_proofs
+                && self.has_checked_reflected_callable_plan(&actual_type_name, expected_field_ty))
+        {
             return Err(format!(
                 "type.field_value: field '{}' has type '{}', requested '{}'",
                 metadata.name, actual_type_name, expected_type_name
             ));
         }
 
-        match value {
+        let selected = match value {
             Value::Struct { fields, .. } => fields
                 .iter()
                 .find(|(name, _)| name == &field_name)
                 .map(|(_, field_value)| field_value.clone())
                 .ok_or_else(|| format!("type.field_value: value is missing field '{field_name}'")),
             other => Err(format!(
-                "type.field_value: expected struct value for '{}', got {other}",
-                type_expr_display(owner_ty)
+                "type.field_value: expected struct value for '{}', got {}",
+                type_expr_display(owner_ty),
+                self.format_debug_value(other, Some(owner_ty))
             )),
-        }
+        }?;
+        self.establish_reflected_field_refinement(
+            selected,
+            expected_field_ty,
+            &actual_type_name,
+            checked_producer,
+        )
     }
 
     fn reflected_machine_state_value(
@@ -6485,13 +8833,15 @@ impl Interpreter {
         value: &Value,
         owner_ty: &TypeExpr,
     ) -> Result<Value, String> {
+        let value = value.payload();
         let Value::Machine {
             type_name, state, ..
         } = value
         else {
             return Err(format!(
-                "type.machine_state_value: expected machine value for '{}', got {value}",
-                type_expr_display(owner_ty)
+                "type.machine_state_value: expected machine value for '{}', got {}",
+                type_expr_display(owner_ty),
+                self.format_debug_value(value, Some(owner_ty))
             ));
         };
 
@@ -6547,12 +8897,14 @@ impl Interpreter {
     }
 
     fn reflected_machine_field_value(
-        &self,
+        &mut self,
         value: &Value,
         owner_ty: &TypeExpr,
         field_metadata: &Value,
         expected_field_ty: &TypeExpr,
+        checked_producer: bool,
     ) -> Result<Value, String> {
+        let value = value.payload();
         let metadata = Self::type_field_metadata_for(field_metadata, "type.machine_field_value")?;
         let Value::Machine {
             type_name,
@@ -6561,8 +8913,9 @@ impl Interpreter {
         } = value
         else {
             return Err(format!(
-                "type.machine_field_value: expected machine value for '{}', got {value}",
-                type_expr_display(owner_ty)
+                "type.machine_field_value: expected machine value for '{}', got {}",
+                type_expr_display(owner_ty),
+                self.format_debug_value(value, Some(owner_ty))
             ));
         };
 
@@ -6667,19 +9020,27 @@ impl Interpreter {
             ));
         }
 
-        fields.get(metadata.index).cloned().ok_or_else(|| {
+        let selected = fields.get(metadata.index).cloned().ok_or_else(|| {
             format!("type.machine_field_value: value is missing payload field '{field_name}'")
-        })
+        })?;
+        self.establish_reflected_field_refinement(
+            selected,
+            expected_field_ty,
+            &actual_type_name,
+            checked_producer,
+        )
     }
 
     fn reflected_variant_value(&self, value: &Value, owner_ty: &TypeExpr) -> Result<Value, String> {
+        let value = value.payload();
         let Value::Enum {
             type_name, variant, ..
         } = value
         else {
             return Err(format!(
-                "type.variant_value: expected enum value for '{}', got {value}",
-                type_expr_display(owner_ty)
+                "type.variant_value: expected enum value for '{}', got {}",
+                type_expr_display(owner_ty),
+                self.format_debug_value(value, Some(owner_ty))
             ));
         };
 
@@ -6724,12 +9085,14 @@ impl Interpreter {
     }
 
     fn reflected_variant_field_value(
-        &self,
+        &mut self,
         value: &Value,
         owner_ty: &TypeExpr,
         field_metadata: &Value,
         expected_field_ty: &TypeExpr,
+        checked_producer: bool,
     ) -> Result<Value, String> {
+        let value = value.payload();
         let metadata = Self::type_field_metadata_for(field_metadata, "type.variant_field_value")?;
         let Value::Enum {
             type_name,
@@ -6738,8 +9101,9 @@ impl Interpreter {
         } = value
         else {
             return Err(format!(
-                "type.variant_field_value: expected enum value for '{}', got {value}",
-                type_expr_display(owner_ty)
+                "type.variant_field_value: expected enum value for '{}', got {}",
+                type_expr_display(owner_ty),
+                self.format_debug_value(value, Some(owner_ty))
             ));
         };
 
@@ -6797,12 +9161,19 @@ impl Interpreter {
                 ));
             }
 
-            return fields.get(metadata.index).cloned().ok_or_else(|| {
+            let selected = fields.get(metadata.index).cloned().ok_or_else(|| {
                 format!(
                     "type.variant_field_value: value is missing payload field '{}'",
                     field.name
                 )
-            });
+            })?;
+            let actual_type_name = field.type_name.clone();
+            return self.establish_reflected_field_refinement(
+                selected,
+                expected_field_ty,
+                &actual_type_name,
+                checked_producer,
+            );
         }
 
         if self.checked_metadata_kind_is(owner_ty, &["enum"]) {
@@ -6849,12 +9220,345 @@ impl Interpreter {
             ));
         }
 
-        fields.get(metadata.index).cloned().ok_or_else(|| {
+        let selected = fields.get(metadata.index).cloned().ok_or_else(|| {
             format!(
                 "type.variant_field_value: value is missing payload field '{}'",
                 field.name
             )
-        })
+        })?;
+        self.establish_reflected_field_refinement(
+            selected,
+            expected_field_ty,
+            &actual_type_name,
+            checked_producer,
+        )
+    }
+
+    /// Reflection's existing requested-type compatibility can erase refinement
+    /// identities. A requested refinement therefore needs its remaining checks
+    /// before its declared result becomes reusable proof in checked source.
+    fn establish_reflected_field_refinement(
+        &mut self,
+        mut value: Value,
+        requested: &TypeExpr,
+        actual_type_name: &str,
+        checked_producer: bool,
+    ) -> Result<Value, String> {
+        if !checked_producer || !self.allow_checked_refinement_proofs {
+            return Ok(value);
+        }
+        let requested = self.concrete_resolved_type_expr(requested, &mut HashSet::new());
+        if !self.producer_type_has_refinement(&requested) {
+            return Ok(value);
+        }
+        if matches!(requested, TypeExpr::Function(..)) {
+            // New callable result proof is lazy; retain its original descriptor.
+            return self.prepare_reflected_callable(value, &requested, actual_type_name);
+        }
+        let actual = Self::simple_type_expr_from_name(actual_type_name, requested.span())
+            .map(|actual| self.concrete_resolved_type_expr(&actual, &mut HashSet::new()));
+        if matches!(&requested, TypeExpr::Named(_)) {
+            if let Some(actual) = &actual {
+                if let Some(proven_prefix) =
+                    self.producer_declared_refinement_proof(actual, &requested)
+                {
+                    // The actual declared root chain establishes this exact
+                    // requested prefix. Normalize and retain its result identity
+                    // without evaluating that already established predicate.
+                    return self.normalize_and_validate_value_from_source(
+                        &requested,
+                        value,
+                        Some(&proven_prefix),
+                    );
+                }
+            }
+        }
+        let mut checks = Vec::new();
+        self.plan_produced_refinements(
+            &requested,
+            actual.as_ref(),
+            &value,
+            &mut Vec::new(),
+            &mut checks,
+        )?;
+        // Finish structural preflight before any predicate can execute. The
+        // plan follows occupied arms and collection order; it never joins.
+        for check in checks {
+            let slot = Self::produced_value_slot(&mut value, &check.path).ok_or_else(|| {
+                "reflected field refinement: checked payload shape changed during validation"
+                    .to_string()
+            })?;
+            *slot = self.normalize_and_validate_value_from_source(
+                &check.requested,
+                slot.clone(),
+                check.source.as_deref(),
+            )?;
+        }
+        Ok(value)
+    }
+
+    fn producer_type_has_refinement(&self, ty: &TypeExpr) -> bool {
+        match ty {
+            TypeExpr::Named(name) => self.type_name_has_refinement(&name.name),
+            TypeExpr::Generic(_, args, _) => {
+                args.iter().any(|ty| self.producer_type_has_refinement(ty))
+            }
+            TypeExpr::View(inner, _) | TypeExpr::StateQualified(inner, _, _) => {
+                self.producer_type_has_refinement(inner)
+            }
+            TypeExpr::Function(params, result, _) => params
+                .iter()
+                .chain(std::iter::once(result.as_ref()))
+                .any(|ty| self.producer_type_has_refinement(ty)),
+        }
+    }
+
+    fn producer_refinement_base(&self, name: &str) -> Option<TypeExpr> {
+        let base = self.type_alias_bases.get(name)?;
+        // Refinement declarations have no caller type parameters. Resolve the
+        // stored spelling in its declaration, using the existing declaration-
+        // only resolver rather than the caller's generic bindings.
+        Some(self.struct_field_type(base, &HashMap::new(), Self::type_name_namespace(name)))
+    }
+
+    /// Recover an established prefix only from the actual declared root
+    /// refinement chain. Outer qualifiers and nominal child fields are not
+    /// root proofs, and runtime value labels never enter this lookup.
+    fn producer_declared_refinement_proof(
+        &self,
+        actual: &TypeExpr,
+        requested: &TypeExpr,
+    ) -> Option<String> {
+        let TypeExpr::Named(requested) = requested else {
+            return None;
+        };
+        // Both owners were made canonical by the producer's declaration-only
+        // resolver. Do not reinterpret them through a caller namespace alias.
+        if !self
+            .type_aliases
+            .get(&requested.name)
+            .is_some_and(Option::is_some)
+        {
+            return None;
+        }
+        let mut actual = actual.clone();
+        let mut visited = HashSet::new();
+        while let TypeExpr::Named(name) = &actual {
+            if name.name == requested.name {
+                return Some(name.name.clone());
+            }
+            if !visited.insert(name.name.clone())
+                || !self
+                    .type_aliases
+                    .get(&name.name)
+                    .is_some_and(Option::is_some)
+            {
+                return None;
+            }
+            let base = self.producer_refinement_base(&name.name)?;
+            actual = self.concrete_resolved_type_expr(&base, &mut HashSet::new());
+        }
+        None
+    }
+
+    fn producer_schema_carrier(&self, ty: &TypeExpr) -> TypeExpr {
+        let mut ty = self.concrete_resolved_type_expr(ty, &mut HashSet::new());
+        let mut visited = HashSet::new();
+        while let TypeExpr::Named(name) = &ty {
+            if !visited.insert(name.name.clone()) {
+                break;
+            }
+            let Some(base) = self.producer_refinement_base(&name.name) else {
+                break;
+            };
+            ty = self.concrete_resolved_type_expr(&base, &mut HashSet::new());
+        }
+        ty
+    }
+
+    fn plan_produced_refinements(
+        &self,
+        requested: &TypeExpr,
+        actual: Option<&TypeExpr>,
+        value: &Value,
+        path: &mut Vec<ProducedValueStep>,
+        checks: &mut Vec<ProducedRefinementCheck>,
+    ) -> Result<(), String> {
+        let requested = self.concrete_resolved_type_expr(requested, &mut HashSet::new());
+        let actual = actual.map(|ty| self.concrete_resolved_type_expr(ty, &mut HashSet::new()));
+        if actual.as_ref().is_some_and(|actual| {
+            type_expr_display(actual) == type_expr_display(&requested)
+                || self
+                    .producer_declared_refinement_proof(actual, &requested)
+                    .is_some()
+        }) || !self.producer_type_has_refinement(&requested)
+        {
+            return Ok(());
+        }
+        if let TypeExpr::Named(name) = &requested {
+            let Some(base) = self.producer_refinement_base(&name.name) else {
+                return Ok(());
+            };
+            self.plan_produced_refinements(&base, actual.as_ref(), value, path, checks)?;
+            checks.push(ProducedRefinementCheck {
+                path: path.clone(),
+                requested,
+                // The base was either already established by the actual schema
+                // or established by an earlier check in this private plan.
+                source: Some(self.resolved_concrete_type_display(&base)),
+            });
+            return Ok(());
+        }
+        if let TypeExpr::View(inner, _) = &requested {
+            let actual = actual.as_ref().map(|ty| match ty {
+                TypeExpr::View(inner, _) => inner.as_ref(),
+                ty => ty,
+            });
+            return self.plan_produced_refinements(inner, actual, value, path, checks);
+        }
+        let TypeExpr::Generic(owner, requested_args, _) = &requested else {
+            return Err(
+                "reflected field refinement: unsupported callable or nominal refinement conversion"
+                    .into(),
+            );
+        };
+        if owner.name == "secret" {
+            return Err(
+                "reflected field refinement: cannot establish new invariants beneath secret".into(),
+            );
+        }
+        let expected_arity = match owner.name.as_str() {
+            "list" | "set" | "optional" => 1,
+            "map" | "result" => 2,
+            _ => return Err(
+                "reflected field refinement: unsupported callable or nominal refinement conversion"
+                    .into(),
+            ),
+        };
+        if requested_args.len() != expected_arity {
+            return Err("reflected field refinement: unsupported requested wrapper shape".into());
+        }
+        let actual_carrier = actual.as_ref().map(|ty| self.producer_schema_carrier(ty));
+        let actual_args = match &actual_carrier {
+            Some(TypeExpr::Generic(actual_owner, args, _))
+                if actual_owner.name == owner.name && args.len() == expected_arity =>
+            {
+                Some(args.as_slice())
+            }
+            _ => None,
+        };
+        if let Value::Typed { value, .. } = value {
+            path.push(ProducedValueStep::Typed);
+            let result =
+                self.plan_produced_refinements(&requested, actual.as_ref(), value, path, checks);
+            path.pop();
+            return result;
+        }
+        let child_actual = |index| actual_args.and_then(|args| args.get(index));
+        match (owner.name.as_str(), value) {
+            ("list", Value::List(items)) | ("set", Value::Set(items)) => {
+                for (index, item) in items.iter().enumerate() {
+                    path.push(ProducedValueStep::Sequence(index));
+                    self.plan_produced_refinements(
+                        &requested_args[0],
+                        child_actual(0),
+                        item,
+                        path,
+                        checks,
+                    )?;
+                    path.pop();
+                }
+            }
+            ("map", Value::Map(items)) => {
+                for (index, (key, value)) in items.iter().enumerate() {
+                    path.push(ProducedValueStep::MapKey(index));
+                    self.plan_produced_refinements(
+                        &requested_args[0],
+                        child_actual(0),
+                        key,
+                        path,
+                        checks,
+                    )?;
+                    path.pop();
+                    path.push(ProducedValueStep::MapValue(index));
+                    self.plan_produced_refinements(
+                        &requested_args[1],
+                        child_actual(1),
+                        value,
+                        path,
+                        checks,
+                    )?;
+                    path.pop();
+                }
+            }
+            ("optional", Value::OptionalNone) => {}
+            ("optional", Value::OptionalSome(inner)) => {
+                path.push(ProducedValueStep::Some);
+                self.plan_produced_refinements(
+                    &requested_args[0],
+                    child_actual(0),
+                    inner,
+                    path,
+                    checks,
+                )?;
+                path.pop();
+            }
+            ("result", Value::ResultOk(inner)) => {
+                path.push(ProducedValueStep::Ok);
+                self.plan_produced_refinements(
+                    &requested_args[0],
+                    child_actual(0),
+                    inner,
+                    path,
+                    checks,
+                )?;
+                path.pop();
+            }
+            ("result", Value::ResultFail(inner)) => {
+                path.push(ProducedValueStep::Fail);
+                self.plan_produced_refinements(
+                    &requested_args[1],
+                    child_actual(1),
+                    inner,
+                    path,
+                    checks,
+                )?;
+                path.pop();
+            }
+            // Pending owners are not joined or inspected to prove children.
+            _ => {
+                return Err(format!(
+                    "reflected field refinement: expected a ready {} value",
+                    owner.name
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn produced_value_slot<'a>(
+        mut value: &'a mut Value,
+        path: &[ProducedValueStep],
+    ) -> Option<&'a mut Value> {
+        for step in path {
+            value = match (step, value) {
+                (ProducedValueStep::Typed, Value::Typed { value, .. }) => value.as_mut(),
+                (ProducedValueStep::Sequence(index), Value::List(items) | Value::Set(items)) => {
+                    items.get_mut(*index)?
+                }
+                (ProducedValueStep::MapKey(index), Value::Map(items)) => {
+                    &mut items.get_mut(*index)?.0
+                }
+                (ProducedValueStep::MapValue(index), Value::Map(items)) => {
+                    &mut items.get_mut(*index)?.1
+                }
+                (ProducedValueStep::Some, Value::OptionalSome(inner))
+                | (ProducedValueStep::Ok, Value::ResultOk(inner))
+                | (ProducedValueStep::Fail, Value::ResultFail(inner)) => inner.as_mut(),
+                _ => return None,
+            };
+        }
+        Some(value)
     }
 
     fn reflected_construct_put(
@@ -6870,10 +9574,11 @@ impl Interpreter {
             variant,
             state,
             fields: existing_fields,
-        } = builder
+        } = builder.payload()
         else {
             return Err(format!(
-                "type.construct_put: first argument must be TypeConstruction, got {builder}"
+                "type.construct_put: first argument must be TypeConstruction, got {}",
+                self.format_debug_value(builder, None)
             ));
         };
 
@@ -7440,10 +10145,11 @@ impl Interpreter {
             variant,
             state,
             fields,
-        } = builder
+        } = builder.payload()
         else {
             return Err(format!(
-                "type.construct_finish: first argument must be TypeConstruction, got {builder}"
+                "type.construct_finish: first argument must be TypeConstruction, got {}",
+                self.format_debug_value(builder, None)
             ));
         };
 
@@ -7561,18 +10267,15 @@ impl Interpreter {
             };
 
             let field_ty = self.substitute_type_expr(&field.ty);
-            let type_name = type_expr_name(&field_ty);
-            let value = match self.normalize_value_for_type(&field_ty, value.clone()) {
+            let value = match self.normalize_and_validate_value(&field_ty, value.clone()) {
                 Ok(value) => value,
                 Err(message) => return Ok(result_fail(message)),
             };
-            if let Err(message) = self.check_refinement(&type_name, &value) {
-                return Ok(result_fail(message));
-            }
             struct_fields.push((field.name.clone(), value));
         }
 
         Ok(result_ok(Value::Struct {
+            concrete_type: Some(self.concrete_type_display(owner_ty)),
             type_name: type_expr_name(owner_ty),
             fields: struct_fields,
         }))
@@ -7609,6 +10312,7 @@ impl Interpreter {
         }
 
         Ok(result_ok(Value::Struct {
+            concrete_type: Some(self.concrete_type_display(owner_ty)),
             type_name: type_expr_name(owner_ty),
             fields: struct_fields,
         }))
@@ -7702,14 +10406,10 @@ impl Interpreter {
             };
 
             let field_ty = self.substitute_type_expr(&field.ty);
-            let type_name = type_expr_name(&field_ty);
-            let value = match self.normalize_value_for_type(&field_ty, value.clone()) {
+            let value = match self.normalize_and_validate_value(&field_ty, value.clone()) {
                 Ok(value) => value,
                 Err(message) => return Ok(result_fail(message)),
             };
-            if let Err(message) = self.check_refinement(&type_name, &value) {
-                return Ok(result_fail(message));
-            }
             enum_fields.push(value);
         }
 
@@ -7818,14 +10518,10 @@ impl Interpreter {
             };
 
             let field_ty = self.substitute_type_expr(&field.ty);
-            let type_name = type_expr_name(&field_ty);
-            let value = match self.normalize_value_for_type(&field_ty, value.clone()) {
+            let value = match self.normalize_and_validate_value(&field_ty, value.clone()) {
                 Ok(value) => value,
                 Err(message) => return Ok(result_fail(message)),
             };
-            if let Err(message) = self.check_refinement(&type_name, &value) {
-                return Ok(result_fail(message));
-            }
             machine_fields.push(value);
         }
 
@@ -7885,6 +10581,7 @@ impl Interpreter {
             }
 
             return Ok(result_ok(Value::Struct {
+                concrete_type: None,
                 type_name: bitfield_name,
                 fields: bitfield_fields,
             }));
@@ -7947,6 +10644,7 @@ impl Interpreter {
         }
 
         Ok(result_ok(Value::Struct {
+            concrete_type: None,
             type_name: bitfield_name,
             fields: bitfield_fields,
         }))
@@ -7960,7 +10658,12 @@ impl Interpreter {
         value: &Value,
         caller: &str,
     ) -> Result<(usize, String, String, i64), String> {
-        let Value::Struct { type_name, fields } = value else {
+        let Value::Struct {
+            concrete_type: _,
+            type_name,
+            fields,
+        } = value
+        else {
             return Err(format!(
                 "{caller}: argument must be TypeVariant, got {value}"
             ));
@@ -8019,7 +10722,12 @@ impl Interpreter {
         value: &Value,
         caller: &str,
     ) -> Result<Vec<TypeFieldMetadata>, String> {
-        let Value::Struct { type_name, fields } = value else {
+        let Value::Struct {
+            concrete_type: _,
+            type_name,
+            fields,
+        } = value
+        else {
             return Err(format!(
                 "{caller}: argument must be TypeVariant, got {value}"
             ));
@@ -8050,7 +10758,12 @@ impl Interpreter {
         value: &Value,
         caller: &str,
     ) -> Result<(usize, String, String), String> {
-        let Value::Struct { type_name, fields } = value else {
+        let Value::Struct {
+            concrete_type: _,
+            type_name,
+            fields,
+        } = value
+        else {
             return Err(format!(
                 "{caller}: argument must be TypeMachineState, got {value}"
             ));
@@ -8101,7 +10814,12 @@ impl Interpreter {
         value: &Value,
         caller: &str,
     ) -> Result<Vec<TypeFieldMetadata>, String> {
-        let Value::Struct { type_name, fields } = value else {
+        let Value::Struct {
+            concrete_type: _,
+            type_name,
+            fields,
+        } = value
+        else {
             return Err(format!(
                 "{caller}: argument must be TypeMachineState, got {value}"
             ));
@@ -8129,7 +10847,12 @@ impl Interpreter {
     }
 
     fn type_field_metadata_for(value: &Value, caller: &str) -> Result<TypeFieldMetadata, String> {
-        let Value::Struct { type_name, fields } = value else {
+        let Value::Struct {
+            concrete_type: _,
+            type_name,
+            fields,
+        } = value
+        else {
             return Err(format!(
                 "{caller}: second argument must be TypeField, got {value}"
             ));
@@ -8235,8 +10958,55 @@ impl Interpreter {
         ))
     }
 
+    fn reflection_info_from_value(value: &Value) -> Result<ReflectionTypeInfo, String> {
+        let type_name = Self::type_info_metadata(value)?;
+        let Value::Struct { fields, .. } = value else {
+            unreachable!()
+        };
+        let field = |name: &str| {
+            fields
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value)
+                .ok_or_else(|| format!("TypeInfo is missing '{name}'"))
+        };
+        let Value::String(kind) = field("kind")? else {
+            return Err("TypeInfo.kind must be string".into());
+        };
+        let Value::Bool(has_secret) = field("has_secret")? else {
+            return Err("TypeInfo.has_secret must be bool".into());
+        };
+        let Value::List(args) = field("args")? else {
+            return Err("TypeInfo.args must be a list".into());
+        };
+        let primitive_tag = match field("primitive_tag")? {
+            Value::OptionalNone => None,
+            Value::OptionalSome(value) => match value.as_ref() {
+                Value::Enum {
+                    type_name, variant, ..
+                } if type_name == "TypePrimitive" => Some(variant.clone()),
+                _ => return Err("TypeInfo.primitive_tag must contain TypePrimitive".into()),
+            },
+            _ => return Err("TypeInfo.primitive_tag must be optional".into()),
+        };
+        Ok(ReflectionTypeInfo::new(
+            type_name,
+            kind,
+            primitive_tag,
+            *has_secret,
+            args.iter()
+                .map(Self::reflection_info_from_value)
+                .collect::<Result<_, _>>()?,
+        ))
+    }
+
     fn type_info_metadata(value: &Value) -> Result<String, String> {
-        let Value::Struct { type_name, fields } = value else {
+        let Value::Struct {
+            concrete_type: _,
+            type_name,
+            fields,
+        } = value
+        else {
             return Err(format!("expected TypeInfo, got {value}"));
         };
         if type_name != "TypeInfo" {
@@ -8295,53 +11065,21 @@ impl Interpreter {
         let Some(provider) = self.random_provider.as_mut() else {
             return Err("Random: entropy unavailable".to_string());
         };
-        match provider {
-            RandomProvider::Production(rng) => {
-                Ok(unbiased_bounded_offset(width, || rng.next_u64()))
-            }
-            RandomProvider::Scripted(samples) => match samples.front().copied() {
-                None => Err("Random: test provider exhausted".to_string()),
-                Some(RandomTestSample::Bounded(offset)) if offset < width => {
-                    samples.pop_front();
-                    Ok(offset)
-                }
-                Some(_) => Err("Random: invalid test sample".to_string()),
-            },
-        }
+        provider.bounded_offset(width).map_err(str::to_owned)
     }
 
     fn random_unit53(&mut self) -> Result<u64, String> {
         let Some(provider) = self.random_provider.as_mut() else {
             return Err("Random: entropy unavailable".to_string());
         };
-        match provider {
-            RandomProvider::Production(rng) => Ok(rng.next_u64() >> 11),
-            RandomProvider::Scripted(samples) => match samples.front().copied() {
-                None => Err("Random: test provider exhausted".to_string()),
-                Some(RandomTestSample::Unit53(bits)) if bits < (1_u64 << 53) => {
-                    samples.pop_front();
-                    Ok(bits)
-                }
-                Some(_) => Err("Random: invalid test sample".to_string()),
-            },
-        }
+        provider.unit53().map_err(str::to_owned)
     }
 
     fn random_boolean(&mut self) -> Result<bool, String> {
         let Some(provider) = self.random_provider.as_mut() else {
             return Err("Random: entropy unavailable".to_string());
         };
-        match provider {
-            RandomProvider::Production(rng) => Ok(rng.next_u32() & 1 == 1),
-            RandomProvider::Scripted(samples) => match samples.front().copied() {
-                None => Err("Random: test provider exhausted".to_string()),
-                Some(RandomTestSample::Boolean(value)) => {
-                    samples.pop_front();
-                    Ok(value)
-                }
-                Some(_) => Err("Random: invalid test sample".to_string()),
-            },
-        }
+        provider.boolean().map_err(str::to_owned)
     }
 
     fn clock_now_milliseconds(&mut self) -> Result<i64, String> {
@@ -8360,27 +11098,32 @@ impl Interpreter {
                     unix_seconds,
                     subsecond_nanoseconds,
                 }) => {
-                    checked_clock_milliseconds(unix_seconds, subsecond_nanoseconds)?;
+                    checked_clock_milliseconds(unix_seconds, subsecond_nanoseconds)
+                        .map_err(str::to_owned)?;
                     samples.pop_front();
                     (unix_seconds, subsecond_nanoseconds)
                 }
             },
         };
-        checked_clock_milliseconds(seconds, nanoseconds)
+        checked_clock_milliseconds(seconds, nanoseconds).map_err(str::to_owned)
     }
 
     fn call_builtin(&mut self, name: &str, args: &[Value]) -> Option<Result<Value, String>> {
-        if let Some(result) = self.call_bitfield_builtin(name, args) {
-            return Some(result);
+        let intrinsic = IntrinsicId::from_callable_name(name)?;
+        if matches!(
+            intrinsic,
+            IntrinsicId::BitfieldFromBytes | IntrinsicId::BitfieldToBytes
+        ) {
+            return self.call_bitfield_builtin(intrinsic, name, args);
         }
 
-        match name {
+        match intrinsic {
             // =================================================================
             // COMPILER PRIMITIVES
             // =================================================================
 
             // -- I/O (capability-simulated) -----------------------------------
-            "Stdout.write" => {
+            IntrinsicId::StdoutWrite => {
                 // Stdout.write(stdout, message) — ignore capability, print message
                 if args.len() < 2 {
                     return Some(Err(format!(
@@ -8394,14 +11137,14 @@ impl Interpreter {
             }
 
             // -- Secret-safe operations --------------------------------------
-            "secret.redact" => {
+            IntrinsicId::SecretRedact => {
                 require_args!(name, 1, args);
                 Some(Ok(Value::String("***".to_string())))
             }
 
-            "secret.compare" => {
+            IntrinsicId::SecretCompare => {
                 require_args!(name, 2, args);
-                let equal = match (&args[0], &args[1]) {
+                let equal = match (args[0].payload(), args[1].payload()) {
                     (Value::String(lhs), Value::String(rhs)) => {
                         constant_time_secret_bytes_equal(lhs.as_bytes(), rhs.as_bytes())
                     }
@@ -8418,9 +11161,9 @@ impl Interpreter {
             }
 
             // -- Random operations (stdlib/random.jett) -----------------------
-            "random.__bounded" if self.current_function_trusted_stdlib => {
+            IntrinsicId::RandomBounded if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
-                match (&args[0], &args[1], &args[2]) {
+                match (args[0].payload(), args[1].payload(), args[2].payload()) {
                     (Value::Nothing, Value::Int64(lower), Value::Int64(upper)) => {
                         if lower >= upper {
                             return Some(Err(
@@ -8441,7 +11184,7 @@ impl Interpreter {
                 }
             }
 
-            "random.__unit_float64" if self.current_function_trusted_stdlib => {
+            IntrinsicId::RandomUnitFloat64 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 if !matches!(args[0], Value::Nothing) {
                     return Some(Err(format!("{name} expects Random")));
@@ -8452,7 +11195,7 @@ impl Interpreter {
                 }
             }
 
-            "random.__bool" if self.current_function_trusted_stdlib => {
+            IntrinsicId::RandomBool if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 if !matches!(args[0], Value::Nothing) {
                     return Some(Err(format!("{name} expects Random")));
@@ -8464,41 +11207,41 @@ impl Interpreter {
             }
 
             // -- Private string kernels (stdlib/string.jett) ------------------
-            "string.__char_count" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringCharCount if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::Int64(string_grapheme_count(s) as i64))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
 
-            "string.__trim" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringTrim if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::String(s.trim().to_string()))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
 
-            "string.__upper" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringUpper if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::String(s.to_uppercase()))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
 
-            "string.__lower" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringLower if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::String(s.to_lowercase()))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
 
-            "string.__replace" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringReplace if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
-                match (&args[0], &args[1], &args[2]) {
+                match (args[0].payload(), args[1].payload(), args[2].payload()) {
                     (Value::String(s), Value::String(from), Value::String(to)) => {
                         let replaced = string_split_grapheme_matches(s, from).join(to);
                         Some(Ok(Value::String(replaced)))
@@ -8507,9 +11250,9 @@ impl Interpreter {
                 }
             }
 
-            "string.__split" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringSplit if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::String(s), Value::String(delim)) => {
                         let parts: Vec<Value> = string_split_grapheme_matches(s, delim)
                             .into_iter()
@@ -8521,9 +11264,9 @@ impl Interpreter {
                 }
             }
 
-            "string.__join" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringJoin if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::List(items), Value::String(sep)) => {
                         let strs: Result<Vec<String>, String> = items
                             .iter()
@@ -8541,9 +11284,9 @@ impl Interpreter {
                 }
             }
 
-            "string.__slice" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringSlice if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
-                match (&args[0], &args[1], &args[2]) {
+                match (args[0].payload(), args[1].payload(), args[2].payload()) {
                     (Value::String(s), Value::Int64(start), Value::Int64(end)) => {
                         let graphemes = string_graphemes(s);
                         let len = graphemes.len() as i64;
@@ -8558,9 +11301,9 @@ impl Interpreter {
                 }
             }
 
-            "string.__repeat" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringRepeat if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::String(s), Value::Int64(n)) => {
                         Some(repeat_string_checked(s, *n).map(Value::String))
                     }
@@ -8569,25 +11312,25 @@ impl Interpreter {
             }
 
             // -- Type conversions (stdlib/string.jett, stdlib/int64.jett) -----
-            "string.__from_int64" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringFromInt64 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Int64(n) => Some(Ok(Value::String(n.to_string()))),
                     _ => Some(Err(format!("{name} expects an int64 argument"))),
                 }
             }
-            "string.__from_uint64" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringFromUint64 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Uint64(n) => Some(Ok(Value::String(n.to_string()))),
                     Value::Int64(n) if *n >= 0 => Some(Ok(Value::String(n.to_string()))),
                     _ => Some(Err(format!("{name} expects a uint64 argument"))),
                 }
             }
 
-            "string.__slugify" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringSlugify if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => {
                         let slug: String = s
                             .to_lowercase()
@@ -8605,9 +11348,9 @@ impl Interpreter {
             }
 
             // -- int64 / float64 conversions ----------------------------------
-            "int64.from_float64" => {
+            IntrinsicId::Int64FromFloat64 => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n)
                         if n.is_finite()
                             && n.fract() == 0.0
@@ -8623,9 +11366,9 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a float64 argument"))),
                 }
             }
-            "int64.from_string" => {
+            IntrinsicId::Int64FromString => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => match s.parse::<i64>() {
                         Ok(n) => Some(Ok(Value::ResultOk(Box::new(Value::Int64(n))))),
                         Err(_) => Some(Ok(Value::ResultFail(Box::new(Value::String(format!(
@@ -8635,9 +11378,9 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
-            "uint64.from_string" => {
+            IntrinsicId::Uint64FromString => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => match s.parse::<u64>() {
                         Ok(n) => Some(Ok(Value::ResultOk(Box::new(Value::Uint64(n))))),
                         Err(_) => Some(Ok(Value::ResultFail(Box::new(Value::String(format!(
@@ -8649,9 +11392,16 @@ impl Interpreter {
             }
 
             // -- float64 conversions ------------------------------------------
-            "float64.from_int64" => {
+            IntrinsicId::Float32FromFloat64 => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
+                    Value::Float64(value) => Some(Ok(Value::Float64((*value as f32) as f64))),
+                    _ => Some(Err(format!("{name} expects a float64 argument"))),
+                }
+            }
+            IntrinsicId::Float64FromInt64 => {
+                require_args!(name, 1, args);
+                match args[0].payload() {
                     Value::Int64(n) => {
                         let converted = *n as f64;
                         if converted as i128 == i128::from(*n) {
@@ -8666,9 +11416,9 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects an int64 argument"))),
                 }
             }
-            "float64.from_string" => {
+            IntrinsicId::Float64FromString => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => match s.parse::<f64>() {
                         Ok(n) => Some(Ok(Value::ResultOk(Box::new(Value::Float64(n))))),
                         Err(_) => Some(Ok(Value::ResultFail(Box::new(Value::String(format!(
@@ -8680,50 +11430,50 @@ impl Interpreter {
             }
 
             // -- Additional string conversions --------------------------------
-            "string.__from_float64" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringFromFloat64 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::String(format!("{n}")))),
                     _ => Some(Err(format!("{name} expects a float64 argument"))),
                 }
             }
-            "string.__from_bool" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringFromBool if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Bool(b) => Some(Ok(Value::String(format!("{b}")))),
                     _ => Some(Err(format!("{name} expects a bool argument"))),
                 }
             }
 
             // -- print (debugging helper) -------------------------------------
-            "print" => {
-                let output: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
-                self.write_stdout(&output.join(" "));
-                Some(Ok(Value::Nothing))
-            }
-            "println" => {
-                let output: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
-                self.write_stdout_line(&output.join(" "));
-                Some(Ok(Value::Nothing))
-            }
+            IntrinsicId::Print => Some(Ok(self.emit_typed_debug_print(
+                DebugEventKind::Print,
+                args,
+                &[],
+            ))),
+            IntrinsicId::Println => Some(Ok(self.emit_typed_debug_print(
+                DebugEventKind::Println,
+                args,
+                &[],
+            ))),
 
             // -- Private list kernels (stdlib/list.jett) ----------------------
-            "list.__new" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListNew if self.current_function_trusted_stdlib => {
                 require_args!(name, 0, args);
                 Some(Ok(Value::List(vec![])))
             }
 
-            "list.__length" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListLength if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::List(items) => Some(Ok(Value::Int64(items.len() as i64))),
                     _ => Some(Err(format!("{name} expects a list argument"))),
                 }
             }
 
-            "list.__append" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListAppend if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::List(items) => {
                         let mut new_list = items.clone();
                         new_list.push(args[1].clone());
@@ -8733,9 +11483,9 @@ impl Interpreter {
                 }
             }
 
-            "list.__get_clone" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListGetClone if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::List(items), Value::Int64(index)) => {
                         let Some(idx) = usize::try_from(*index).ok() else {
                             return Some(Ok(Value::OptionalNone));
@@ -8750,12 +11500,12 @@ impl Interpreter {
                 }
             }
 
-            "list.__sort" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListSort if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::List(items) => {
                         let mut sorted = items.clone();
-                        sorted.sort_by(|a, b| match (a, b) {
+                        sorted.sort_by(|a, b| match (a.payload(), b.payload()) {
                             (Value::Int64(x), Value::Int64(y)) => x.cmp(y),
                             (Value::Uint64(x), Value::Uint64(y)) => x.cmp(y),
                             (Value::Float64(x), Value::Float64(y)) => {
@@ -8772,31 +11522,33 @@ impl Interpreter {
             }
 
             // -- Private map kernels (stdlib/map.jett) ------------------------
-            "map.__new" if self.current_function_trusted_stdlib => Some(Ok(Value::Map(Vec::new()))),
-            "map.__length" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MapNew if self.current_function_trusted_stdlib => {
+                Some(Ok(Value::Map(Vec::new())))
+            }
+            IntrinsicId::MapLength if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Map(entries) => Some(Ok(Value::Int64(entries.len() as i64))),
                     _ => Some(Err(format!("{name} expects a map argument"))),
                 }
             }
-            "map.__has" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MapHas if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Map(entries) => {
-                        let found = entries.iter().any(|(k, _)| k == &args[1]);
+                        let found = entries.iter().any(|(k, _)| k == args[1].payload());
                         Some(Ok(Value::Bool(found)))
                     }
                     _ => Some(Err(format!("{name} expects a map as first argument"))),
                 }
             }
-            "map.__get" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MapGet if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Map(entries) => {
                         let val = entries
                             .iter()
-                            .find(|(k, _)| k == &args[1])
+                            .find(|(k, _)| k == args[1].payload())
                             .map(|(_, v)| v.clone());
                         Some(Ok(match val {
                             Some(v) => Value::OptionalSome(Box::new(v)),
@@ -8806,9 +11558,9 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a map as first argument"))),
                 }
             }
-            "map.__insert" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MapInsert if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
-                match args[0].clone() {
+                match args[0].payload().clone() {
                     Value::Map(mut entries) => {
                         let key = args[1].clone();
                         let val = args[2].clone();
@@ -8822,19 +11574,19 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a map as first argument"))),
                 }
             }
-            "map.__remove" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MapRemove if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match args[0].clone() {
+                match args[0].payload().clone() {
                     Value::Map(mut entries) => {
-                        entries.retain(|(k, _)| k != &args[1]);
+                        entries.retain(|(k, _)| k != args[1].payload());
                         Some(Ok(Value::Map(entries)))
                     }
                     _ => Some(Err(format!("{name} expects a map as first argument"))),
                 }
             }
-            "map.__from_lists" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MapFromLists if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::List(keys), Value::List(values)) => {
                         let mut entries = Vec::new();
                         for (key, value) in keys.iter().zip(values.iter()) {
@@ -8853,10 +11605,12 @@ impl Interpreter {
             }
 
             // -- Private set kernels (stdlib/set.jett) ------------------------
-            "set.__new" if self.current_function_trusted_stdlib => Some(Ok(Value::Set(Vec::new()))),
-            "set.__add" if self.current_function_trusted_stdlib => {
+            IntrinsicId::SetNew if self.current_function_trusted_stdlib => {
+                Some(Ok(Value::Set(Vec::new())))
+            }
+            IntrinsicId::SetAdd if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match args[0].clone() {
+                match args[0].payload().clone() {
                     Value::Set(mut items) => {
                         let val = args[1].clone();
                         if !items.contains(&val) {
@@ -8867,44 +11621,44 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a set as first argument"))),
                 }
             }
-            "set.__remove" if self.current_function_trusted_stdlib => {
+            IntrinsicId::SetRemove if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match args[0].clone() {
+                match args[0].payload().clone() {
                     Value::Set(mut items) => {
-                        items.retain(|v| v != &args[1]);
+                        items.retain(|v| v != args[1].payload());
                         Some(Ok(Value::Set(items)))
                     }
                     _ => Some(Err(format!("{name} expects a set as first argument"))),
                 }
             }
-            "set.__contains" if self.current_function_trusted_stdlib => {
+            IntrinsicId::SetContains if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match &args[0] {
-                    Value::Set(items) => Some(Ok(Value::Bool(items.contains(&args[1])))),
+                match args[0].payload() {
+                    Value::Set(items) => Some(Ok(Value::Bool(items.contains(args[1].payload())))),
                     _ => Some(Err(format!("{name} expects a set as first argument"))),
                 }
             }
-            "set.__length" if self.current_function_trusted_stdlib => {
+            IntrinsicId::SetLength if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Set(items) => Some(Ok(Value::Int64(items.len() as i64))),
                     _ => Some(Err(format!("{name} expects a set argument"))),
                 }
             }
 
-            "list.__sort_by_index" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListSortByIndex if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::List(items), Value::Int64(idx)) => {
                         let idx = usize::try_from(*idx).unwrap_or(usize::MAX);
                         let mut sorted = items.clone();
                         sorted.sort_by(|a, b| {
-                            let va = match a {
-                                Value::List(l) => l.get(idx).cloned(),
+                            let va = match a.payload() {
+                                Value::List(l) => l.get(idx).map(|value| value.payload().clone()),
                                 _ => None,
                             };
-                            let vb = match b {
-                                Value::List(l) => l.get(idx).cloned(),
+                            let vb = match b.payload() {
+                                Value::List(l) => l.get(idx).map(|value| value.payload().clone()),
                                 _ => None,
                             };
                             match (va, vb) {
@@ -8926,18 +11680,21 @@ impl Interpreter {
                 }
             }
 
-            "list.__is_sorted" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListIsSorted if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::List(items) => {
-                        let sorted = items.windows(2).all(|w| match (&w[0], &w[1]) {
-                            (Value::Int64(a), Value::Int64(b)) => a <= b,
-                            (Value::Uint64(a), Value::Uint64(b)) => a <= b,
-                            (Value::Float64(a), Value::Float64(b)) => a <= b,
-                            (Value::String(a), Value::String(b)) => a <= b,
-                            (Value::Bool(a), Value::Bool(b)) => a <= b,
-                            _ => true,
-                        });
+                        let sorted =
+                            items
+                                .windows(2)
+                                .all(|w| match (w[0].payload(), w[1].payload()) {
+                                    (Value::Int64(a), Value::Int64(b)) => a <= b,
+                                    (Value::Uint64(a), Value::Uint64(b)) => a <= b,
+                                    (Value::Float64(a), Value::Float64(b)) => a <= b,
+                                    (Value::String(a), Value::String(b)) => a <= b,
+                                    (Value::Bool(a), Value::Bool(b)) => a <= b,
+                                    _ => true,
+                                });
                         Some(Ok(Value::Bool(sorted)))
                     }
                     _ => Some(Err(format!("{name} expects a list argument"))),
@@ -8945,18 +11702,18 @@ impl Interpreter {
             }
 
             // -- Private math kernels (stdlib/math.jett) ----------------------
-            "math.__abs" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathKernelAbs if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Int64(n) => Some(Ok(Value::Int64(n.wrapping_abs()))),
                     Value::Float64(n) => Some(Ok(Value::Float64(n.abs()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
 
-            "math.__min" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathKernelMin if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::Int64(a), Value::Int64(b)) => Some(Ok(Value::Int64(*a.min(b)))),
                     (Value::Float64(a), Value::Float64(b)) => Some(Ok(Value::Float64(a.min(*b)))),
                     _ => Some(Err(format!(
@@ -8965,9 +11722,9 @@ impl Interpreter {
                 }
             }
 
-            "math.__max" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathKernelMax if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::Int64(a), Value::Int64(b)) => Some(Ok(Value::Int64(*a.max(b)))),
                     (Value::Float64(a), Value::Float64(b)) => Some(Ok(Value::Float64(a.max(*b)))),
                     _ => Some(Err(format!(
@@ -8976,18 +11733,18 @@ impl Interpreter {
                 }
             }
 
-            "math.__sqrt" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathSqrt if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.sqrt()))),
                     Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).sqrt()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
 
-            "math.__pow" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathPow if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::Float64(base), Value::Float64(exp)) => {
                         Some(Ok(Value::Float64(base.powf(*exp))))
                     }
@@ -9007,36 +11764,36 @@ impl Interpreter {
                 }
             }
 
-            "math.__floor" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathFloor if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.floor()))),
                     Value::Int64(n) => Some(Ok(Value::Int64(*n))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
 
-            "math.__ceil" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathCeil if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.ceil()))),
                     Value::Int64(n) => Some(Ok(Value::Int64(*n))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
 
-            "math.__round" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathRound if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.round()))),
                     Value::Int64(n) => Some(Ok(Value::Int64(*n))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
 
-            "math.__clamp" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathClamp if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
-                match (&args[0], &args[1], &args[2]) {
+                match (args[0].payload(), args[1].payload(), args[2].payload()) {
                     (Value::Int64(v), Value::Int64(lo), Value::Int64(hi)) => {
                         Some(Ok(Value::Int64((*v).clamp(*lo, *hi))))
                     }
@@ -9057,40 +11814,40 @@ impl Interpreter {
                 }
             }
 
-            "math.__log" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathLog if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.ln()))),
                     Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).ln()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
 
-            "math.__log2" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathLog2 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.log2()))),
                     Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).log2()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
 
-            "math.__log10" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathLog10 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.log10()))),
                     Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).log10()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
 
-            "math.__average" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathAverage if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::List(items) if !items.is_empty() => {
                         let numbers: Result<Vec<f64>, String> = items
                             .iter()
-                            .map(|value| match value {
+                            .map(|value| match value.payload() {
                                 Value::Int64(n) => Ok(*n as f64),
                                 Value::Uint64(n) => Ok(*n as f64),
                                 Value::Float64(n) => Ok(*n),
@@ -9106,13 +11863,13 @@ impl Interpreter {
                 }
             }
 
-            "math.__median" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathMedian if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::List(items) if !items.is_empty() => {
                         let nums: Result<Vec<f64>, String> = items
                             .iter()
-                            .map(|value| match value {
+                            .map(|value| match value.payload() {
                                 Value::Int64(n) => Ok(*n as f64),
                                 Value::Uint64(n) => Ok(*n as f64),
                                 Value::Float64(n) => Ok(*n),
@@ -9140,41 +11897,41 @@ impl Interpreter {
             }
 
             // -- Math constants and extras -----------------------------------------
-            "math.__pi" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathPi if self.current_function_trusted_stdlib => {
                 require_args!(name, 0, args);
                 Some(Ok(Value::Float64(std::f64::consts::PI)))
             }
-            "math.__e" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathE if self.current_function_trusted_stdlib => {
                 require_args!(name, 0, args);
                 Some(Ok(Value::Float64(std::f64::consts::E)))
             }
-            "math.__sin" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathSin if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.sin()))),
                     Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).sin()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
-            "math.__cos" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathCos if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.cos()))),
                     Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).cos()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
-            "math.__tan" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathTan if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.tan()))),
                     Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).tan()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
-            "math.__mod" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathMod if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::Int64(a), Value::Int64(b)) => {
                         if *b == 0 {
                             Some(Err("math.mod: division by zero".to_string()))
@@ -9185,9 +11942,9 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
                 }
             }
-            "math.__gcd" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathGcd if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::Int64(a), Value::Int64(b)) => {
                         let (mut x, mut y) = (a.unsigned_abs(), b.unsigned_abs());
                         while y != 0 {
@@ -9200,9 +11957,9 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
                 }
             }
-            "math.__lcm" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathLcm if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::Int64(a), Value::Int64(b)) => {
                         if *a == 0 || *b == 0 {
                             Some(Ok(Value::Int64(0)))
@@ -9222,9 +11979,9 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
                 }
             }
-            "math.__factorial" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathFactorial if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Int64(n) => {
                         if *n < 0 {
                             Some(Err(
@@ -9241,9 +11998,9 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects an int64 argument"))),
                 }
             }
-            "list.__insert_at" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListInsertAt if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::List(items), Value::Int64(index)) => {
                         let Some(idx) = usize::try_from(*index).ok() else {
                             return Some(Err(format!("{name}: index {index} out of bounds")));
@@ -9261,9 +12018,9 @@ impl Interpreter {
                     ))),
                 }
             }
-            "list.__remove_at" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListRemoveAt if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::List(items), Value::Int64(index)) => {
                         let Some(idx) = usize::try_from(*index).ok() else {
                             return Some(Err(format!("{name}: index {index} out of bounds")));
@@ -9279,9 +12036,9 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a list and an int64 index"))),
                 }
             }
-            "list.__swap" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListSwap if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
-                match (&args[0], &args[1], &args[2]) {
+                match (args[0].payload(), args[1].payload(), args[2].payload()) {
                     (Value::List(items), Value::Int64(i), Value::Int64(j)) => {
                         let (Some(a), Some(b)) =
                             (usize::try_from(*i).ok(), usize::try_from(*j).ok())
@@ -9300,26 +12057,26 @@ impl Interpreter {
                 }
             }
 
-            "string.__trim_start" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringTrimStart if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::String(s.trim_start().to_string()))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
 
-            "string.__trim_end" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringTrimEnd if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::String(s.trim_end().to_string()))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
 
             // Private string segmentation kernels yield list[string].
-            "string.__chars" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringChars if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => {
                         let chars: Vec<Value> = string_graphemes(s)
                             .into_iter()
@@ -9331,9 +12088,9 @@ impl Interpreter {
                 }
             }
 
-            "string.__words" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringWords if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => {
                         let words: Vec<Value> = s
                             .split_whitespace()
@@ -9345,9 +12102,9 @@ impl Interpreter {
                 }
             }
 
-            "string.__lines" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringLines if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => {
                         let mut lines = Vec::new();
                         let bytes = s.as_bytes();
@@ -9375,43 +12132,18 @@ impl Interpreter {
             }
 
             // -- UUID operations (stdlib/uuid.jett) ---------------------------
-            "uuid.new" => {
+            IntrinsicId::UuidNew => {
                 require_args!(name, 0, args);
-                // Generate a UUID v4 using rand
-                let mut rng = rand::thread_rng();
-                let mut b = [0u8; 16];
-                for byte in b.iter_mut() {
-                    *byte = rand::Rng::r#gen(&mut rng);
-                }
-                // Set version 4 bits
-                b[6] = (b[6] & 0x0F) | 0x40;
-                // Set variant bits
-                b[8] = (b[8] & 0x3F) | 0x80;
-                let uuid = format!(
-                    "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-                    b[0],
-                    b[1],
-                    b[2],
-                    b[3],
-                    b[4],
-                    b[5],
-                    b[6],
-                    b[7],
-                    b[8],
-                    b[9],
-                    b[10],
-                    b[11],
-                    b[12],
-                    b[13],
-                    b[14],
-                    b[15]
-                );
-                Some(Ok(Value::String(uuid)))
+                Some(
+                    jett_runtime::uuid::new_v4()
+                        .map(Value::String)
+                        .map_err(str::to_owned),
+                )
             }
 
-            "string.__index_of" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringIndexOf if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::String(haystack), Value::String(needle)) => {
                         let result = match string_find_grapheme_match(haystack, needle) {
                             Some((_, _, index)) => {
@@ -9424,9 +12156,9 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects two string arguments"))),
                 }
             }
-            "string.__count" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringCount if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::String(haystack), Value::String(needle)) => {
                         let count = string_count_grapheme_matches(haystack, needle) as i64;
                         Some(Ok(Value::Int64(count)))
@@ -9434,9 +12166,9 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects two string arguments"))),
                 }
             }
-            "string.__to_upper_first" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringToUpperFirst if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => {
                         let graphemes = string_graphemes(s);
                         let result = match graphemes.split_first() {
@@ -9455,9 +12187,9 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
-            "string.__to_lower_first" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringToLowerFirst if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => {
                         let graphemes = string_graphemes(s);
                         let result = match graphemes.split_first() {
@@ -9477,9 +12209,9 @@ impl Interpreter {
                 }
             }
 
-            "string.__is_numeric" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringIsNumeric if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::Bool(
                         !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()),
                     ))),
@@ -9487,9 +12219,9 @@ impl Interpreter {
                 }
             }
 
-            "string.__is_alpha" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringIsAlpha if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::Bool(
                         !s.is_empty() && s.chars().all(|c| c.is_alphabetic()),
                     ))),
@@ -9498,9 +12230,9 @@ impl Interpreter {
             }
 
             // -- Encoding operations (stdlib/encoding.jett) -------------------
-            "encoding.__base64_encode" if self.current_function_trusted_stdlib => {
+            IntrinsicId::EncodingBase64Encode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Bytes(bytes) => {
                         let encoded = base64_encode(bytes);
                         Some(Ok(Value::String(encoded)))
@@ -9509,9 +12241,9 @@ impl Interpreter {
                 }
             }
 
-            "encoding.__base64_decode" if self.current_function_trusted_stdlib => {
+            IntrinsicId::EncodingBase64Decode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => match base64_decode(s) {
                         Ok(bytes) => Some(Ok(Value::ResultOk(Box::new(Value::Bytes(bytes))))),
                         Err(error) => Some(Ok(Value::ResultFail(Box::new(Value::String(
@@ -9522,9 +12254,9 @@ impl Interpreter {
                 }
             }
 
-            "encoding.__hex_decode" if self.current_function_trusted_stdlib => {
+            IntrinsicId::EncodingHexDecode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => match encoding_hex_decode(s) {
                         Ok(bytes) => Some(Ok(Value::ResultOk(Box::new(Value::Bytes(bytes))))),
                         Err(error) => Some(Ok(Value::ResultFail(Box::new(Value::String(
@@ -9535,17 +12267,17 @@ impl Interpreter {
                 }
             }
 
-            "encoding.__url_encode" if self.current_function_trusted_stdlib => {
+            IntrinsicId::EncodingUrlEncode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::String(percent_encode(s, false)))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
 
-            "encoding.__url_decode" if self.current_function_trusted_stdlib => {
+            IntrinsicId::EncodingUrlDecode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(percent_decode(s, false)
                         .map(|decoded| Value::ResultOk(Box::new(Value::String(decoded))))
                         .unwrap_or_else(|error| {
@@ -9555,17 +12287,17 @@ impl Interpreter {
                 }
             }
 
-            "encoding.__form_encode" if self.current_function_trusted_stdlib => {
+            IntrinsicId::EncodingFormEncode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::String(percent_encode(s, true)))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
 
-            "encoding.__form_decode" if self.current_function_trusted_stdlib => {
+            IntrinsicId::EncodingFormDecode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(percent_decode(s, true)
                         .map(|decoded| Value::ResultOk(Box::new(Value::String(decoded))))
                         .unwrap_or_else(|error| {
@@ -9576,33 +12308,33 @@ impl Interpreter {
             }
 
             // -- Crypto operations (stdlib/crypto.jett) -----------------------
-            "crypto.__sha256" if self.current_function_trusted_stdlib => {
+            IntrinsicId::CryptoSha256 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Bytes(bytes) => Some(Ok(Value::Bytes(sha256_digest(bytes)))),
                     _ => Some(Err(format!("{name} expects a bytes argument"))),
                 }
             }
 
-            "crypto.__sha512" if self.current_function_trusted_stdlib => {
+            IntrinsicId::CryptoSha512 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Bytes(bytes) => Some(Ok(Value::Bytes(sha512_digest(bytes)))),
                     _ => Some(Err(format!("{name} expects a bytes argument"))),
                 }
             }
 
-            "crypto.__md5" if self.current_function_trusted_stdlib => {
+            IntrinsicId::CryptoMd5 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Bytes(bytes) => Some(Ok(Value::Bytes(md5_digest(bytes)))),
                     _ => Some(Err(format!("{name} expects a bytes argument"))),
                 }
             }
 
-            "crypto.__hmac_sha256" if self.current_function_trusted_stdlib => {
+            IntrinsicId::CryptoHmacSha256 if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::Bytes(key), Value::Bytes(message)) => {
                         Some(Ok(Value::Bytes(hmac_sha256_digest(key, message))))
                     }
@@ -9611,7 +12343,7 @@ impl Interpreter {
             }
 
             // -- Wall-clock operation (stdlib/time.jett) ----------------------
-            "Clock.__now" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ClockNow if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 if !matches!(args[0], Value::Nothing) {
                     return Some(Err(format!("{name} expects Clock")));
@@ -9623,13 +12355,13 @@ impl Interpreter {
             }
 
             // -- Launch environment operations (stdlib/environment.jett) -------
-            "Environment.__get" if self.current_function_trusted_stdlib => {
+            IntrinsicId::EnvironmentGet if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                if !matches!(&args[0], Value::Capability(capability) if capability == "Environment")
+                if !matches!(args[0].payload(), Value::Capability(capability) if capability == "Environment")
                 {
                     return Some(Err(format!("{name} expects Environment")));
                 }
-                let Value::String(key) = &args[1] else {
+                let Value::String(key) = args[1].payload() else {
                     return Some(Err(format!("{name} expects a string key")));
                 };
                 let Some(environment) = &self.launch_environment else {
@@ -9640,12 +12372,12 @@ impl Interpreter {
                         Value::String(value),
                     )))),
                     Ok(None) => Value::ResultOk(Box::new(Value::OptionalNone)),
-                    Err(error) => Value::ResultFail(Box::new(Value::String(error))),
+                    Err(error) => Value::ResultFail(Box::new(Value::String(error.to_owned()))),
                 }))
             }
-            "Environment.__args" if self.current_function_trusted_stdlib => {
+            IntrinsicId::EnvironmentArgs if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                if !matches!(&args[0], Value::Capability(capability) if capability == "Environment")
+                if !matches!(args[0].payload(), Value::Capability(capability) if capability == "Environment")
                 {
                     return Some(Err(format!("{name} expects Environment")));
                 }
@@ -9654,7 +12386,7 @@ impl Interpreter {
                 };
                 Some(Ok(Value::List(
                     environment
-                        .arguments
+                        .arguments()
                         .iter()
                         .cloned()
                         .map(Value::String)
@@ -9663,9 +12395,9 @@ impl Interpreter {
             }
 
             // -- CSV operations (stdlib/csv.jett) --------------------------
-            "csv.__parse" if self.current_function_trusted_stdlib => {
+            IntrinsicId::CsvParse if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => match parse_csv_records(s) {
                         Ok(records) => {
                             let rows: Vec<Value> = records
@@ -9682,9 +12414,9 @@ impl Interpreter {
                 }
             }
 
-            "csv.__stringify" if self.current_function_trusted_stdlib => {
+            IntrinsicId::CsvStringify if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::List(rows) => {
                         let mut lines = Vec::new();
                         for row in rows {
@@ -9710,54 +12442,24 @@ impl Interpreter {
                 }
             }
 
-            "csv.__parse_with_header" if self.current_function_trusted_stdlib => {
+            IntrinsicId::CsvParseWithHeader if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
-                    Value::String(s) => match parse_csv_records(s) {
+                match args[0].payload() {
+                    Value::String(s) => match parse_csv_with_header(s) {
                         Ok(records) => {
-                            let mut records = records.into_iter();
-                            let headers: Vec<String> = match records.next() {
-                                Some(header_row) => header_row,
-                                None => {
-                                    return Some(Ok(result_ok(Value::List(Vec::new()))));
-                                }
-                            };
-
-                            let mut seen_headers = HashSet::new();
-                            for (index, header) in headers.iter().enumerate() {
-                                if header.is_empty() {
-                                    return Some(Ok(result_fail(format!(
-                                        "CSV header error at field {}: header must not be empty",
-                                        index + 1
-                                    ))));
-                                }
-                                if !seen_headers.insert(header.as_str()) {
-                                    return Some(Ok(result_fail(format!(
-                                        "CSV header error at field {}: duplicate header '{}'",
-                                        index + 1,
-                                        header
-                                    ))));
-                                }
-                            }
-
-                            let mut rows = Vec::new();
-                            for (index, cols) in records.enumerate() {
-                                if cols.len() != headers.len() {
-                                    return Some(Ok(result_fail(format!(
-                                        "CSV header error at record {}: expected {} fields, got {}",
-                                        index + 2,
-                                        headers.len(),
-                                        cols.len()
-                                    ))));
-                                }
-
-                                let entries: Vec<(Value, Value)> = headers
-                                    .iter()
-                                    .zip(cols.into_iter())
-                                    .map(|(h, c)| (Value::String(h.clone()), Value::String(c)))
-                                    .collect();
-                                rows.push(Value::Map(entries));
-                            }
+                            let rows = records
+                                .into_iter()
+                                .map(|entries| {
+                                    Value::Map(
+                                        entries
+                                            .into_iter()
+                                            .map(|(key, value)| {
+                                                (Value::String(key), Value::String(value))
+                                            })
+                                            .collect(),
+                                    )
+                                })
+                                .collect();
                             Some(Ok(result_ok(Value::List(rows))))
                         }
                         Err(message) => Some(Ok(result_fail(message))),
@@ -9767,24 +12469,24 @@ impl Interpreter {
             }
 
             // -- Range generation ---------------------------------------------------
-            "range" => {
+            IntrinsicId::Range => {
                 match args.len() {
                     // range(end) — 0 to end exclusive
-                    1 => match &args[0] {
+                    1 => match args[0].payload() {
                         Value::Int64(end) => {
                             Some(range_values_checked(0, *end, 1).map(Value::List))
                         }
                         _ => Some(Err(format!("{name} expects int64 arguments"))),
                     },
                     // range(start, end) — start to end exclusive
-                    2 => match (&args[0], &args[1]) {
+                    2 => match (args[0].payload(), args[1].payload()) {
                         (Value::Int64(start), Value::Int64(end)) => {
                             Some(range_values_checked(*start, *end, 1).map(Value::List))
                         }
                         _ => Some(Err(format!("{name} expects int64 arguments"))),
                     },
                     // range(start, end, step)
-                    3 => match (&args[0], &args[1], &args[2]) {
+                    3 => match (args[0].payload(), args[1].payload(), args[2].payload()) {
                         (Value::Int64(start), Value::Int64(end), Value::Int64(step)) => {
                             Some(range_values_checked(*start, *end, *step).map(Value::List))
                         }
@@ -9795,22 +12497,22 @@ impl Interpreter {
             }
 
             // -- Bytes operations (stdlib/bytes.jett) ---------------------------
-            "bytes.__new" if self.current_function_trusted_stdlib => {
+            IntrinsicId::BytesNew if self.current_function_trusted_stdlib => {
                 require_args!(name, 0, args);
                 Some(Ok(Value::Bytes(Vec::new())))
             }
 
-            "bytes.__length" if self.current_function_trusted_stdlib => {
+            IntrinsicId::BytesLength if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Bytes(b) => Some(Ok(Value::Int64(b.len() as i64))),
                     _ => Some(Err(format!("{name} expects a bytes argument"))),
                 }
             }
 
-            "bytes.__slice" if self.current_function_trusted_stdlib => {
+            IntrinsicId::BytesSlice if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
-                match (&args[0], &args[1], &args[2]) {
+                match (args[0].payload(), args[1].payload(), args[2].payload()) {
                     (Value::Bytes(b), Value::Int64(start), Value::Int64(end)) => {
                         let len = b.len() as i64;
                         let start = (*start).clamp(0, len) as usize;
@@ -9824,9 +12526,9 @@ impl Interpreter {
                 }
             }
 
-            "bytes.__concat" if self.current_function_trusted_stdlib => {
+            IntrinsicId::BytesConcat if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::Bytes(a), Value::Bytes(b)) => {
                         let mut result = a.clone();
                         result.extend(b.iter());
@@ -9836,17 +12538,17 @@ impl Interpreter {
                 }
             }
 
-            "bytes.__from_string" if self.current_function_trusted_stdlib => {
+            IntrinsicId::BytesFromString if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::Bytes(s.as_bytes().to_vec()))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
 
-            "bytes.__to_string" if self.current_function_trusted_stdlib => {
+            IntrinsicId::BytesToString if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Bytes(b) => match String::from_utf8(b.clone()) {
                         Ok(s) => Some(Ok(Value::ResultOk(Box::new(Value::String(s))))),
                         Err(e) => Some(Ok(Value::ResultFail(Box::new(Value::String(format!(
@@ -9857,9 +12559,9 @@ impl Interpreter {
                 }
             }
 
-            "bytes.__to_hex" if self.current_function_trusted_stdlib => {
+            IntrinsicId::BytesToHex if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Bytes(b) => {
                         let hex: String = b.iter().map(|byte| format!("{byte:02x}")).collect();
                         Some(Ok(Value::String(hex)))
@@ -9868,9 +12570,9 @@ impl Interpreter {
                 }
             }
 
-            "bytes.__from_hex" if self.current_function_trusted_stdlib => {
+            IntrinsicId::BytesFromHex if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(raw) => match Self::parse_hex_bytes(
                         raw,
                         "bytes.from_hex: expected even-length hex string",
@@ -9883,9 +12585,9 @@ impl Interpreter {
                 }
             }
 
-            "bytes.__get" if self.current_function_trusted_stdlib => {
+            IntrinsicId::BytesGet if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::Bytes(b), Value::Int64(index)) => {
                         let Some(idx) = usize::try_from(*index).ok() else {
                             return Some(Ok(Value::OptionalNone));
@@ -9904,8 +12606,155 @@ impl Interpreter {
                 }
             }
 
-            // Not a built-in
-            _ => None,
+            // Private stdlib kernels are intentionally unavailable to direct
+            // project calls. Keep this list explicit so a new intrinsic must
+            // choose a comptime dispatch path.
+            IntrinsicId::BytesConcat
+            | IntrinsicId::BytesFromHex
+            | IntrinsicId::BytesFromString
+            | IntrinsicId::BytesGet
+            | IntrinsicId::BytesLength
+            | IntrinsicId::BytesNew
+            | IntrinsicId::BytesSlice
+            | IntrinsicId::BytesToHex
+            | IntrinsicId::BytesToString
+            | IntrinsicId::ClockNow
+            | IntrinsicId::CryptoHmacSha256
+            | IntrinsicId::CryptoMd5
+            | IntrinsicId::CryptoSha256
+            | IntrinsicId::CryptoSha512
+            | IntrinsicId::CsvParse
+            | IntrinsicId::CsvParseWithHeader
+            | IntrinsicId::CsvStringify
+            | IntrinsicId::EncodingBase64Decode
+            | IntrinsicId::EncodingBase64Encode
+            | IntrinsicId::EncodingFormDecode
+            | IntrinsicId::EncodingFormEncode
+            | IntrinsicId::EncodingHexDecode
+            | IntrinsicId::EncodingUrlDecode
+            | IntrinsicId::EncodingUrlEncode
+            | IntrinsicId::EnvironmentArgs
+            | IntrinsicId::EnvironmentGet
+            | IntrinsicId::ListAppend
+            | IntrinsicId::ListGetClone
+            | IntrinsicId::ListInsertAt
+            | IntrinsicId::ListIsSorted
+            | IntrinsicId::ListLength
+            | IntrinsicId::ListNew
+            | IntrinsicId::ListRemoveAt
+            | IntrinsicId::ListSort
+            | IntrinsicId::ListSortByIndex
+            | IntrinsicId::ListSwap
+            | IntrinsicId::MapFromLists
+            | IntrinsicId::MapGet
+            | IntrinsicId::MapHas
+            | IntrinsicId::MapInsert
+            | IntrinsicId::MapLength
+            | IntrinsicId::MapNew
+            | IntrinsicId::MapRemove
+            | IntrinsicId::MathAverage
+            | IntrinsicId::MathCeil
+            | IntrinsicId::MathClamp
+            | IntrinsicId::MathCos
+            | IntrinsicId::MathE
+            | IntrinsicId::MathFactorial
+            | IntrinsicId::MathFloor
+            | IntrinsicId::MathGcd
+            | IntrinsicId::MathKernelAbs
+            | IntrinsicId::MathKernelMax
+            | IntrinsicId::MathKernelMin
+            | IntrinsicId::MathLcm
+            | IntrinsicId::MathLog
+            | IntrinsicId::MathLog10
+            | IntrinsicId::MathLog2
+            | IntrinsicId::MathMedian
+            | IntrinsicId::MathMod
+            | IntrinsicId::MathPi
+            | IntrinsicId::MathPow
+            | IntrinsicId::MathRound
+            | IntrinsicId::MathSin
+            | IntrinsicId::MathSqrt
+            | IntrinsicId::MathTan
+            | IntrinsicId::RandomBool
+            | IntrinsicId::RandomBounded
+            | IntrinsicId::RandomUnitFloat64
+            | IntrinsicId::SetAdd
+            | IntrinsicId::SetContains
+            | IntrinsicId::SetLength
+            | IntrinsicId::SetNew
+            | IntrinsicId::SetRemove
+            | IntrinsicId::StringCharCount
+            | IntrinsicId::StringChars
+            | IntrinsicId::StringCount
+            | IntrinsicId::StringFromBool
+            | IntrinsicId::StringFromFloat64
+            | IntrinsicId::StringFromInt64
+            | IntrinsicId::StringFromUint64
+            | IntrinsicId::StringIndexOf
+            | IntrinsicId::StringIsAlpha
+            | IntrinsicId::StringIsNumeric
+            | IntrinsicId::StringJoin
+            | IntrinsicId::StringLines
+            | IntrinsicId::StringLower
+            | IntrinsicId::StringRepeat
+            | IntrinsicId::StringReplace
+            | IntrinsicId::StringSlice
+            | IntrinsicId::StringSlugify
+            | IntrinsicId::StringSplit
+            | IntrinsicId::StringToLowerFirst
+            | IntrinsicId::StringToUpperFirst
+            | IntrinsicId::StringTrim
+            | IntrinsicId::StringTrimEnd
+            | IntrinsicId::StringTrimStart
+            | IntrinsicId::StringUpper
+            | IntrinsicId::StringWords => None,
+
+            // Routed before this ordinary dispatcher.
+            IntrinsicId::BitfieldFromBytes | IntrinsicId::BitfieldToBytes => None,
+            IntrinsicId::GraphicsRun
+            | IntrinsicId::ListGroupBy
+            | IntrinsicId::ListSortBy
+            | IntrinsicId::ListSum => None,
+            IntrinsicId::JsonParse
+            | IntrinsicId::JsonParseExact
+            | IntrinsicId::JsonSerialize
+            | IntrinsicId::JsonSerializePublic
+            | IntrinsicId::TypeArg
+            | IntrinsicId::TypeBitfieldFields
+            | IntrinsicId::TypeBitfieldLayout
+            | IntrinsicId::TypeConstructFinish
+            | IntrinsicId::TypeConstructMachineStart
+            | IntrinsicId::TypeConstructPut
+            | IntrinsicId::TypeConstructStart
+            | IntrinsicId::TypeConstructVariantStart
+            | IntrinsicId::TypeFieldValue
+            | IntrinsicId::TypeFields
+            | IntrinsicId::TypeHasSecret
+            | IntrinsicId::TypeInfo
+            | IntrinsicId::TypeKind
+            | IntrinsicId::TypeKindTag
+            | IntrinsicId::TypeMachineFieldValue
+            | IntrinsicId::TypeMachineLayout
+            | IntrinsicId::TypeMachineStateValue
+            | IntrinsicId::TypeMachineStates
+            | IntrinsicId::TypeMachineTransitions
+            | IntrinsicId::TypeName
+            | IntrinsicId::TypePrimitiveTag
+            | IntrinsicId::TypeVariantFieldValue
+            | IntrinsicId::TypeVariantValue
+            | IntrinsicId::TypeVariants => None,
+
+            // These are implemented by source wrappers or require runtime-only
+            // capabilities, so the ordinary comptime dispatcher declines them.
+            IntrinsicId::FilesystemReadFile
+            | IntrinsicId::FilesystemWriteFile
+            | IntrinsicId::LogEmit
+            | IntrinsicId::MathAbs
+            | IntrinsicId::MathMax
+            | IntrinsicId::MathMin
+            | IntrinsicId::TestMockClock
+            | IntrinsicId::TestMockEnvironment
+            | IntrinsicId::TestMockRandom => None,
         }
     }
 
@@ -9915,6 +12764,12 @@ impl Interpreter {
     /// Built-in standard library functions are checked first; if the name
     /// does not match a built-in, user-defined functions are consulted.
     pub fn call_function(&mut self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        if args.iter().any(Value::contains_live_resource_or_grant) {
+            return Err(
+                "raw call API cannot adopt Resource custody or runtime authority".to_string(),
+            );
+        }
+
         self.call_function_with_type_args(name, &[], args)
     }
 
@@ -9926,12 +12781,52 @@ impl Interpreter {
         name: &str,
         args: Vec<Value>,
     ) -> Result<Value, String> {
+        if args.iter().any(Value::contains_live_resource_or_grant) {
+            return Err(
+                "raw call API cannot adopt Resource custody or runtime authority".to_string(),
+            );
+        }
+
         let saved_namespace = self.current_namespace.clone();
         self.current_namespace = namespace.map(str::to_string);
         let runtime_name = self
             .registry_name(&self.functions, name)
             .unwrap_or_else(|| name.to_string());
         let result = self.call_function(&runtime_name, args);
+        self.current_namespace = saved_namespace;
+        result
+    }
+
+    /// Enter a checked source function after the embedding compiler has
+    /// established every input invariant, including refined aggregate children.
+    /// Main capabilities and zero-argument verify entries satisfy this contract;
+    /// arbitrary host values and generated/shrunk candidates do not by default.
+    /// Entry parameters still undergo ordinary normalization and validation: no
+    /// source proof is synthesized from their destination annotations. The
+    /// checked body may reuse its own source facts, unless nested under a raw call.
+    pub fn call_checked_function_in_namespace(
+        &mut self,
+        namespace: Option<&str>,
+        name: &str,
+        args: Vec<Value>,
+    ) -> Result<Value, String> {
+        if args.iter().any(Value::contains_live_resource_or_grant) {
+            return Err(
+                "raw call API cannot adopt Resource custody or runtime authority".to_string(),
+            );
+        }
+
+        let saved_namespace = self.current_namespace.clone();
+        self.current_namespace = namespace.map(str::to_string);
+        let runtime_name = self
+            .registry_name(&self.functions, name)
+            .unwrap_or_else(|| name.to_string());
+        let source_types = vec![None; args.len()];
+        let previous_field_entry = std::mem::replace(&mut self.field_update_entry_allowed, true);
+        let previous_temporary_entry = self.set_temporary_entry_allowed(true);
+        let result = self.call_function_from_source(&runtime_name, &[], args, Some(&source_types));
+        self.set_temporary_entry_allowed(previous_temporary_entry);
+        self.field_update_entry_allowed = previous_field_entry;
         self.current_namespace = saved_namespace;
         result
     }
@@ -9956,15 +12851,60 @@ impl Interpreter {
         type_args: &[TypeExpr],
         args: Vec<Value>,
     ) -> Result<Value, String> {
+        self.call_function_from_source(name, type_args, args, None)
+    }
+
+    fn call_function_from_source(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: Vec<Value>,
+        source_types: Option<&[Option<String>]>,
+    ) -> Result<Value, String> {
+        let resolved_type_args: Vec<_> = type_args
+            .iter()
+            .map(|ty| self.substitute_type_expr(ty))
+            .collect();
+        self.call_function_from_resolved_source(name, &resolved_type_args, args, source_types)
+    }
+
+    fn call_function_from_resolved_source(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: Vec<Value>,
+        source_types: Option<&[Option<String>]>,
+    ) -> Result<Value, String> {
+        // Raw higher-order and actor builtins can execute source bodies before
+        // reaching a registered function. Keep their complete dispatch raw too.
+        let saved_proofs = self.allow_checked_refinement_proofs;
+        self.allow_checked_refinement_proofs &= source_types.is_some();
+        let source_types = source_types.filter(|_| self.allow_checked_refinement_proofs);
+        let result = self.dispatch_function_from_source(name, type_args, args, source_types);
+        self.allow_checked_refinement_proofs = saved_proofs;
+        result
+    }
+
+    fn dispatch_function_from_source(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: Vec<Value>,
+        source_types: Option<&[Option<String>]>,
+    ) -> Result<Value, String> {
         if self.is_trusted_stdlib_first_function(name) {
-            return self.call_user_function_with_type_args(name, type_args, args);
+            return self.call_user_function_from_source(name, type_args, args, source_types);
         }
 
         // Check higher-order built-ins first (require &mut self).
-        if let Some(result) = self.call_higher_order_builtin(name, &args) {
+        if let Some(result) =
+            self.call_higher_order_builtin_with_type_args(name, type_args, &args, false)
+        {
             return result;
         }
-        if let Some(result) = self.call_builtin_with_type_args(name, type_args, &args) {
+        if let Some(result) =
+            self.call_builtin_with_type_args_from_source(name, type_args, &args, false)
+        {
             return result;
         }
         // Check built-in functions first.
@@ -9972,7 +12912,7 @@ impl Interpreter {
             return result;
         }
 
-        self.call_user_function_with_type_args(name, type_args, args)
+        self.call_user_function_from_source(name, type_args, args, source_types)
     }
 
     fn is_trusted_stdlib_first_function(&self, name: &str) -> bool {
@@ -9981,7 +12921,9 @@ impl Interpreter {
     }
 
     fn has_trusted_stdlib_function(&self, name: &str) -> bool {
-        self.trusted_stdlib_functions.contains(name) && self.functions.contains_key(name)
+        self.functions
+            .get(name)
+            .is_some_and(|function| function.trusted_stdlib)
     }
 
     fn call_user_function_with_type_args(
@@ -9990,23 +12932,118 @@ impl Interpreter {
         type_args: &[TypeExpr],
         args: Vec<Value>,
     ) -> Result<Value, String> {
+        // Compiler-owned JSON facade forwarding inherits its caller's trust.
+        // Its destination inputs remain forced; a raw dispatch already disabled
+        // proofs and cannot regain them through this internal bridge.
+        let source_types = vec![None; args.len()];
+        self.call_user_function_from_source(name, type_args, args, Some(&source_types))
+    }
+
+    fn call_user_function_from_source(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: Vec<Value>,
+        source_types: Option<&[Option<String>]>,
+    ) -> Result<Value, String> {
         // Check if the name refers to a variable holding a function value (closure).
         if let Some(fn_val) = self.get_variable(name).cloned() {
-            if matches!(fn_val, Value::Function { .. } | Value::NamedFunction(_)) {
-                return self.call_fn_value(fn_val, args);
+            if matches!(
+                fn_val.payload(),
+                Value::Function { .. } | Value::NamedFunction(_) | Value::ReflectedCallable(_)
+            ) {
+                return self.call_fn_value_from_source(fn_val, args, source_types);
             }
         }
 
-        let resolved_name = self
-            .resolve_interface_dispatch(name, &args)
-            .unwrap_or_else(|| name.to_string());
+        self.call_registered_function_from_resolved_source(name, type_args, args, source_types)
+    }
+
+    fn call_registered_function_from_source(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: Vec<Value>,
+        source_types: Option<&[Option<String>]>,
+    ) -> Result<Value, String> {
+        let resolved_type_args: Vec<_> = type_args
+            .iter()
+            .map(|ty| self.substitute_type_expr(ty))
+            .collect();
+        self.call_registered_function_from_resolved_source(
+            name,
+            &resolved_type_args,
+            args,
+            source_types,
+        )
+    }
+
+    fn call_registered_function_from_resolved_source(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: Vec<Value>,
+        source_types: Option<&[Option<String>]>,
+    ) -> Result<Value, String> {
+        self.call_registered_function_with_temporary_frame(
+            name,
+            type_args,
+            args,
+            source_types,
+            None,
+        )
+    }
+
+    fn call_registered_function_with_temporary_frame(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: Vec<Value>,
+        source_types: Option<&[Option<String>]>,
+        temporary_frame: Option<temporary_local_views::PreparedNamedFrame>,
+    ) -> Result<Value, String> {
+        let resolved_name = match (
+            self.resolve_interface_dispatch(name, &args),
+            self.interface_dispatch_name(name),
+        ) {
+            (Some(resolved), _) => resolved,
+            (None, Some(interface)) => return Err(format!("undefined function '{interface}'")),
+            (None, None) => name.to_string(),
+        };
 
         // Look up the function definition.
-        let func = self
+        let registered = self
             .functions
             .get(&resolved_name)
-            .ok_or_else(|| format!("undefined function '{name}'"))?
+            .ok_or_else(|| {
+                let name = self
+                    .registry_name(&self.interface_methods, name)
+                    .unwrap_or_else(|| name.to_string());
+                format!("undefined function '{name}'")
+            })?
             .clone();
+        let original_capture_origin =
+            if crate::value::body_may_mint_inline_function(&registered.definition.body) {
+                self.checked_expression_types
+                    .as_ref()
+                    .and_then(|types| {
+                        types.resource_program.as_ref().filter(|program| {
+                            crate::value::closure_capture::original_root_types(program, types)
+                        })
+                    })
+                    .and_then(|program| {
+                        crate::value::closure_capture::OriginalClosureOwner::registered(
+                            program,
+                            &resolved_name,
+                            &registered.definition,
+                            &registered.namespace,
+                        )
+                    })
+            } else {
+                None
+            };
+        let registered_definition = registered.definition.clone();
+        let func = registered_definition.as_ref();
 
         if args.len() != func.params.len() {
             return Err(format!(
@@ -10018,50 +13055,180 @@ impl Interpreter {
         }
 
         let type_scope = self.type_scope_for_function(&func, type_args)?;
-        self.type_arg_scopes.push(type_scope);
+        if let Some(interface) = self.interface_dispatch_name(name) {
+            self.validate_interface_argument_owners(
+                &interface,
+                &func,
+                registered.namespace.as_deref(),
+                &type_scope,
+                &args,
+            )?;
+        }
+        let arguments: Vec<TypeExpr> = func
+            .type_params
+            .iter()
+            .map(|param| type_scope[&param.name].clone())
+            .collect();
+        let captured_arguments = self.captured_type_arguments(&arguments);
+        let expression_types = match &self.checked_expression_types {
+            Some(types) => match temporary_frame.as_ref() {
+                Some(frame) => frame
+                    .select_registered_projection(
+                        types,
+                        &resolved_name,
+                        &registered.namespace,
+                        func,
+                        &captured_arguments,
+                        &args,
+                    )
+                    .map_err(|error| format!("{resolved_name}: {error}"))?,
+                None => types
+                    .select(func.name.span, &captured_arguments, &args)
+                    .map_err(|error| format!("{resolved_name}: {error}"))?,
+            },
+            None => None,
+        };
+        let field_body = self.prepare_checked_field_function(
+            &resolved_name,
+            &registered.namespace,
+            func,
+            expression_types.as_deref(),
+            &captured_arguments,
+            source_types.is_some(),
+        )?;
+        let temporary_function = self.prepare_temporary_function(
+            &resolved_name,
+            &registered.namespace,
+            func,
+            expression_types.as_deref(),
+            &captured_arguments,
+            source_types.is_some(),
+            temporary_frame.as_ref(),
+        )?;
+        let func = match (&temporary_function, &field_body) {
+            (Some(receipt), _) => receipt.original()?,
+            (None, Some(reference)) => reference.function().map_err(|error| error.to_string())?,
+            (None, None) => func,
+        };
+        let saved_field_cursor = self.enter_checked_field_body(field_body.as_ref())?;
+        let temporary_activation = match self.enter_temporary_function(temporary_function.clone()) {
+            Ok(activation) => activation,
+            Err(error) => {
+                let _field_restore = self.restore_checked_field_body(saved_field_cursor);
+                return Err(error);
+            }
+        };
+        let saved_expression_types =
+            std::mem::replace(&mut self.active_checked_function, expression_types);
+        let saved_type_arguments = std::mem::replace(&mut self.current_type_arguments, arguments);
+        let saved_scoped_types = std::mem::take(&mut self.scoped_type_bindings);
+        let saved_checked_scope = self.active_checked_scope.take();
+        let saved_capture_origin = std::mem::replace(
+            &mut self.active_reflected_capture_origin,
+            original_capture_origin,
+        );
+        // Resolve arguments above in the caller, then keep its type bindings
+        // out of the callee's lexical scope, including non-generic callees.
+        let saved_type_scopes = std::mem::replace(&mut self.type_arg_scopes, vec![type_scope]);
 
         let saved_namespace = self.current_namespace.clone();
         let saved_trusted_stdlib = self.current_function_trusted_stdlib;
-        self.current_namespace = Self::function_namespace(&resolved_name);
-        self.current_function_trusted_stdlib =
-            self.trusted_stdlib_functions.contains(&resolved_name);
+        self.current_namespace = registered.namespace;
+        self.current_function_trusted_stdlib = registered.trusted_stdlib;
 
         let scope_depth = self.scopes.len();
+        let saved_scope_floor = self.lexical_scope_floor;
+        self.lexical_scope_floor = scope_depth;
         self.push_scope();
+        let ordinary_return_context = self
+            .resource_transport
+            .as_mut()
+            .is_some_and(|transport| transport.enter_ordinary_return());
+        let saved_proofs = self.allow_checked_refinement_proofs;
+        self.allow_checked_refinement_proofs &= source_types.is_some();
+        let source_types = source_types.filter(|_| self.allow_checked_refinement_proofs);
         let call_result = (|| {
-            for (param, arg) in func.params.iter().zip(args) {
-                let param_ty = self.substitute_type_expr(&param.ty);
-                let type_name = type_expr_name(&param_ty);
-                let arg = self.normalize_value_for_type(&param_ty, arg)?;
-                self.check_refinement(&type_name, &arg)?;
-                self.set_variable_with_type(&param.name.name, arg, param_ty);
+            if let Some(frame) = temporary_frame.as_ref() {
+                let staged =
+                    self.stage_temporary_parameters(func, args, source_types, Some(frame))?;
+                for (index, (param, (arg, param_ty))) in func.params.iter().zip(staged).enumerate()
+                {
+                    self.set_variable_with_type(&param.name.name, arg, param_ty);
+                    self.install_temporary_parameter(index, param, Some(frame))?;
+                    self.install_checked_field_binding(&param.name)?;
+                }
+            } else {
+                for (index, (param, arg)) in func.params.iter().zip(args).enumerate() {
+                    let param_ty = self.substitute_type_expr(&param.ty);
+                    let source_type = source_types
+                        .and_then(|types| types.get(index))
+                        .and_then(Option::as_deref);
+                    let arg =
+                        self.normalize_and_validate_value_from_source(&param_ty, arg, source_type)?;
+                    self.set_variable_with_type(&param.name.name, arg, param_ty);
+                    self.install_checked_field_binding(&param.name)?;
+                }
             }
 
-            let result = self.exec_block_inner(&func.body)?;
-            let mut value = match result {
-                Some(Signal::Return(v)) => v,
+            let result = match self.exec_block_with_temporary_output(&func.body)? {
+                temporary_local_views::BlockOutput::Acquired(output) => {
+                    return output.into_registered_value(
+                        self,
+                        temporary_activation,
+                        temporary_function.as_ref(),
+                    );
+                }
+                temporary_local_views::BlockOutput::Ordinary(result) => result,
+            };
+            let (mut value, return_source_type) = match result {
+                Some(Signal::Return(value, source_type)) => (value, source_type),
+                Some(Signal::ResourceReturn(..) | Signal::ResourceDefault(..)) => {
+                    return Err("raw call API cannot return Resource custody".to_string());
+                }
                 Some(Signal::Default(_)) => {
                     return Err("`default` can only be used inside a `handle` block".to_string());
                 }
-                _ => Value::Nothing,
+                _ => (Value::Nothing, None),
             };
 
             if let Some(return_type) = &func.return_type {
                 let return_type = self.substitute_type_expr(return_type);
-                let type_name = type_expr_name(&return_type);
-                value = self.normalize_value_for_type(&return_type, value)?;
-                self.check_refinement(&type_name, &value)?;
+                // Public/raw API invocations remain forced boundaries even
+                // when a checked body happens to be installed on the runtime.
+                let source_type = source_types.and(return_source_type.as_deref());
+                value = self.normalize_and_validate_value_from_source(
+                    &return_type,
+                    value,
+                    source_type,
+                )?;
             }
 
             Ok(value)
         })();
+        if ordinary_return_context {
+            if let Some(transport) = self.resource_transport.as_mut() {
+                transport.leave_return();
+            }
+        }
+        self.allow_checked_refinement_proofs = saved_proofs;
         while self.scopes.len() > scope_depth {
             self.pop_scope();
         }
-        self.type_arg_scopes.pop();
+        self.lexical_scope_floor = saved_scope_floor;
+        self.active_checked_scope = saved_checked_scope;
+        self.scoped_type_bindings = saved_scoped_types;
+        self.type_arg_scopes = saved_type_scopes;
+        self.current_type_arguments = saved_type_arguments;
+        self.active_checked_function = saved_expression_types;
         self.current_namespace = saved_namespace;
         self.current_function_trusted_stdlib = saved_trusted_stdlib;
-        call_result
+        self.active_reflected_capture_origin = saved_capture_origin;
+        let temporary_restore = self.leave_temporary_function(temporary_activation);
+        let field_restore = self.restore_checked_field_body(saved_field_cursor);
+        match (call_result, temporary_restore, field_restore) {
+            (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => Err(error),
+            (Ok(value), Ok(()), Ok(())) => Ok(value),
+        }
     }
 
     fn type_scope_for_function(
@@ -10081,39 +13248,181 @@ impl Interpreter {
             ));
         }
 
-        let raw: HashMap<String, TypeExpr> = func
+        Ok(func
             .type_params
             .iter()
             .zip(type_args.iter())
-            .map(|(param, arg)| (param.name.clone(), self.substitute_type_expr(arg)))
-            .collect();
-
-        Ok(raw
-            .iter()
-            .map(|(name, ty)| (name.clone(), self.substitute_type_expr_with_map(ty, &raw)))
+            .map(|(param, arg)| (param.name.clone(), arg.clone()))
             .collect())
     }
 
+    fn sum_primitive_list(
+        &self,
+        name: &str,
+        type_name: &str,
+        items: &[Value],
+    ) -> Result<Value, String> {
+        let invalid_element = |index| {
+            if index == 0 {
+                format!("{name}: list elements must be int64 or float64")
+            } else {
+                format!("{name}: mixed types")
+            }
+        };
+        if matches!(type_name, "float32" | "float64") {
+            let mut total = 0.0_f64;
+            for (index, item) in items.iter().enumerate() {
+                let Value::Float64(number) = item.payload() else {
+                    return Err(invalid_element(index));
+                };
+                total = if type_name == "float32" {
+                    f64::from(total as f32 + *number as f32)
+                } else {
+                    total + number
+                };
+            }
+            return Ok(Value::Float64(total));
+        }
+        let mut total = 0_u64;
+        // Reduction modulo the selected width commutes with every addition.
+        // Keep the raw accumulator and apply that width before returning.
+        for (index, item) in items.iter().enumerate() {
+            let bits = match (type_name, item.payload()) {
+                ("uint64", Value::Uint64(number)) => *number,
+                (_, Value::Int64(number)) if type_name != "uint64" => *number as u64,
+                _ => return Err(invalid_element(index)),
+            };
+            total = total.wrapping_add(bits);
+        }
+        self.wrap_integer_value_for_type_name(type_name, Value::Uint64(total))
+    }
+
+    fn sum_fallback_list(name: &str, items: &[Value]) -> Result<Value, String> {
+        if items.is_empty() {
+            return Ok(Value::Int64(0));
+        }
+        // Keep the existing fallback's int64/float64 arithmetic and errors.
+        match items[0].payload() {
+            Value::Int64(_) => {
+                let mut total = 0i64;
+                for item in items {
+                    match item.payload() {
+                        Value::Int64(n) => total = total.wrapping_add(*n),
+                        _ => return Err(format!("{name}: mixed types")),
+                    }
+                }
+                Ok(Value::Int64(total))
+            }
+            Value::Float64(_) => {
+                let mut total = 0.0f64;
+                for item in items {
+                    match item.payload() {
+                        Value::Float64(n) => total += n,
+                        _ => return Err(format!("{name}: mixed types")),
+                    }
+                }
+                Ok(Value::Float64(total))
+            }
+            _ => Err(format!("{name}: list elements must be int64 or float64")),
+        }
+    }
+
+    fn sum_resolved_list(
+        &mut self,
+        name: &str,
+        element_type: Option<TypeExpr>,
+        args: &[Value],
+        checked_producer: bool,
+    ) -> Result<Value, String> {
+        if args.len() != 1 {
+            return Err(format!("{name} expects 1 argument, got {}", args.len()));
+        }
+        let Value::List(items) = args[0].payload() else {
+            return Err(format!("{name}: argument must be a list"));
+        };
+        let element = element_type
+            .as_ref()
+            .map(|ty| self.resolved_concrete_type_display(ty));
+        if let Some(type_name) = element
+            && matches!(
+                type_name.as_str(),
+                "int8"
+                    | "int16"
+                    | "int32"
+                    | "int64"
+                    | "uint8"
+                    | "uint16"
+                    | "uint32"
+                    | "uint64"
+                    | "float32"
+                    | "float64"
+            )
+        {
+            return self.sum_primitive_list(name, &type_name, items);
+        }
+        let value = Self::sum_fallback_list(name, items)?;
+        match element_type {
+            // Fresh fallback output needs the selected invariant before any
+            // checked local, argument or return can reuse its result type.
+            Some(ty) if self.allow_checked_refinement_proofs && checked_producer => {
+                let canonical = self.concrete_resolved_type_expr(&ty, &mut HashSet::new());
+                let mut unqualified = &canonical;
+                let mut qualified = false;
+                while let TypeExpr::Generic(owner, arguments, _) = unqualified {
+                    if owner.name != "secret" || arguments.len() != 1 {
+                        break;
+                    }
+                    qualified = true;
+                    unqualified = &arguments[0];
+                }
+                if qualified
+                    && matches!(unqualified, TypeExpr::Named(name) if self.type_name_has_refinement(&name.name))
+                {
+                    return Err(format!(
+                        "{name}: cannot establish new invariants beneath secret"
+                    ));
+                }
+                self.normalize_and_validate_value(&ty, value)
+            }
+            // Raw/no-fact facades retain their one existing return check.
+            _ => Ok(value),
+        }
+    }
+
     /// Try to call a higher-order built-in that requires `&mut self` (because
-    /// it needs to invoke a user-supplied function value).  Returns `None` if
+    /// it needs to invoke a user-supplied function value). Returns `None` if
     /// the name is not a higher-order built-in.
+    #[cfg(test)]
     fn call_higher_order_builtin(
         &mut self,
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, String>> {
-        match name {
-            "graphics.__run" if self.current_function_trusted_stdlib => {
+        self.call_higher_order_builtin_with_type_args(name, &[], args, false)
+    }
+
+    /// Explicit arguments are resolved; absent arguments retain the legacy
+    /// metadata-free enclosing-generic fallback.
+    fn call_higher_order_builtin_with_type_args(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: &[Value],
+        checked_producer: bool,
+    ) -> Option<Result<Value, String>> {
+        let intrinsic = IntrinsicId::from_callable_name(name)?;
+        match intrinsic {
+            IntrinsicId::GraphicsRun if self.current_function_trusted_stdlib => {
                 Some(self.run_graphics_builtin(args.to_vec()))
             }
-            "list.__sort_by" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListSortBy if self.current_function_trusted_stdlib => {
                 if args.len() != 2 {
                     return Some(Err(format!(
                         "list.__sort_by expects 2 arguments, got {}",
                         args.len()
                     )));
                 }
-                let items = match &args[0] {
+                let items = match args[0].payload() {
                     Value::List(v) => v.clone(),
                     _ => return Some(Err("list.__sort_by: first argument must be a list".into())),
                 };
@@ -10121,7 +13430,10 @@ impl Interpreter {
                 // Compute keys for each item.
                 let mut keyed: Vec<(i64, Value)> = Vec::new();
                 for item in items {
-                    match self.call_fn_value(fn_val.clone(), vec![item.clone()]) {
+                    match self
+                        .call_fn_value(fn_val.clone(), vec![item.clone()])
+                        .map(Value::into_payload)
+                    {
                         Ok(Value::Int64(k)) => keyed.push((k, item)),
                         Ok(other) => {
                             return Some(Err(format!(
@@ -10134,65 +13446,37 @@ impl Interpreter {
                 keyed.sort_by_key(|(k, _)| *k);
                 Some(Ok(Value::List(keyed.into_iter().map(|(_, v)| v).collect())))
             }
-            "list.__sum" if self.current_function_trusted_stdlib => {
-                if args.len() != 1 {
-                    return Some(Err(format!(
-                        "{name} expects 1 argument, got {}",
-                        args.len()
-                    )));
-                }
-                match &args[0] {
-                    Value::List(items) => {
-                        if items.is_empty() {
-                            return Some(Ok(Value::Int64(0)));
-                        }
-                        // Detect int64 vs float64 from first element.
-                        match &items[0] {
-                            Value::Int64(_) => {
-                                let mut total = 0i64;
-                                for item in items {
-                                    match item {
-                                        Value::Int64(n) => {
-                                            total = total.wrapping_add(*n);
-                                        }
-                                        _ => return Some(Err(format!("{name}: mixed types"))),
-                                    }
-                                }
-                                Some(Ok(Value::Int64(total)))
-                            }
-                            Value::Float64(_) => {
-                                let mut total = 0.0f64;
-                                for item in items {
-                                    match item {
-                                        Value::Float64(n) => total += n,
-                                        _ => return Some(Err(format!("{name}: mixed types"))),
-                                    }
-                                }
-                                Some(Ok(Value::Float64(total)))
-                            }
-                            _ => Some(Err(format!(
-                                "{name}: list elements must be int64 or float64"
-                            ))),
-                        }
-                    }
-                    _ => Some(Err(format!("{name}: argument must be a list"))),
-                }
+            IntrinsicId::ListSum if self.current_function_trusted_stdlib => {
+                let selected = type_args.first().cloned().or_else(|| {
+                    self.current_type_arguments
+                        .first()
+                        .map(|ty| self.resolve_installed_type_expr(ty))
+                });
+                let blank_aliases = vec![HashMap::new(); self.namespace_alias_scopes.len()];
+                let saved_aliases =
+                    std::mem::replace(&mut self.namespace_alias_scopes, blank_aliases);
+                let result = self.sum_resolved_list(name, selected, args, checked_producer);
+                self.namespace_alias_scopes = saved_aliases;
+                Some(result)
             }
-            "list.__group_by" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListGroupBy if self.current_function_trusted_stdlib => {
                 if args.len() != 2 {
                     return Some(Err(format!(
                         "{name} expects 2 arguments, got {}",
                         args.len()
                     )));
                 }
-                let items = match &args[0] {
+                let items = match args[0].payload() {
                     Value::List(v) => v.clone(),
                     _ => return Some(Err(format!("{name}: first argument must be a list"))),
                 };
                 let fn_val = args[1].clone();
                 let mut groups: Vec<(Value, Value)> = Vec::new();
                 for item in items {
-                    let key = match self.call_fn_value(fn_val.clone(), vec![item.clone()]) {
+                    let key = match self
+                        .call_fn_value(fn_val.clone(), vec![item.clone()])
+                        .map(Value::into_payload)
+                    {
                         Ok(k) => k,
                         Err(e) => return Some(Err(e)),
                     };
@@ -10207,20 +13491,73 @@ impl Interpreter {
                 Some(Ok(Value::Map(groups)))
             }
 
-            _ => None,
+            // The four guarded variants fall through here for untrusted
+            // callers; every other intrinsic is intentionally declined.
+            IntrinsicId::GraphicsRun
+            | IntrinsicId::ListGroupBy
+            | IntrinsicId::ListSortBy
+            | IntrinsicId::ListSum => None,
+            non_higher_order_intrinsics!() => None,
         }
     }
 
     /// Call a `Value::Function` (inline function) with the given arguments.
     fn call_fn_value(&mut self, fn_val: Value, args: Vec<Value>) -> Result<Value, String> {
-        match fn_val {
-            Value::NamedFunction(name) => self.call_function(&name, args),
-            Value::Function {
-                params,
-                body,
-                captures,
-                namespace,
-            } => {
+        self.call_fn_value_from_source(fn_val, args, None)
+    }
+
+    fn call_fn_value_from_source(
+        &mut self,
+        fn_val: Value,
+        args: Vec<Value>,
+        source_types: Option<&[Option<String>]>,
+    ) -> Result<Value, String> {
+        match fn_val.into_payload() {
+            Value::ReflectedCallable(adapter) => {
+                self.call_reflected_callable(*adapter, args, source_types)
+            }
+            Value::NamedFunction(name) => {
+                self.call_registered_function_from_source(&name, &[], args, source_types)
+            }
+            source @ Value::Function { .. } => {
+                let field_body = self.prepare_checked_field_inline(&source)?;
+                let original_capture_origin = match &source {
+                    Value::Function { body, .. }
+                        if crate::value::body_may_mint_inline_function(body) =>
+                    {
+                        self.checked_expression_types
+                            .as_ref()
+                            .and_then(|types| {
+                                types.resource_program.as_ref().filter(|program| {
+                                    crate::value::closure_capture::original_root_types(
+                                        program, types,
+                                    )
+                                })
+                            })
+                            .and_then(|program| {
+                                crate::value::closure_capture::invocation_origin(&source, program)
+                            })
+                    }
+                    _ => None,
+                };
+                let Value::Function {
+                    type_context,
+                    params,
+                    body,
+                    captures,
+                    capture_types,
+                    namespace_aliases,
+                    namespace,
+                } = source
+                else {
+                    unreachable!("inline call matched its function value above");
+                };
+                let (execution_params, execution_body) = match &field_body {
+                    Some(reference) => reference
+                        .field_inline_parts()
+                        .map_err(|error| error.to_string())?,
+                    None => (params.as_slice(), &body),
+                };
                 if args.len() != params.len() {
                     return Err(format!(
                         "inline function expects {} argument(s), got {}",
@@ -10228,70 +13565,285 @@ impl Interpreter {
                         args.len()
                     ));
                 }
-                let mut normalized_args = Vec::with_capacity(args.len());
-                for (param, arg) in params.iter().zip(args) {
-                    let param_ty = self.substitute_type_expr(&param.ty);
-                    normalized_args.push(self.normalize_value_for_type(&param_ty, arg)?);
-                }
-
-                // Push the captured environment as a scope, then the parameter scope on top.
+                let saved_capture_origin = std::mem::replace(
+                    &mut self.active_reflected_capture_origin,
+                    original_capture_origin,
+                );
+                let saved_field_cursor = self.enter_checked_field_body(field_body.as_ref())?;
+                let saved_expression_types = std::mem::replace(
+                    &mut self.active_checked_function,
+                    type_context.checked_function,
+                );
+                let saved_checked_scope =
+                    std::mem::replace(&mut self.active_checked_scope, type_context.checked_scope);
+                let saved_scoped_types = std::mem::replace(
+                    &mut self.scoped_type_bindings,
+                    type_context.scoped_type_bindings,
+                );
+                let saved_type_scopes =
+                    std::mem::replace(&mut self.type_arg_scopes, vec![type_context.bindings]);
+                let saved_type_arguments = std::mem::replace(
+                    &mut self.current_type_arguments,
+                    type_context
+                        .arguments
+                        .into_iter()
+                        .map(|arg| arg.ty)
+                        .collect(),
+                );
+                let saved_namespace = std::mem::replace(&mut self.current_namespace, namespace);
+                let saved_trusted_stdlib = self.current_function_trusted_stdlib;
+                self.current_function_trusted_stdlib = false;
                 let scope_depth = self.scopes.len();
+                let saved_scope_floor = self.lexical_scope_floor;
+                self.lexical_scope_floor = scope_depth;
                 self.push_scope();
                 for (name, value) in &captures {
-                    self.set_variable(name, value.clone());
+                    if let Some(ty) = capture_types.get(name) {
+                        self.set_variable_with_type(name, value.clone(), ty.clone());
+                    } else {
+                        self.set_variable(name, value.clone());
+                    }
+                }
+                for (name, target) in namespace_aliases {
+                    self.set_namespace_alias(name, target);
                 }
                 self.push_scope();
-                for (param, arg) in params.iter().zip(normalized_args) {
-                    let param_ty = self.substitute_type_expr(&param.ty);
-                    self.set_variable_with_type(&param.name.name, arg, param_ty);
+                let ordinary_return_context = self
+                    .resource_transport
+                    .as_mut()
+                    .is_some_and(|transport| transport.enter_ordinary_return());
+                let saved_proofs = self.allow_checked_refinement_proofs;
+                self.allow_checked_refinement_proofs &= source_types.is_some();
+                let source_types = source_types.filter(|_| self.allow_checked_refinement_proofs);
+                let result = (|| {
+                    for (index, (param, arg)) in execution_params.iter().zip(args).enumerate() {
+                        let param_ty = self.substitute_type_expr(&param.ty);
+                        let source_type = source_types
+                            .and_then(|types| types.get(index))
+                            .and_then(Option::as_deref);
+                        let arg = self.normalize_and_validate_value_from_source(
+                            &param_ty,
+                            arg,
+                            source_type,
+                        )?;
+                        self.set_variable_with_type(&param.name.name, arg, param_ty);
+                        self.install_checked_field_binding(&param.name)?;
+                    }
+                    let (mut value, return_source_type) =
+                        match self.exec_block_inner(execution_body)? {
+                            Some(Signal::Return(value, source_type)) => (value, source_type),
+                            Some(Signal::ResourceReturn(..) | Signal::ResourceDefault(..)) => {
+                                return Err(
+                                "captured Resource return has no checked custody transport proof"
+                                    .to_string(),
+                            );
+                            }
+                            Some(Signal::Default(_)) => {
+                                return Err("`default` can only be used inside a `handle` block"
+                                    .to_string());
+                            }
+                            _ => (Value::Nothing, None),
+                        };
+                    if let Some(return_type) = &type_context.return_type {
+                        let return_type = self.substitute_type_expr(return_type);
+                        let source_type = source_types.and(return_source_type.as_deref());
+                        value = self.normalize_and_validate_value_from_source(
+                            &return_type,
+                            value,
+                            source_type,
+                        )?;
+                    }
+                    Ok(value)
+                })();
+                if ordinary_return_context {
+                    if let Some(transport) = self.resource_transport.as_mut() {
+                        transport.leave_return();
+                    }
                 }
-                let saved_trusted_stdlib = self.current_function_trusted_stdlib;
-                let saved_namespace = self.current_namespace.clone();
-                self.current_function_trusted_stdlib = false;
-                self.current_namespace = namespace;
-                let result = self.exec_block_inner(&body);
-                self.current_function_trusted_stdlib = saved_trusted_stdlib;
-                self.current_namespace = saved_namespace;
+                self.allow_checked_refinement_proofs = saved_proofs;
                 while self.scopes.len() > scope_depth {
                     self.pop_scope();
                 }
-                let result = result?;
-                Ok(match result {
-                    Some(Signal::Return(v)) => v,
-                    _ => Value::Nothing,
-                })
+                self.lexical_scope_floor = saved_scope_floor;
+                self.current_function_trusted_stdlib = saved_trusted_stdlib;
+                self.current_namespace = saved_namespace;
+                self.active_checked_scope = saved_checked_scope;
+                self.scoped_type_bindings = saved_scoped_types;
+                self.type_arg_scopes = saved_type_scopes;
+                self.current_type_arguments = saved_type_arguments;
+                self.active_checked_function = saved_expression_types;
+                self.active_reflected_capture_origin = saved_capture_origin;
+                let field_restore = self.restore_checked_field_body(saved_field_cursor);
+                match (result, field_restore) {
+                    (Err(error), _) | (_, Err(error)) => Err(error),
+                    (Ok(value), Ok(())) => Ok(value),
+                }
             }
             other => Err(format!("expected function value, got {other}")),
         }
     }
 
     fn resolve_interface_dispatch(&self, name: &str, args: &[Value]) -> Option<String> {
-        if self.functions.contains_key(name) {
-            return Some(name.to_string());
+        if let Some(interface) = self.interface_dispatch_name(name) {
+            let receiver = args.first()?;
+            if matches!(receiver.payload(), Value::Pending(_)) {
+                return None;
+            }
+            let receiver_type = runtime_type_name(receiver)?;
+            return self.interface_methods[&interface]
+                .get(&receiver_type)
+                .cloned();
         }
+        self.functions.contains_key(name).then(|| name.to_string())
+    }
 
-        let receiver_type = runtime_type_name(args.first()?)?;
+    fn interface_dispatch_name(&self, name: &str) -> Option<String> {
         self.interface_methods
-            .get(name)
-            .and_then(|methods| methods.get(&receiver_type))
+            .contains_key(name)
+            .then(|| name.to_string())
+            .or_else(|| {
+                self.current_qualified_name(name)
+                    .filter(|qualified| self.interface_methods.contains_key(qualified))
+            })
+    }
+
+    fn display_interpolation_value(&mut self, expr: &Expr, value: Value) -> Result<String, String> {
+        let receiver = self
+            .checked_expression_type(expr.span())
             .cloned()
+            .or_else(|| {
+                self.call_argument_type(expr)
+                    .map(|ty| self.concrete_type_display(&ty))
+            })
+            .or_else(|| runtime_type_name(&value));
+        let display_method = receiver.and_then(|receiver| {
+            self.interface_methods
+                .get("Displayable.display")
+                .and_then(|methods| methods.get(&receiver))
+                .cloned()
+        });
+        let Some(display_method) = display_method else {
+            return Ok(value.to_string());
+        };
+        match self.call_function(&display_method, vec![value])? {
+            Value::String(text) => Ok(text),
+            other => Err(format!(
+                "Displayable.display returned {other} instead of string"
+            )),
+        }
+    }
+
+    fn struct_field_type(
+        &self,
+        ty: &TypeExpr,
+        arguments: &HashMap<String, TypeExpr>,
+        namespace: Option<&str>,
+    ) -> TypeExpr {
+        match ty {
+            TypeExpr::Named(name) => arguments
+                .get(&name.name)
+                // Actual arguments were fully resolved in the caller. They
+                // are values, not templates to substitute through this map.
+                .cloned()
+                .unwrap_or_else(|| TypeExpr::Named(self.expand_type_ident(name, namespace))),
+            TypeExpr::Generic(name, children, span) => TypeExpr::Generic(
+                self.expand_type_ident(name, namespace),
+                children
+                    .iter()
+                    .map(|child| self.struct_field_type(child, arguments, namespace))
+                    .collect(),
+                *span,
+            ),
+            TypeExpr::View(inner, span) => TypeExpr::View(
+                Box::new(self.struct_field_type(inner, arguments, namespace)),
+                *span,
+            ),
+            TypeExpr::StateQualified(inner, state, span) => TypeExpr::StateQualified(
+                Box::new(self.struct_field_type(inner, arguments, namespace)),
+                state.clone(),
+                *span,
+            ),
+            TypeExpr::Function(params, result, span) => TypeExpr::Function(
+                params
+                    .iter()
+                    .map(|param| self.struct_field_type(param, arguments, namespace))
+                    .collect(),
+                Box::new(self.struct_field_type(result, arguments, namespace)),
+                *span,
+            ),
+        }
     }
 
     fn construct_struct(
         &mut self,
         struct_name: &str,
+        type_args: &[TypeExpr],
         args: &[CallArg],
         arg_values: Vec<Value>,
+        source_types: &[Option<String>],
     ) -> Result<Value, String> {
         let strukt = self
             .structs
             .get(struct_name)
             .ok_or_else(|| format!("undefined struct '{struct_name}'"))?
             .clone();
-        let validates_refinements = strukt
+        // Stored field spellings belong to the declaration. Caller imports
+        // must not rewrite even a canonical owner during normalization,
+        // predicate lookup, or retained field identity. Keep the alias stack's
+        // shape so predicates can still establish their own lexical imports.
+        let declaration_aliases = vec![HashMap::new(); self.namespace_alias_scopes.len()];
+        let caller_aliases =
+            std::mem::replace(&mut self.namespace_alias_scopes, declaration_aliases);
+        let caller_type_scopes = std::mem::take(&mut self.type_arg_scopes);
+        let caller_namespace = std::mem::replace(
+            &mut self.current_namespace,
+            Self::type_name_namespace(struct_name).map(str::to_owned),
+        );
+        let result = self.construct_struct_in_declaration(
+            &strukt,
+            type_args,
+            args,
+            arg_values,
+            source_types,
+        );
+        self.current_namespace = caller_namespace;
+        self.type_arg_scopes = caller_type_scopes;
+        self.namespace_alias_scopes = caller_aliases;
+        result
+    }
+
+    fn construct_struct_in_declaration(
+        &mut self,
+        strukt: &StructDef,
+        type_args: &[TypeExpr],
+        args: &[CallArg],
+        arg_values: Vec<Value>,
+        source_types: &[Option<String>],
+    ) -> Result<Value, String> {
+        let struct_name = &strukt.name.name;
+        let substitutions: HashMap<_, _> = strukt
+            .type_params
+            .iter()
+            .zip(type_args)
+            .map(|(parameter, argument)| (parameter.name.clone(), argument.clone()))
+            .collect();
+        // Arguments above are already resolved in the caller. Field spelling
+        // now belongs solely to the struct's declaration and its own map, not
+        // an unrelated caller parameter with the same name.
+        let field_types: Vec<_> = strukt
             .fields
             .iter()
-            .any(|field| self.type_name_has_refinement(&type_expr_name(&field.ty)));
+            .map(|field| {
+                self.struct_field_type(
+                    &field.ty,
+                    &substitutions,
+                    Self::type_name_namespace(struct_name),
+                )
+            })
+            .collect();
+        let validates_refinements = field_types
+            .iter()
+            .any(|ty| self.type_name_has_refinement(&type_expr_name(ty)));
 
         if args.len() > strukt.fields.len() {
             return Err(format!(
@@ -10303,7 +13855,7 @@ impl Interpreter {
         }
 
         let mut fields: Vec<Option<Value>> = vec![None; strukt.fields.len()];
-        for (arg, value) in args.iter().zip(arg_values) {
+        for (source_index, (arg, value)) in args.iter().zip(arg_values).enumerate() {
             let field_index = if let Some(name) = &arg.name {
                 strukt
                     .fields
@@ -10329,16 +13881,19 @@ impl Interpreter {
                 ));
             }
 
-            let field_ty = self.substitute_type_expr(&strukt.fields[field_index].ty);
-            let type_name = type_expr_name(&field_ty);
-            let value = self.normalize_value_for_type(&field_ty, value)?;
-            if let Err(message) = self.check_refinement(&type_name, &value) {
+            let type_name = type_expr_name(&field_types[field_index]);
+            let value = self.normalize_value_for_type_name(&type_name, value)?;
+            if let Err(message) = self.check_refinement_from_source(
+                &type_name,
+                &value,
+                source_types.get(source_index).and_then(Option::as_deref),
+            ) {
                 if validates_refinements {
                     return Ok(Value::ResultFail(Box::new(Value::String(message))));
                 }
                 return Err(message);
             }
-            fields[field_index] = Some(value);
+            fields[field_index] = Some(self.retain_checked_identity(&type_name, value));
         }
 
         for (index, field) in strukt.fields.iter().enumerate() {
@@ -10357,7 +13912,15 @@ impl Interpreter {
             .map(|(field, value)| (field.name.name.clone(), value.unwrap()))
             .collect();
 
+        let concrete_type = (!type_args.is_empty()).then(|| {
+            let args = type_args
+                .iter()
+                .map(|ty| self.concrete_type_display(ty))
+                .collect::<Vec<_>>();
+            format!("{struct_name}[{}]", args.join(", "))
+        });
         let value = Value::Struct {
+            concrete_type,
             type_name: struct_name.to_string(),
             fields,
         };
@@ -10458,6 +14021,7 @@ impl Interpreter {
         }
 
         let value = Value::Struct {
+            concrete_type: None,
             type_name: bitfield_name.to_string(),
             fields: bitfield
                 .fields
@@ -10474,9 +14038,27 @@ impl Interpreter {
         }
     }
 
-    fn eval_value_field_access(&self, value: Value, field_name: &str) -> Result<ExprFlow, String> {
-        match value {
-            Value::Struct { type_name, fields } => fields
+    fn eval_value_field_access(
+        &self,
+        value: Value,
+        field_name: &str,
+        receiver_type: Option<&TypeExpr>,
+    ) -> Result<ExprFlow, String> {
+        if !matches!(
+            value.payload(),
+            Value::Struct { .. } | Value::Machine { .. }
+        ) {
+            return Err(format!(
+                "field access is not supported on {}",
+                self.format_debug_value(&value, receiver_type)
+            ));
+        }
+        match value.into_payload() {
+            Value::Struct {
+                concrete_type: _,
+                type_name,
+                fields,
+            } => fields
                 .into_iter()
                 .find(|(name, _)| name == field_name)
                 .map(|(_, value)| ExprFlow::Value(value))
@@ -10508,7 +14090,7 @@ impl Interpreter {
                     )
                 })
             }
-            other => Err(format!("field access is not supported on {other}")),
+            _ => unreachable!("field receiver shape checked before consuming its wrappers"),
         }
     }
 
@@ -10573,7 +14155,7 @@ impl Interpreter {
 
         // arg 0 is evaluated — it should be the current machine value
         let current_value = self.eval_expr(&args[0].value)?;
-        let current_state = match &current_value {
+        let current_state = match current_value.payload() {
             Value::Machine {
                 type_name, state, ..
             } => {
@@ -10650,7 +14232,7 @@ impl Default for Interpreter {
 // ---------------------------------------------------------------------------
 
 fn is_truthy(val: &Value) -> Result<bool, String> {
-    match val {
+    match val.payload() {
         Value::Bool(b) => Ok(*b),
         _ => Err(format!("expected boolean, got {val}")),
     }
@@ -10785,36 +14367,6 @@ fn string_graphemes(s: &str) -> Vec<&str> {
     UnicodeSegmentation::graphemes(s, true).collect()
 }
 
-fn float_midpoint(left: f64, right: f64) -> f64 {
-    if left == right {
-        return left;
-    }
-    if !left.is_finite() || !right.is_finite() {
-        return (left + right) / 2.0;
-    }
-    if left.is_sign_negative() == right.is_sign_negative() {
-        left + (right - left) / 2.0
-    } else {
-        left / 2.0 + right / 2.0
-    }
-}
-
-fn float_average(values: &[f64]) -> f64 {
-    let sum = values.iter().sum::<f64>();
-    // Rescaling can underflow small residuals after large values cancel.
-    // Keep ordinary summation whenever it did not overflow.
-    if sum.is_finite() {
-        return sum / values.len() as f64;
-    }
-    let scale = values.iter().map(|value| value.abs()).fold(0.0, f64::max);
-    if scale == 0.0 || !scale.is_finite() {
-        return sum / values.len() as f64;
-    }
-
-    let scaled_sum = values.iter().map(|value| value / scale).sum::<f64>();
-    scaled_sum / values.len() as f64 * scale
-}
-
 fn uint64_arithmetic_operand(value: i64) -> Result<u64, String> {
     if value >= 0 {
         Ok(value as u64)
@@ -10894,6 +14446,7 @@ fn compare_i64_uint64(left: i64, op: BinOp, right: u64) -> Result<Value, String>
 }
 
 fn eval_binary_op(left: &Value, op: BinOp, right: &Value) -> Result<Value, String> {
+    let (left, right) = (left.payload(), right.payload());
     match (left, op, right) {
         // -- Integer arithmetic -----------------------------------------------
         (Value::Int64(a), BinOp::Add, Value::Int64(b)) => Ok(Value::Int64(a.wrapping_add(*b))),
@@ -11275,6 +14828,7 @@ fn type_expr_display(ty: &TypeExpr) -> String {
 
 fn runtime_type_name(value: &Value) -> Option<String> {
     match value {
+        Value::Typed { type_name, .. } => Some(type_name.clone()),
         Value::Int64(_) => Some("int64".to_string()),
         Value::Uint64(_) => Some("uint64".to_string()),
         Value::Float64(_) => Some("float64".to_string()),
@@ -11286,16 +14840,24 @@ fn runtime_type_name(value: &Value) -> Option<String> {
         Value::OptionalSome(_) | Value::OptionalNone => Some("optional".to_string()),
         Value::Nothing => Some("nothing".to_string()),
         Value::Capability(name) => Some(name.clone()),
+        Value::Resource(_) => None,
+        Value::ResourceHook(_) => Some("function".to_string()),
+        Value::GrantedNetwork(_) => Some("Network".to_string()),
         Value::TypeConstruction { .. } => Some("TypeConstruction".to_string()),
-        Value::Struct { type_name, .. }
-        | Value::Enum { type_name, .. }
-        | Value::Machine { type_name, .. } => Some(type_name.clone()),
+        Value::Struct {
+            type_name,
+            concrete_type,
+            ..
+        } => Some(concrete_type.as_ref().unwrap_or(type_name).clone()),
+        Value::Enum { type_name, .. } | Value::Machine { type_name, .. } => Some(type_name.clone()),
         Value::Error(_) => None,
         Value::Actor(_) => Some("actor".to_string()),
         Value::Pending(_) => Some("pending".to_string()),
         Value::Map(_) => Some("map".to_string()),
         Value::Set(_) => Some("set".to_string()),
-        Value::Function { .. } | Value::NamedFunction(_) => Some("function".to_string()),
+        Value::Function { .. } | Value::NamedFunction(_) | Value::ReflectedCallable(_) => {
+            Some("function".to_string())
+        }
     }
 }
 
@@ -11422,6 +14984,4404 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reflected_comparison_normalizes_repeated_aliases_without_erasing_boundaries() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.register_type_alias(&type_alias("IntegerAlias", "int64", None));
+        for (actual, requested) in [
+            ("map[int64, int64]", "map[IntegerAlias, IntegerAlias]"),
+            ("map[int64, int64]", "map[models.Positive, models.Positive]"),
+            (
+                "result[int64, int64]",
+                "result[models.Positive, models.Positive]",
+            ),
+            (
+                "map[list[int64], list[int64]]",
+                "map[list[models.Positive], list[models.Positive]]",
+            ),
+            ("Box[int64, int64]", "Box[models.Positive, models.Positive]"),
+            (
+                "secret[map[int64, int64]]",
+                "secret[map[models.Positive, models.Positive]]",
+            ),
+        ] {
+            let requested_ty = Interpreter::simple_type_expr_from_name(requested, sp()).unwrap();
+            assert!(interpreter.reflection_type_names_match(actual, requested));
+            assert!(interpreter.reflection_type_name_matches_expr(actual, &requested_ty));
+        }
+        for (actual, requested) in [
+            ("map[int64, int64]", "map[models.Positive, bool]"),
+            (
+                "Box[int64, int64]",
+                "OtherBox[models.Positive, models.Positive]",
+            ),
+            (
+                "map[int64, int64]",
+                "secret[map[models.Positive, models.Positive]]",
+            ),
+            (
+                "secret[map[int64, int64]]",
+                "map[models.Positive, models.Positive]",
+            ),
+        ] {
+            let requested_ty = Interpreter::simple_type_expr_from_name(requested, sp()).unwrap();
+            assert!(!interpreter.reflection_type_names_match(actual, requested));
+            assert!(!interpreter.reflection_type_name_matches_expr(actual, &requested_ty));
+        }
+        let repeated =
+            Interpreter::simple_type_expr_from_name("map[models.Positive, models.Positive]", sp())
+                .unwrap();
+        assert_eq!(
+            interpreter
+                .reflection_compare_type_expr(&TypeExpr::View(Box::new(repeated.clone()), sp(),)),
+            "view map[int64, int64]"
+        );
+        assert_eq!(
+            interpreter.reflection_compare_type_expr(&TypeExpr::StateQualified(
+                Box::new(repeated),
+                ident("active"),
+                sp(),
+            )),
+            "map[int64, int64] at active"
+        );
+        assert_eq!(
+            interpreter.reflection_compare_type_expr(&TypeExpr::Function(
+                vec![type_named("models.Positive"), type_named("models.Positive")],
+                Box::new(type_named("models.Positive")),
+                sp(),
+            )),
+            "function(int64, int64) returns int64"
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+    }
+
+    #[test]
+    fn reflected_comparison_retains_declaration_context_and_cycle_stopping() {
+        let mut interpreter = reuse_interpreter();
+        interpreter
+            .register_type_alias_in_namespace(Some("models"), &type_alias("Local", "int64", None));
+        interpreter
+            .register_type_alias_in_namespace(Some("shadow"), &type_alias("Local", "bool", None));
+        let mut pair = type_alias("Pair", "int64", None);
+        pair.base_type =
+            Interpreter::simple_type_expr_from_name("map[Local, Local]", sp()).unwrap();
+        interpreter.register_type_alias_in_namespace(Some("models"), &pair);
+        interpreter.current_namespace = Some("shadow".into());
+        assert_eq!(
+            interpreter.reflection_compare_type_name("models.Pair"),
+            "map[int64, int64]"
+        );
+        assert!(
+            !interpreter
+                .reflection_type_names_match("map[int64, int64]", "map[models.Pair, models.Pair]")
+        );
+        assert!(interpreter.reflection_type_names_match(
+            "map[map[int64, int64], map[int64, int64]]",
+            "map[models.Pair, models.Pair]"
+        ));
+
+        // Malformed metadata-free alias graphs remain bounded and do not become integers.
+        for (name, base) in [
+            ("SelfCycle", "SelfCycle"),
+            ("CycleA", "CycleB"),
+            ("CycleB", "CycleA"),
+            ("GenericCycle", "list[GenericCycle]"),
+        ] {
+            let mut alias = type_alias(name, "int64", None);
+            alias.base_type = Interpreter::simple_type_expr_from_name(base, sp()).unwrap();
+            interpreter.register_type_alias(&alias);
+        }
+        for (name, expected) in [
+            ("SelfCycle", "SelfCycle"),
+            ("CycleA", "CycleA"),
+            ("CycleB", "CycleB"),
+            ("GenericCycle", "list[GenericCycle]"),
+        ] {
+            assert_eq!(interpreter.reflection_compare_type_name(name), expected);
+            assert!(!interpreter.reflection_type_names_match("int64", name));
+        }
+        assert_eq!(
+            interpreter.reflection_compare_type_name("map[CycleA, models.Positive]"),
+            "map[CycleA, int64]"
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+    }
+
+    #[test]
+    fn repeated_reflected_leaf_requests_validate_map_slots_and_occupied_result_arms() {
+        for shape in ["record", "enum", "machine"] {
+            for (actual, requested, payload, expected_markers) in [
+                (
+                    "map[int64, int64]",
+                    "map[models.Positive, models.Positive]",
+                    Value::Map(vec![
+                        (Value::Int64(1), Value::Int64(7)),
+                        (Value::Int64(2), Value::Int64(9)),
+                    ]),
+                    vec!["trace positive"; 4],
+                ),
+                (
+                    "result[int64, int64]",
+                    "result[models.Positive, models.Positive]",
+                    Value::ResultOk(Box::new(Value::Int64(7))),
+                    vec!["trace positive"],
+                ),
+                (
+                    "result[int64, int64]",
+                    "result[models.Positive, models.Positive]",
+                    Value::ResultFail(Box::new(Value::Int64(9))),
+                    vec!["trace positive"],
+                ),
+            ] {
+                let (mut interpreter, expression) =
+                    nested_reflected_case(shape, actual, requested, payload.clone());
+                let source = interpreter.get_variable("input").unwrap().clone();
+                assert_eq!(
+                    interpreter.eval_expr(&expression).unwrap().payload(),
+                    &payload,
+                    "{shape}/{requested}"
+                );
+                assert_eq!(reuse_markers(&mut interpreter), expected_markers);
+                assert_eq!(
+                    format!("{:?}", interpreter.get_variable("input").unwrap()),
+                    format!("{source:?}"),
+                );
+                assert!(interpreter.allow_checked_refinement_proofs);
+            }
+            let (mut interpreter, expression) = nested_reflected_case(
+                shape,
+                "map[int64, int64]",
+                "map[models.Positive, models.Positive]",
+                Value::Map(vec![
+                    (Value::Int64(1), Value::Int64(-2)),
+                    (Value::Int64(3), Value::Int64(4)),
+                ]),
+            );
+            let source = interpreter.get_variable("input").unwrap().clone();
+            assert_eq!(
+                interpreter.eval_expr(&expression),
+                Err("refinement type constraint failed for 'models.Positive'".into())
+            );
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"; 2]);
+            assert_eq!(
+                format!("{:?}", interpreter.get_variable("input").unwrap()),
+                format!("{source:?}"),
+            );
+
+            for depth in [0, 1, 2] {
+                let mut pending = Value::Map(vec![(Value::Int64(1), Value::Int64(7))]);
+                for _ in 0..depth {
+                    pending = Value::Pending(Box::new(pending));
+                }
+                let (mut interpreter, expression) = nested_reflected_case(
+                    shape,
+                    "map[models.Positive, models.Positive]",
+                    "map[models.Positive, models.Positive]",
+                    pending.clone(),
+                );
+                assert_eq!(interpreter.eval_expr(&expression), Ok(pending.clone()));
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                if depth != 0 {
+                    let (mut interpreter, expression) = nested_reflected_case(
+                        shape,
+                        "map[int64, int64]",
+                        "map[models.Positive, models.Positive]",
+                        pending,
+                    );
+                    let source = interpreter.get_variable("input").unwrap().clone();
+                    assert_eq!(
+                        interpreter.eval_expr(&expression),
+                        Err("reflected field refinement: expected a ready map value".into())
+                    );
+                    assert!(reuse_markers(&mut interpreter).is_empty());
+                    assert_eq!(
+                        format!("{:?}", interpreter.get_variable("input").unwrap()),
+                        format!("{source:?}"),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_reflected_requests_keep_selector_precedence_and_protected_refusals() {
+        for shape in ["record", "enum", "machine"] {
+            for (name, replacement, error_fragment) in [
+                (
+                    "owner_type",
+                    Value::String("Other".into()),
+                    "field metadata belongs to",
+                ),
+                (
+                    "owner_member",
+                    Value::OptionalSome(Box::new(Value::String("other".into()))),
+                    "field metadata belongs to",
+                ),
+                ("index", Value::Int64(9), "at index 9"),
+                ("name", Value::String("other".into()), "does not match"),
+                ("type_name", Value::String("bool".into()), "has type 'bool'"),
+            ] {
+                let (mut interpreter, expression) = nested_reflected_case(
+                    shape,
+                    "map[int64, int64]",
+                    "map[models.Positive, models.Positive]",
+                    Value::Map(vec![(Value::Int64(-1), Value::Int64(-2))]),
+                );
+                let source = interpreter.get_variable("input").unwrap().clone();
+                let mut selector = interpreter.get_variable("selector").unwrap().clone();
+                let Value::Struct { fields, .. } = &mut selector else {
+                    unreachable!()
+                };
+                fields
+                    .iter_mut()
+                    .find(|(field, _)| field == name)
+                    .unwrap()
+                    .1 = replacement;
+                interpreter.set_variable("selector", selector.clone());
+                let error = interpreter.eval_expr(&expression).unwrap_err();
+                assert!(error.contains(error_fragment), "{shape}/{name}: {error}");
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                interpreter.checked_expression_types = None;
+                assert_eq!(interpreter.eval_expr(&expression), Err(error));
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                assert_eq!(
+                    format!("{:?}", interpreter.get_variable("input").unwrap()),
+                    format!("{source:?}"),
+                );
+                assert_eq!(interpreter.get_variable("selector"), Some(&selector));
+            }
+            for (actual, requested, expected) in [
+                (
+                    "secret[map[int64, int64]]",
+                    "secret[map[models.Positive, models.Positive]]",
+                    "reflected field refinement: cannot establish new invariants beneath secret",
+                ),
+                (
+                    "Box[int64, int64]",
+                    "Box[models.Positive, models.Positive]",
+                    "reflected field refinement: unsupported callable or nominal refinement conversion",
+                ),
+            ] {
+                let (mut interpreter, expression) = nested_reflected_case(
+                    shape,
+                    actual,
+                    requested,
+                    Value::Map(vec![(Value::Int64(-913), Value::Int64(-914))]),
+                );
+                let source = interpreter.get_variable("input").unwrap().clone();
+                let error = interpreter.eval_expr(&expression).unwrap_err();
+                assert_eq!(error, expected, "{shape}/{requested}");
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                assert_eq!(
+                    format!("{:?}", interpreter.get_variable("input").unwrap()),
+                    format!("{source:?}"),
+                );
+            }
+        }
+    }
+
+    fn nested_reflected_case(
+        shape: &str,
+        actual: &str,
+        requested: &str,
+        payload: Value,
+    ) -> (Interpreter, Expr) {
+        let (interpreter, mut expression) =
+            reflected_proof_case(shape, actual, requested, payload, true);
+        let Expr::GenericCall(_, types, _, _) = &mut expression else {
+            unreachable!()
+        };
+        types[1] = Interpreter::simple_type_expr_from_name(requested, sp()).unwrap();
+        (interpreter, expression)
+    }
+
+    #[test]
+    fn nested_reflected_producers_validate_ready_wrappers_in_payload_order() {
+        for shape in ["record", "enum", "machine"] {
+            for (actual, requested, payload, markers) in [
+                (
+                    "list[int64]",
+                    "list[models.Positive]",
+                    Value::List(vec![Value::Int64(1), Value::Int64(2)]),
+                    vec!["trace positive", "trace positive"],
+                ),
+                (
+                    "set[int64]",
+                    "set[models.Positive]",
+                    Value::Set(vec![Value::Int64(1), Value::Int64(2)]),
+                    vec!["trace positive", "trace positive"],
+                ),
+                (
+                    "map[int64, int64]",
+                    "map[int64, models.Large]",
+                    Value::Map(vec![
+                        (Value::Int64(1), Value::Int64(7)),
+                        (Value::Int64(2), Value::Int64(9)),
+                    ]),
+                    vec![
+                        "trace positive",
+                        "trace large",
+                        "trace positive",
+                        "trace large",
+                    ],
+                ),
+                (
+                    "optional[int64]",
+                    "optional[models.Positive]",
+                    Value::OptionalNone,
+                    vec![],
+                ),
+                (
+                    "optional[int64]",
+                    "optional[models.Positive]",
+                    Value::OptionalSome(Box::new(Value::Int64(2))),
+                    vec!["trace positive"],
+                ),
+                (
+                    "result[int64, int64]",
+                    "result[models.Positive, int64]",
+                    Value::ResultOk(Box::new(Value::Int64(2))),
+                    vec!["trace positive"],
+                ),
+                (
+                    "result[int64, int64]",
+                    "result[int64, models.Large]",
+                    Value::ResultFail(Box::new(Value::Int64(7))),
+                    vec!["trace positive", "trace large"],
+                ),
+                (
+                    "list[models.Positive]",
+                    "list[models.Large]",
+                    Value::List(vec![Value::Int64(7), Value::Int64(9)]),
+                    vec!["trace large", "trace large"],
+                ),
+                (
+                    "list[optional[result[int64, int64]]]",
+                    "list[optional[result[int64, models.Large]]]",
+                    Value::List(vec![
+                        Value::OptionalNone,
+                        Value::OptionalSome(Box::new(Value::ResultFail(Box::new(Value::Int64(7))))),
+                        Value::OptionalSome(Box::new(Value::ResultOk(Box::new(Value::Int64(2))))),
+                    ]),
+                    vec!["trace positive", "trace large"],
+                ),
+            ] {
+                let (mut interpreter, expression) =
+                    nested_reflected_case(shape, actual, requested, payload.clone());
+                let original = format!("{:?}", interpreter.get_variable("input").unwrap());
+                assert_eq!(
+                    interpreter.eval_expr(&expression).unwrap().payload(),
+                    &payload,
+                    "{shape}/{requested}"
+                );
+                assert_eq!(
+                    reuse_markers(&mut interpreter),
+                    markers,
+                    "{shape}/{requested}"
+                );
+                assert_eq!(
+                    format!("{:?}", interpreter.get_variable("input").unwrap()),
+                    original
+                );
+                assert!(interpreter.allow_checked_refinement_proofs);
+                assert_eq!(interpreter.scopes.len(), 1);
+            }
+            let (mut interpreter, expression) = nested_reflected_case(
+                shape,
+                "list[int64]",
+                "list[models.Positive]",
+                Value::List(vec![Value::Int64(1), Value::Int64(-2), Value::Int64(3)]),
+            );
+            assert_eq!(
+                interpreter.eval_expr(&expression),
+                Err("refinement type constraint failed for 'models.Positive'".into())
+            );
+            assert_eq!(
+                reuse_markers(&mut interpreter),
+                ["trace positive", "trace positive"]
+            );
+        }
+    }
+
+    #[test]
+    fn nested_reflected_preflight_preserves_pending_and_shape_failure_precedence() {
+        for shape in ["record", "enum", "machine"] {
+            let (mut interpreter, expression) = nested_reflected_case(
+                shape,
+                "list[optional[int64]]",
+                "list[optional[models.Positive]]",
+                Value::List(vec![
+                    Value::OptionalSome(Box::new(Value::Int64(7))),
+                    Value::Bool(false),
+                ]),
+            );
+            assert_eq!(
+                interpreter.eval_expr(&expression),
+                Err("reflected field refinement: expected a ready optional value".into())
+            );
+            assert!(
+                reuse_markers(&mut interpreter).is_empty(),
+                "preflight precedes first predicate"
+            );
+            for depth in [1, 2] {
+                let mut pending = Value::List(vec![Value::Int64(7)]);
+                for _ in 0..depth {
+                    pending = Value::Pending(Box::new(pending));
+                }
+                let (mut interpreter, expression) = nested_reflected_case(
+                    shape,
+                    "list[int64]",
+                    "list[models.Positive]",
+                    pending.clone(),
+                );
+                let joined = Expr::Join(Box::new(expression), Span::new(FileId::new(0), 941, 942));
+                assert_eq!(
+                    interpreter.eval_expr(&joined),
+                    Err("reflected field refinement: expected a ready list value".into())
+                );
+                assert!(
+                    reuse_markers(&mut interpreter).is_empty(),
+                    "no implicit join"
+                );
+                let (mut interpreter, expression) = nested_reflected_case(
+                    shape,
+                    "list[models.Positive]",
+                    "list[models.Positive]",
+                    pending.clone(),
+                );
+                assert_eq!(interpreter.eval_expr(&expression), Ok(pending));
+                assert!(reuse_markers(&mut interpreter).is_empty());
+            }
+            let (mut interpreter, expression) = nested_reflected_case(
+                shape,
+                "list[int64]",
+                "list[models.Positive]",
+                Value::List(vec![Value::Pending(Box::new(Value::Int64(7)))]),
+            );
+            let error = interpreter.eval_expr(&expression).unwrap_err();
+            assert!(error.contains("error evaluating refinement constraint for 'models.Positive'"));
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        }
+    }
+
+    #[test]
+    fn nested_reflected_refusals_stop_future_secret_callable_and_nominal_consumers() {
+        for shape in ["record", "enum", "machine"] {
+            for route in ["secret", "callable", "nominal"] {
+                let (actual, requested, payload, expected) = match route {
+                    "secret" => (
+                        "secret[int64]",
+                        "secret[models.Positive]",
+                        Value::Int64(-913),
+                        "reflected field refinement: cannot establish new invariants beneath secret",
+                    ),
+                    "callable" => (
+                        "function() returns int64",
+                        "function() returns models.Positive",
+                        Value::NamedFunction("plain".into()),
+                        "reflected field refinement: unsupported callable or nominal refinement conversion",
+                    ),
+                    _ => (
+                        "Box[int64]",
+                        "Box[models.Positive]",
+                        Value::Struct {
+                            concrete_type: Some("Box[int64]".into()),
+                            type_name: "Box".into(),
+                            fields: vec![("value".into(), Value::Int64(-913))],
+                        },
+                        "reflected field refinement: unsupported callable or nominal refinement conversion",
+                    ),
+                };
+                let (mut interpreter, expression) =
+                    nested_reflected_case(shape, actual, requested, payload);
+                let consumer_span = Span::new(FileId::new(0), 943, 944);
+                let exposed = match route {
+                    "secret" => Expr::Declassify(Box::new(expression.clone()), consumer_span),
+                    "callable" => Expr::Call(Box::new(expression.clone()), vec![], consumer_span),
+                    _ => Expr::FieldAccess(
+                        Box::new(expression.clone()),
+                        ident("value"),
+                        consumer_span,
+                    ),
+                };
+                let mut plain = func_def("plain", vec![], block(vec![return_stmt(int(-913))]));
+                plain.return_type = Some(type_named("int64"));
+                interpreter.register_function(&plain);
+                let mut echo = func_def(
+                    "echo",
+                    vec![("value", "models.Positive")],
+                    block(vec![return_stmt(Expr::Coarsen(
+                        Box::new(var("value")),
+                        sp(),
+                    ))]),
+                );
+                echo.return_type = Some(type_named("int64"));
+                interpreter.register_function(&echo);
+                reuse_facts(
+                    &mut interpreter,
+                    &[
+                        (expression.span(), requested),
+                        (consumer_span, "models.Positive"),
+                    ],
+                );
+                let error = interpreter
+                    .eval_expr(&call("echo", vec![exposed]))
+                    .unwrap_err();
+                assert_eq!(error, expected, "{shape}/{route}");
+                assert!(!error.contains("913"));
+                assert!(
+                    reuse_markers(&mut interpreter).is_empty(),
+                    "no hidden predicate or observer"
+                );
+                assert!(interpreter.allow_checked_refinement_proofs);
+            }
+            let hidden = Value::Pending(Box::new(Value::Pending(Box::new(Value::Int64(7)))));
+            let (mut interpreter, expression) = nested_reflected_case(
+                shape,
+                "secret[models.Positive]",
+                "secret[models.Positive]",
+                hidden.clone(),
+            );
+            assert_eq!(interpreter.eval_expr(&expression), Ok(hidden));
+            assert!(reuse_markers(&mut interpreter).is_empty());
+            // Inactive hidden arms cannot expose any unchecked value.
+            let (mut interpreter, expression) = nested_reflected_case(
+                shape,
+                "result[secret[int64], int64]",
+                "result[secret[models.Positive], int64]",
+                Value::ResultFail(Box::new(Value::Int64(7))),
+            );
+            assert_eq!(
+                interpreter.eval_expr(&expression),
+                Ok(Value::ResultFail(Box::new(Value::Int64(7))))
+            );
+            assert!(reuse_markers(&mut interpreter).is_empty());
+        }
+    }
+
+    #[test]
+    fn nested_reflected_checks_remain_private_and_validate_refinement_bases() {
+        for shape in ["record", "enum", "machine"] {
+            for proof_mode in [false, true] {
+                let payload = Value::List(vec![Value::Int64(-1)]);
+                let (mut interpreter, expression) = nested_reflected_case(
+                    shape,
+                    "list[int64]",
+                    "list[models.Positive]",
+                    payload.clone(),
+                );
+                interpreter.allow_checked_refinement_proofs = proof_mode;
+                interpreter.checked_expression_types = None;
+                assert_eq!(interpreter.eval_expr(&expression), Ok(payload));
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                assert_eq!(interpreter.allow_checked_refinement_proofs, proof_mode);
+            }
+            let (mut interpreter, expression) = nested_reflected_case(
+                shape,
+                "list[int64]",
+                "ValidatedList",
+                Value::List(vec![Value::Int64(-1)]),
+            );
+            let mut alias = type_alias("ValidatedList", "int64", Some(bool_expr(true)));
+            alias.base_type =
+                Interpreter::simple_type_expr_from_name("list[models.Positive]", sp()).unwrap();
+            interpreter.register_type_alias(&alias);
+            assert_eq!(
+                interpreter.eval_expr(&expression),
+                Err("refinement type constraint failed for 'models.Positive'".into())
+            );
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        }
+    }
+
+    #[test]
+    fn qualified_sum_refinement_refusal_preserves_primitive_and_domain_errors() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.current_function_trusted_stdlib = true;
+        for selected in ["secret[models.Positive]", "secret[secret[models.Positive]]"] {
+            let ty = Interpreter::simple_type_expr_from_name(selected, sp()).unwrap();
+            for values in [vec![], vec![Value::Int64(1), Value::Int64(2)]] {
+                assert_eq!(
+                    interpreter.call_higher_order_builtin_with_type_args(
+                        "list.__sum",
+                        std::slice::from_ref(&ty),
+                        &[Value::List(values)],
+                        true
+                    ),
+                    Some(Err(
+                        "list.__sum: cannot establish new invariants beneath secret".into()
+                    ))
+                );
+                assert!(reuse_markers(&mut interpreter).is_empty());
+            }
+            assert_eq!(
+                interpreter.call_higher_order_builtin_with_type_args(
+                    "list.__sum",
+                    std::slice::from_ref(&ty),
+                    &[Value::List(vec![Value::String("hidden".into())])],
+                    true
+                ),
+                Some(Err(
+                    "list.__sum: list elements must be int64 or float64".into()
+                ))
+            );
+            assert_eq!(
+                interpreter.call_higher_order_builtin_with_type_args(
+                    "list.__sum",
+                    std::slice::from_ref(&ty),
+                    &[Value::Bool(false)],
+                    true
+                ),
+                Some(Err("list.__sum: argument must be a list".into()))
+            );
+            assert_eq!(
+                interpreter.call_higher_order_builtin_with_type_args(
+                    "list.__sum",
+                    std::slice::from_ref(&ty),
+                    &[Value::List(vec![])],
+                    false
+                ),
+                Some(Ok(Value::Int64(0)))
+            );
+        }
+        for selected in [
+            "secret[int64]",
+            "list[models.Positive]",
+            "secret[list[models.Positive]]",
+        ] {
+            let ty = Interpreter::simple_type_expr_from_name(selected, sp()).unwrap();
+            assert_eq!(
+                interpreter.call_higher_order_builtin_with_type_args(
+                    "list.__sum",
+                    &[ty],
+                    &[Value::List(vec![])],
+                    true
+                ),
+                Some(Ok(Value::Int64(0))),
+                "existing empty fallback domain: {selected}"
+            );
+        }
+        assert!(reuse_markers(&mut interpreter).is_empty());
+    }
+
+    fn install_colliding_type_aliases(interpreter: &mut Interpreter) {
+        for owner in ["Positive", "Large"] {
+            interpreter.register_type_alias_in_namespace(
+                Some("shadow"),
+                &type_alias(owner, "int64", Some(bool_expr(false))),
+            );
+        }
+        interpreter.set_namespace_alias("selected".into(), "models".into());
+        interpreter.set_namespace_alias("models".into(), "shadow".into());
+    }
+
+    #[test]
+    fn resolved_reflected_field_types_do_not_reexpand_caller_imports() {
+        for shape in ["record", "enum", "machine"] {
+            for (actual, requested, number, markers) in [
+                ("int64", "Positive", 7, vec!["trace positive"]),
+                ("int64", "Positive", -1, vec!["trace positive"]),
+                ("models.Positive", "Positive", 7, vec![]),
+                ("models.Positive", "Large", 7, vec!["trace large"]),
+                ("models.Positive", "Large", 3, vec!["trace large"]),
+            ] {
+                let target = format!("models.{requested}");
+                let (mut interpreter, mut expression) =
+                    reflected_proof_case(shape, actual, &target, Value::Int64(number), true);
+                install_colliding_type_aliases(&mut interpreter);
+                let aliases = interpreter.namespace_alias_scopes.clone();
+                let Expr::GenericCall(callee, types, args, span) = &mut expression else {
+                    unreachable!()
+                };
+                types[1] = type_named(&format!("selected.{requested}"));
+                // Inspect this call boundary directly: its output is canonical.
+                // General expression-normalization alias handling is separate.
+                let output = interpreter.eval_call_flow(callee, types, args, *span);
+                if number < 0 || (requested == "Large" && number <= 5) {
+                    assert!(
+                        matches!(output, Err(ref error) if error == &format!("refinement type constraint failed for '{target}'")),
+                        "{shape}/{actual}/{requested}: {output:?}"
+                    );
+                } else {
+                    assert!(
+                        matches!(output, Ok(ExprFlow::Value(Value::Typed { ref type_name, ref value })) if type_name == &target && value.payload() == &Value::Int64(number)),
+                        "{shape}/{actual}/{requested}: {output:?}"
+                    );
+                }
+                assert_eq!(reuse_markers(&mut interpreter), markers);
+                assert_eq!(interpreter.namespace_alias_scopes, aliases);
+                assert!(interpreter.allow_checked_refinement_proofs);
+            }
+        }
+    }
+
+    #[test]
+    fn exact_reflected_root_refinements_retain_identity_without_predicates() {
+        for shape in ["record", "enum", "machine"] {
+            for depth in 0..=2 {
+                let mut payload = Value::Int64(7);
+                for _ in 0..depth {
+                    payload = Value::Pending(Box::new(payload));
+                }
+                let (mut interpreter, expression) = reflected_proof_case(
+                    shape,
+                    "models.Positive",
+                    "models.Positive",
+                    payload,
+                    true,
+                );
+                let original = format!("{:?}", interpreter.get_variable("input").unwrap());
+                let Expr::GenericCall(callee, types, args, span) = &expression else {
+                    unreachable!()
+                };
+                let ExprFlow::Value(output) = interpreter
+                    .eval_call_flow(callee, types, args, *span)
+                    .unwrap()
+                else {
+                    panic!("field read must produce a value")
+                };
+                let mut ready = &output;
+                for _ in 0..depth {
+                    let Value::Pending(inner) = ready else {
+                        panic!("{shape}/{depth}: pending depth changed: {output:?}")
+                    };
+                    ready = inner;
+                }
+                assert!(
+                    matches!(ready, Value::Typed { type_name, value }
+                        if type_name == "models.Positive" && value.payload() == &Value::Int64(7)),
+                    "{shape}/{depth}: {output:?}"
+                );
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                assert_eq!(
+                    format!("{:?}", interpreter.get_variable("input").unwrap()),
+                    original
+                );
+                assert!(interpreter.allow_checked_refinement_proofs);
+                assert_eq!(interpreter.scopes.len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn metadata_free_reflected_declaration_aliases_keep_their_lexical_lookup() {
+        for shape in ["record", "enum", "machine"] {
+            for direct_api in [false, true] {
+                let (mut interpreter, expression) = reflected_proof_case(
+                    shape,
+                    "selected.Positive",
+                    "models.Positive",
+                    Value::Int64(7),
+                    false,
+                );
+                interpreter.set_namespace_alias("selected".into(), "models".into());
+                let mut selector = interpreter.get_variable("selector").unwrap().clone();
+                let Value::Struct { fields, .. } = &mut selector else {
+                    unreachable!()
+                };
+                fields
+                    .iter_mut()
+                    .find(|(name, _)| name == "type_name")
+                    .unwrap()
+                    .1 = Value::String("models.Positive".into());
+                interpreter.set_variable("selector", selector);
+                interpreter.checked_expression_types = None;
+                let aliases = interpreter.namespace_alias_scopes.clone();
+                let result = if direct_api {
+                    let Expr::GenericCall(callee, types, _, _) = &expression else {
+                        unreachable!()
+                    };
+                    let Expr::FieldAccess(owner, member, _) = callee.as_ref() else {
+                        unreachable!()
+                    };
+                    let name = Interpreter::extract_dotted_name(owner, &member.name).unwrap();
+                    let values = vec![
+                        interpreter.get_variable("input").unwrap().clone(),
+                        interpreter.get_variable("selector").unwrap().clone(),
+                    ];
+                    interpreter
+                        .call_builtin_with_type_args(&name, types, &values)
+                        .unwrap()
+                } else {
+                    interpreter.eval_expr(&expression)
+                };
+                assert_eq!(result, Ok(Value::Int64(7)), "{shape}/{direct_api}");
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                assert_eq!(interpreter.namespace_alias_scopes, aliases);
+            }
+        }
+    }
+
+    #[test]
+    fn raw_and_resolved_typed_builtin_entries_restore_aliases_on_all_results() {
+        let mut interpreter = reuse_interpreter();
+        install_colliding_type_aliases(&mut interpreter);
+        let aliases = interpreter.namespace_alias_scopes.clone();
+        assert_eq!(
+            interpreter.call_builtin_with_type_args(
+                "type.name",
+                &[type_named("selected.Positive")],
+                &[]
+            ),
+            Some(Ok(Value::String("models.Positive".into())))
+        );
+        assert_eq!(
+            interpreter.call_builtin_with_type_args_from_source(
+                "type.name",
+                &[type_named("models.Positive")],
+                &[],
+                false
+            ),
+            Some(Ok(Value::String("models.Positive".into())))
+        );
+        assert_eq!(interpreter.namespace_alias_scopes, aliases);
+        assert!(matches!(
+            interpreter.call_builtin_with_type_args_from_source("type.field_value", &[], &[], true),
+            Some(Err(_))
+        ));
+        assert_eq!(interpreter.namespace_alias_scopes, aliases);
+        assert!(
+            interpreter
+                .call_builtin_with_type_args_from_source("not.a.builtin", &[], &[], true)
+                .is_none()
+        );
+        assert_eq!(interpreter.namespace_alias_scopes, aliases);
+        assert!(reuse_markers(&mut interpreter).is_empty());
+    }
+
+    #[test]
+    fn resolved_sum_actual_type_keeps_canonical_owner_and_callback_imports() {
+        let mut interpreter = reuse_interpreter();
+        install_colliding_type_aliases(&mut interpreter);
+        interpreter.current_function_trusted_stdlib = true;
+        let aliases = interpreter.namespace_alias_scopes.clone();
+        let call_span = Span::new(FileId::new(0), 921, 922);
+        reuse_facts(&mut interpreter, &[(call_span, "models.Positive")]);
+        for values in [vec![int(1), int(2)], vec![]] {
+            let output = interpreter.eval_call_flow(
+                &field_access(var("list"), "__sum"),
+                &[type_named("selected.Positive")],
+                &[CallArg {
+                    name: None,
+                    value: Expr::ListConstruct(values.clone(), sp()),
+                    span: sp(),
+                }],
+                call_span,
+            );
+            if values.is_empty() {
+                assert!(
+                    matches!(output, Err(ref error) if error == "refinement type constraint failed for 'models.Positive'")
+                );
+            } else {
+                assert!(
+                    matches!(output, Ok(ExprFlow::Value(Value::Typed { ref type_name, ref value })) if type_name == "models.Positive" && value.payload() == &Value::Int64(3))
+                );
+            }
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+            assert_eq!(interpreter.namespace_alias_scopes, aliases);
+            assert!(interpreter.current_function_trusted_stdlib);
+        }
+        let mut rank = func_def(
+            "rank",
+            vec![("number", "int64")],
+            block(vec![return_stmt(var("number"))]),
+        );
+        rank.return_type = Some(type_named("int64"));
+        interpreter.register_function_in_namespace(Some("helpers"), &rank);
+        let mut key = func_def(
+            "key",
+            vec![("number", "int64")],
+            block(vec![return_stmt(dotted_call(
+                "chosen",
+                "rank",
+                vec![var("number")],
+            ))]),
+        );
+        key.return_type = Some(type_named("int64"));
+        interpreter.register_function(&key);
+        interpreter.set_namespace_alias("chosen".into(), "helpers".into());
+        let aliases = interpreter.namespace_alias_scopes.clone();
+        assert_eq!(
+            interpreter.call_higher_order_builtin_with_type_args(
+                "list.__sort_by",
+                &[],
+                &[
+                    Value::List(vec![Value::Int64(2), Value::Int64(1)]),
+                    Value::NamedFunction("key".into())
+                ],
+                false,
+            ),
+            Some(Ok(Value::List(vec![Value::Int64(1), Value::Int64(2)])))
+        );
+        assert_eq!(interpreter.namespace_alias_scopes, aliases);
+    }
+
+    fn reflected_proof_case(
+        shape: &str,
+        actual: &str,
+        requested: &str,
+        payload: Value,
+        checked_layout: bool,
+    ) -> (Interpreter, Expr) {
+        let mut interpreter = reuse_interpreter();
+        interpreter.register_type_alias(&type_alias("PositiveAlias", "models.Positive", None));
+        let kind = if actual == "int64" {
+            "primitive"
+        } else if actual == "PositiveAlias" {
+            "alias"
+        } else {
+            "refinement"
+        };
+        let primitive = ReflectionTypeInfo::new(
+            "int64",
+            "primitive",
+            Some("int64_type".into()),
+            false,
+            vec![],
+        );
+        let children = match kind {
+            "primitive" => vec![],
+            "alias" => vec![ReflectionTypeInfo::new(
+                "models.Positive",
+                "refinement",
+                Some("int64_type".into()),
+                false,
+                vec![primitive],
+            )],
+            _ => vec![primitive],
+        };
+        let field = ReflectionFieldInfo::new(
+            0,
+            "value",
+            actual,
+            kind,
+            "value",
+            false,
+            ReflectionTypeInfo::new(actual, kind, Some("int64_type".into()), false, children),
+        );
+        let mut metadata = ReflectionMetadata::new();
+        let (owner, builtin, member, value) = match shape {
+            "record" => {
+                interpreter.register_struct(&struct_def("Holder", vec![("value", actual)], vec![]));
+                metadata.insert_type_fields("Holder", vec![field.clone()]);
+                (
+                    "Holder",
+                    "field_value",
+                    None,
+                    Value::Struct {
+                        concrete_type: None,
+                        type_name: "Holder".into(),
+                        fields: vec![("value".into(), payload)],
+                    },
+                )
+            }
+            "enum" => {
+                interpreter.register_enum(&enum_def_with_field("Choice", "item", "value", actual));
+                metadata.insert_type_variants(
+                    "Choice",
+                    vec![ReflectionVariantInfo::new(
+                        0,
+                        "item",
+                        0,
+                        false,
+                        vec![field.clone()],
+                    )],
+                );
+                (
+                    "Choice",
+                    "variant_field_value",
+                    Some("item"),
+                    Value::Enum {
+                        type_name: "Choice".into(),
+                        variant: "item".into(),
+                        fields: vec![payload],
+                    },
+                )
+            }
+            "machine" => {
+                interpreter.register_machine(&machine_def(
+                    "Session",
+                    vec![("active", vec![("value", type_named(actual))])],
+                    vec![],
+                ));
+                metadata.insert_machine(
+                    "Session",
+                    ReflectionMachineInfo::new(
+                        vec![ReflectionMachineStateInfo::new(
+                            0,
+                            "active",
+                            false,
+                            vec![field.clone()],
+                        )],
+                        vec![],
+                    ),
+                );
+                (
+                    "Session",
+                    "machine_field_value",
+                    Some("active"),
+                    Value::Machine {
+                        type_name: "Session".into(),
+                        state: "active".into(),
+                        fields: vec![payload],
+                    },
+                )
+            }
+            _ => unreachable!(),
+        };
+        if checked_layout {
+            interpreter.set_reflection_metadata(Arc::new(metadata));
+        }
+        interpreter.set_variable("input", value);
+        interpreter.set_variable(
+            "selector",
+            Interpreter::reflection_field_info_value(owner, member, &field),
+        );
+        let expression = Expr::GenericCall(
+            Box::new(field_access(var("type"), builtin)),
+            vec![type_named(owner), type_named(requested)],
+            vec![
+                named_arg("value", var("input")),
+                named_arg("field", var("selector")),
+            ],
+            Span::new(FileId::new(0), 701, 702),
+        );
+        reuse_facts(&mut interpreter, &[(expression.span(), requested)]);
+        (interpreter, expression)
+    }
+
+    #[test]
+    fn reflected_field_producers_establish_new_requested_refinements_for_all_shapes() {
+        for shape in ["record", "enum", "machine"] {
+            for checked_layout in [false, true] {
+                for payload in [-1, 7] {
+                    // A runtime label cannot turn an actual int64 field into
+                    // refinement proof, even if it claims the requested owner.
+                    let raw = Value::Typed {
+                        type_name: "models.Positive".into(),
+                        value: Box::new(Value::Int64(payload)),
+                    };
+                    let (mut interpreter, expression) = reflected_proof_case(
+                        shape,
+                        "int64",
+                        "models.Positive",
+                        raw,
+                        checked_layout,
+                    );
+                    let original = interpreter.get_variable("input").unwrap().clone();
+                    let output = interpreter.eval_expr(&expression);
+                    if payload < 0 {
+                        assert_eq!(
+                            output,
+                            Err("refinement type constraint failed for 'models.Positive'".into()),
+                            "{shape}/{checked_layout}"
+                        );
+                    } else {
+                        assert_eq!(
+                            output.unwrap(),
+                            Value::Typed {
+                                type_name: "models.Positive".into(),
+                                value: Box::new(Value::Int64(7))
+                            }
+                        );
+                    }
+                    assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+                    assert_eq!(interpreter.get_variable("input"), Some(&original));
+                    assert!(interpreter.allow_checked_refinement_proofs);
+                    assert_eq!(interpreter.scopes.len(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reflected_field_producers_reuse_exact_and_ancestor_declared_types_only() {
+        for shape in ["record", "enum", "machine"] {
+            for checked_layout in [false, true] {
+                for (actual, requested, markers) in [
+                    ("models.Positive", "models.Positive", vec![]),
+                    ("PositiveAlias", "models.Positive", vec![]),
+                    ("models.Positive", "PositiveAlias", vec![]),
+                    ("models.Positive", "models.Large", vec!["trace large"]),
+                    ("PositiveAlias", "models.Large", vec!["trace large"]),
+                    ("models.Positive", "models.Sibling", vec!["trace sibling"]),
+                ] {
+                    let (mut interpreter, expression) = reflected_proof_case(
+                        shape,
+                        actual,
+                        requested,
+                        Value::Int64(7),
+                        checked_layout,
+                    );
+                    assert_eq!(
+                        interpreter.eval_expr(&expression).unwrap().payload(),
+                        &Value::Int64(7)
+                    );
+                    assert_eq!(
+                        reuse_markers(&mut interpreter),
+                        markers,
+                        "{shape}/{actual}/{requested}/{checked_layout}"
+                    );
+                }
+                let (mut interpreter, expression) = reflected_proof_case(
+                    shape,
+                    "models.Positive",
+                    "models.Large",
+                    Value::Int64(3),
+                    checked_layout,
+                );
+                assert_eq!(
+                    interpreter.eval_expr(&expression),
+                    Err("refinement type constraint failed for 'models.Large'".into())
+                );
+                assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+
+                // Ordinary requested types retain the original value and owner.
+                let original = Value::Typed {
+                    type_name: "models.Positive".into(),
+                    value: Box::new(Value::Int64(7)),
+                };
+                let (mut interpreter, expression) = reflected_proof_case(
+                    shape,
+                    "models.Positive",
+                    "int64",
+                    original.clone(),
+                    checked_layout,
+                );
+                assert_eq!(interpreter.eval_expr(&expression), Ok(original));
+                assert!(reuse_markers(&mut interpreter).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn reflected_declared_ancestor_proofs_preserve_all_selector_results_and_pending_depths() {
+        for shape in ["record", "enum", "machine"] {
+            for checked_layout in [false, true] {
+                for (actual, requested) in [
+                    ("models.Large", "models.Positive"),
+                    ("LargeAlias", "models.Positive"),
+                    ("models.Large", "PositiveAlias"),
+                ] {
+                    for depth in [0, 1, 2] {
+                        let mut payload = Value::Typed {
+                            type_name: "models.Large".into(),
+                            value: Box::new(Value::Int64(7)),
+                        };
+                        let mut expected = Value::Typed {
+                            type_name: "models.Positive".into(),
+                            value: Box::new(Value::Int64(7)),
+                        };
+                        for _ in 0..depth {
+                            payload = Value::Pending(Box::new(payload));
+                            expected = Value::Pending(Box::new(expected));
+                        }
+                        let (mut interpreter, expression) =
+                            reflected_proof_case(shape, actual, requested, payload, checked_layout);
+                        interpreter.register_type_alias(&type_alias(
+                            "LargeAlias",
+                            "models.Large",
+                            None,
+                        ));
+                        let source = interpreter.get_variable("input").unwrap().clone();
+                        let selector = interpreter.get_variable("selector").unwrap().clone();
+                        let output = interpreter.eval_expr(&expression).unwrap();
+                        assert_eq!(
+                            format!("{output:?}"),
+                            format!("{expected:?}"),
+                            "{shape}/{checked_layout}/{actual}/{requested}/{depth}"
+                        );
+                        assert!(reuse_markers(&mut interpreter).is_empty());
+                        assert_eq!(
+                            format!("{:?}", interpreter.get_variable("input").unwrap()),
+                            format!("{source:?}"),
+                        );
+                        assert_eq!(
+                            format!("{:?}", interpreter.get_variable("selector").unwrap()),
+                            format!("{selector:?}"),
+                        );
+                        assert!(interpreter.allow_checked_refinement_proofs);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reflected_declared_ancestor_proofs_preserve_owned_unicode_sources() {
+        for shape in ["record", "enum", "machine"] {
+            for checked_layout in [false, true] {
+                for depth in [0, 1, 2] {
+                    let mut payload = Value::Typed {
+                        type_name: "models.Long".into(),
+                        value: Box::new(Value::String("Agent-???".into())),
+                    };
+                    let mut expected = Value::Typed {
+                        type_name: "models.Text".into(),
+                        value: Box::new(Value::String("Agent-???".into())),
+                    };
+                    for _ in 0..depth {
+                        payload = Value::Pending(Box::new(payload));
+                        expected = Value::Pending(Box::new(expected));
+                    }
+                    let (mut interpreter, expression) = reflected_proof_case(
+                        shape,
+                        "models.Long",
+                        "models.Text",
+                        payload,
+                        checked_layout,
+                    );
+                    for (owner, base, marker) in
+                        [("Text", "string", "text"), ("Long", "Text", "long")]
+                    {
+                        let mut predicate = func_def(
+                            marker,
+                            vec![(marker, "string")],
+                            block(vec![
+                                Stmt::Trace(TraceStmt {
+                                    name: ident(marker),
+                                    span: sp(),
+                                }),
+                                return_stmt(Expr::BoolLiteral(true, sp())),
+                            ]),
+                        );
+                        predicate.return_type = Some(type_named("bool"));
+                        interpreter.register_function_in_namespace(Some("models"), &predicate);
+                        interpreter.register_type_alias_in_namespace(
+                            Some("models"),
+                            &type_alias(owner, base, Some(call(marker, vec![var("value")]))),
+                        );
+                    }
+                    let source = interpreter.get_variable("input").unwrap().clone();
+                    let output = interpreter.eval_expr(&expression).unwrap();
+                    assert_eq!(
+                        format!("{output:?}"),
+                        format!("{expected:?}"),
+                        "{shape}/{checked_layout}/{depth}"
+                    );
+                    assert!(reuse_markers(&mut interpreter).is_empty());
+                    assert_eq!(
+                        format!("{:?}", interpreter.get_variable("input").unwrap()),
+                        format!("{source:?}"),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reflected_declared_ancestor_proofs_do_not_escape_root_schema_or_checked_mode() {
+        for shape in ["record", "enum", "machine"] {
+            for mode in ["no_fact", "unrelated_fact", "raw", "disabled"] {
+                let original = Value::Typed {
+                    type_name: "models.Large".into(),
+                    value: Box::new(Value::Int64(7)),
+                };
+                let (mut interpreter, expression) = reflected_proof_case(
+                    shape,
+                    "models.Large",
+                    "models.Positive",
+                    original.clone(),
+                    true,
+                );
+                if mode == "no_fact" {
+                    interpreter.checked_expression_types = None;
+                } else if mode == "unrelated_fact" {
+                    reuse_facts(
+                        &mut interpreter,
+                        &[(Span::new(FileId::new(0), 970, 971), "models.Positive")],
+                    );
+                } else if mode == "disabled" {
+                    interpreter.allow_checked_refinement_proofs = false;
+                }
+                let source = interpreter.get_variable("input").unwrap().clone();
+                let output = if mode == "raw" {
+                    let Expr::GenericCall(callee, types, _, _) = &expression else {
+                        unreachable!()
+                    };
+                    let Expr::FieldAccess(owner, member, _) = callee.as_ref() else {
+                        unreachable!()
+                    };
+                    let name = Interpreter::extract_dotted_name(owner, &member.name).unwrap();
+                    interpreter.call_function_with_type_args(
+                        &name,
+                        types,
+                        vec![
+                            source.clone(),
+                            interpreter.get_variable("selector").unwrap().clone(),
+                        ],
+                    )
+                } else {
+                    interpreter.eval_expr(&expression)
+                };
+                assert_eq!(output, Ok(original), "{shape}/{mode}");
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                assert_eq!(interpreter.get_variable("input"), Some(&source));
+            }
+            // Runtime labels on an actual primitive field cannot supply proof.
+            let (mut interpreter, expression) = reflected_proof_case(
+                shape,
+                "int64",
+                "models.Positive",
+                Value::Typed {
+                    type_name: "models.Large".into(),
+                    value: Box::new(Value::Int64(-1)),
+                },
+                true,
+            );
+            assert_eq!(
+                interpreter.eval_expr(&expression),
+                Err("refinement type constraint failed for 'models.Positive'".into(),)
+            );
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        }
+        let mut interpreter = reuse_interpreter();
+        interpreter.register_struct(&struct_def(
+            "Nested",
+            vec![("value", "models.Large")],
+            vec![],
+        ));
+        for actual in [
+            type_named("models.Sibling"),
+            type_named("Nested"),
+            TypeExpr::Generic(ident("secret"), vec![type_named("models.Large")], sp()),
+            TypeExpr::Generic(ident("list"), vec![type_named("models.Large")], sp()),
+        ] {
+            assert!(
+                interpreter
+                    .producer_declared_refinement_proof(&actual, &type_named("models.Positive"),)
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn reflected_field_producer_gates_preserve_raw_and_metadata_free_boundaries() {
+        for shape in ["record", "enum", "machine"] {
+            for mode in ["no_fact", "unrelated_fact", "raw", "disabled"] {
+                let (mut interpreter, expression) =
+                    reflected_proof_case(shape, "int64", "models.Positive", Value::Int64(-1), true);
+                if mode == "no_fact" {
+                    interpreter.checked_expression_types = None;
+                } else if mode == "unrelated_fact" {
+                    reuse_facts(
+                        &mut interpreter,
+                        &[(Span::new(FileId::new(0), 910, 911), "models.Positive")],
+                    );
+                } else if mode == "disabled" {
+                    interpreter.allow_checked_refinement_proofs = false;
+                }
+                let output = if mode == "raw" {
+                    let Expr::GenericCall(callee, types, _, _) = &expression else {
+                        unreachable!()
+                    };
+                    let Expr::FieldAccess(owner, member, _) = callee.as_ref() else {
+                        unreachable!()
+                    };
+                    let name = Interpreter::extract_dotted_name(owner, &member.name).unwrap();
+                    let values = vec![
+                        interpreter.get_variable("input").unwrap().clone(),
+                        interpreter.get_variable("selector").unwrap().clone(),
+                    ];
+                    interpreter.call_function_with_type_args(&name, types, values)
+                } else {
+                    interpreter.eval_expr(&expression)
+                };
+                assert_eq!(output, Ok(Value::Int64(-1)), "{shape}/{mode}");
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                assert_eq!(
+                    interpreter.normalize_and_validate_value(
+                        &type_named("models.Positive"),
+                        output.unwrap()
+                    ),
+                    Err("refinement type constraint failed for 'models.Positive'".into())
+                );
+                assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+                assert_eq!(
+                    interpreter.allow_checked_refinement_proofs,
+                    mode != "disabled"
+                );
+            }
+            // A checked private pipeline must establish its explicit requested
+            // type even though the step fact records only the inbound owner.
+            let (mut interpreter, expression) =
+                reflected_proof_case(shape, "int64", "models.Positive", Value::Int64(-1), true);
+            let Expr::GenericCall(callee, mut types, mut args, _) = expression else {
+                unreachable!()
+            };
+            let inbound = type_expr_display(&types[0]);
+            types[1] = type_named("Requested");
+            interpreter.type_arg_scopes.push(HashMap::from([(
+                "Requested".into(),
+                type_named("models.Positive"),
+            )]));
+            let input = args.remove(0).value;
+            let step_span = Span::new(FileId::new(0), 703, 704);
+            let piped = Expr::Pipeline(
+                Box::new(input),
+                vec![PipelineStep {
+                    function: Expr::GenericCall(callee, types, args, sp()),
+                    extra_args: vec![],
+                    handle: None,
+                    span: step_span,
+                }],
+                sp(),
+            );
+            reuse_facts(&mut interpreter, &[(step_span, &inbound)]);
+            assert_eq!(
+                interpreter.eval_expr(&piped),
+                Err("refinement type constraint failed for 'models.Positive'".into())
+            );
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+            assert_eq!(interpreter.type_arg_scopes.len(), 1);
+            assert!(interpreter.allow_checked_refinement_proofs);
+        }
+    }
+
+    #[test]
+    fn reflected_field_producers_preserve_pending_and_selector_failure_order() {
+        for shape in ["record", "enum", "machine"] {
+            for depth in [1, 2] {
+                let mut pending = Value::Typed {
+                    type_name: "models.Positive".into(),
+                    value: Box::new(Value::Int64(7)),
+                };
+                for _ in 0..depth {
+                    pending = Value::Pending(Box::new(pending));
+                }
+                let (mut interpreter, expression) = reflected_proof_case(
+                    shape,
+                    "models.Positive",
+                    "models.Positive",
+                    pending.clone(),
+                    true,
+                );
+                assert_eq!(interpreter.eval_expr(&expression), Ok(pending));
+                assert!(reuse_markers(&mut interpreter).is_empty());
+            }
+            for malformed in [
+                "root_pending",
+                "missing_payload",
+                "wrong_owner",
+                "wrong_index",
+            ] {
+                let (mut interpreter, expression) =
+                    reflected_proof_case(shape, "int64", "models.Positive", Value::Int64(-1), true);
+                let mut input = interpreter.get_variable("input").unwrap().clone();
+                let mut selector = interpreter.get_variable("selector").unwrap().clone();
+                match malformed {
+                    "root_pending" => input = Value::Pending(Box::new(input)),
+                    "missing_payload" => match &mut input {
+                        Value::Struct { fields, .. } => fields.clear(),
+                        Value::Enum { fields, .. } | Value::Machine { fields, .. } => {
+                            fields.clear()
+                        }
+                        _ => unreachable!(),
+                    },
+                    _ => {
+                        let Value::Struct { fields, .. } = &mut selector else {
+                            unreachable!()
+                        };
+                        let (name, replacement) = if malformed == "wrong_owner" {
+                            ("owner_type", Value::String("Other".into()))
+                        } else {
+                            ("index", Value::Int64(9))
+                        };
+                        fields
+                            .iter_mut()
+                            .find(|(field, _)| field == name)
+                            .unwrap()
+                            .1 = replacement;
+                    }
+                }
+                interpreter.set_variable("input", input.clone());
+                interpreter.set_variable("selector", selector.clone());
+                let checked_error = interpreter.eval_expr(&expression).unwrap_err();
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                interpreter.checked_expression_types = None;
+                assert_eq!(
+                    interpreter.eval_expr(&expression),
+                    Err(checked_error),
+                    "{shape}/{malformed}"
+                );
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                assert_eq!(interpreter.get_variable("input"), Some(&input));
+                assert_eq!(interpreter.get_variable("selector"), Some(&selector));
+            }
+            let (mut interpreter, expression) = reflected_proof_case(
+                shape,
+                "int64",
+                "models.Positive",
+                Value::Pending(Box::new(Value::Int64(7))),
+                true,
+            );
+            let error = interpreter.eval_expr(&expression).unwrap_err();
+            assert!(error.contains("error evaluating refinement constraint for 'models.Positive'"));
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        }
+    }
+
+    #[test]
+    fn sum_producer_validates_fresh_refinements_before_they_become_source_proofs() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.current_function_trusted_stdlib = true;
+        reuse_facts(
+            &mut interpreter,
+            &[(Span::new(FileId::new(0), 601, 602), "models.Positive")],
+        );
+        let selected = [type_named("models.Positive")];
+        for items in [vec![], vec![Value::Int64(i64::MAX), Value::Int64(1)]] {
+            assert_eq!(
+                interpreter.call_higher_order_builtin_with_type_args(
+                    "list.__sum",
+                    &selected,
+                    &[Value::List(items)],
+                    true
+                ),
+                Some(Err(
+                    "refinement type constraint failed for 'models.Positive'".into()
+                ))
+            );
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+            assert!(interpreter.allow_checked_refinement_proofs);
+        }
+        assert_eq!(
+            interpreter.call_higher_order_builtin_with_type_args(
+                "list.__sum",
+                &selected,
+                &[Value::List(vec![Value::Int64(1), Value::Int64(2)])],
+                true
+            ),
+            Some(Ok(Value::Typed {
+                type_name: "models.Positive".into(),
+                value: Box::new(Value::Int64(3))
+            }))
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        for (value, expected) in [
+            (
+                Value::Pending(Box::new(Value::List(vec![]))),
+                "argument must be a list",
+            ),
+            (
+                Value::List(vec![Value::Pending(Box::new(Value::Int64(1)))]),
+                "list elements must be int64 or float64",
+            ),
+            (
+                Value::List(vec![Value::Int64(1), Value::Bool(true)]),
+                "mixed types",
+            ),
+        ] {
+            assert_eq!(
+                interpreter.call_higher_order_builtin_with_type_args(
+                    "list.__sum",
+                    &selected,
+                    &[value],
+                    true
+                ),
+                Some(Err(format!("list.__sum: {expected}")))
+            );
+            assert!(
+                reuse_markers(&mut interpreter).is_empty(),
+                "producer errors precede predicates"
+            );
+        }
+    }
+
+    #[test]
+    fn sum_producer_uses_actual_intrinsic_type_arguments_and_preserves_primitive_aliases() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.current_function_trusted_stdlib = true;
+        reuse_facts(
+            &mut interpreter,
+            &[(Span::new(FileId::new(0), 601, 602), "models.Positive")],
+        );
+        interpreter.current_type_arguments =
+            vec![type_named("int8"), type_named("models.Positive")];
+        interpreter.type_arg_scopes.push(HashMap::from([
+            ("X".into(), type_named("int8")),
+            ("Y".into(), type_named("models.Positive")),
+        ]));
+        assert_eq!(
+            interpreter.call_higher_order_builtin_with_type_args(
+                "list.__sum",
+                &[interpreter.substitute_type_expr(&type_named("Y"))],
+                &[Value::List(vec![])],
+                true
+            ),
+            Some(Err(
+                "refinement type constraint failed for 'models.Positive'".into()
+            ))
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        interpreter.current_type_arguments = vec![type_named("models.Positive")];
+        interpreter.register_type_alias(&type_alias("Small", "int8", None));
+        for selected in ["int8", "Small"] {
+            assert_eq!(
+                interpreter.call_higher_order_builtin_with_type_args(
+                    "list.__sum",
+                    &[type_named(selected)],
+                    &[Value::List(vec![Value::Int64(127), Value::Int64(1)])],
+                    true
+                ),
+                Some(Ok(Value::Int64(-128))),
+                "{selected}"
+            );
+            assert!(reuse_markers(&mut interpreter).is_empty());
+        }
+        interpreter.type_arg_scopes.clear();
+        interpreter.current_type_arguments.clear();
+        assert_eq!(
+            interpreter.call_higher_order_builtin("list.__sum", &[Value::List(vec![])]),
+            Some(Ok(Value::Int64(0)))
+        );
+        assert_eq!(
+            interpreter.call_higher_order_builtin(
+                "list.__sum",
+                &[Value::List(vec![Value::Int64(1), Value::Int64(2)])]
+            ),
+            Some(Ok(Value::Int64(3)))
+        );
+    }
+
+    #[test]
+    fn sum_producer_rejects_invalid_results_before_checked_locals_arguments_and_returns() {
+        for route in ["local", "argument", "return", "pipeline"] {
+            let mut interpreter = reuse_interpreter();
+            let kernel_span = Span::new(FileId::new(0), 601, 602);
+            let kernel = Expr::GenericCall(
+                Box::new(field_access(var("list"), "__sum")),
+                vec![type_named("Y")],
+                vec![CallArg {
+                    name: None,
+                    value: var("items"),
+                    span: sp(),
+                }],
+                kernel_span,
+            );
+            let returned = reuse_source("value", 603);
+            let mut echo = func_def(
+                "echo",
+                vec![("value", "models.Positive")],
+                block(vec![return_stmt(returned.clone())]),
+            );
+            echo.return_type = Some(type_named("models.Positive"));
+            interpreter.register_function(&echo);
+            let body = match route {
+                "pipeline" => block(vec![return_stmt(Expr::Pipeline(
+                    Box::new(var("items")),
+                    vec![PipelineStep {
+                        function: Expr::GenericCall(
+                            Box::new(field_access(var("list"), "__sum")),
+                            vec![type_named("Y")],
+                            vec![],
+                            sp(),
+                        ),
+                        extra_args: vec![],
+                        handle: None,
+                        span: Span::new(FileId::new(0), 609, 610),
+                    }],
+                    kernel_span,
+                ))]),
+                "local" => block(vec![
+                    typed_var_decl("Y", "selected", kernel),
+                    return_stmt(reuse_source("selected", 606)),
+                ]),
+                "argument" => block(vec![return_stmt(Expr::Call(
+                    Box::new(var("echo")),
+                    vec![CallArg {
+                        name: None,
+                        value: kernel,
+                        span: sp(),
+                    }],
+                    Span::new(FileId::new(0), 607, 608),
+                ))]),
+                _ => block(vec![return_stmt(kernel)]),
+            };
+            let mut facade = func_def("facade", vec![("items", "list")], body);
+            facade.span = Span::new(FileId::new(STDLIB_FILE_ID_START), 604, 605);
+            facade.type_params = vec![ident("X"), ident("Y")];
+            facade.params[0].ty = TypeExpr::Generic(ident("list"), vec![type_named("Y")], sp());
+            facade.return_type = Some(type_named("Y"));
+            interpreter.register_function(&facade);
+            reuse_facts(
+                &mut interpreter,
+                &[
+                    (kernel_span, "models.Positive"),
+                    (returned.span(), "models.Positive"),
+                    (Span::new(FileId::new(0), 606, 607), "models.Positive"),
+                    (Span::new(FileId::new(0), 607, 608), "models.Positive"),
+                    (Span::new(FileId::new(0), 609, 610), "list[models.Positive]"),
+                ],
+            );
+            let invocation = Expr::GenericCall(
+                Box::new(var("facade")),
+                vec![type_named("int8"), type_named("models.Positive")],
+                vec![CallArg {
+                    name: None,
+                    value: Expr::ListConstruct(vec![], sp()),
+                    span: sp(),
+                }],
+                sp(),
+            );
+            assert_eq!(
+                interpreter.eval_expr(&invocation),
+                Err("refinement type constraint failed for 'models.Positive'".into()),
+                "{route}"
+            );
+            assert_eq!(
+                reuse_markers(&mut interpreter),
+                ["trace positive"],
+                "{route}"
+            );
+            assert!(interpreter.allow_checked_refinement_proofs);
+            assert!(!interpreter.current_function_trusted_stdlib);
+            assert!(interpreter.current_type_arguments.is_empty());
+            assert!(interpreter.type_arg_scopes.is_empty());
+
+            let mut successful = invocation.clone();
+            let Expr::GenericCall(_, _, args, _) = &mut successful else {
+                unreachable!()
+            };
+            args[0].value = Expr::ListConstruct(vec![int(1), int(2)], sp());
+            assert_eq!(
+                interpreter.eval_expr(&successful).unwrap().payload(),
+                &Value::Int64(3),
+                "{route}"
+            );
+            assert_eq!(
+                reuse_markers(&mut interpreter),
+                ["trace positive"],
+                "{route}"
+            );
+
+            if route == "return" {
+                // Raw calls inherit proof-disabled execution and keep their
+                // existing single forced facade-return validation.
+                assert_eq!(
+                    interpreter
+                        .call_function_with_type_args(
+                            "facade",
+                            &[type_named("int8"), type_named("models.Positive")],
+                            vec![Value::List(vec![Value::Int64(1), Value::Int64(2)])],
+                        )
+                        .unwrap()
+                        .payload(),
+                    &Value::Int64(3),
+                );
+                assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+                assert!(interpreter.allow_checked_refinement_proofs);
+
+                // No fact at the actual ordinary Call result means no new
+                // producer check, even when unrelated checked facts exist.
+                for partial_metadata in [false, true] {
+                    interpreter.checked_expression_types = None;
+                    if partial_metadata {
+                        reuse_facts(&mut interpreter, &[(returned.span(), "models.Positive")]);
+                    }
+                    assert_eq!(
+                        interpreter.eval_expr(&successful).unwrap().payload(),
+                        &Value::Int64(3),
+                    );
+                    assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+                    assert!(interpreter.allow_checked_refinement_proofs);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sum_pipeline_uses_checked_input_only_as_execution_evidence() {
+        let step_span = Span::new(FileId::new(0), 611, 612);
+        let expression = Expr::Pipeline(
+            Box::new(Expr::ListConstruct(vec![int(1), int(2)], sp())),
+            vec![PipelineStep {
+                function: Expr::GenericCall(
+                    Box::new(field_access(var("list"), "__sum")),
+                    vec![type_named("models.Positive")],
+                    vec![],
+                    sp(),
+                ),
+                extra_args: vec![],
+                handle: None,
+                span: step_span,
+            }],
+            Span::new(FileId::new(0), 613, 614),
+        );
+        for (has_step_fact, allow_proofs) in [(true, true), (false, true), (true, false)] {
+            let mut interpreter = reuse_interpreter();
+            interpreter.current_function_trusted_stdlib = true;
+            interpreter.allow_checked_refinement_proofs = allow_proofs;
+            // Deliberately omit the output fact. The input list type cannot
+            // serve as the output proof or replace the explicit Positive T.
+            if has_step_fact {
+                reuse_facts(&mut interpreter, &[(step_span, "list[models.Positive]")]);
+            }
+            let output = interpreter.eval_expr(&expression).unwrap();
+            assert_eq!(output.payload(), &Value::Int64(3));
+            if has_step_fact && allow_proofs {
+                assert!(
+                    matches!(output, Value::Typed { ref type_name, .. } if type_name == "models.Positive")
+                );
+                assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+            } else {
+                assert_eq!(output, Value::Int64(3));
+                assert!(reuse_markers(&mut interpreter).is_empty());
+            }
+            assert_eq!(interpreter.allow_checked_refinement_proofs, allow_proofs);
+        }
+    }
+
+    fn raw_proof_holder(value: i64) -> Value {
+        Value::Struct {
+            concrete_type: None,
+            type_name: "Holder".into(),
+            fields: vec![(
+                "value".into(),
+                Value::Typed {
+                    type_name: "models.Positive".into(),
+                    value: Box::new(Value::Int64(value)),
+                },
+            )],
+        }
+    }
+
+    fn raw_proof_echo(value: Expr) -> Expr {
+        Expr::Call(
+            Box::new(var("echo")),
+            vec![named_arg("input", value)],
+            Span::new(FileId::new(0), 506, 507),
+        )
+    }
+
+    fn raw_proof_interpreter() -> (Interpreter, Expr, Expr) {
+        let mut interpreter = reuse_interpreter();
+        interpreter.register_struct(&struct_def(
+            "Holder",
+            vec![("value", "models.Positive")],
+            vec![],
+        ));
+        let returned = reuse_source("input", 501);
+        let mut echo = func_def(
+            "echo",
+            vec![("input", "models.Positive")],
+            block(vec![return_stmt(returned.clone())]),
+        );
+        echo.return_type = Some(type_named("models.Positive"));
+        interpreter.register_function(&echo);
+        let field = Expr::FieldAccess(
+            Box::new(var("holder")),
+            ident("value"),
+            Span::new(FileId::new(0), 502, 503),
+        );
+        reuse_facts(
+            &mut interpreter,
+            &[
+                (returned.span(), "models.Positive"),
+                (Span::new(FileId::new(0), 506, 507), "models.Positive"),
+                (Span::new(FileId::new(0), 507, 508), "models.Positive"),
+                (field.span(), "models.Positive"),
+            ],
+        );
+        (interpreter, field, returned)
+    }
+
+    #[test]
+    fn raw_call_disables_nested_field_proofs_for_calls_locals_and_callbacks() {
+        for route in ["local", "call", "pipeline", "named", "inline"] {
+            let (mut interpreter, field, _) = raw_proof_interpreter();
+            let initializer = match route {
+                "local" => field,
+                "pipeline" => Expr::Pipeline(
+                    Box::new(field),
+                    vec![PipelineStep {
+                        function: var("echo"),
+                        extra_args: vec![],
+                        handle: None,
+                        span: Span::new(FileId::new(0), 502, 503),
+                    }],
+                    Span::new(FileId::new(0), 507, 508),
+                ),
+                _ => raw_proof_echo(field),
+            };
+            let body = block(vec![
+                typed_var_decl("models.Positive", "selected", initializer),
+                return_stmt(Expr::Coarsen(Box::new(var("selected")), sp())),
+            ]);
+            let mut raw = func_def("raw", vec![("holder", "Holder")], body.clone());
+            raw.return_type = Some(type_named("int64"));
+            interpreter.register_function(&raw);
+            let result = match route {
+                "named" => interpreter.call_fn_value(
+                    Value::NamedFunction("raw".into()),
+                    vec![raw_proof_holder(-1)],
+                ),
+                "inline" => {
+                    let callback = interpreter
+                        .eval_expr(&Expr::InlineFn(
+                            raw.params.clone(),
+                            Some(type_named("int64")),
+                            body,
+                            sp(),
+                        ))
+                        .unwrap();
+                    interpreter.call_fn_value(callback, vec![raw_proof_holder(-1)])
+                }
+                _ => interpreter.call_function("raw", vec![raw_proof_holder(-1)]),
+            };
+            assert_eq!(
+                result,
+                Err("refinement type constraint failed for 'models.Positive'".into()),
+                "{route}"
+            );
+            assert_eq!(
+                reuse_markers(&mut interpreter),
+                ["trace positive"],
+                "{route}"
+            );
+            assert!(interpreter.allow_checked_refinement_proofs, "{route}");
+            assert_eq!(interpreter.scopes.len(), 1, "{route}");
+            assert!(
+                interpreter
+                    .checked_expression_type(Span::new(FileId::new(0), 502, 503))
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn raw_call_disables_list_element_and_direct_constructor_field_proofs() {
+        let (mut interpreter, field, returned) = raw_proof_interpreter();
+        let element = reuse_source("item", 504);
+        reuse_facts(
+            &mut interpreter,
+            &[
+                (field.span(), "models.Positive"),
+                (returned.span(), "models.Positive"),
+                (Span::new(FileId::new(0), 506, 507), "models.Positive"),
+                (Span::new(FileId::new(0), 507, 508), "models.Positive"),
+                (element.span(), "models.Positive"),
+            ],
+        );
+        let mut raw = func_def(
+            "raw_list",
+            vec![("items", "list")],
+            block(vec![
+                Stmt::For(ForStmt {
+                    variable: ident("item"),
+                    value_variable: None,
+                    view: false,
+                    iterable: var("items"),
+                    body: block(vec![typed_var_decl(
+                        "models.Positive",
+                        "selected",
+                        raw_proof_echo(element),
+                    )]),
+                    span: sp(),
+                }),
+                return_stmt(int(0)),
+            ]),
+        );
+        raw.params[0].ty =
+            TypeExpr::Generic(ident("list"), vec![type_named("models.Positive")], sp());
+        raw.return_type = Some(type_named("int64"));
+        interpreter.register_function(&raw);
+        let Value::Struct { fields, .. } = raw_proof_holder(-1) else {
+            unreachable!()
+        };
+        assert_eq!(
+            interpreter.call_function("raw_list", vec![Value::List(vec![fields[0].1.clone()])]),
+            Err("refinement type constraint failed for 'models.Positive'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        assert!(interpreter.allow_checked_refinement_proofs);
+
+        let mut rebuild = func_def(
+            "rebuild",
+            vec![("holder", "Holder")],
+            block(vec![return_stmt(call("Holder", vec![field]))]),
+        );
+        rebuild.return_type = Some(TypeExpr::Generic(
+            ident("result"),
+            vec![type_named("Holder"), type_named("string")],
+            sp(),
+        ));
+        interpreter.register_function(&rebuild);
+        assert_eq!(
+            interpreter.call_function("rebuild", vec![raw_proof_holder(-1)]),
+            Ok(Value::ResultFail(Box::new(Value::String(
+                "refinement type constraint failed for 'models.Positive'".into()
+            ))))
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        assert!(interpreter.allow_checked_refinement_proofs);
+
+        // This repair does not recursively validate arbitrary raw aggregates:
+        // only the already-existing consuming boundaries force their checks.
+        let mut untouched = func_def(
+            "untouched",
+            vec![("holder", "Holder")],
+            block(vec![return_stmt(int(0))]),
+        );
+        untouched.return_type = Some(type_named("int64"));
+        interpreter.register_function(&untouched);
+        assert_eq!(
+            interpreter.call_function("untouched", vec![raw_proof_holder(-1)]),
+            Ok(Value::Int64(0))
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+    }
+
+    #[test]
+    fn checked_entry_reuses_body_proofs_but_forces_inputs_and_restores_raw_mode() {
+        let (mut interpreter, field, returned) = raw_proof_interpreter();
+        let called = Expr::Call(
+            Box::new(var("echo")),
+            vec![named_arg("input", field)],
+            Span::new(FileId::new(0), 505, 506),
+        );
+        reuse_facts(
+            &mut interpreter,
+            &[
+                (Span::new(FileId::new(0), 502, 503), "models.Positive"),
+                (returned.span(), "models.Positive"),
+                (Span::new(FileId::new(0), 506, 507), "models.Positive"),
+                (Span::new(FileId::new(0), 507, 508), "models.Positive"),
+                (called.span(), "models.Positive"),
+            ],
+        );
+        let mut checked = func_def(
+            "checked",
+            vec![("holder", "Holder")],
+            block(vec![
+                typed_var_decl("models.Positive", "selected", called),
+                return_stmt(Expr::Coarsen(Box::new(var("selected")), sp())),
+            ]),
+        );
+        checked.return_type = Some(type_named("int64"));
+        interpreter.register_function(&checked);
+        assert_eq!(
+            interpreter.call_checked_function_in_namespace(
+                None,
+                "checked",
+                vec![raw_proof_holder(7)]
+            ),
+            Ok(Value::Int64(7))
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+        assert_eq!(
+            interpreter.call_function("checked", vec![raw_proof_holder(7)]),
+            Ok(Value::Int64(7))
+        );
+        assert_eq!(reuse_markers(&mut interpreter), vec!["trace positive"; 3]);
+        assert!(interpreter.allow_checked_refinement_proofs);
+        assert_eq!(
+            interpreter.call_checked_function_in_namespace(None, "echo", vec![Value::Int64(-1)]),
+            Err("refinement type constraint failed for 'models.Positive'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        assert!(interpreter.allow_checked_refinement_proofs);
+
+        // Compiler-owned facade forwarding inherits source trust while keeping
+        // its own destination inputs forced.
+        assert_eq!(
+            interpreter.call_user_function_with_type_args(
+                "checked",
+                &[],
+                vec![raw_proof_holder(7)]
+            ),
+            Ok(Value::Int64(7))
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+
+        // A trusted bridge cannot re-enable proofs inside a raw invocation tree.
+        interpreter.allow_checked_refinement_proofs = false;
+        assert_eq!(
+            interpreter.call_checked_function_in_namespace(
+                None,
+                "checked",
+                vec![raw_proof_holder(-1)]
+            ),
+            Err("refinement type constraint failed for 'models.Positive'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        assert!(!interpreter.allow_checked_refinement_proofs);
+        assert_eq!(
+            interpreter.call_user_function_with_type_args(
+                "checked",
+                &[],
+                vec![raw_proof_holder(-1)]
+            ),
+            Err("refinement type constraint failed for 'models.Positive'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        assert!(!interpreter.allow_checked_refinement_proofs);
+        interpreter.allow_checked_refinement_proofs = true;
+        assert_eq!(
+            interpreter.call_checked_function_in_namespace(
+                None,
+                "checked",
+                vec![raw_proof_holder(7)]
+            ),
+            Ok(Value::Int64(7))
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+    }
+
+    #[test]
+    fn forced_refinement_validator_does_not_trust_predicate_body_field_facts() {
+        let (mut interpreter, field, returned) = raw_proof_interpreter();
+        let mut predicate = func_def(
+            "holder_valid",
+            vec![("holder", "Holder")],
+            block(vec![
+                typed_var_decl("models.Positive", "selected", raw_proof_echo(field.clone())),
+                return_stmt(bool_expr(true)),
+            ]),
+        );
+        predicate.return_type = Some(type_named("bool"));
+        interpreter.register_function(&predicate);
+        interpreter.register_type_alias(&type_alias(
+            "ValidHolder",
+            "Holder",
+            Some(call("holder_valid", vec![var("value")])),
+        ));
+        reuse_facts(
+            &mut interpreter,
+            &[
+                (field.span(), "models.Positive"),
+                (returned.span(), "models.Positive"),
+                (Span::new(FileId::new(0), 506, 507), "models.Positive"),
+                (Span::new(FileId::new(0), 507, 508), "models.Positive"),
+            ],
+        );
+        assert_eq!(
+            interpreter.check_refinement_type("ValidHolder", &raw_proof_holder(-1)),
+            Err("error evaluating refinement constraint for 'ValidHolder': refinement type constraint failed for 'models.Positive'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        assert!(interpreter.allow_checked_refinement_proofs);
+        assert_eq!(interpreter.scopes.len(), 1);
+    }
+
+    #[test]
+    fn checked_call_reuses_named_and_named_value_boundaries_but_raw_calls_still_validate() {
+        let mut interpreter = reuse_interpreter();
+        let returned = reuse_source("input", 100);
+        let mut echo = func_def(
+            "echo",
+            vec![("input", "models.Positive")],
+            block(vec![return_stmt(returned.clone())]),
+        );
+        echo.params[0].view = true;
+        echo.return_type = Some(type_named("models.Positive"));
+        interpreter.register_function_in_namespace(Some("models"), &echo);
+        interpreter
+            .exec_stmt(&typed_var_decl("models.Positive", "source", int(7)))
+            .unwrap();
+        reuse_markers(&mut interpreter);
+        let argument = Expr::View(
+            Box::new(reuse_source("source", 101)),
+            Span::new(FileId::new(0), 102, 103),
+        );
+        reuse_facts(
+            &mut interpreter,
+            &[
+                (returned.span(), "models.Positive"),
+                (argument.span(), "models.Positive"),
+            ],
+        );
+        assert_eq!(
+            interpreter
+                .eval_expr(&call("models.echo", vec![argument.clone()]))
+                .unwrap()
+                .payload(),
+            &Value::Int64(7)
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+        interpreter.set_variable("callback", Value::NamedFunction("models.echo".into()));
+        assert_eq!(
+            interpreter
+                .eval_expr(&call("callback", vec![argument]))
+                .unwrap()
+                .payload(),
+            &Value::Int64(7)
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+
+        assert_eq!(
+            interpreter
+                .call_function("models.echo", vec![Value::Int64(7)])
+                .unwrap()
+                .payload(),
+            &Value::Int64(7)
+        );
+        assert_eq!(
+            reuse_markers(&mut interpreter),
+            ["trace positive", "trace positive"]
+        );
+        let stale = Value::Typed {
+            type_name: "models.Positive".into(),
+            value: Box::new(Value::Int64(-1)),
+        };
+        assert_eq!(
+            interpreter.call_fn_value(
+                Value::NamedFunction("models.echo".into()),
+                vec![stale.clone()]
+            ),
+            Err("refinement type constraint failed for 'models.Positive'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        interpreter.set_variable("stale", stale);
+        let returned = reuse_source("stale", 104);
+        let mut producer = func_def(
+            "producer",
+            vec![],
+            block(vec![return_stmt(returned.clone())]),
+        );
+        producer.return_type = Some(type_named("models.Positive"));
+        interpreter.register_function(&producer);
+        reuse_facts(&mut interpreter, &[(returned.span(), "models.Positive")]);
+        assert_eq!(
+            interpreter.call_function("producer", vec![]),
+            Err("refinement type constraint failed for 'models.Positive'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+    }
+
+    #[test]
+    fn checked_call_reorders_proofs_with_named_values_and_evaluates_arguments_first() {
+        let mut interpreter = reuse_interpreter();
+        let mut choose = func_def(
+            "choose",
+            vec![("first", "models.Positive"), ("second", "models.Large")],
+            block(vec![return_stmt(var("first"))]),
+        );
+        choose.params.iter_mut().for_each(|param| param.view = true);
+        choose.return_type = Some(type_named("int64"));
+        interpreter.register_function(&choose);
+        interpreter.set_variable("small", Value::Int64(7));
+        interpreter.set_variable("establishedLarge", Value::Int64(9));
+        let small = reuse_source("small", 110);
+        let large = reuse_source("establishedLarge", 111);
+        reuse_facts(
+            &mut interpreter,
+            &[
+                (small.span(), "models.Positive"),
+                (large.span(), "models.Large"),
+            ],
+        );
+        let reordered = Expr::Call(
+            Box::new(var("choose")),
+            vec![named_arg("second", large), named_arg("first", small)],
+            sp(),
+        );
+        assert_eq!(interpreter.eval_expr(&reordered), Ok(Value::Int64(7)));
+        assert!(reuse_markers(&mut interpreter).is_empty());
+
+        for name in ["one", "two"] {
+            let mut producer = func_def(
+                name,
+                vec![],
+                block(vec![
+                    var_decl(name, int(7)),
+                    Stmt::Trace(TraceStmt {
+                        name: ident(name),
+                        span: sp(),
+                    }),
+                    return_stmt(var(name)),
+                ]),
+            );
+            producer.return_type = Some(type_named("int64"));
+            interpreter.register_function(&producer);
+        }
+        reuse_facts(&mut interpreter, &[]);
+        let ordered = Expr::Call(
+            Box::new(var("choose")),
+            vec![
+                named_arg("second", call("one", vec![])),
+                named_arg("first", call("two", vec![])),
+            ],
+            sp(),
+        );
+        assert_eq!(interpreter.eval_expr(&ordered), Ok(Value::Int64(7)));
+        assert_eq!(
+            reuse_markers(&mut interpreter),
+            [
+                "trace one",
+                "trace two",
+                "trace positive",
+                "trace positive",
+                "trace large"
+            ]
+        );
+    }
+
+    #[test]
+    fn checked_call_return_proofs_preserve_ancestor_suffix_and_unvalidated_inputs() {
+        let mut interpreter = reuse_interpreter();
+        let returned = reuse_source("input", 120);
+        let mut extend = func_def(
+            "extend",
+            vec![("input", "models.Positive")],
+            block(vec![return_stmt(returned.clone())]),
+        );
+        extend.params[0].view = true;
+        extend.return_type = Some(type_named("models.Large"));
+        interpreter.register_function(&extend);
+        let argument = reuse_source("source", 121);
+        interpreter.set_variable("source", Value::Int64(7));
+        reuse_facts(
+            &mut interpreter,
+            &[
+                (returned.span(), "models.Positive"),
+                (argument.span(), "models.Positive"),
+            ],
+        );
+        assert_eq!(
+            interpreter
+                .eval_expr(&call("extend", vec![argument.clone()]))
+                .unwrap()
+                .payload(),
+            &Value::Int64(7)
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+        interpreter.set_variable("source", Value::Int64(2));
+        assert_eq!(
+            interpreter.eval_expr(&call("extend", vec![argument])),
+            Err("refinement type constraint failed for 'models.Large'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+
+        let returned = Expr::IntLiteral(2, Span::new(FileId::new(0), 122, 123));
+        let mut create = func_def("create", vec![], block(vec![return_stmt(returned.clone())]));
+        create.return_type = Some(type_named("models.Large"));
+        interpreter.register_function(&create);
+        reuse_facts(&mut interpreter, &[(returned.span(), "int64")]);
+        let caller_scope = Arc::new(CheckedScopedTypes {
+            bound_type: "models.Large".into(),
+            expressions: HashMap::from([(returned.span(), "models.Large".into())]),
+            ..Default::default()
+        });
+        interpreter.active_checked_scope = Some(caller_scope.clone());
+        interpreter.current_namespace = Some("app".into());
+        assert_eq!(
+            interpreter.eval_expr(&call("create", vec![])),
+            Err("refinement type constraint failed for 'models.Large'".into())
+        );
+        assert_eq!(
+            reuse_markers(&mut interpreter),
+            ["trace positive", "trace large"]
+        );
+        assert!(Arc::ptr_eq(
+            interpreter.active_checked_scope.as_ref().unwrap(),
+            &caller_scope
+        ));
+        assert_eq!(interpreter.current_namespace.as_deref(), Some("app"));
+        assert_eq!(interpreter.scopes.len(), 1);
+        assert!(interpreter.type_arg_scopes.is_empty());
+    }
+
+    #[test]
+    fn checked_call_generic_body_and_caller_scoped_proofs_remain_separate() {
+        let mut interpreter = reuse_interpreter();
+        let returned = reuse_source("input", 130);
+        let mut identity = func_def(
+            "identity",
+            vec![("input", "T")],
+            block(vec![return_stmt(returned.clone())]),
+        );
+        identity.name.span = Span::new(FileId::new(0), 131, 132);
+        identity.type_params = vec![ident("T")];
+        identity.params[0].view = true;
+        identity.return_type = Some(type_named("T"));
+        interpreter.register_function(&identity);
+        let generic = Arc::new(CheckedFunctionTypes {
+            type_arguments: vec!["models.Positive".into()],
+            expressions: Arc::new(HashMap::from([(returned.span(), "models.Positive".into())])),
+            ..Default::default()
+        });
+        let argument = reuse_source("source", 132);
+        interpreter.set_variable("source", Value::Int64(7));
+        interpreter.set_checked_expression_types(Arc::new(CheckedExpressionTypes {
+            expressions: HashMap::from([
+                (argument.span(), "int64".into()),
+                (returned.span(), "int64".into()),
+            ]),
+            functions: HashMap::from([(identity.name.span, vec![generic])]),
+            ..Default::default()
+        }));
+        let caller_scope = Arc::new(CheckedScopedTypes {
+            bound_type: "models.Positive".into(),
+            expressions: HashMap::from([(argument.span(), "models.Positive".into())]),
+            ..Default::default()
+        });
+        interpreter.active_checked_scope = Some(caller_scope.clone());
+        let expression = Expr::GenericCall(
+            Box::new(var("identity")),
+            vec![type_named("models.Positive")],
+            vec![named_arg("input", argument)],
+            sp(),
+        );
+        assert_eq!(
+            interpreter.eval_expr(&expression).unwrap().payload(),
+            &Value::Int64(7)
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+        assert!(Arc::ptr_eq(
+            interpreter.active_checked_scope.as_ref().unwrap(),
+            &caller_scope
+        ));
+        assert!(interpreter.active_checked_function.is_none());
+        assert!(interpreter.type_arg_scopes.is_empty());
+    }
+
+    #[test]
+    fn checked_call_nested_returns_cannot_lend_proof_to_the_outer_expression() {
+        let mut interpreter = reuse_interpreter();
+        let returned = reuse_source("ready", 140);
+        let mut inner = func_def(
+            "inner",
+            vec![],
+            block(vec![
+                typed_var_decl("models.Large", "ready", reuse_handle(int(9), int(9), 141)),
+                return_stmt(returned.clone()),
+            ]),
+        );
+        inner.return_type = Some(type_named("models.Large"));
+        interpreter.register_function(&inner);
+        let derived = Expr::Binary(
+            Box::new(Expr::Coarsen(
+                Box::new(call("inner", vec![])),
+                Span::new(FileId::new(0), 142, 143),
+            )),
+            BinOp::Sub,
+            Box::new(int(7)),
+            Span::new(FileId::new(0), 144, 145),
+        );
+        let mut outer = func_def("outer", vec![], block(vec![return_stmt(derived.clone())]));
+        outer.return_type = Some(type_named("models.Large"));
+        interpreter.register_function(&outer);
+        reuse_facts(
+            &mut interpreter,
+            &[(returned.span(), "models.Large"), (derived.span(), "int64")],
+        );
+        assert_eq!(
+            interpreter.eval_expr(&call("outer", vec![])),
+            Err("refinement type constraint failed for 'models.Large'".into())
+        );
+        assert_eq!(
+            reuse_markers(&mut interpreter),
+            [
+                "trace positive",
+                "trace large",
+                "trace positive",
+                "trace large"
+            ]
+        );
+        assert_eq!(interpreter.scopes.len(), 1);
+    }
+
+    #[test]
+    fn checked_call_pipeline_and_pending_values_keep_their_original_proofs() {
+        let mut interpreter = reuse_interpreter();
+        let returned = reuse_source("input", 150);
+        let mut echo = func_def(
+            "echo",
+            vec![("input", "models.Positive")],
+            block(vec![return_stmt(returned.clone())]),
+        );
+        echo.params[0].view = true;
+        echo.return_type = Some(type_named("models.Positive"));
+        interpreter.register_function(&echo);
+        let mut choose = func_def(
+            "choose",
+            vec![("input", "models.Positive"), ("other", "models.Large")],
+            block(vec![return_stmt(returned.clone())]),
+        );
+        choose.params.iter_mut().for_each(|param| param.view = true);
+        choose.return_type = Some(type_named("models.Positive"));
+        interpreter.register_function(&choose);
+        interpreter.set_variable("other", Value::Int64(9));
+        let source = reuse_source("source", 151);
+        let extra = reuse_source("other", 152);
+        let first_step = Span::new(FileId::new(0), 153, 154);
+        let second_step = Span::new(FileId::new(0), 155, 156);
+        reuse_facts(
+            &mut interpreter,
+            &[
+                (source.span(), "models.Positive"),
+                (extra.span(), "models.Large"),
+                (returned.span(), "models.Positive"),
+                (first_step, "models.Positive"),
+                (second_step, "models.Positive"),
+            ],
+        );
+        let pipeline = Expr::Pipeline(
+            Box::new(source),
+            vec![
+                PipelineStep {
+                    function: var("choose"),
+                    extra_args: vec![named_arg("other", extra)],
+                    handle: None,
+                    span: first_step,
+                },
+                PipelineStep {
+                    function: var("echo"),
+                    extra_args: vec![],
+                    handle: None,
+                    span: second_step,
+                },
+            ],
+            sp(),
+        );
+        for depth in 0..=2 {
+            let mut input = Value::Typed {
+                type_name: "models.Positive".into(),
+                value: Box::new(Value::Int64(7)),
+            };
+            for _ in 0..depth {
+                input = Value::Pending(Box::new(input));
+            }
+            interpreter.set_variable("source", input.clone());
+            assert_eq!(interpreter.eval_expr(&pipeline), Ok(input.clone()));
+            assert_eq!(interpreter.get_variable("source"), Some(&input));
+            assert!(reuse_markers(&mut interpreter).is_empty());
+        }
+    }
+
+    #[test]
+    fn checked_call_handle_returns_carry_the_selected_return_witness() {
+        for returns_from_handler in [false, true] {
+            let mut interpreter = reuse_interpreter();
+            let copied = Expr::Clone(
+                Box::new(reuse_source("input", 160)),
+                Span::new(FileId::new(0), 161, 162),
+            );
+            let handler_statement = if returns_from_handler {
+                return_stmt(copied.clone())
+            } else {
+                Stmt::Expr(ExprStmt {
+                    expr: Expr::Default(Box::new(copied.clone()), sp()),
+                    span: sp(),
+                })
+            };
+            let handled = Expr::Handle(
+                Box::new(Expr::None(sp())),
+                None,
+                block(vec![handler_statement]),
+                Span::new(FileId::new(0), 163, 164),
+            );
+            let mut select = func_def(
+                "select",
+                vec![("input", "models.Positive")],
+                block(vec![return_stmt(handled.clone())]),
+            );
+            select.params[0].view = true;
+            select.return_type = Some(type_named("models.Positive"));
+            interpreter.register_function(&select);
+            let source = reuse_source("source", 165);
+            interpreter.set_variable("source", Value::Int64(7));
+            reuse_facts(
+                &mut interpreter,
+                &[
+                    (source.span(), "models.Positive"),
+                    (copied.span(), "models.Positive"),
+                    // A Return escaping the handler supplies its own source fact;
+                    // the unreachable outer Return expression must not replace it.
+                    (
+                        handled.span(),
+                        if returns_from_handler {
+                            "int64"
+                        } else {
+                            "models.Positive"
+                        },
+                    ),
+                ],
+            );
+            assert_eq!(
+                interpreter
+                    .eval_expr(&call("select", vec![source]))
+                    .unwrap()
+                    .payload(),
+                &Value::Int64(7)
+            );
+            assert!(reuse_markers(&mut interpreter).is_empty());
+            assert_eq!(interpreter.scopes.len(), 1);
+        }
+    }
+
+    #[test]
+    fn canonical_type_bindings_follow_chains_without_redirecting_terminal_owners() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.set_namespace_alias("models".into(), "shadow".into());
+        interpreter.set_namespace_alias("selected".into(), "models".into());
+        interpreter.register_type_alias_in_namespace(
+            Some("shadow"),
+            &type_alias("Positive", "int64", Some(bool_expr(false))),
+        );
+        interpreter.type_arg_scopes = vec![HashMap::from([
+            ("T".into(), type_named("models.Positive")),
+            ("Field".into(), type_named("T")),
+        ])];
+        for name in ["T", "Field"] {
+            assert_eq!(
+                type_expr_display(&interpreter.substitute_type_expr(&type_named(name))),
+                "models.Positive"
+            );
+        }
+        assert_eq!(
+            type_expr_display(&interpreter.substitute_type_expr(&type_named("models.Positive"))),
+            "shadow.Positive"
+        );
+        assert_eq!(
+            type_expr_display(&interpreter.substitute_type_expr(&type_named("selected.Positive"))),
+            "models.Positive"
+        );
+        let template = TypeExpr::Generic(
+            ident("map"),
+            vec![type_named("T"), type_named("selected.Positive")],
+            sp(),
+        );
+        assert_eq!(
+            interpreter.concrete_type_display(&template),
+            "map[models.Positive, models.Positive]"
+        );
+        let actual = HashMap::from([("Item".into(), type_named("models.Positive"))]);
+        assert_eq!(
+            type_expr_display(&interpreter.substitute_type_expr_with_map_in_namespace(
+                &type_named("Item"),
+                &actual,
+                Some("app")
+            )),
+            "models.Positive"
+        );
+        interpreter.type_arg_scopes[0].insert("Cycle".into(), type_named("Cycle"));
+        assert_eq!(
+            type_expr_display(&interpreter.substitute_type_expr(&type_named("Cycle"))),
+            "Cycle"
+        );
+        interpreter.register_struct(&struct_def("T", vec![("value", "int64")], vec![]));
+        interpreter.type_arg_scopes[0].insert("T".into(), type_named("bool"));
+        interpreter.type_arg_scopes[0].insert("Actual".into(), type_named("T"));
+        assert_eq!(
+            type_expr_display(&interpreter.substitute_type_expr(&type_named("Actual"))),
+            "T"
+        );
+        assert_eq!(
+            type_expr_display(&interpreter.resolve_installed_type_expr(&type_named("T"))),
+            "T"
+        );
+        assert_eq!(
+            type_expr_display(&interpreter.substitute_type_expr(&type_named("T"))),
+            "bool"
+        );
+        assert_eq!(interpreter.visible_namespace_aliases()["models"], "shadow");
+    }
+
+    #[test]
+    fn canonical_type_arguments_select_callee_without_caller_parameter_or_alias_rebinding() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.set_namespace_alias("selected".into(), "models".into());
+        interpreter.set_namespace_alias("models".into(), "shadow".into());
+        interpreter.register_type_alias_in_namespace(
+            Some("shadow"),
+            &type_alias("Positive", "int64", Some(bool_expr(false))),
+        );
+        interpreter.type_arg_scopes = vec![HashMap::from([("T".into(), type_named("bool"))])];
+        let returned = reuse_source("input", 710);
+        let mut identity = func_def(
+            "identity",
+            vec![("input", "T")],
+            block(vec![return_stmt(returned.clone())]),
+        );
+        identity.name.span = Span::new(FileId::new(0), 711, 712);
+        identity.type_params = vec![ident("T")];
+        identity.return_type = Some(type_named("T"));
+        interpreter.register_function(&identity);
+        let body = Arc::new(CheckedFunctionTypes {
+            type_arguments: vec!["models.Positive".into()],
+            expressions: Arc::new(HashMap::from([(returned.span(), "models.Positive".into())])),
+            ..Default::default()
+        });
+        let argument = reuse_source("source", 712);
+        interpreter.set_variable_with_type(
+            "source",
+            Value::Int64(7),
+            type_named("models.Positive"),
+        );
+        interpreter.set_checked_expression_types(Arc::new(CheckedExpressionTypes {
+            expressions: HashMap::from([(argument.span(), "models.Positive".into())]),
+            functions: HashMap::from([(identity.name.span, vec![body])]),
+            ..Default::default()
+        }));
+        let invocation = Expr::GenericCall(
+            Box::new(var("identity")),
+            vec![type_named("selected.Positive")],
+            vec![named_arg("input", argument)],
+            sp(),
+        );
+        let result = interpreter.eval_expr(&invocation).unwrap();
+        assert!(
+            matches!(result, Value::Typed { ref type_name, ref value } if type_name == "models.Positive" && value.payload() == &Value::Int64(7))
+        );
+        assert_eq!(
+            type_expr_display(&interpreter.debug_expression_type(&invocation).unwrap()),
+            "models.Positive"
+        );
+        interpreter.set_variable_with_type(
+            "sources",
+            Value::List(vec![Value::Int64(7)]),
+            TypeExpr::Generic(ident("list"), vec![type_named("models.Positive")], sp()),
+        );
+        let inferred = call("identity", vec![var("sources")]);
+        assert_eq!(
+            type_expr_display(&interpreter.debug_expression_type(&inferred).unwrap()),
+            "list[models.Positive]"
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+        assert_eq!(
+            type_expr_display(&interpreter.type_arg_scopes[0]["T"]),
+            "bool"
+        );
+        assert_eq!(interpreter.visible_namespace_aliases()["models"], "shadow");
+        assert!(interpreter.active_checked_function.is_none());
+        assert_eq!(interpreter.scopes.len(), 1);
+    }
+
+    #[test]
+    fn canonical_closure_capture_preserves_generic_reflected_metadata_and_imports() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.set_namespace_alias("models".into(), "shadow".into());
+        interpreter.register_type_alias_in_namespace(
+            Some("shadow"),
+            &type_alias("Positive", "int64", Some(bool_expr(false))),
+        );
+        interpreter.type_arg_scopes = vec![HashMap::from([
+            ("T".into(), type_named("models.Positive")),
+            ("Field".into(), type_named("T")),
+        ])];
+        interpreter.current_type_arguments = vec![type_named("models.Positive")];
+        interpreter.scoped_type_bindings = vec![ClosureScopedTypeBinding {
+            name: "Field".into(),
+            canonical_name: "models.Positive".into(),
+            reflection: None,
+        }];
+        let returned = reuse_source("input", 720);
+        reuse_facts(&mut interpreter, &[(returned.span(), "int64")]);
+        let closure = interpreter
+            .capture_closure(
+                &func_def("unused", vec![("input", "int64")], block(vec![])).params,
+                Some(&type_named("Field")),
+                &block(vec![return_stmt(returned)]),
+            )
+            .unwrap();
+        let Value::Function {
+            ref type_context,
+            ref namespace_aliases,
+            ..
+        } = closure
+        else {
+            panic!("expected closure")
+        };
+        assert_eq!(
+            type_expr_display(&type_context.bindings["T"]),
+            "models.Positive"
+        );
+        assert_eq!(
+            type_expr_display(&type_context.bindings["Field"]),
+            "models.Positive"
+        );
+        assert_eq!(type_context.arguments[0].canonical_name, "models.Positive");
+        assert_eq!(
+            type_context.scoped_type_bindings[0].canonical_name,
+            "models.Positive"
+        );
+        assert_eq!(namespace_aliases["models"], "shadow");
+        for input in [7, -1] {
+            let result = interpreter.call_fn_value_from_source(
+                closure.clone(),
+                vec![Value::Int64(input)],
+                Some(&[None]),
+            );
+            if input > 0 {
+                assert!(
+                    matches!(result, Ok(Value::Typed { ref type_name, ref value }) if type_name == "models.Positive" && value.payload() == &Value::Int64(7))
+                );
+            } else {
+                assert_eq!(
+                    result,
+                    Err("refinement type constraint failed for 'models.Positive'".into())
+                );
+            }
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+            assert_eq!(interpreter.visible_namespace_aliases()["models"], "shadow");
+            assert_eq!(
+                interpreter.scoped_type_bindings[0].canonical_name,
+                "models.Positive"
+            );
+            assert_eq!(interpreter.scopes.len(), 1);
+        }
+    }
+
+    #[test]
+    fn canonical_locals_and_checked_expressions_keep_owner_and_primitive_width() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.set_namespace_alias("selected".into(), "models".into());
+        interpreter.set_namespace_alias("models".into(), "shadow".into());
+        interpreter.register_type_alias_in_namespace(
+            Some("shadow"),
+            &type_alias("Positive", "int64", Some(bool_expr(false))),
+        );
+        interpreter
+            .register_type_alias_in_namespace(Some("models"), &type_alias("Small", "int8", None));
+        interpreter
+            .register_type_alias_in_namespace(Some("shadow"), &type_alias("Small", "uint64", None));
+        let source = reuse_source("source", 730);
+        interpreter.set_variable_with_type(
+            "source",
+            Value::Int64(7),
+            type_named("models.Positive"),
+        );
+        reuse_facts(&mut interpreter, &[(source.span(), "models.Positive")]);
+        interpreter
+            .exec_stmt(&typed_var_decl(
+                "selected.Positive",
+                "copied",
+                source.clone(),
+            ))
+            .unwrap();
+        assert!(
+            matches!(interpreter.get_variable("copied"), Some(Value::Typed { type_name, value }) if type_name == "models.Positive" && value.payload() == &Value::Int64(7))
+        );
+        assert_eq!(
+            type_expr_display(interpreter.get_variable_type("copied").unwrap()),
+            "models.Positive"
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+        let base = Expr::IntLiteral(-1, Span::new(FileId::new(0), 731, 732));
+        reuse_facts(&mut interpreter, &[(base.span(), "int64")]);
+        assert_eq!(
+            interpreter.exec_stmt(&typed_var_decl("selected.Positive", "rejected", base)),
+            Err("refinement type constraint failed for 'models.Positive'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        assert!(interpreter.get_variable("rejected").is_none());
+        let field = Expr::IntLiteral(127, Span::new(FileId::new(0), 732, 733));
+        reuse_facts(&mut interpreter, &[(field.span(), "models.Small")]);
+        assert_eq!(interpreter.eval_expr(&field), Ok(Value::Int64(127)));
+        interpreter
+            .exec_stmt(&typed_var_decl("selected.Small", "small", field))
+            .unwrap();
+        assert_eq!(interpreter.get_variable("small"), Some(&Value::Int64(127)));
+        assert_eq!(interpreter.visible_namespace_aliases()["models"], "shadow");
+        assert_eq!(interpreter.scopes.len(), 1);
+    }
+
+    #[test]
+    fn canonical_declaration_alias_bases_ignore_caller_generic_and_namespace_bindings() {
+        let mut interpreter = Interpreter::new();
+        interpreter.register_struct_in_namespace(
+            Some("models"),
+            &struct_def("T", vec![("value", "int64")], vec![]),
+        );
+        interpreter
+            .register_type_alias_in_namespace(Some("models"), &type_alias("Wrapped", "T", None));
+        interpreter
+            .register_type_alias_in_namespace(Some("shadow"), &type_alias("Wrapped", "bool", None));
+        interpreter.set_namespace_alias("selected".into(), "models".into());
+        interpreter.set_namespace_alias("models".into(), "shadow".into());
+        interpreter.type_arg_scopes = vec![HashMap::from([("T".into(), type_named("bool"))])];
+        assert_eq!(
+            interpreter.concrete_type_display(&type_named("selected.Wrapped")),
+            "models.T"
+        );
+        assert_eq!(
+            interpreter.resolved_concrete_type_display(&type_named("models.Wrapped")),
+            "models.T"
+        );
+        assert_eq!(
+            interpreter.concrete_type_display(&type_named("models.Wrapped")),
+            "bool"
+        );
+        assert!(
+            interpreter
+                .merge_inferred_never(&type_named("models.Wrapped"), &type_named("bool"), false)
+                .is_none()
+        );
+        assert_eq!(
+            interpreter.with_resolved_type_aliases(|interpreter| interpreter
+                .primitive_base_type_name("models.Wrapped")
+                .into_owned()),
+            "models.T"
+        );
+        assert_eq!(
+            type_expr_display(&interpreter.type_arg_scopes[0]["T"]),
+            "bool"
+        );
+    }
+
+    #[test]
+    fn canonical_source_locals_closures_and_reflected_bindings_work_in_closed_comptime() {
+        let source = r#"namespace models
+export type Positive = int64 where value > 0
+export type Alias = Positive
+export function identity[T](value: T) returns T:
+    return value
+export function make[T]() returns function(int64) returns T:
+    return function(value: int64) returns T: return value
+namespace shadow
+export type Positive = int64 where value < 0
+export type Alias = Positive
+namespace app
+function report() returns string:
+    use models as selected
+    use shadow as models
+    selected.Positive first = 7 handle error:
+        return error
+    selected.Alias copied = first
+    selected.Positive generic = selected.identity[selected.Positive](clone first)
+    function(int64) returns selected.Positive callback = selected.make[selected.Positive]()
+    selected.Positive returned = callback(9)
+    comptime type Bound = type.info[selected.Alias]():
+        function(int64) returns Bound reflected = function(value: int64) returns Bound: return value
+        Bound scoped = reflected(11)
+        return "{coarsen first}:{coarsen copied}:{coarsen generic}:{coarsen returned}:{coarsen scoped}:{type.name[Bound]()}"
+function main() returns string:
+    return comptime report()
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interpreter = Interpreter::new();
+        interpreter.register_module(&parsed.module);
+        assert_eq!(
+            interpreter.call_function("app.main", vec![]),
+            Ok(Value::String("7:7:7:9:11:models.Alias".into()))
+        );
+        assert_eq!(interpreter.scopes.len(), 1);
+        assert_eq!(interpreter.lexical_scope_floor, 0);
+        assert!(interpreter.type_arg_scopes.is_empty());
+        assert!(interpreter.scoped_type_bindings.is_empty());
+        assert!(interpreter.visible_namespace_aliases().is_empty());
+    }
+
+    #[test]
+    fn canonical_reflected_field_and_argument_loop_bindings_keep_selected_owners() {
+        let source = r#"namespace models
+export type Positive = int64 where value > 0
+export struct Scalar:
+    value: Positive
+export struct Items:
+    values: list[Positive]
+namespace shadow
+export type Positive = int64 where value < 0
+namespace app
+function field_name() returns string:
+    use models as selected
+    use shadow as models
+    mutable string found = "missing"
+    for field in type.fields[selected.Scalar]():
+        comptime type Field = field.type_info:
+            found = type.name[Field]()
+    return found
+function direct_argument() returns string:
+    use models as selected
+    use shadow as models
+    mutable string found = "missing"
+    for arg in type.info[list[selected.Positive]]().args:
+        comptime type Arg = arg:
+            found = type.name[Arg]()
+    return found
+function field_argument() returns string:
+    use models as selected
+    use shadow as models
+    mutable string found = "missing"
+    for field in type.fields[selected.Items]():
+        for arg in field.type_info.args:
+            comptime type Arg = arg:
+                found = type.name[Arg]()
+    return found
+function nested_argument() returns string:
+    use models as selected
+    use shadow as models
+    mutable string found = "missing"
+    for outer in type.info[list[optional[selected.Positive]]]().args:
+        comptime type Outer = outer:
+            for inner in outer.args:
+                comptime type Inner = inner:
+                    found = type.name[Inner]()
+    return found
+function main() returns string:
+    return comptime "{field_name()}|{direct_argument()}|{field_argument()}|{nested_argument()}"
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interpreter = Interpreter::new();
+        interpreter.register_module(&parsed.module);
+        assert_eq!(
+            interpreter.call_function("app.main", vec![]),
+            Ok(Value::String(
+                "models.Positive|models.Positive|models.Positive|models.Positive".into()
+            ))
+        );
+        assert_eq!(interpreter.scopes.len(), 1);
+        assert!(interpreter.type_arg_scopes.is_empty());
+        assert!(interpreter.scoped_type_bindings.is_empty());
+        assert!(interpreter.reflected_field_scopes.is_empty());
+        assert!(interpreter.reflected_type_info_scopes.is_empty());
+        assert!(interpreter.visible_namespace_aliases().is_empty());
+    }
+
+    #[test]
+    fn call_view_refinement_parameters_validate_without_changing_binding_metadata() {
+        for inline in [false, true] {
+            for depth in 1..=2 {
+                let mut interpreter = reuse_interpreter();
+                let mut parameter_type = type_named("models.Positive");
+                for _ in 0..depth {
+                    parameter_type = TypeExpr::View(Box::new(parameter_type), sp());
+                }
+                let mut function = func_def(
+                    "capture",
+                    vec![("input", "models.Positive")],
+                    block(vec![return_stmt(Expr::InlineFn(
+                        vec![],
+                        None,
+                        block(vec![return_stmt(var("input"))]),
+                        sp(),
+                    ))]),
+                );
+                function.params[0].ty = parameter_type.clone();
+                interpreter.register_function(&function);
+                let closure = interpreter
+                    .capture_closure(&function.params, None, &function.body)
+                    .unwrap();
+                let wrapped_fact = type_expr_display(&parameter_type);
+                for (number, checked) in [(-1, false), (7, false), (7, true)] {
+                    let input = Value::Typed {
+                        type_name: "models.Positive".into(),
+                        value: Box::new(Value::Int64(number)),
+                    };
+                    let facts = [Some(wrapped_fact.clone())];
+                    let result = if inline {
+                        interpreter.call_fn_value_from_source(
+                            closure.clone(),
+                            vec![input],
+                            checked.then_some(facts.as_slice()),
+                        )
+                    } else {
+                        interpreter.call_registered_function_from_source(
+                            "capture",
+                            &[],
+                            vec![input],
+                            checked.then_some(facts.as_slice()),
+                        )
+                    };
+                    if number < 0 {
+                        assert_eq!(
+                            result,
+                            Err("refinement type constraint failed for 'models.Positive'".into())
+                        );
+                    } else {
+                        let Value::Function {
+                            capture_types,
+                            captures,
+                            ..
+                        } = result.unwrap()
+                        else {
+                            panic!("capture body did not return a closure");
+                        };
+                        assert_eq!(type_expr_display(&capture_types["input"]), wrapped_fact);
+                        assert_eq!(captures["input"].payload(), &Value::Int64(number));
+                    }
+                    assert_eq!(
+                        reuse_markers(&mut interpreter),
+                        if checked {
+                            vec![]
+                        } else {
+                            vec!["trace positive"]
+                        }
+                    );
+                    assert!(interpreter.allow_checked_refinement_proofs);
+                    assert_eq!(interpreter.scopes.len(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn call_canonical_refinement_targets_keep_written_alias_resolution_and_restore_imports() {
+        let mut interpreter = reuse_interpreter();
+        interpreter
+            .register_type_alias_in_namespace(Some("models"), &type_alias("Small", "int8", None));
+        interpreter
+            .register_type_alias_in_namespace(Some("shadow"), &type_alias("Small", "uint64", None));
+        interpreter.register_type_alias_in_namespace(
+            Some("shadow"),
+            &type_alias(
+                "Positive",
+                "int64",
+                Some(binary(var("value"), BinOp::Lt, int(0))),
+            ),
+        );
+        interpreter.set_namespace_alias("selected".into(), "models".into());
+        interpreter.set_namespace_alias("models".into(), "shadow".into());
+        let original_aliases = interpreter.visible_namespace_aliases();
+        let positive = interpreter
+            .capture_closure(
+                &func_def("unused", vec![("input", "int64")], block(vec![])).params,
+                Some(&type_named("selected.Positive")),
+                &block(vec![return_stmt(var("input"))]),
+            )
+            .unwrap();
+        let small = interpreter
+            .capture_closure(
+                &[],
+                Some(&type_named("selected.Small")),
+                &block(vec![return_stmt(int(42))]),
+            )
+            .unwrap();
+        for input in [7, -1] {
+            let result = interpreter.call_fn_value_from_source(
+                positive.clone(),
+                vec![Value::Int64(input)],
+                Some(&[None]),
+            );
+            if input > 0 {
+                assert!(matches!(
+                    result,
+                    Ok(Value::Typed { ref type_name, ref value })
+                        if type_name == "models.Positive" && value.payload() == &Value::Int64(7)
+                ));
+            } else {
+                assert_eq!(
+                    result,
+                    Err("refinement type constraint failed for 'models.Positive'".into())
+                );
+            }
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+            assert_eq!(interpreter.visible_namespace_aliases(), original_aliases);
+            assert_eq!(interpreter.scopes.len(), 1);
+        }
+        assert_eq!(
+            interpreter.call_fn_value_from_source(small, vec![], Some(&[])),
+            Ok(Value::Int64(42))
+        );
+        assert_eq!(interpreter.visible_namespace_aliases(), original_aliases);
+        let overflow = interpreter
+            .capture_closure(
+                &[],
+                Some(&type_named("selected.Small")),
+                &block(vec![return_stmt(int(128))]),
+            )
+            .unwrap();
+        assert!(
+            interpreter
+                .call_fn_value_from_source(overflow, vec![], Some(&[]))
+                .unwrap_err()
+                .contains("int8 value 128 is outside range")
+        );
+        assert_eq!(interpreter.visible_namespace_aliases(), original_aliases);
+        assert_eq!(interpreter.scopes.len(), 1);
+    }
+
+    #[test]
+    fn call_canonical_refinement_normalization_keeps_bound_generic_and_reflected_owners() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.register_type_alias_in_namespace(
+            Some("shadow"),
+            &type_alias("Positive", "int64", Some(bool_expr(false))),
+        );
+        interpreter.set_namespace_alias("models".into(), "shadow".into());
+        interpreter.type_arg_scopes = vec![HashMap::from([
+            ("T".into(), type_named("models.Positive")),
+            ("Field".into(), type_named("models.Positive")),
+        ])];
+        interpreter.scoped_type_bindings = vec![ClosureScopedTypeBinding {
+            name: "Field".into(),
+            canonical_name: "models.Positive".into(),
+            reflection: None,
+        }];
+        let aliases = interpreter.visible_namespace_aliases();
+        for binding in ["T", "Field"] {
+            for input in [7, -1] {
+                let result = interpreter
+                    .normalize_and_validate_value(&type_named(binding), Value::Int64(input));
+                if input > 0 {
+                    assert!(matches!(
+                        result,
+                        Ok(Value::Typed { ref type_name, ref value })
+                            if type_name == "models.Positive" && value.payload() == &Value::Int64(7)
+                    ));
+                } else {
+                    assert_eq!(
+                        result,
+                        Err("refinement type constraint failed for 'models.Positive'".into())
+                    );
+                }
+                assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+                assert_eq!(interpreter.visible_namespace_aliases(), aliases);
+                assert_eq!(
+                    type_expr_display(&interpreter.type_arg_scopes[0][binding]),
+                    "models.Positive"
+                );
+                assert_eq!(
+                    interpreter.scoped_type_bindings[0].canonical_name,
+                    "models.Positive"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inline_refinement_new_return_checks_before_checked_consumers() {
+        for route in ["direct", "local", "argument", "return"] {
+            let mut interpreter = reuse_interpreter();
+            let returned = Expr::IntLiteral(-1, Span::new(FileId::new(0), 610, 611));
+            let inline = Expr::InlineFn(
+                vec![],
+                Some(type_named("models.Positive")),
+                block(vec![return_stmt(returned.clone())]),
+                Span::new(FileId::new(0), 611, 612),
+            );
+            let invocation = Expr::Call(
+                Box::new(inline),
+                vec![],
+                Span::new(FileId::new(0), 612, 613),
+            );
+            let echoed = reuse_source("input", 613);
+            let mut echo = func_def(
+                "echo",
+                vec![("input", "models.Positive")],
+                block(vec![return_stmt(echoed.clone())]),
+            );
+            echo.return_type = Some(type_named("models.Positive"));
+            interpreter.register_function(&echo);
+            let mut relay = func_def(
+                "relay",
+                vec![],
+                block(vec![return_stmt(invocation.clone())]),
+            );
+            relay.return_type = Some(type_named("models.Positive"));
+            interpreter.register_function(&relay);
+            reuse_facts(
+                &mut interpreter,
+                &[
+                    (returned.span(), "int64"),
+                    (invocation.span(), "models.Positive"),
+                    (echoed.span(), "models.Positive"),
+                ],
+            );
+            let error = match route {
+                "local" => interpreter
+                    .exec_stmt(&typed_var_decl("models.Positive", "ready", invocation))
+                    .unwrap_err(),
+                "argument" => interpreter
+                    .eval_expr(&call("echo", vec![invocation]))
+                    .unwrap_err(),
+                "return" => interpreter.eval_expr(&call("relay", vec![])).unwrap_err(),
+                _ => interpreter.eval_expr(&invocation).unwrap_err(),
+            };
+            assert_eq!(
+                error, "refinement type constraint failed for 'models.Positive'",
+                "{route}"
+            );
+            assert_eq!(
+                reuse_markers(&mut interpreter),
+                ["trace positive"],
+                "{route}"
+            );
+            assert!(interpreter.get_variable("ready").is_none(), "{route}");
+            assert!(interpreter.allow_checked_refinement_proofs, "{route}");
+            assert_eq!(interpreter.scopes.len(), 1, "{route}");
+        }
+    }
+
+    #[test]
+    fn inline_refinement_parameters_force_unproven_values_and_reuse_exact_facts() {
+        let mut interpreter = reuse_interpreter();
+        let returned = reuse_source("input", 620);
+        let params = func_def("unused", vec![("input", "models.Positive")], block(vec![])).params;
+        reuse_facts(&mut interpreter, &[(returned.span(), "models.Positive")]);
+        let closure = interpreter
+            .capture_closure(
+                &params,
+                Some(&type_named("models.Positive")),
+                &block(vec![return_stmt(returned)]),
+            )
+            .unwrap();
+        for (input, facts, expected_markers, succeeds) in [
+            (7, Some(vec![Some("models.Positive".into())]), vec![], true),
+            (
+                7,
+                Some(vec![Some("int64".into())]),
+                vec!["trace positive"],
+                true,
+            ),
+            (
+                -1,
+                Some(vec![Some("int64".into())]),
+                vec!["trace positive"],
+                false,
+            ),
+            (-1, None, vec!["trace positive"], false),
+        ] {
+            let value = Value::Typed {
+                type_name: "models.Positive".into(),
+                value: Box::new(Value::Int64(input)),
+            };
+            let result = interpreter.call_fn_value_from_source(
+                closure.clone(),
+                vec![value],
+                facts.as_deref(),
+            );
+            if succeeds {
+                assert_eq!(result.unwrap().payload(), &Value::Int64(input));
+            } else {
+                assert_eq!(
+                    result,
+                    Err("refinement type constraint failed for 'models.Positive'".into())
+                );
+            }
+            assert_eq!(reuse_markers(&mut interpreter), expected_markers);
+            assert!(interpreter.allow_checked_refinement_proofs);
+            assert_eq!(interpreter.scopes.len(), 1);
+        }
+    }
+
+    #[test]
+    fn inline_refinement_returns_check_only_the_unproven_ancestor_suffix() {
+        let mut interpreter = reuse_interpreter();
+        let returned = reuse_source("input", 630);
+        let params = func_def("unused", vec![("input", "models.Positive")], block(vec![])).params;
+        reuse_facts(&mut interpreter, &[(returned.span(), "models.Positive")]);
+        let closure = interpreter
+            .capture_closure(
+                &params,
+                Some(&type_named("models.Large")),
+                &block(vec![return_stmt(returned)]),
+            )
+            .unwrap();
+        let facts = [Some("models.Positive".into())];
+        for input in [7, 2] {
+            let result = interpreter.call_fn_value_from_source(
+                closure.clone(),
+                vec![Value::Int64(input)],
+                Some(&facts),
+            );
+            if input == 7 {
+                assert!(matches!(
+                    result,
+                    Ok(Value::Typed { ref type_name, ref value })
+                        if type_name == "models.Large" && value.payload() == &Value::Int64(7)
+                ));
+            } else {
+                assert_eq!(
+                    result,
+                    Err("refinement type constraint failed for 'models.Large'".into())
+                );
+            }
+            assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+            assert_eq!(interpreter.scopes.len(), 1);
+        }
+    }
+
+    #[test]
+    fn inline_refinement_return_context_restores_generic_reflected_and_alias_scopes() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.register_type_alias_in_namespace(
+            Some("shadow"),
+            &type_alias("Large", "int64", Some(bool_expr(false))),
+        );
+        interpreter.current_namespace = Some("models".into());
+        interpreter.set_namespace_alias("selected".into(), "models".into());
+        interpreter.type_arg_scopes = vec![HashMap::from([
+            ("T".into(), type_named("models.Large")),
+            ("Field".into(), type_named("T")),
+        ])];
+        interpreter.current_type_arguments = vec![type_named("models.Large")];
+        interpreter.scoped_type_bindings = vec![ClosureScopedTypeBinding {
+            name: "Field".into(),
+            canonical_name: "models.Large".into(),
+            reflection: None,
+        }];
+        let returned = Expr::IntLiteral(7, Span::new(FileId::new(0), 640, 641));
+        let captured_function = Arc::new(CheckedFunctionTypes {
+            expressions: Arc::new(HashMap::from([(returned.span(), "int64".into())])),
+            ..Default::default()
+        });
+        let captured_scope = Arc::new(CheckedScopedTypes {
+            bound_type: "models.Large".into(),
+            expressions: HashMap::from([(returned.span(), "int64".into())]),
+            ..Default::default()
+        });
+        interpreter.active_checked_function = Some(captured_function);
+        interpreter.active_checked_scope = Some(captured_scope);
+        let successful = interpreter
+            .capture_closure(
+                &[],
+                Some(&type_named("Field")),
+                &block(vec![return_stmt(returned.clone())]),
+            )
+            .unwrap();
+        let failed = interpreter
+            .capture_closure(
+                &[],
+                Some(&type_named("Field")),
+                &block(vec![return_stmt(Expr::IntLiteral(2, returned.span()))]),
+            )
+            .unwrap();
+        let caller_function = Arc::new(CheckedFunctionTypes::default());
+        let caller_scope = Arc::new(CheckedScopedTypes::default());
+        interpreter.active_checked_function = Some(caller_function.clone());
+        interpreter.active_checked_scope = Some(caller_scope.clone());
+        interpreter.current_namespace = Some("app".into());
+        interpreter.set_namespace_alias("selected".into(), "shadow".into());
+        interpreter.type_arg_scopes = vec![HashMap::from([
+            ("T".into(), type_named("bool")),
+            ("Field".into(), type_named("string")),
+        ])];
+        interpreter.current_type_arguments = vec![type_named("bool")];
+        interpreter.scoped_type_bindings = vec![ClosureScopedTypeBinding {
+            name: "Field".into(),
+            canonical_name: "string".into(),
+            reflection: None,
+        }];
+        interpreter.current_function_trusted_stdlib = true;
+        for (closure, succeeds) in [(successful, true), (failed, false)] {
+            let result = interpreter.call_fn_value_from_source(closure, vec![], Some(&[]));
+            if succeeds {
+                assert_eq!(result.unwrap().payload(), &Value::Int64(7));
+            } else {
+                assert_eq!(
+                    result,
+                    Err("refinement type constraint failed for 'models.Large'".into())
+                );
+            }
+            assert_eq!(
+                reuse_markers(&mut interpreter),
+                ["trace positive", "trace large"]
+            );
+            assert_eq!(interpreter.current_namespace.as_deref(), Some("app"));
+            assert_eq!(
+                interpreter.visible_namespace_aliases()["selected"],
+                "shadow"
+            );
+            assert_eq!(
+                type_expr_display(&interpreter.type_arg_scopes[0]["T"]),
+                "bool"
+            );
+            assert_eq!(
+                type_expr_display(&interpreter.type_arg_scopes[0]["Field"]),
+                "string"
+            );
+            assert_eq!(
+                type_expr_display(&interpreter.current_type_arguments[0]),
+                "bool"
+            );
+            assert_eq!(interpreter.scoped_type_bindings[0].canonical_name, "string");
+            assert!(Arc::ptr_eq(
+                interpreter.active_checked_function.as_ref().unwrap(),
+                &caller_function
+            ));
+            assert!(Arc::ptr_eq(
+                interpreter.active_checked_scope.as_ref().unwrap(),
+                &caller_scope
+            ));
+            assert!(interpreter.current_function_trusted_stdlib);
+            assert!(interpreter.allow_checked_refinement_proofs);
+            assert_eq!(interpreter.scopes.len(), 1);
+            assert_eq!(interpreter.lexical_scope_floor, 0);
+        }
+    }
+
+    #[test]
+    fn inline_refinement_exact_owned_and_pending_returns_preserve_values() {
+        for (owner, base, input) in [
+            (
+                "Text",
+                type_named("string"),
+                Value::String("Agent-λ🙂".into()),
+            ),
+            (
+                "Items",
+                TypeExpr::Generic(ident("list"), vec![type_named("int64")], sp()),
+                Value::List(vec![Value::Int64(7), Value::Int64(9)]),
+            ),
+        ] {
+            let mut interpreter = Interpreter::new();
+            let mut predicate = func_def(
+                "accept",
+                vec![("observed", "int64")],
+                block(vec![
+                    Stmt::Trace(TraceStmt {
+                        name: ident("observed"),
+                        span: sp(),
+                    }),
+                    return_stmt(bool_expr(true)),
+                ]),
+            );
+            predicate.params[0].ty = base.clone();
+            predicate.params[0].view = true;
+            predicate.return_type = Some(type_named("bool"));
+            interpreter.register_function_in_namespace(Some("models"), &predicate);
+            let mut alias = type_alias(owner, "int64", Some(call("accept", vec![var("value")])));
+            alias.base_type = base;
+            interpreter.register_type_alias_in_namespace(Some("models"), &alias);
+            let canonical = format!("models.{owner}");
+            let returned = reuse_source("input", 650);
+            let mut params = func_def("unused", vec![("input", &canonical)], block(vec![])).params;
+            params[0].view = true;
+            reuse_facts(&mut interpreter, &[(returned.span(), &canonical)]);
+            let closure = interpreter
+                .capture_closure(
+                    &params,
+                    Some(&type_named(&canonical)),
+                    &block(vec![return_stmt(Expr::Clone(
+                        Box::new(returned),
+                        Span::new(FileId::new(0), 651, 652),
+                    ))]),
+                )
+                .unwrap();
+            reuse_facts(
+                &mut interpreter,
+                &[(Span::new(FileId::new(0), 651, 652), &canonical)],
+            );
+            for depth in 0..=2 {
+                let mut value = Value::Typed {
+                    type_name: canonical.clone(),
+                    value: Box::new(input.clone()),
+                };
+                for _ in 0..depth {
+                    value = Value::Pending(Box::new(value));
+                }
+                let facts = [Some(canonical.clone())];
+                assert_eq!(
+                    interpreter.call_fn_value_from_source(
+                        closure.clone(),
+                        vec![value.clone()],
+                        Some(&facts)
+                    ),
+                    Ok(value)
+                );
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                assert_eq!(interpreter.scopes.len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn inline_refinement_declared_primitive_returns_normalize_without_inventing_annotations() {
+        let mut interpreter = Interpreter::new();
+        for (annotation, expected) in [
+            (Some(type_named("uint64")), Value::Uint64(42)),
+            (None, Value::Int64(42)),
+        ] {
+            let expression =
+                Expr::InlineFn(vec![], annotation, block(vec![return_stmt(int(42))]), sp());
+            let closure = interpreter.eval_expr(&expression).unwrap();
+            assert_eq!(interpreter.call_fn_value(closure, vec![]), Ok(expected));
+            assert_eq!(interpreter.scopes.len(), 1);
+        }
+    }
+
+    #[test]
+    fn inline_refinement_raw_callbacks_force_return_and_preserve_disabled_mode() {
+        let mut interpreter = reuse_interpreter();
+        let returned = reuse_source("forged", 660);
+        interpreter.set_variable(
+            "forged",
+            Value::Typed {
+                type_name: "models.Positive".into(),
+                value: Box::new(Value::Int64(-1)),
+            },
+        );
+        reuse_facts(&mut interpreter, &[(returned.span(), "models.Positive")]);
+        let closure = interpreter
+            .capture_closure(
+                &[],
+                Some(&type_named("models.Positive")),
+                &block(vec![return_stmt(returned)]),
+            )
+            .unwrap();
+        for previously_enabled in [true, false] {
+            interpreter.allow_checked_refinement_proofs = previously_enabled;
+            assert_eq!(
+                interpreter.call_fn_value(closure.clone(), vec![]),
+                Err("refinement type constraint failed for 'models.Positive'".into())
+            );
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+            assert_eq!(
+                interpreter.allow_checked_refinement_proofs,
+                previously_enabled
+            );
+            assert_eq!(interpreter.scopes.len(), 1);
+        }
+        assert_eq!(
+            interpreter.call_fn_value_from_source(closure, vec![], Some(&[])),
+            Err("refinement type constraint failed for 'models.Positive'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        assert!(!interpreter.allow_checked_refinement_proofs);
+    }
+
+    fn reuse_source(name: &str, offset: u32) -> Expr {
+        Expr::Ident(Ident {
+            name: name.into(),
+            span: Span::new(FileId::new(0), offset, offset + 1),
+        })
+    }
+
+    fn reuse_facts(interpreter: &mut Interpreter, facts: &[(Span, &str)]) {
+        interpreter.set_checked_expression_types(Arc::new(CheckedExpressionTypes {
+            expressions: facts
+                .iter()
+                .map(|(span, name)| (*span, (*name).to_owned()))
+                .collect(),
+            ..Default::default()
+        }));
+    }
+
+    fn reuse_interpreter() -> Interpreter {
+        let mut interpreter = Interpreter::new();
+        for (owner, base, marker, minimum) in [
+            ("Positive", "int64", "positive", 0),
+            ("Large", "Positive", "large", 5),
+            ("Sibling", "int64", "sibling", 0),
+        ] {
+            let mut predicate = func_def(
+                marker,
+                vec![(marker, "int64")],
+                block(vec![
+                    Stmt::Trace(TraceStmt {
+                        name: ident(marker),
+                        span: sp(),
+                    }),
+                    return_stmt(binary(var(marker), BinOp::Gt, int(minimum))),
+                ]),
+            );
+            predicate.return_type = Some(type_named("bool"));
+            interpreter.register_function_in_namespace(Some("models"), &predicate);
+            interpreter.register_type_alias_in_namespace(
+                Some("models"),
+                &type_alias(owner, base, Some(call(marker, vec![var("value")]))),
+            );
+        }
+        interpreter
+    }
+
+    fn reuse_markers(interpreter: &mut Interpreter) -> Vec<String> {
+        interpreter
+            .take_debug_output()
+            .into_iter()
+            .map(|line| line.split(':').next().unwrap().to_owned())
+            .collect()
+    }
+
+    fn reuse_handle(target: Expr, fallback: Expr, offset: u32) -> Expr {
+        Expr::Handle(
+            Box::new(target),
+            None,
+            block(vec![Stmt::Expr(ExprStmt {
+                expr: Expr::Default(Box::new(fallback), sp()),
+                span: sp(),
+            })]),
+            Span::new(FileId::new(0), offset, offset + 1),
+        )
+    }
+
+    #[test]
+    fn refinement_reuse_does_not_trust_typed_values_at_forced_boundaries() {
+        let mut interpreter = reuse_interpreter();
+        let stale = Value::Typed {
+            type_name: "models.Positive".into(),
+            value: Box::new(Value::Int64(-1)),
+        };
+        let error = "refinement type constraint failed for 'models.Positive'";
+        assert_eq!(
+            interpreter.check_refinement_type("models.Positive", &stale),
+            Err(error.into())
+        );
+        interpreter.set_variable("stale", stale.clone());
+        assert_eq!(
+            interpreter.exec_stmt(&typed_var_decl("models.Positive", "copy", var("stale"))),
+            Err(error.into())
+        );
+        let mut accept = func_def(
+            "accept",
+            vec![("input", "models.Positive")],
+            block(vec![return_stmt(var("input"))]),
+        );
+        accept.return_type = Some(type_named("int64"));
+        interpreter.register_function(&accept);
+        assert_eq!(
+            interpreter.call_function("accept", vec![stale]),
+            Err(error.into())
+        );
+        let mut produce = func_def("produce", vec![], block(vec![return_stmt(var("stale"))]));
+        produce.return_type = Some(type_named("models.Positive"));
+        interpreter.register_function(&produce);
+        assert_eq!(
+            interpreter.call_function("produce", vec![]),
+            Err(error.into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), vec!["trace positive"; 4]);
+    }
+
+    #[test]
+    fn refinement_reuse_locals_skip_only_the_checked_ancestor_prefix() {
+        let mut interpreter = reuse_interpreter();
+        interpreter
+            .exec_stmt(&typed_var_decl("models.Positive", "source", int(7)))
+            .unwrap();
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        let source = reuse_source("source", 10);
+        reuse_facts(&mut interpreter, &[(source.span(), "models.Positive")]);
+        interpreter
+            .exec_stmt(&typed_var_decl(
+                "models.Large",
+                "large_value",
+                reuse_handle(source, int(9), 11),
+            ))
+            .unwrap();
+        assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+
+        let exact = Expr::Clone(
+            Box::new(reuse_source("large_value", 12)),
+            Span::new(FileId::new(0), 13, 14),
+        );
+        reuse_facts(&mut interpreter, &[(exact.span(), "models.Large")]);
+        interpreter
+            .exec_stmt(&typed_var_decl("models.Large", "copied", exact))
+            .unwrap();
+        assert!(reuse_markers(&mut interpreter).is_empty());
+
+        let coarsened = Expr::Coarsen(
+            Box::new(reuse_source("large_value", 15)),
+            Span::new(FileId::new(0), 16, 17),
+        );
+        reuse_facts(&mut interpreter, &[(coarsened.span(), "models.Positive")]);
+        interpreter
+            .exec_stmt(&typed_var_decl(
+                "models.Large",
+                "rechecked",
+                reuse_handle(coarsened, int(9), 18),
+            ))
+            .unwrap();
+        assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+
+        interpreter
+            .exec_stmt(&typed_var_decl("models.Sibling", "sibling_value", int(7)))
+            .unwrap();
+        reuse_markers(&mut interpreter);
+        let sibling = reuse_source("sibling_value", 19);
+        reuse_facts(&mut interpreter, &[(sibling.span(), "models.Sibling")]);
+        // This low-level boundary control proves carrier identity is not proof.
+        interpreter
+            .exec_stmt(&typed_var_decl("models.Large", "unrelated", sibling))
+            .unwrap();
+        assert_eq!(
+            reuse_markers(&mut interpreter),
+            ["trace positive", "trace large"]
+        );
+    }
+
+    #[test]
+    fn refinement_reuse_handles_use_target_or_exact_success_payload_facts() {
+        for (source_type, input, expected_markers) in [
+            (
+                "result[models.Positive, string]",
+                Value::ResultOk(Box::new(Value::Int64(7))),
+                vec!["trace large"],
+            ),
+            (
+                "optional[models.Large]",
+                Value::OptionalSome(Box::new(Value::Int64(7))),
+                vec![],
+            ),
+            (
+                "result[int64, string]",
+                Value::ResultOk(Box::new(Value::Int64(7))),
+                vec!["trace positive", "trace large"],
+            ),
+            (
+                "result[models.Large, string]",
+                Value::ResultFail(Box::new(Value::String("no".into()))),
+                vec![],
+            ),
+            ("optional[models.Large]", Value::OptionalNone, vec![]),
+            ("int64", Value::Int64(-1), vec!["trace positive"]),
+        ] {
+            let mut interpreter = reuse_interpreter();
+            let source = reuse_source("source", 20);
+            let initializer = reuse_handle(source.clone(), int(9), 21);
+            // The handle's contextual output is Large even when its target
+            // still needs every predicate. It must never supply the proof.
+            reuse_facts(
+                &mut interpreter,
+                &[
+                    (source.span(), source_type),
+                    (initializer.span(), "models.Large"),
+                ],
+            );
+            interpreter.set_variable("source", input);
+            interpreter
+                .exec_stmt(&typed_var_decl("models.Large", "selected", initializer))
+                .unwrap();
+            assert_eq!(
+                reuse_markers(&mut interpreter),
+                expected_markers,
+                "{source_type}"
+            );
+        }
+        for source in ["secret[result[models.Large, string]]", "models.Large"] {
+            assert_eq!(
+                Interpreter::checked_sum_success_type(Some(source), sp()),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn refinement_reuse_selected_generic_and_reflected_facts_restore_after_failure() {
+        let mut interpreter = reuse_interpreter();
+        let source = reuse_source("source", 30);
+        interpreter.set_variable("source", Value::Int64(7));
+        reuse_facts(&mut interpreter, &[(source.span(), "int64")]);
+        let generic = Arc::new(CheckedFunctionTypes {
+            type_arguments: vec!["models.Positive".into()],
+            expressions: Arc::new(HashMap::from([(source.span(), "models.Positive".into())])),
+            ..Default::default()
+        });
+        let reflected = Arc::new(CheckedScopedTypes {
+            bound_type: "models.Large".into(),
+            expressions: HashMap::from([(source.span(), "models.Large".into())]),
+            ..Default::default()
+        });
+        interpreter.active_checked_function = Some(generic.clone());
+        interpreter.active_checked_scope = Some(reflected.clone());
+        interpreter.current_namespace = Some("app".into());
+        interpreter
+            .exec_stmt(&typed_var_decl("models.Large", "reflected", source.clone()))
+            .unwrap();
+        assert!(reuse_markers(&mut interpreter).is_empty());
+        interpreter.active_checked_scope = None;
+        interpreter
+            .exec_stmt(&typed_var_decl("models.Large", "generic", source.clone()))
+            .unwrap();
+        assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+        assert!(Arc::ptr_eq(
+            interpreter.active_checked_function.as_ref().unwrap(),
+            &generic
+        ));
+
+        interpreter.set_variable("source", Value::Int64(2));
+        assert_eq!(
+            interpreter.exec_stmt(&typed_var_decl("models.Large", "invalid", source.clone())),
+            Err("refinement type constraint failed for 'models.Large'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+        assert_eq!(interpreter.current_namespace.as_deref(), Some("app"));
+        assert!(Arc::ptr_eq(
+            interpreter.active_checked_function.as_ref().unwrap(),
+            &generic
+        ));
+        interpreter.active_checked_function = None;
+        interpreter.set_variable("source", Value::Int64(7));
+        interpreter
+            .exec_stmt(&typed_var_decl("models.Large", "root", source))
+            .unwrap();
+        assert_eq!(
+            reuse_markers(&mut interpreter),
+            ["trace positive", "trace large"]
+        );
+    }
+
+    #[test]
+    fn refinement_reuse_pending_exact_depth_is_preserved_but_suffix_still_checks() {
+        for depth in [1, 2] {
+            let mut interpreter = reuse_interpreter();
+            let mut value = Value::Typed {
+                type_name: "models.Large".into(),
+                value: Box::new(Value::Int64(7)),
+            };
+            for _ in 0..depth {
+                value = Value::Pending(Box::new(value));
+            }
+            let source = reuse_source("source", 40);
+            interpreter.set_variable("source", value.clone());
+            reuse_facts(&mut interpreter, &[(source.span(), "models.Large")]);
+            interpreter
+                .exec_stmt(&typed_var_decl("models.Large", "copy", source.clone()))
+                .unwrap();
+            assert_eq!(interpreter.get_variable("copy"), Some(&value));
+            assert_eq!(interpreter.get_variable("source"), Some(&value));
+            assert!(reuse_markers(&mut interpreter).is_empty());
+            // Coarsening a pending value to Positive does not preserve the
+            // discarded Large proof, even if a raw label still says Large.
+            reuse_facts(&mut interpreter, &[(source.span(), "models.Positive")]);
+            assert!(
+                interpreter
+                    .exec_stmt(&typed_var_decl("models.Large", "invalid", source))
+                    .is_err()
+            );
+            assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+        }
+    }
+
+    #[test]
+    fn refinement_reuse_owned_string_and_list_proofs_survive_normalization() {
+        for (owner, base, input) in [
+            ("Text", type_named("string"), string("ready")),
+            (
+                "Items",
+                TypeExpr::Generic(ident("list"), vec![type_named("int64")], sp()),
+                Expr::ListConstruct(vec![int(7)], sp()),
+            ),
+        ] {
+            let mut interpreter = Interpreter::new();
+            let mut predicate = func_def(
+                "valid",
+                vec![("observed", "int64")],
+                block(vec![
+                    Stmt::Trace(TraceStmt {
+                        name: ident("observed"),
+                        span: sp(),
+                    }),
+                    return_stmt(bool_expr(true)),
+                ]),
+            );
+            predicate.params[0].ty = base.clone();
+            predicate.params[0].view = true;
+            predicate.return_type = Some(type_named("bool"));
+            interpreter.register_function_in_namespace(Some("models"), &predicate);
+            let mut alias = type_alias(owner, "int64", Some(call("valid", vec![var("value")])));
+            alias.base_type = base;
+            interpreter.register_type_alias_in_namespace(Some("models"), &alias);
+            let canonical = format!("models.{owner}");
+            interpreter
+                .exec_stmt(&typed_var_decl(&canonical, "source", input))
+                .unwrap();
+            assert_eq!(reuse_markers(&mut interpreter), ["trace observed"]);
+            let source = Expr::Clone(
+                Box::new(reuse_source("source", 45)),
+                Span::new(FileId::new(0), 46, 47),
+            );
+            reuse_facts(&mut interpreter, &[(source.span(), &canonical)]);
+            let original = interpreter.get_variable("source").cloned().unwrap();
+            interpreter
+                .exec_stmt(&typed_var_decl(&canonical, "copy", source))
+                .unwrap();
+            assert_eq!(interpreter.get_variable("source"), Some(&original));
+            assert_eq!(interpreter.get_variable("copy"), Some(&original));
+            assert!(reuse_markers(&mut interpreter).is_empty());
+        }
+    }
+
+    #[test]
+    fn refinement_reuse_struct_fields_keep_namespace_result_flags_and_argument_order() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.register_struct_in_namespace(
+            Some("models"),
+            &struct_def("Pair", vec![("left", "Large"), ("right", "Large")], vec![]),
+        );
+        // A caller-local spelling must not redefine a declaration's fields.
+        interpreter.register_type_alias_in_namespace(
+            Some("app"),
+            &type_alias("Large", "int64", Some(bool_expr(false))),
+        );
+        interpreter.current_namespace = Some("app".into());
+        for marker in ["first", "second"] {
+            let mut function = func_def(
+                marker,
+                vec![],
+                block(vec![
+                    var_decl(marker, int(7)),
+                    Stmt::Trace(TraceStmt {
+                        name: ident(marker),
+                        span: sp(),
+                    }),
+                    return_stmt(var(marker)),
+                ]),
+            );
+            function.return_type = Some(type_named("int64"));
+            interpreter.register_function(&function);
+        }
+        let first = Expr::Call(
+            Box::new(var("first")),
+            vec![],
+            Span::new(FileId::new(0), 50, 51),
+        );
+        let second = Expr::Call(
+            Box::new(var("second")),
+            vec![],
+            Span::new(FileId::new(0), 52, 53),
+        );
+        reuse_facts(
+            &mut interpreter,
+            &[(first.span(), "int64"), (second.span(), "int64")],
+        );
+        let constructor = Expr::Call(
+            Box::new(var("models.Pair")),
+            vec![named_arg("right", first), named_arg("left", second)],
+            sp(),
+        );
+        let value = interpreter.eval_expr(&constructor).unwrap();
+        assert!(matches!(value, Value::ResultOk(_)), "{value:?}");
+        assert_eq!(
+            reuse_markers(&mut interpreter),
+            [
+                "trace first",
+                "trace second",
+                "trace positive",
+                "trace large",
+                "trace positive",
+                "trace large"
+            ]
+        );
+        let Value::ResultOk(value) = value else {
+            unreachable!()
+        };
+        let Value::Struct {
+            type_name, fields, ..
+        } = *value
+        else {
+            unreachable!()
+        };
+        assert_eq!(type_name, "models.Pair");
+        assert_eq!(
+            fields
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["left", "right"]
+        );
+        assert_eq!(interpreter.current_namespace.as_deref(), Some("app"));
+
+        let ready = reuse_source("ready", 54);
+        interpreter.set_variable("ready", Value::Int64(7));
+        reuse_facts(&mut interpreter, &[(ready.span(), "models.Large")]);
+        let exact = Expr::Call(
+            Box::new(var("models.Pair")),
+            vec![named_arg("left", ready.clone()), named_arg("right", ready)],
+            sp(),
+        );
+        assert!(matches!(
+            interpreter.eval_expr(&exact),
+            Ok(Value::ResultOk(_))
+        ));
+        assert!(
+            reuse_markers(&mut interpreter).is_empty(),
+            "empty predicate chains still return result"
+        );
+
+        interpreter.set_variable("ready", Value::Int64(2));
+        reuse_facts(
+            &mut interpreter,
+            &[(Span::new(FileId::new(0), 54, 55), "models.Positive")],
+        );
+        assert_eq!(
+            interpreter.eval_expr(&exact),
+            Ok(Value::ResultFail(Box::new(Value::String(
+                "refinement type constraint failed for 'models.Large'".into(),
+            ))))
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+    }
+
+    #[test]
+    fn refinement_reuse_generic_struct_flags_follow_explicit_concrete_fields() {
+        let mut interpreter = reuse_interpreter();
+        let mut boxed = struct_def("Box", vec![("value", "T")], vec![]);
+        boxed.type_params = vec![ident("T")];
+        interpreter.register_struct_in_namespace(Some("models"), &boxed);
+        // The caller's T deliberately disagrees with the constructor's T.
+        interpreter
+            .type_arg_scopes
+            .push(HashMap::from([("T".into(), type_named("bool"))]));
+        let source = reuse_source("source", 60);
+        interpreter.set_variable("source", Value::Int64(7));
+        reuse_facts(&mut interpreter, &[(source.span(), "models.Positive")]);
+        let constructor = Expr::GenericCall(
+            Box::new(var("models.Box")),
+            vec![type_named("models.Positive")],
+            vec![named_arg("value", source.clone())],
+            sp(),
+        );
+        let Value::ResultOk(value) = interpreter.eval_expr(&constructor).unwrap() else {
+            panic!(
+                "a concretely refined field always returns result, even with no predicates left"
+            );
+        };
+        let Value::Struct {
+            concrete_type,
+            fields,
+            ..
+        } = *value
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            concrete_type.as_deref(),
+            Some("models.Box[models.Positive]")
+        );
+        assert_eq!(fields[0].1.payload(), &Value::Int64(7));
+        assert!(reuse_markers(&mut interpreter).is_empty());
+        assert_eq!(
+            type_expr_display(&interpreter.current_type_binding("T").unwrap()),
+            "bool"
+        );
+
+        interpreter.set_variable("source", Value::Int64(-1));
+        reuse_facts(&mut interpreter, &[(source.span(), "int64")]);
+        assert_eq!(
+            interpreter.eval_expr(&constructor),
+            Ok(Value::ResultFail(Box::new(Value::String(
+                "refinement type constraint failed for 'models.Positive'".into(),
+            ))))
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+
+        interpreter
+            .type_arg_scopes
+            .last_mut()
+            .unwrap()
+            .insert("T".into(), type_named("models.Positive"));
+        interpreter.set_variable("source", Value::Int64(7));
+        reuse_facts(&mut interpreter, &[(source.span(), "models.Positive")]);
+        let forwarded = Expr::GenericCall(
+            Box::new(var("models.Box")),
+            vec![type_named("T")],
+            vec![named_arg("value", source)],
+            sp(),
+        );
+        assert!(matches!(
+            interpreter.eval_expr(&forwarded),
+            Ok(Value::ResultOk(_))
+        ));
+        assert!(reuse_markers(&mut interpreter).is_empty());
+    }
+
+    #[test]
+    fn refinement_reuse_generic_caller_cannot_change_box_bool_fields() {
+        let mut interpreter = reuse_interpreter();
+        let mut boxed = struct_def("Box", vec![("value", "T")], vec![]);
+        boxed.type_params = vec![ident("T")];
+        interpreter.register_struct_in_namespace(Some("models"), &boxed);
+        let constructor = Expr::GenericCall(
+            Box::new(var("models.Box")),
+            vec![type_named("bool")],
+            vec![named_arg("value", bool_expr(true))],
+            sp(),
+        );
+        let mut make = func_def(
+            "make",
+            vec![("ignored", "T")],
+            block(vec![return_stmt(constructor)]),
+        );
+        make.type_params = vec![ident("T")];
+        make.params[0].view = true;
+        make.return_type = Some(TypeExpr::Generic(
+            ident("models.Box"),
+            vec![type_named("bool")],
+            sp(),
+        ));
+        interpreter.register_function(&make);
+        let Value::Struct {
+            concrete_type,
+            fields,
+            ..
+        } = interpreter
+            .call_function_with_type_args(
+                "make",
+                &[type_named("models.Positive")],
+                vec![Value::Int64(7)],
+            )
+            .unwrap()
+        else {
+            panic!("Box[bool] is not a validating constructor");
+        };
+        assert_eq!(concrete_type.as_deref(), Some("models.Box[bool]"));
+        assert_eq!(fields, vec![("value".into(), Value::Bool(true))]);
+        // Only the unchanged raw-call parameter boundary validates Positive.
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        assert!(interpreter.type_arg_scopes.is_empty());
+    }
+
+    #[test]
+    fn refinement_reuse_struct_type_arguments_resolve_in_caller_namespace() {
+        let mut interpreter = Interpreter::new();
+        let mut boxed = struct_def("Box", vec![("value", "T")], vec![]);
+        boxed.type_params = vec![ident("T")];
+        interpreter.register_struct_in_namespace(Some("models"), &boxed);
+        interpreter.register_type_alias_in_namespace(
+            Some("models"),
+            &type_alias("Input", "int64", Some(bool_expr(false))),
+        );
+        interpreter.register_type_alias_in_namespace(
+            Some("app"),
+            &type_alias(
+                "Input",
+                "int64",
+                Some(binary(var("value"), BinOp::Gt, int(0))),
+            ),
+        );
+        interpreter.current_namespace = Some("app".into());
+        let constructor = Expr::GenericCall(
+            Box::new(var("models.Box")),
+            vec![type_named("Input")],
+            vec![named_arg("value", int(7))],
+            sp(),
+        );
+        let Value::ResultOk(value) = interpreter.eval_expr(&constructor).unwrap() else {
+            panic!("caller Input must be validated, not declaration-neighbor models.Input");
+        };
+        let Value::Struct {
+            concrete_type,
+            fields,
+            ..
+        } = *value
+        else {
+            unreachable!()
+        };
+        assert_eq!(concrete_type.as_deref(), Some("models.Box[app.Input]"));
+        assert_eq!(fields[0].1.payload(), &Value::Int64(7));
+        assert_eq!(interpreter.current_namespace.as_deref(), Some("app"));
+
+        // Unresolved raw-API arguments are not recursively reinterpreted as
+        // struct-parameter templates (which could create T -> T cycles).
+        let raw_map = HashMap::from([("T".into(), type_named("T"))]);
+        assert_eq!(
+            type_expr_display(&interpreter.struct_field_type(
+                &type_named("T"),
+                &raw_map,
+                Some("models")
+            )),
+            "T"
+        );
+    }
+
+    #[test]
+    fn refinement_reuse_struct_fields_isolate_caller_aliases_and_restore_every_exit() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.register_type_alias_in_namespace(
+            Some("shadow"),
+            &type_alias("Positive", "int64", Some(bool_expr(false))),
+        );
+        interpreter.register_struct_in_namespace(
+            Some("models"),
+            &struct_def("Holder", vec![("value", "models.Positive")], vec![]),
+        );
+        assert_eq!(
+            type_expr_name(&interpreter.structs["models.Holder"].fields[0].ty),
+            "models.Positive"
+        );
+
+        // Predicates still need working local imports after the caller's
+        // aliases are hidden. More than one caller scope pins stack alignment.
+        let mut rule = func_def(
+            "check",
+            vec![("value", "int64")],
+            block(vec![return_stmt(binary(var("value"), BinOp::Gt, int(0)))]),
+        );
+        rule.return_type = Some(type_named("bool"));
+        interpreter.register_function_in_namespace(Some("rules"), &rule);
+        let mut predicate = func_def(
+            "positive",
+            vec![("positive", "int64")],
+            block(vec![
+                Stmt::Use(UseDecl {
+                    path: ident("rules"),
+                    alias: Some(ident("selected")),
+                    span: sp(),
+                }),
+                Stmt::Trace(TraceStmt {
+                    name: ident("positive"),
+                    span: sp(),
+                }),
+                return_stmt(call("selected.check", vec![var("positive")])),
+            ]),
+        );
+        predicate.return_type = Some(type_named("bool"));
+        interpreter.register_function_in_namespace(Some("models"), &predicate);
+        interpreter.push_scope();
+        interpreter.push_scope();
+        interpreter.set_namespace_alias("original".into(), "models".into());
+        interpreter.set_namespace_alias("models".into(), "shadow".into());
+        interpreter.set_namespace_alias("selected".into(), "shadow".into());
+        interpreter
+            .type_arg_scopes
+            .push(HashMap::from([("T".into(), type_named("bool"))]));
+        interpreter.current_namespace = Some("app".into());
+        let aliases = interpreter.namespace_alias_scopes.clone();
+        let source = reuse_source("source", 70);
+        reuse_facts(&mut interpreter, &[(source.span(), "int64")]);
+        let constructor = Expr::Call(
+            Box::new(var("original.Holder")),
+            vec![named_arg("value", source.clone())],
+            sp(),
+        );
+        for (input, succeeds) in [(7, true), (-1, false)] {
+            interpreter.set_variable("source", Value::Int64(input));
+            let outcome = interpreter.eval_expr(&constructor).unwrap();
+            if succeeds {
+                let Value::ResultOk(value) = outcome else {
+                    panic!("{outcome:?}")
+                };
+                let Value::Struct { fields, .. } = *value else {
+                    unreachable!()
+                };
+                assert!(
+                    matches!(&fields[0].1, Value::Typed { type_name, .. } if type_name == "models.Positive")
+                );
+            } else {
+                assert_eq!(
+                    outcome,
+                    Value::ResultFail(Box::new(Value::String(
+                        "refinement type constraint failed for 'models.Positive'".into(),
+                    )))
+                );
+            }
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+            assert_eq!(interpreter.current_namespace.as_deref(), Some("app"));
+            assert_eq!(interpreter.namespace_alias_scopes, aliases);
+            assert_eq!(
+                type_expr_display(&interpreter.current_type_binding("T").unwrap()),
+                "bool"
+            );
+            assert_eq!(interpreter.scopes.len(), 3);
+        }
+        let missing = Expr::Call(Box::new(var("original.Holder")), vec![], sp());
+        assert_eq!(
+            interpreter.eval_expr(&missing),
+            Err("struct 'models.Holder' is missing required field 'value'".into())
+        );
+        assert_eq!(interpreter.namespace_alias_scopes, aliases);
+        assert_eq!(interpreter.current_namespace.as_deref(), Some("app"));
+        assert_eq!(
+            type_expr_display(&interpreter.current_type_binding("T").unwrap()),
+            "bool"
+        );
+
+        let mut boxed = struct_def("Box", vec![("value", "T")], vec![]);
+        boxed.type_params = vec![ident("T")];
+        interpreter.register_struct_in_namespace(Some("models"), &boxed);
+        let caller_argument = Expr::GenericCall(
+            Box::new(var("original.Box")),
+            vec![type_named("models.Positive")],
+            vec![named_arg("value", int(7))],
+            sp(),
+        );
+        assert_eq!(
+            interpreter.eval_expr(&caller_argument),
+            Ok(Value::ResultFail(Box::new(Value::String(
+                "refinement type constraint failed for 'shadow.Positive'".into(),
+            )))),
+            "explicit actual arguments must still resolve through caller imports"
+        );
+        assert_eq!(interpreter.namespace_alias_scopes, aliases);
+    }
+
+    #[test]
     fn grapheme_split_handles_large_near_matches() {
         let haystack = "a".repeat(1024 * 1024);
         let delimiter = format!("{}b", "a".repeat(512 * 1024));
@@ -11484,6 +19444,340 @@ mod tests {
     }
 
     #[test]
+    fn checked_join_preserves_exact_result_shape_and_one_pending_level() {
+        let operand_span = Span::new(FileId::new(0), 1, 2);
+        let operand = Expr::Ident(Ident {
+            name: "task".into(),
+            span: operand_span,
+        });
+        let expression = Expr::Join(Box::new(operand.clone()), Span::new(FileId::new(0), 3, 4));
+        for (type_name, preserves_result) in [
+            ("result[int64, string]", true),
+            ("secret[result[int64, string]]", false),
+            ("secret[secret[result[int64, string]]]", false),
+        ] {
+            for ready in [
+                Value::ResultOk(Box::new(Value::Int64(7))),
+                Value::ResultFail(Box::new(Value::String("failed".into()))),
+            ] {
+                for depth in 0..=2 {
+                    let mut input = ready.clone();
+                    for _ in 0..depth {
+                        input = Value::Pending(Box::new(input));
+                    }
+                    let mut expected = ready.clone();
+                    for _ in 1..depth {
+                        expected = Value::Pending(Box::new(expected));
+                    }
+                    if !preserves_result {
+                        expected = Value::ResultOk(Box::new(expected));
+                    }
+                    let mut interpreter = Interpreter::new();
+                    interpreter.set_checked_expression_types(Arc::new(CheckedExpressionTypes {
+                        expressions: HashMap::from([(operand_span, type_name.into())]),
+                        ..Default::default()
+                    }));
+                    interpreter.set_variable("task", input.clone());
+                    assert_eq!(
+                        interpreter.join_preserves_result(&operand),
+                        Some(preserves_result)
+                    );
+                    assert_eq!(
+                        interpreter.eval_expr(&expression),
+                        Ok(expected),
+                        "{type_name}, depth {depth}, {ready:?}"
+                    );
+                    assert_eq!(interpreter.get_variable("task"), Some(&input));
+                }
+            }
+        }
+        // The cancellation sentinel is only the resolved bare unit value.
+        for (input, expected) in [
+            (
+                Value::Nothing,
+                Value::ResultFail(Box::new(Value::String("task was cancelled".into()))),
+            ),
+            (
+                Value::Pending(Box::new(Value::Nothing)),
+                Value::ResultOk(Box::new(Value::Nothing)),
+            ),
+            (
+                Value::Pending(Box::new(Value::Pending(Box::new(Value::Nothing)))),
+                Value::ResultOk(Box::new(Value::Pending(Box::new(Value::Nothing)))),
+            ),
+        ] {
+            let mut interpreter = Interpreter::new();
+            interpreter.set_checked_expression_types(Arc::new(CheckedExpressionTypes {
+                expressions: HashMap::from([(operand_span, "nothing".into())]),
+                ..Default::default()
+            }));
+            interpreter.set_variable("task", input);
+            assert_eq!(interpreter.eval_expr(&expression), Ok(expected));
+        }
+    }
+
+    #[test]
+    fn checked_join_uses_active_generic_and_reflected_facts_before_declared_types() {
+        let operand_span = Span::new(FileId::new(0), 1, 2);
+        let operand = Expr::Ident(Ident {
+            name: "task".into(),
+            span: operand_span,
+        });
+        let expression = Expr::Join(Box::new(operand.clone()), Span::new(FileId::new(0), 3, 4));
+        let ready = Value::ResultOk(Box::new(Value::Int64(7)));
+        let mut interpreter = Interpreter::new();
+        let declared =
+            Interpreter::simple_type_expr_from_name("secret[result[int64, string]]", operand_span)
+                .unwrap();
+        interpreter.set_variable_with_type("task", ready.clone(), declared);
+        interpreter.set_checked_expression_types(Arc::new(CheckedExpressionTypes {
+            expressions: HashMap::from([(operand_span, "result[int64, string]".into())]),
+            ..Default::default()
+        }));
+        assert_eq!(interpreter.eval_expr(&expression), Ok(ready.clone()));
+        interpreter.active_checked_function = Some(Arc::new(CheckedFunctionTypes {
+            type_arguments: vec!["secret[result[int64, string]]".into()],
+            expressions: Arc::new(HashMap::from([(
+                operand_span,
+                "secret[result[int64, string]]".into(),
+            )])),
+            ..Default::default()
+        }));
+        assert_eq!(
+            interpreter.eval_expr(&expression),
+            Ok(Value::ResultOk(Box::new(ready.clone())))
+        );
+        interpreter.active_checked_scope = Some(Arc::new(CheckedScopedTypes {
+            bound_type: "result[int64, string]".into(),
+            expressions: HashMap::from([(operand_span, "result[int64, string]".into())]),
+            ..Default::default()
+        }));
+        assert_eq!(interpreter.eval_expr(&expression), Ok(ready.clone()));
+        interpreter.active_checked_scope = None;
+        assert_eq!(
+            interpreter.eval_expr(&expression),
+            Ok(Value::ResultOk(Box::new(ready.clone())))
+        );
+        interpreter.active_checked_function = None;
+        assert_eq!(interpreter.eval_expr(&expression), Ok(ready));
+
+        // A nominal checked owner is not a result even when its payload is.
+        interpreter.set_checked_expression_types(Arc::new(CheckedExpressionTypes {
+            expressions: HashMap::from([(operand_span, "models.Validated".into())]),
+            ..Default::default()
+        }));
+        assert_eq!(interpreter.join_preserves_result(&operand), Some(false));
+    }
+
+    #[test]
+    fn join_declared_alias_fallback_stops_at_secret_and_refinement_owners() {
+        let parsed = jett_parser::parse(
+            r#"namespace models
+type Public = result[int64, string]
+type Forwarded = Public
+type Hidden = secret[Public]
+type Nested = secret[Hidden]
+type Validated = Public where true
+type ValidatedAlias = Validated
+"#,
+            FileId::new(0),
+        );
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interpreter = Interpreter::new();
+        interpreter.register_module(&parsed.module);
+        interpreter.current_namespace = Some("unrelated".into());
+        for (name, expected) in [
+            ("models.Public", true),
+            ("models.Forwarded", true),
+            ("models.Hidden", false),
+            ("models.Nested", false),
+            ("models.Validated", false),
+            ("models.ValidatedAlias", false),
+        ] {
+            interpreter.set_variable_with_type(
+                "task",
+                Value::ResultOk(Box::new(Value::Int64(7))),
+                type_named(name),
+            );
+            for expression in [
+                var("task"),
+                Expr::Run(Box::new(var("task")), sp()),
+                Expr::Clone(Box::new(Expr::Paren(Box::new(var("task")), sp())), sp()),
+            ] {
+                assert_eq!(
+                    interpreter.join_preserves_result(&expression),
+                    Some(expected),
+                    "{name}"
+                );
+            }
+        }
+        interpreter.type_arg_scopes.push(HashMap::from([(
+            "T".into(),
+            type_named("models.Forwarded"),
+        )]));
+        interpreter.set_variable_with_type(
+            "task",
+            Value::ResultOk(Box::new(Value::Int64(7))),
+            type_named("T"),
+        );
+        assert_eq!(interpreter.join_preserves_result(&var("task")), Some(true));
+        interpreter
+            .type_arg_scopes
+            .last_mut()
+            .unwrap()
+            .insert("T".into(), type_named("models.Hidden"));
+        assert_eq!(interpreter.join_preserves_result(&var("task")), Some(false));
+    }
+
+    #[test]
+    fn join_without_checked_or_declared_metadata_keeps_raw_api_behavior() {
+        let ready = Value::ResultOk(Box::new(Value::Int64(7)));
+        for (input, expected) in [
+            (ready.clone(), Value::ResultOk(Box::new(ready.clone()))),
+            (Value::Pending(Box::new(ready.clone())), ready.clone()),
+            (
+                Value::Pending(Box::new(Value::Pending(Box::new(ready.clone())))),
+                Value::ResultOk(Box::new(Value::Pending(Box::new(ready)))),
+            ),
+        ] {
+            let mut interpreter = Interpreter::new();
+            interpreter.set_variable("task", input);
+            assert_eq!(interpreter.join_preserves_result(&var("task")), None);
+            assert_eq!(
+                interpreter.eval_expr(&Expr::Join(Box::new(var("task")), sp())),
+                Ok(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn join_debug_types_keep_exact_outer_shapes_and_declared_alias_labels() {
+        let parsed = jett_parser::parse(
+            r#"namespace models
+type Public = result[int64, string]
+type Forwarded = Public
+type Hidden = secret[Public]
+type Validated = Public where true
+type ValidatedAlias = Validated
+"#,
+            FileId::new(0),
+        );
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interpreter = Interpreter::new();
+        interpreter.register_module(&parsed.module);
+        for (declared, expected) in [
+            ("result[int64, string]", "result[int64, string]"),
+            ("models.Public", "models.Public"),
+            ("models.Forwarded", "models.Forwarded"),
+            ("models.Hidden", "result[models.Hidden, string]"),
+            ("models.Validated", "result[models.Validated, string]"),
+            (
+                "models.ValidatedAlias",
+                "result[models.ValidatedAlias, string]",
+            ),
+            (
+                "secret[result[int64, string]]",
+                "result[secret[result[int64, string]], string]",
+            ),
+        ] {
+            let ty = Interpreter::simple_type_expr_from_name(declared, sp()).unwrap();
+            interpreter.set_variable_with_type(
+                "task",
+                Value::ResultOk(Box::new(Value::Int64(7))),
+                ty,
+            );
+            let expression = Expr::Join(Box::new(var("task")), sp());
+            let actual = interpreter.debug_expression_type(&expression).unwrap();
+            assert_eq!(type_expr_display(&actual), expected, "{declared}");
+        }
+    }
+
+    #[test]
+    fn join_debug_types_prefer_checked_target_facts_in_active_context_order() {
+        let operand_span = Span::new(FileId::new(0), 1, 2);
+        let target_span = Span::new(FileId::new(0), 3, 4);
+        let operand = Expr::Ident(Ident {
+            name: "task".into(),
+            span: operand_span,
+        });
+        let expression = Expr::Join(Box::new(operand), target_span);
+        let mut interpreter = Interpreter::new();
+        interpreter.set_variable_with_type(
+            "task",
+            Value::ResultOk(Box::new(Value::Int64(7))),
+            type_named("T"),
+        );
+        interpreter.set_checked_expression_types(Arc::new(CheckedExpressionTypes {
+            expressions: HashMap::from([(target_span, "result[models.Validated, string]".into())]),
+            ..Default::default()
+        }));
+        let debug_name = |interpreter: &Interpreter| {
+            type_expr_display(&interpreter.debug_expression_type(&expression).unwrap())
+        };
+        assert_eq!(debug_name(&interpreter), "result[models.Validated, string]");
+        interpreter.active_checked_function = Some(Arc::new(CheckedFunctionTypes {
+            expressions: Arc::new(HashMap::from([(
+                target_span,
+                "result[secret[result[int64, string]], string]".into(),
+            )])),
+            ..Default::default()
+        }));
+        assert_eq!(
+            debug_name(&interpreter),
+            "result[secret[result[int64, string]], string]"
+        );
+        interpreter.active_checked_scope = Some(Arc::new(CheckedScopedTypes {
+            expressions: HashMap::from([(target_span, "result[int64, string]".into())]),
+            ..Default::default()
+        }));
+        assert_eq!(debug_name(&interpreter), "result[int64, string]");
+        interpreter.active_checked_scope = None;
+        assert_eq!(
+            debug_name(&interpreter),
+            "result[secret[result[int64, string]], string]"
+        );
+        interpreter.active_checked_function = None;
+        assert_eq!(debug_name(&interpreter), "result[models.Validated, string]");
+    }
+
+    #[test]
+    fn refined_join_handles_extract_outer_results_before_refinement_validation() {
+        let parsed = jett_parser::parse(
+            r#"namespace app
+type RefinedOutcome = result[int64, string] where true
+function joined(candidate: result[int64, string]) returns int64:
+    RefinedOutcome checked = candidate handle error:
+        return -1
+    RefinedOutcome pending = run run checked
+    RefinedOutcome once = join pending handle error:
+        return -3
+    RefinedOutcome ready = join once handle error:
+        return -4
+    result[int64, string] base = coarsen ready
+    int64 answer = base handle error:
+        return -2
+    return answer
+"#,
+            FileId::new(0),
+        );
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interpreter = Interpreter::new();
+        interpreter.register_module(&parsed.module);
+        for (candidate, expected) in [
+            (Value::ResultOk(Box::new(Value::Int64(7))), 7),
+            (
+                Value::ResultFail(Box::new(Value::String("inner failure".into()))),
+                -2,
+            ),
+        ] {
+            assert_eq!(
+                interpreter.call_function("app.joined", vec![candidate]),
+                Ok(Value::Int64(expected))
+            );
+        }
+    }
+
+    #[test]
     fn explicit_comptime_expression_uses_baked_value() {
         let span = sp();
         let expression = Expr::Comptime(
@@ -11495,8 +19789,8 @@ mod tests {
             )),
             span,
         );
-        let mut values = HashMap::new();
-        values.insert(span, Value::Int64(42));
+        let mut values = crate::ExplicitComptimeValues::default();
+        values.insert(span, crate::ComptimeContext::default(), Value::Int64(42));
 
         let mut interpreter = Interpreter::new();
         interpreter.set_explicit_comptime_values(Arc::new(values));
@@ -11598,8 +19892,12 @@ mod tests {
 
     /// Helper: create a function call expression.
     fn call(name: &str, args: Vec<Expr>) -> Expr {
+        call_expression(var(name), args)
+    }
+
+    fn call_expression(callee: Expr, args: Vec<Expr>) -> Expr {
         Expr::Call(
-            Box::new(var(name)),
+            Box::new(callee),
             args.into_iter()
                 .map(|value| CallArg {
                     name: None,
@@ -11762,6 +20060,59 @@ mod tests {
             "checked reflection metadata for type 'Box' is missing type info metadata"
         );
         assert_eq!(kind_error, info_error);
+    }
+
+    #[test]
+    fn checked_resource_kind_tag_preserves_opaque_type_metadata() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "io.FileHandle",
+            "resource",
+            None,
+            false,
+            Vec::new(),
+        ));
+        let mut interpreter = Interpreter::new();
+        interpreter.set_reflection_metadata(Arc::new(metadata));
+        let ty = type_named("io.FileHandle");
+        let expected_tag = Value::Enum {
+            type_name: "TypeKind".into(),
+            variant: "resource_type".into(),
+            fields: Vec::new(),
+        };
+        let tag = interpreter
+            .call_builtin_with_type_args("type.kind_tag", std::slice::from_ref(&ty), &[])
+            .expect("typed kind builtin")
+            .expect("resource kind metadata");
+        assert_eq!(tag, expected_tag);
+        let info = interpreter
+            .call_builtin_with_type_args("type.info", std::slice::from_ref(&ty), &[])
+            .expect("typed info builtin")
+            .expect("resource info metadata");
+        let Value::Struct { fields, .. } = info else {
+            panic!("expected TypeInfo")
+        };
+        assert!(
+            fields
+                .iter()
+                .any(|(name, value)| name == "kind_tag" && *value == expected_tag)
+        );
+        for builtin in ["type.fields", "type.variants", "type.machine_states"] {
+            assert_eq!(
+                interpreter
+                    .call_builtin_with_type_args(builtin, std::slice::from_ref(&ty), &[],)
+                    .expect("typed shape builtin")
+                    .expect("empty resource shape"),
+                Value::List(Vec::new())
+            );
+        }
+        assert_eq!(
+            interpreter
+                .call_builtin_with_type_args("type.primitive_tag", &[ty], &[],)
+                .expect("typed primitive builtin")
+                .expect("resource has no primitive"),
+            Value::OptionalNone
+        );
     }
 
     #[test]
@@ -12042,6 +20393,7 @@ mod tests {
         interp.set_reflection_metadata(Arc::new(metadata));
 
         let value = Value::Struct {
+            concrete_type: None,
             type_name: "SecretBox".to_string(),
             fields: Vec::new(),
         };
@@ -12132,6 +20484,75 @@ mod tests {
 
         assert_eq!(bindings.len(), 1);
         assert_eq!(type_expr_display(&bindings[0].ty), "string");
+    }
+
+    #[test]
+    fn scoped_type_facts_restore_after_return_and_error() {
+        let mut interp = Interpreter::new();
+        let inner = Arc::new(CheckedScopedTypes {
+            bound_type: "int8".into(),
+            expressions: HashMap::from([(sp(), "int8".into())]),
+            ..Default::default()
+        });
+        let outer = Arc::new(CheckedScopedTypes {
+            bindings: HashMap::from([(sp(), vec![inner])]),
+            ..Default::default()
+        });
+        interp.active_checked_scope = Some(outer.clone());
+        interp
+            .type_arg_scopes
+            .push(HashMap::from([("Outer".into(), type_named("int64"))]));
+        interp.scoped_type_bindings = vec![ClosureScopedTypeBinding {
+            name: "Outer".into(),
+            canonical_name: "int64".into(),
+            reflection: None,
+        }];
+        for failing in [false, true] {
+            let body = if failing {
+                var("missing")
+            } else {
+                Expr::Binary(
+                    Box::new(Expr::IntLiteral(127, sp())),
+                    BinOp::Add,
+                    Box::new(Expr::IntLiteral(1, sp())),
+                    sp(),
+                )
+            };
+            let binding = ComptimeTypeBindStmt {
+                name: ident("Field"),
+                value: Expr::GenericCall(
+                    Box::new(field_access(var("type"), "info")),
+                    vec![type_named("int8")],
+                    Vec::new(),
+                    sp(),
+                ),
+                body: block(vec![return_stmt(body)]),
+                span: sp(),
+            };
+            let result = interp.exec_comptime_type_bind(&binding);
+            if failing {
+                assert!(result.unwrap_err().contains("missing"));
+            } else {
+                assert!(matches!(
+                    result.unwrap(),
+                    Some(Signal::Return(Value::Typed { type_name, value }, _))
+                        if type_name == "int8" && *value == Value::Int64(-128)
+                ));
+            }
+            assert!(Arc::ptr_eq(
+                interp.active_checked_scope.as_ref().unwrap(),
+                &outer
+            ));
+            assert_eq!(interp.type_arg_scopes.len(), 1);
+            assert_eq!(
+                interp.scoped_type_bindings,
+                vec![ClosureScopedTypeBinding {
+                    name: "Outer".into(),
+                    canonical_name: "int64".into(),
+                    reflection: None
+                }]
+            );
+        }
     }
 
     #[test]
@@ -12299,6 +20720,7 @@ mod tests {
         let field =
             Interpreter::reflection_field_info_value("Box", None, &string_field_info(0, "value"));
         let value = Value::Struct {
+            concrete_type: None,
             type_name: "Box".to_string(),
             fields: vec![("value".to_string(), Value::String("ok".to_string()))],
         };
@@ -12418,6 +20840,7 @@ mod tests {
             panic!("expected list of TypeField values");
         };
         let value = Value::Struct {
+            concrete_type: None,
             type_name: "Box".to_string(),
             fields: vec![("value".to_string(), Value::String("ok".to_string()))],
         };
@@ -13134,6 +21557,7 @@ mod tests {
             panic!("expected successful construction finish");
         };
         let Value::Struct {
+            concrete_type: _,
             type_name: finished_type_name,
             fields: finished_fields,
         } = *finished
@@ -13224,6 +21648,7 @@ mod tests {
         assert_eq!(
             *finished,
             Value::Struct {
+                concrete_type: None,
                 type_name: "Counter".to_string(),
                 fields: vec![("value".to_string(), Value::Uint64(42))],
             }
@@ -13879,6 +22304,7 @@ mod tests {
         assert_eq!(
             finished,
             result_ok(Value::Struct {
+                concrete_type: None,
                 type_name: "Header".to_string(),
                 fields: vec![
                     ("version".to_string(), Value::Int64(4)),
@@ -13982,6 +22408,7 @@ mod tests {
         assert_eq!(
             finished,
             result_ok(Value::Struct {
+                concrete_type: None,
                 type_name: "Header".to_string(),
                 fields: vec![("wide".to_string(), Value::Uint64(42))],
             })
@@ -14377,6 +22804,60 @@ mod tests {
     }
 
     #[test]
+    fn normalize_float32_alias_preserves_only_binary32_precision() {
+        let mut interp = Interpreter::new();
+        interp.register_type_alias(&type_alias("SmallFloat", "float32", None));
+        interp.register_type_alias(&type_alias("Reading", "SmallFloat", None));
+        for type_name in ["float32", "SmallFloat", "Reading", "secret[float32]"] {
+            assert_eq!(
+                interp.normalize_value_for_type_name(type_name, Value::Float64(0.1)),
+                Ok(Value::Float64(0.1_f32 as f64))
+            );
+        }
+        assert_eq!(
+            interp.normalize_value_for_type_name("float64", Value::Float64(0.1)),
+            Ok(Value::Float64(0.1))
+        );
+    }
+
+    #[test]
+    fn float32_declared_boundaries_normalize_without_checked_expression_map() {
+        let mut interp = Interpreter::new();
+        interp
+            .exec_stmt(&typed_var_decl("float32", "x", float(0.1)))
+            .unwrap();
+        assert_eq!(
+            interp.eval_expr(&var("x")).unwrap(),
+            Value::Float64(0.1_f32 as f64)
+        );
+        interp.exec_stmt(&assign("x", float(0.2))).unwrap();
+        assert_eq!(
+            interp.eval_expr(&var("x")).unwrap(),
+            Value::Float64(0.2_f32 as f64)
+        );
+        let mut echo = func_def(
+            "echo_f32",
+            vec![("value", "float32")],
+            block(vec![return_stmt(var("value"))]),
+        );
+        echo.return_type = Some(type_named("float32"));
+        interp.register_function(&echo);
+        assert_eq!(
+            interp
+                .call_function("echo_f32", vec![Value::Float64(0.1)])
+                .unwrap(),
+            Value::Float64(0.1_f32 as f64)
+        );
+        let mut literal = func_def("literal_f32", vec![], block(vec![return_stmt(float(0.1))]));
+        literal.return_type = Some(type_named("float32"));
+        interp.register_function(&literal);
+        assert_eq!(
+            interp.call_function("literal_f32", vec![]).unwrap(),
+            Value::Float64(0.1_f32 as f64)
+        );
+    }
+
+    #[test]
     fn normalize_sized_integers_accepts_declared_boundaries() {
         let interp = Interpreter::new();
         let cases = [
@@ -14709,7 +23190,12 @@ mod tests {
             "json_parse_reflected",
             block(vec![return_stmt(string("fake"))]),
         );
-        interp.register_function_named("json.json_parse_reflected", &fake_hook, false);
+        interp.register_function_named(
+            "json.json_parse_reflected",
+            Some("json"),
+            &fake_hook,
+            false,
+        );
 
         let err = interp
             .call_function_with_type_args(
@@ -14820,7 +23306,7 @@ mod tests {
             interp.register_function_in_namespace(Some("json"), &trusted_hook);
             let fake_wrapper =
                 generic_json_hook(wrapper_name, block(vec![return_stmt(string("fake"))]));
-            interp.register_function_named(public_name, &fake_wrapper, false);
+            interp.register_function_named(public_name, Some("json"), &fake_wrapper, false);
 
             let err = interp
                 .call_function_with_type_args(
@@ -14873,7 +23359,7 @@ mod tests {
         interp.register_function_in_namespace(Some("json"), &trusted_hook);
 
         let fake_wrapper = generic_json_hook("parse", block(vec![return_stmt(string("fake"))]));
-        interp.register_function_named("json.parse", &fake_wrapper, false);
+        interp.register_function_named("json.parse", Some("json"), &fake_wrapper, false);
 
         let err = interp
             .call_function_with_type_args(
@@ -14896,7 +23382,12 @@ mod tests {
             "json_parse_reflected",
             block(vec![return_stmt(string("fake"))]),
         );
-        interp.register_function_named("json.json_parse_reflected", &fake_hook, false);
+        interp.register_function_named(
+            "json.json_parse_reflected",
+            Some("json"),
+            &fake_hook,
+            false,
+        );
         let mut public_wrapper =
             generic_json_hook("parse", block(vec![return_stmt(string("public wrapper"))]));
         public_wrapper.span = stdlib_sp();
@@ -14923,7 +23414,12 @@ mod tests {
             "json_parse_exact_reflected",
             block(vec![return_stmt(string("fake exact"))]),
         );
-        interp.register_function_named("json.json_parse_exact_reflected", &fake_hook, false);
+        interp.register_function_named(
+            "json.json_parse_exact_reflected",
+            Some("json"),
+            &fake_hook,
+            false,
+        );
 
         let err = interp
             .call_function_with_type_args(
@@ -14973,7 +23469,12 @@ mod tests {
             "json_serialize_reflected",
             block(vec![return_stmt(string("fake"))]),
         );
-        interp.register_function_named("json.json_serialize_reflected", &fake_hook, false);
+        interp.register_function_named(
+            "json.json_serialize_reflected",
+            Some("json"),
+            &fake_hook,
+            false,
+        );
 
         let err = interp
             .call_function_with_type_args(
@@ -15023,7 +23524,12 @@ mod tests {
             "json_serialize_public_reflected",
             block(vec![return_stmt(string("fake"))]),
         );
-        interp.register_function_named("json.json_serialize_public_reflected", &fake_hook, false);
+        interp.register_function_named(
+            "json.json_serialize_public_reflected",
+            Some("json"),
+            &fake_hook,
+            false,
+        );
 
         let err = interp
             .call_function_with_type_args(
@@ -15214,7 +23720,7 @@ mod tests {
             vec![("value", "JsonTree")],
             block(vec![return_stmt(string("ordinary wrapper"))]),
         );
-        interp.register_function_named("json.kind", &wrapper, false);
+        interp.register_function_named("json.kind", Some("json"), &wrapper, false);
 
         let value = interp
             .call_function("json.kind", vec![json_tree_null()])
@@ -15237,7 +23743,12 @@ mod tests {
             "json_parse_reflected",
             block(vec![return_stmt(string("fake"))]),
         );
-        interp.register_function_named("json.json_parse_reflected", &fake_hook, false);
+        interp.register_function_named(
+            "json.json_parse_reflected",
+            Some("json"),
+            &fake_hook,
+            false,
+        );
 
         let err = interp
             .call_function_with_type_args(
@@ -15267,7 +23778,12 @@ mod tests {
             "json_parse_exact_reflected",
             block(vec![return_stmt(string("fake exact"))]),
         );
-        interp.register_function_named("json.json_parse_exact_reflected", &fake_hook, false);
+        interp.register_function_named(
+            "json.json_parse_exact_reflected",
+            Some("json"),
+            &fake_hook,
+            false,
+        );
 
         let err = interp
             .call_function_with_type_args(
@@ -15297,7 +23813,12 @@ mod tests {
             "json_serialize_reflected",
             block(vec![return_stmt(string("fake"))]),
         );
-        interp.register_function_named("json.json_serialize_reflected", &fake_hook, false);
+        interp.register_function_named(
+            "json.json_serialize_reflected",
+            Some("json"),
+            &fake_hook,
+            false,
+        );
 
         let err = interp
             .call_function_with_type_args(
@@ -15327,7 +23848,12 @@ mod tests {
             "json_serialize_public_reflected",
             block(vec![return_stmt(string("fake"))]),
         );
-        interp.register_function_named("json.json_serialize_public_reflected", &fake_hook, false);
+        interp.register_function_named(
+            "json.json_serialize_public_reflected",
+            Some("json"),
+            &fake_hook,
+            false,
+        );
 
         let err = interp
             .call_function_with_type_args(
@@ -15394,9 +23920,165 @@ mod tests {
     }
 
     #[test]
+    fn named_function_type_context_restores_caller_after_argument_failure() {
+        let mut interp = Interpreter::new();
+        let caller_types = Arc::new(CheckedFunctionTypes {
+            expressions: Arc::new(HashMap::from([(
+                Span::new(FileId::new(0), 99, 100),
+                "uint64".into(),
+            )])),
+            ..Default::default()
+        });
+        interp.active_checked_function = Some(caller_types.clone());
+        let caller_scope = Arc::new(CheckedScopedTypes::default());
+        interp.active_checked_scope = Some(caller_scope.clone());
+        interp.scoped_type_bindings = vec![ClosureScopedTypeBinding {
+            name: "Field".into(),
+            canonical_name: "string".into(),
+            reflection: None,
+        }];
+        let echo = func_def(
+            "echo",
+            vec![("value", "int8")],
+            block(vec![return_stmt(var("value"))]),
+        );
+        interp.register_function_in_namespace(Some("callee"), &echo);
+        interp.type_arg_scopes = vec![HashMap::from([("T".into(), type_named("string"))])];
+        interp.current_type_arguments = vec![type_named("uint64")];
+        interp.current_namespace = Some("caller".into());
+        interp.current_function_trusted_stdlib = true;
+        for value in [128, 127] {
+            let result = interp.call_function("callee.echo", vec![Value::Int64(value)]);
+            if value == 128 {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .contains("int8 value 128 is outside range")
+                );
+            } else {
+                assert_eq!(result.unwrap(), Value::Int64(127));
+            }
+            assert_eq!(
+                interp.scoped_type_bindings,
+                vec![ClosureScopedTypeBinding {
+                    name: "Field".into(),
+                    canonical_name: "string".into(),
+                    reflection: None
+                }]
+            );
+            assert!(Arc::ptr_eq(
+                interp.active_checked_scope.as_ref().unwrap(),
+                &caller_scope
+            ));
+            assert_eq!(interp.scopes.len(), 1);
+            assert_eq!(interp.lexical_scope_floor, 0);
+            assert_eq!(interp.type_arg_scopes.len(), 1);
+            assert_eq!(type_expr_display(&interp.type_arg_scopes[0]["T"]), "string");
+            assert_eq!(
+                type_expr_display(&interp.current_type_arguments[0]),
+                "uint64"
+            );
+            assert_eq!(interp.current_namespace.as_deref(), Some("caller"));
+            assert!(interp.current_function_trusted_stdlib);
+            assert!(Arc::ptr_eq(
+                interp.active_checked_function.as_ref().unwrap(),
+                &caller_types
+            ));
+        }
+    }
+
+    #[test]
+    fn closure_type_context_restores_caller_after_argument_failure() {
+        let mut interp = Interpreter::new();
+        let caller_types = Arc::new(CheckedFunctionTypes {
+            expressions: Arc::new(HashMap::from([(
+                Span::new(FileId::new(0), 99, 100),
+                "uint64".into(),
+            )])),
+            ..Default::default()
+        });
+        interp.active_checked_function = Some(caller_types.clone());
+        let caller_scope = Arc::new(CheckedScopedTypes::default());
+        interp.active_checked_scope = Some(caller_scope.clone());
+        interp.scoped_type_bindings = vec![ClosureScopedTypeBinding {
+            name: "Field".into(),
+            canonical_name: "string".into(),
+            reflection: None,
+        }];
+        interp
+            .type_arg_scopes
+            .push(HashMap::from([("T".into(), type_named("string"))]));
+        interp.current_type_arguments = vec![type_named("uint64")];
+        interp.current_namespace = Some("caller".into());
+        interp.current_function_trusted_stdlib = true;
+        let closure = Value::Function {
+            type_context: Box::new(ClosureTypeContext {
+                return_type: None,
+                checked_scope: None,
+                scoped_type_bindings: Vec::new(),
+                checked_function: None,
+                bindings: HashMap::from([("T".into(), type_named("int8"))]),
+                arguments: Vec::new(),
+                reflected_capture: None,
+            }),
+            params: vec![Param {
+                view: false,
+                mutable: false,
+                name: ident("value"),
+                ty: type_named("T"),
+                span: sp(),
+            }],
+            body: block(vec![return_stmt(var("value"))]),
+            captures: HashMap::new(),
+            capture_types: HashMap::new(),
+            namespace_aliases: HashMap::new(),
+            namespace: Some("closure".into()),
+        };
+        for value in [128, 127] {
+            let result = interp.call_fn_value(closure.clone(), vec![Value::Int64(value)]);
+            if value == 128 {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .contains("int8 value 128 is outside range")
+                );
+            } else {
+                assert_eq!(result.unwrap(), Value::Int64(127));
+            }
+            assert_eq!(
+                interp.scoped_type_bindings,
+                vec![ClosureScopedTypeBinding {
+                    name: "Field".into(),
+                    canonical_name: "string".into(),
+                    reflection: None
+                }]
+            );
+            assert!(Arc::ptr_eq(
+                interp.active_checked_scope.as_ref().unwrap(),
+                &caller_scope
+            ));
+            assert_eq!(interp.scopes.len(), 1);
+            assert_eq!(interp.lexical_scope_floor, 0);
+            assert_eq!(interp.type_arg_scopes.len(), 1);
+            assert_eq!(type_expr_display(&interp.type_arg_scopes[0]["T"]), "string");
+            assert_eq!(
+                type_expr_display(&interp.current_type_arguments[0]),
+                "uint64"
+            );
+            assert_eq!(interp.current_namespace.as_deref(), Some("caller"));
+            assert!(interp.current_function_trusted_stdlib);
+            assert!(Arc::ptr_eq(
+                interp.active_checked_function.as_ref().unwrap(),
+                &caller_types
+            ));
+        }
+    }
+
+    #[test]
     fn uint64_inline_function_parameter_normalizes_small_literal_carrier() {
         let mut interp = Interpreter::new();
         let fn_value = Value::Function {
+            type_context: Box::default(),
             params: vec![Param {
                 view: false,
                 mutable: false,
@@ -15406,6 +24088,8 @@ mod tests {
             }],
             body: block(vec![return_stmt(var("value"))]),
             captures: HashMap::new(),
+            capture_types: HashMap::new(),
+            namespace_aliases: HashMap::new(),
             namespace: None,
         };
 
@@ -15753,6 +24437,1065 @@ mod tests {
     }
 
     #[test]
+    fn function_expression_callees_support_named_captured_and_comptime_values() {
+        let mut interp = Interpreter::new();
+        interp.register_function(&func_def(
+            "increment",
+            vec![("value", "int64")],
+            block(vec![return_stmt(binary(var("value"), BinOp::Add, int(1)))]),
+        ));
+        let callback = Expr::InlineFn(
+            vec![Param {
+                view: true,
+                mutable: false,
+                name: ident("value"),
+                ty: type_named("int64"),
+                span: sp(),
+            }],
+            Some(type_named("int64")),
+            block(vec![return_stmt(binary(
+                var("value"),
+                BinOp::Add,
+                var("delta"),
+            ))]),
+            sp(),
+        );
+        interp.register_function(&func_def(
+            "factory",
+            vec![("delta", "int64")],
+            block(vec![return_stmt(callback.clone())]),
+        ));
+        interp.set_variable("callback", Value::NamedFunction("increment".into()));
+        assert_eq!(
+            interp.eval_expr(&call_expression(
+                Expr::Paren(Box::new(var("callback")), sp()),
+                vec![int(4)]
+            )),
+            Ok(Value::Int64(5))
+        );
+        assert_eq!(
+            interp.eval_expr(&call_expression(
+                call("factory", vec![int(10)]),
+                vec![Expr::View(Box::new(int(4)), sp())]
+            )),
+            Ok(Value::Int64(14))
+        );
+        interp.set_variable("delta", Value::Int64(20));
+        assert_eq!(
+            interp.eval_expr(&call_expression(callback, vec![int(4)])),
+            Ok(Value::Int64(24))
+        );
+        let computed = Expr::Comptime(
+            Box::new(call_expression(
+                call("factory", vec![int(30)]),
+                vec![int(4)],
+            )),
+            sp(),
+        );
+        assert_eq!(interp.eval_expr(&computed), Ok(Value::Int64(34)));
+    }
+
+    #[test]
+    fn function_expression_fields_prefer_local_values_over_dotted_declarations() {
+        let mut interp = Interpreter::new();
+        interp.register_function(&func_def(
+            "increment",
+            vec![("value", "int64")],
+            block(vec![return_stmt(binary(var("value"), BinOp::Add, int(1)))]),
+        ));
+        interp.register_function_in_namespace(
+            Some("wrapper"),
+            &func_def(
+                "invoke",
+                vec![("value", "int64")],
+                block(vec![return_stmt(int(99))]),
+            ),
+        );
+        let field = Expr::FieldAccess(Box::new(var("wrapper")), ident("invoke"), sp());
+        assert_eq!(
+            interp.eval_expr(&call_expression(field.clone(), vec![int(4)])),
+            Ok(Value::Int64(99))
+        );
+        interp.set_variable(
+            "wrapper",
+            Value::Struct {
+                concrete_type: None,
+                type_name: "Wrapper".into(),
+                fields: vec![("invoke".into(), Value::NamedFunction("increment".into()))],
+            },
+        );
+        assert_eq!(
+            interp.eval_expr(&call_expression(field.clone(), vec![int(4)])),
+            Ok(Value::Int64(5))
+        );
+        assert!(
+            matches!(interp.eval_expr(&field), Ok(Value::NamedFunction(name)) if name == "increment")
+        );
+        interp.register_function(&func_def(
+            "wrapper_factory",
+            vec![],
+            block(vec![return_stmt(var("wrapper"))]),
+        ));
+        let computed_field = Expr::FieldAccess(
+            Box::new(call("wrapper_factory", vec![])),
+            ident("invoke"),
+            sp(),
+        );
+        assert_eq!(
+            interp.eval_expr(&call_expression(computed_field, vec![int(4)])),
+            Ok(Value::Int64(5))
+        );
+    }
+
+    #[test]
+    fn function_expression_named_values_keep_their_registered_target_when_shadowed() {
+        let mut interp = Interpreter::new();
+        interp.register_function(&func_def(
+            "target",
+            vec![],
+            block(vec![return_stmt(int(1))]),
+        ));
+        interp.register_function(&func_def(
+            "replacement",
+            vec![],
+            block(vec![return_stmt(int(2))]),
+        ));
+        let original = interp.eval_expr(&var("target")).unwrap();
+        interp.set_variable("target", Value::NamedFunction("replacement".into()));
+        interp.set_variable("saved", original);
+        assert_eq!(
+            interp.eval_expr(&call("target", vec![])),
+            Ok(Value::Int64(2))
+        );
+        assert_eq!(
+            interp.eval_expr(&call("saved", vec![])),
+            Ok(Value::Int64(1))
+        );
+    }
+
+    #[test]
+    fn function_expression_parenthesized_declarations_keep_named_argument_order() {
+        let mut interp = Interpreter::new();
+        interp.register_function(&func_def(
+            "subtract",
+            vec![("first", "int64"), ("second", "int64")],
+            block(vec![return_stmt(binary(
+                var("first"),
+                BinOp::Sub,
+                var("second"),
+            ))]),
+        ));
+        let call = Expr::Call(
+            Box::new(Expr::Paren(Box::new(var("subtract")), sp())),
+            vec![named_arg("second", int(4)), named_arg("first", int(10))],
+            sp(),
+        );
+        assert_eq!(interp.eval_expr(&call), Ok(Value::Int64(6)));
+    }
+
+    #[test]
+    fn function_expression_enum_constructor_labels_preserve_source_evaluation_order() {
+        let mut interp = Interpreter::new();
+        let mut pair = enum_def_with_field("Pair", "values", "first", "int64");
+        pair.variants[0].fields.push(FieldDef {
+            name: ident("second"),
+            ty: type_named("int64"),
+            serialize_name: None,
+            span: sp(),
+        });
+        interp.register_enum(&pair);
+        interp.register_enum_in_namespace(Some("types"), &pair);
+        interp.set_namespace_alias("alias".into(), "types".into());
+        for (callee, expected_type) in [
+            (
+                Expr::EnumVariant(ident("Pair"), ident("values"), sp()),
+                "Pair",
+            ),
+            (
+                Expr::Paren(
+                    Box::new(Expr::FieldAccess(
+                        Box::new(var("Pair")),
+                        ident("values"),
+                        sp(),
+                    )),
+                    sp(),
+                ),
+                "Pair",
+            ),
+            (
+                Expr::FieldAccess(
+                    Box::new(Expr::FieldAccess(
+                        Box::new(var("types")),
+                        ident("Pair"),
+                        sp(),
+                    )),
+                    ident("values"),
+                    sp(),
+                ),
+                "types.Pair",
+            ),
+            (
+                Expr::FieldAccess(
+                    Box::new(Expr::FieldAccess(
+                        Box::new(var("alias")),
+                        ident("Pair"),
+                        sp(),
+                    )),
+                    ident("values"),
+                    sp(),
+                ),
+                "types.Pair",
+            ),
+        ] {
+            interp.set_variable("events", Value::Int64(0));
+            let argument = |value, marker| {
+                Expr::Handle(
+                    Box::new(Expr::None(sp())),
+                    None,
+                    block(vec![
+                        assign(
+                            "events",
+                            binary(
+                                binary(var("events"), BinOp::Mul, int(10)),
+                                BinOp::Add,
+                                int(marker),
+                            ),
+                        ),
+                        Stmt::Expr(ExprStmt {
+                            expr: Expr::Default(Box::new(int(value)), sp()),
+                            span: sp(),
+                        }),
+                    ]),
+                    sp(),
+                )
+            };
+            let expression = Expr::Call(
+                Box::new(callee),
+                vec![
+                    named_arg("second", argument(4, 1)),
+                    named_arg("first", argument(10, 2)),
+                ],
+                sp(),
+            );
+            assert_eq!(
+                interp.eval_expr(&expression),
+                Ok(Value::Enum {
+                    type_name: expected_type.into(),
+                    variant: "values".into(),
+                    fields: vec![Value::Int64(10), Value::Int64(4)],
+                })
+            );
+            assert_eq!(interp.get_variable("events"), Some(&Value::Int64(12)));
+        }
+    }
+
+    #[test]
+    fn enum_pipeline_payloads_keep_named_order_and_lexical_effects() {
+        for constructor in ["Triple.values", "(Triple.values)", "sample.Triple.values"] {
+            let source = format!(
+                r#"namespace sample
+enum Triple:
+    values(first: int64, second: int64, third: int64)
+function mark(label: string, value: int64) returns int64:
+    println(label)
+    return value
+function make() returns Triple:
+    return mark("input", 1) into {constructor}(third: mark("third", 3), second: mark("second", 2))
+"#
+            );
+            let parsed = jett_parser::parse(&source, FileId::new(0));
+            assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+            let mut interp = Interpreter::new();
+            interp.register_module(&parsed.module);
+            interp.enable_stdout_capture();
+            assert_eq!(
+                interp.call_function("sample.make", vec![]),
+                Ok(Value::Enum {
+                    type_name: "sample.Triple".into(),
+                    variant: "values".into(),
+                    fields: vec![Value::Int64(1), Value::Int64(2), Value::Int64(3)],
+                })
+            );
+            assert!(interp.take_stdout_output().is_empty());
+            assert_eq!(
+                crate::render_debug_events(&interp.take_debug_events()),
+                "input\nthird\nsecond\n",
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_named_and_positional_function_arguments_fill_unassigned_parameters() {
+        for callee in ["combine", "(combine)", "sample.combine"] {
+            for piped in [false, true] {
+                let call = if piped {
+                    format!(
+                        "mark(\"first\", 1) into {callee}(third: mark(\"third\", 3), mark(\"second\", 2))"
+                    )
+                } else {
+                    format!(
+                        "{callee}(third: mark(\"third\", 3), mark(\"first\", 1), mark(\"second\", 2))"
+                    )
+                };
+                let source = format!(
+                    r#"namespace sample
+function combine(first: int64, second: int64, third: int64) returns int64:
+    return first * 100 + second * 10 + third
+function mark(label: string, value: int64) returns int64:
+    println(label)
+    return value
+function make() returns int64:
+    return {call}
+"#
+                );
+                let parsed = jett_parser::parse(&source, FileId::new(0));
+                assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+                let mut interp = Interpreter::new();
+                interp.register_module(&parsed.module);
+                interp.enable_stdout_capture();
+                assert_eq!(
+                    interp.call_function("sample.make", vec![]),
+                    Ok(Value::Int64(123)),
+                    "{call}"
+                );
+                assert_eq!(
+                    crate::render_debug_events(&interp.take_debug_events()),
+                    if piped {
+                        "first\nthird\nsecond\n"
+                    } else {
+                        "third\nfirst\nsecond\n"
+                    },
+                    "{call}"
+                );
+                assert!(interp.take_stdout_output().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_named_and_positional_enum_arguments_fill_unassigned_payloads() {
+        for constructor in ["Triple.values", "(Triple.values)", "sample.Triple.values"] {
+            for piped in [false, true] {
+                let call = if piped {
+                    format!(
+                        "mark(\"first\", 1) into {constructor}(third: mark(\"third\", 3), mark(\"second\", 2))"
+                    )
+                } else {
+                    format!(
+                        "{constructor}(third: mark(\"third\", 3), mark(\"first\", 1), mark(\"second\", 2))"
+                    )
+                };
+                let source = format!(
+                    r#"namespace sample
+enum Triple:
+    values(first: int64, second: int64, third: int64)
+function mark(label: string, value: int64) returns int64:
+    println(label)
+    return value
+function make() returns Triple:
+    return {call}
+"#
+                );
+                let parsed = jett_parser::parse(&source, FileId::new(0));
+                assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+                let mut interp = Interpreter::new();
+                interp.register_module(&parsed.module);
+                interp.enable_stdout_capture();
+                assert_eq!(
+                    interp.call_function("sample.make", vec![]),
+                    Ok(Value::Enum {
+                        type_name: "sample.Triple".into(),
+                        variant: "values".into(),
+                        fields: vec![Value::Int64(1), Value::Int64(2), Value::Int64(3)],
+                    }),
+                    "{call}"
+                );
+                assert_eq!(
+                    crate::render_debug_events(&interp.take_debug_events()),
+                    if piped {
+                        "first\nthird\nsecond\n"
+                    } else {
+                        "third\nfirst\nsecond\n"
+                    },
+                    "{call}"
+                );
+                assert!(interp.take_stdout_output().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn function_expression_callee_is_resolved_after_argument_handlers() {
+        let mut interp = Interpreter::new();
+        for (name, delta) in [("first", 10), ("second", 20)] {
+            interp.register_function(&func_def(
+                name,
+                vec![("value", "int64")],
+                block(vec![return_stmt(binary(
+                    var("value"),
+                    BinOp::Add,
+                    int(delta),
+                ))]),
+            ));
+        }
+        interp.set_variable("selected", Value::NamedFunction("first".into()));
+        let argument = Expr::Handle(
+            Box::new(Expr::None(sp())),
+            None,
+            block(vec![
+                assign("selected", var("second")),
+                Stmt::Expr(ExprStmt {
+                    expr: Expr::Default(Box::new(int(4)), sp()),
+                    span: sp(),
+                }),
+            ]),
+            sp(),
+        );
+        let expression =
+            call_expression(Expr::Paren(Box::new(var("selected")), sp()), vec![argument]);
+        assert_eq!(interp.eval_expr(&expression), Ok(Value::Int64(24)));
+
+        interp.set_variable("events", Value::Int64(0));
+        interp.register_function(&func_def(
+            "factory",
+            vec![],
+            block(vec![
+                assign(
+                    "events",
+                    binary(
+                        binary(var("events"), BinOp::Mul, int(10)),
+                        BinOp::Add,
+                        int(2),
+                    ),
+                ),
+                return_stmt(var("second")),
+            ]),
+        ));
+        let argument = Expr::Handle(
+            Box::new(Expr::None(sp())),
+            None,
+            block(vec![
+                assign("events", int(1)),
+                Stmt::Expr(ExprStmt {
+                    expr: Expr::Default(Box::new(int(4)), sp()),
+                    span: sp(),
+                }),
+            ]),
+            sp(),
+        );
+        assert_eq!(
+            interp.eval_expr(&call_expression(call("factory", vec![]), vec![argument])),
+            Ok(Value::Int64(24))
+        );
+        assert_eq!(interp.get_variable("events"), Some(&Value::Int64(12)));
+    }
+
+    #[test]
+    fn function_expression_signals_propagate_from_arguments_and_callee() {
+        let mut interp = Interpreter::new();
+        interp.set_variable("events", Value::Int64(0));
+        let signal = Expr::Handle(
+            Box::new(Expr::None(sp())),
+            None,
+            block(vec![return_stmt(int(7))]),
+            sp(),
+        );
+        let marker = || {
+            Expr::Handle(
+                Box::new(Expr::None(sp())),
+                None,
+                block(vec![
+                    assign("events", binary(var("events"), BinOp::Add, int(1))),
+                    Stmt::Expr(ExprStmt {
+                        expr: Expr::Default(Box::new(int(4)), sp()),
+                        span: sp(),
+                    }),
+                ]),
+                sp(),
+            )
+        };
+        let expression = call_expression(signal.clone(), vec![marker()]);
+        assert!(matches!(
+            interp.eval_expr_flow(&expression),
+            Ok(ExprFlow::Signal(Signal::Return(Value::Int64(7), None)))
+        ));
+        assert_eq!(interp.get_variable("events"), Some(&Value::Int64(1)));
+        let expression = call_expression(marker(), vec![signal]);
+        assert!(matches!(
+            interp.eval_expr_flow(&expression),
+            Ok(ExprFlow::Signal(Signal::Return(Value::Int64(7), None)))
+        ));
+        assert_eq!(
+            interp.get_variable("events"),
+            Some(&Value::Int64(1)),
+            "callee must not run after an argument returns"
+        );
+    }
+
+    #[test]
+    fn function_expression_factories_do_not_capture_unrelated_caller_bindings() {
+        let mut interp = Interpreter::new();
+        interp.register_function(&func_def(
+            "target",
+            vec![],
+            block(vec![return_stmt(int(7))]),
+        ));
+        interp.register_function(&func_def(
+            "named_factory",
+            vec![],
+            block(vec![return_stmt(var("target"))]),
+        ));
+        interp.register_function(&func_def(
+            "closure_factory",
+            vec![],
+            block(vec![return_stmt(Expr::InlineFn(
+                vec![],
+                Some(type_named("int64")),
+                block(vec![return_stmt(call("target", vec![]))]),
+                sp(),
+            ))]),
+        ));
+        for factory in ["named_factory", "closure_factory"] {
+            interp.register_function(&func_def(
+                "caller",
+                vec![("target", "int64")],
+                block(vec![return_stmt(call_expression(
+                    call(factory, vec![]),
+                    vec![],
+                ))]),
+            ));
+            assert_eq!(
+                interp.eval_expr(&call("caller", vec![int(99)])),
+                Ok(Value::Int64(7))
+            );
+        }
+        assert_eq!(interp.lexical_scope_floor, 0);
+        assert_eq!(interp.scopes.len(), 1);
+    }
+
+    #[test]
+    fn declared_functions_do_not_inherit_caller_namespace_aliases() {
+        for invocation in [
+            "return original.read_value()",
+            "return (original.read_value)()",
+            "function() returns int64 callback = original.read_value\n    return callback()",
+            "return original.named_factory()()",
+            "return original.read_alias()",
+        ] {
+            let source = format!(
+                r#"namespace beta
+export function value() returns int64:
+    return 9
+namespace alpha
+export function value() returns int64:
+    return 1
+export function read_value() returns int64:
+    return alpha.value()
+export function read_alias() returns int64:
+    use alpha as selected
+    return selected.value()
+export function named_factory() returns function() returns int64:
+    return alpha.read_value
+namespace app
+function main() returns int64:
+    use alpha as original
+    use beta as alpha
+    use beta as selected
+    {invocation}
+"#
+            );
+            let parsed = jett_parser::parse(&source, FileId::new(0));
+            assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+            let mut interp = Interpreter::new();
+            interp.register_module(&parsed.module);
+            assert_eq!(
+                interp.call_function("app.main", vec![]),
+                Ok(Value::Int64(1)),
+                "{invocation}"
+            );
+            assert_eq!(interp.lexical_scope_floor, 0);
+            assert_eq!(interp.namespace_alias_scopes.len(), 1);
+            assert!(interp.visible_namespace_aliases().is_empty());
+        }
+    }
+
+    #[test]
+    fn source_methods_preserve_their_declaration_namespace() {
+        for declaration in [
+            "export struct Counter:\n    value: int64\n    function read(view self: Counter) returns int64:\n        Payload computed = Payload(value: helper() + self.value)\n        return computed.value + models.helper()",
+            "export interface Reader:\n    function read(view self: Reader) returns int64\nexport struct Counter:\n    value: int64\nimplement Reader for Counter:\n    function read(view self: Counter) returns int64:\n        Payload computed = Payload(value: helper() + self.value)\n        return computed.value + models.helper()",
+        ] {
+            for invocation in [
+                "return original.Counter.read(view counter)",
+                "return (original.Counter.read)(view counter)",
+                "function(view original.Counter) returns int64 callback = original.Counter.read\n    return callback(view counter)",
+                "return original.make_reader()(view counter)",
+                "return original.local_read(view counter)",
+            ] {
+                let source = format!(
+                    r#"namespace beta
+export function helper() returns int64:
+    return 99
+namespace models
+function helper() returns int64:
+    return 5
+struct Payload:
+    value: int64
+{declaration}
+export function make_reader() returns function(view Counter) returns int64:
+    return models.Counter.read
+export function local_read(view counter: Counter) returns int64:
+    return Counter.read(view counter)
+namespace app
+function main() returns int64:
+    use models as original
+    use beta as models
+    original.Counter counter = original.Counter(value: 2)
+    {invocation}
+"#
+                );
+                let parsed = jett_parser::parse(&source, FileId::new(0));
+                assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+                let mut interp = Interpreter::new();
+                interp.register_module(&parsed.module);
+                assert_eq!(
+                    interp.call_function("app.main", vec![]),
+                    Ok(Value::Int64(12)),
+                    "{declaration}\n{invocation}"
+                );
+                assert_eq!(interp.lexical_scope_floor, 0);
+                assert_eq!(interp.namespace_alias_scopes.len(), 1);
+                assert_eq!(interp.current_namespace, None);
+                assert!(interp.visible_namespace_aliases().is_empty());
+
+                let method = field_access(field_access(var("models"), "Counter"), "read");
+                let value = interp.eval_expr(&method).expect("method value");
+                assert_eq!(value.to_string(), "function(models.Counter.read)");
+                let TypeExpr::Function(params, return_type, _) = interp
+                    .named_function_argument_type(&method)
+                    .expect("method signature")
+                else {
+                    panic!("expected function signature");
+                };
+                assert_eq!(type_expr_name(&params[0]), "models.Counter");
+                assert_eq!(type_expr_name(&return_type), "int64");
+            }
+        }
+    }
+
+    #[test]
+    fn comptime_method_values_preserve_names_and_declaration_namespace() {
+        let source = r#"namespace models
+function helper() returns int64:
+    return 5
+struct Counter:
+    value: int64
+    function read(view self: Counter) returns int64:
+        return helper() + self.value
+function make_reader() returns function(view Counter) returns int64:
+    return models.Counter.read
+function main() returns nothing:
+    function(view Counter) returns int64 direct = comptime models.Counter.read
+    function(view Counter) returns int64 returned = comptime make_reader()
+    int64 answer = comptime models.Counter.read(view Counter(value: 2))
+    return nothing
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let (values, diagnostics) = crate::evaluate_explicit_comptime_expressions(
+            &parsed.module,
+            Arc::new(ReflectionMetadata::new()),
+            Arc::new(CheckedExpressionTypes::default()),
+            Arc::new(HashMap::new()),
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(values.len(), 3);
+        assert_eq!(
+            values
+                .values()
+                .filter(|value| matches!(value, Value::NamedFunction(name) if name == "models.Counter.read"))
+                .count(),
+            2
+        );
+        assert!(values.values().any(|value| *value == Value::Int64(7)));
+    }
+
+    #[test]
+    fn declared_interface_method_values_exist_before_implementations() {
+        let declaration = interface_decl(
+            "Reader",
+            vec![("read", vec![("self", "Reader", true)], "int64")],
+        );
+        for namespace in [None, Some("models")] {
+            let mut interp = Interpreter::new();
+            if let Some(namespace) = namespace {
+                interp.register_interface_in_namespace(Some(namespace), &declaration);
+            } else {
+                interp.register_interface(&declaration);
+            }
+            let owner = namespace.map_or_else(
+                || var("Reader"),
+                |namespace| field_access(var(namespace), "Reader"),
+            );
+            let method = field_access(owner, "read");
+            let name = namespace.map_or_else(
+                || "Reader.read".to_string(),
+                |namespace| format!("{namespace}.Reader.read"),
+            );
+            let callback = interp.eval_expr(&method).expect("declared callback");
+            assert!(matches!(&callback, Value::NamedFunction(target) if target == &name));
+            assert_eq!(callback.to_string(), format!("function({name})"));
+            assert!(interp.interface_methods[&name].is_empty());
+            assert_eq!(
+                interp.call_fn_value(callback.clone(), vec![Value::Int64(7)]),
+                Err(format!("undefined function '{name}'"))
+            );
+
+            let namespace_header = namespace
+                .map(|namespace| format!("namespace {namespace}\n"))
+                .unwrap_or_default();
+            let source = format!(
+                "{namespace_header}implement Reader for int64:\n    function read(view self: int64) returns int64:\n        return self + 1\n"
+            );
+            let parsed = jett_parser::parse(&source, FileId::new(0));
+            assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+            interp.register_module(&parsed.module);
+            interp.register_interface_in_namespace(namespace, &declaration);
+            assert_eq!(
+                interp.call_fn_value(callback, vec![Value::Int64(7)]),
+                Ok(Value::Int64(8))
+            );
+        }
+    }
+
+    #[test]
+    fn interface_method_values_dispatch_by_owner_with_aliases_and_inherent_collision() {
+        let source = r#"namespace beta
+export function helper() returns int64:
+    return 99
+export interface Reader:
+    function read(view self: Reader) returns int64
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return 99
+namespace models
+function helper() returns int64:
+    return 5
+export interface Reader:
+    function read(view self: Reader) returns int64
+export type Readable = Reader
+export type Chained = Readable
+export struct Counter:
+    value: int64
+    function read(view self: Counter) returns int64:
+        return 1000 + self.value
+implement Reader for Counter:
+    function read(view self: Counter) returns int64:
+        return helper() + self.value
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return helper() + self
+export function make_reader() returns function(view Reader) returns int64:
+    return Readable.read
+namespace app
+function main() returns int64:
+    use models as original
+    use beta as models
+    original.Counter counter = original.Counter(value: 2)
+    original.Reader boxed = clone counter
+    original.Reader number = 7
+    function(view original.Reader) returns int64 callback = original.Reader.read
+    int64 first = callback(view boxed)
+    function(view original.Readable) returns int64 aliased = original.Readable.read
+    int64 second = aliased(view number)
+    int64 third = original.make_reader()(view boxed)
+    function(view original.Chained) returns int64 chained = original.Chained.read
+    int64 fourth = chained(view number)
+    int64 inherent = original.Counter.read(view counter)
+    return first + second + third + fourth + inherent
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interp = Interpreter::new();
+        interp.register_module(&parsed.module);
+        assert_eq!(
+            interp.call_function("app.main", vec![]),
+            Ok(Value::Int64(1040))
+        );
+        let alias_method = field_access(field_access(var("models"), "Readable"), "read");
+        assert!(matches!(
+            interp.eval_expr(&alias_method),
+            Ok(Value::NamedFunction(name)) if name == "models.Reader.read"
+        ));
+        assert_eq!(interp.lexical_scope_floor, 0);
+        assert_eq!(interp.namespace_alias_scopes.len(), 1);
+        assert_eq!(interp.current_namespace, None);
+        assert!(interp.visible_namespace_aliases().is_empty());
+    }
+
+    #[test]
+    fn declared_interface_slots_take_precedence_over_colliding_source_methods() {
+        let source = r#"namespace models
+interface Reader:
+    function read(view self: Reader) returns int64
+interface Other:
+    function read(view self: Other) returns int64
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return self + 1
+implement Other for Reader:
+    function read(view self: Reader) returns int64:
+        return 99
+function main() returns list[int64]:
+    Reader item = 7
+    function(view Reader) returns int64 callback = Reader.read
+    int64 direct = Reader.read(view item)
+    int64 indirect = callback(view item)
+    return list(direct, indirect)
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interp = Interpreter::new();
+        interp.register_module(&parsed.module);
+        assert!(interp.functions.contains_key("models.Reader.read"));
+        assert_eq!(
+            interp.call_function("models.main", vec![]),
+            Ok(Value::List(vec![Value::Int64(8), Value::Int64(8)]))
+        );
+        assert_eq!(
+            interp.call_function("models.Reader.read", vec![Value::Bool(true)]),
+            Err("undefined function 'models.Reader.read'".into())
+        );
+    }
+
+    #[test]
+    fn interface_alias_method_values_ignore_callers_generic_type_bindings() {
+        let source = r#"namespace models
+interface Reader:
+    function read(view self: Reader) returns int64
+type Readable = Reader
+struct Counter:
+    value: int64
+implement Reader for Counter:
+    function read(view self: Counter) returns int64:
+        return self.value + 5
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return 1
+function choose[Reader](unused: Reader) returns function(view models.Reader) returns int64:
+    return models.Readable.read
+function main() returns int64:
+    Counter item = Counter(value: 2)
+    function(view models.Reader) returns int64 callback = choose[int64](7)
+    return callback(view item)
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interp = Interpreter::new();
+        interp.register_module(&parsed.module);
+        assert!(matches!(
+            interp.call_function_with_type_args(
+                "models.choose",
+                &[type_named("int64")],
+                vec![Value::Int64(7)]
+            ),
+            Ok(Value::NamedFunction(name)) if name == "models.Reader.read"
+        ));
+        assert_eq!(
+            interp.call_function("models.main", vec![]),
+            Ok(Value::Int64(7))
+        );
+    }
+
+    #[test]
+    fn interface_method_callback_evaluates_arguments_before_callee_once() {
+        let source = r#"namespace app
+interface Reader:
+    function read(view self: Reader) returns int64
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return self + 1
+function receiver(stdout: Stdout) returns Reader:
+    Stdout.write(view stdout, "argument\n")
+    return 7
+function select_reader(stdout: Stdout) returns function(view Reader) returns int64:
+    Stdout.write(view stdout, "callee\n")
+    return Reader.read
+function main(stdout: Stdout) returns int64:
+    return select_reader(view stdout)(view receiver(view stdout))
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interp = Interpreter::new();
+        interp.register_module(&parsed.module);
+        interp.enable_stdout_capture();
+        assert_eq!(
+            interp.call_function("app.main", vec![Value::Nothing]),
+            Ok(Value::Int64(8))
+        );
+        assert_eq!(interp.take_stdout_output(), "argument\ncallee\n");
+    }
+
+    #[test]
+    fn interface_method_callback_preserves_pending_receiver_failures() {
+        let source = r#"namespace models
+interface Reader:
+    function read(view self: Reader) returns int64
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return self + 1
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interp = Interpreter::new();
+        interp.register_module(&parsed.module);
+        let method = field_access(field_access(var("models"), "Reader"), "read");
+        let callback = interp.eval_expr(&method).expect("interface callback");
+        let mut pending = Value::Int64(7);
+        for _ in 0..2 {
+            pending = Value::Pending(Box::new(pending));
+            let expected = Err("undefined function 'models.Reader.read'".into());
+            assert_eq!(
+                interp.call_fn_value(callback.clone(), vec![pending.clone()]),
+                expected
+            );
+            assert_eq!(
+                interp.call_function("models.Reader.read", vec![pending.clone()]),
+                expected
+            );
+        }
+        assert_eq!(
+            interp.call_fn_value(callback, vec![Value::Int64(7)]),
+            Ok(Value::Int64(8))
+        );
+        assert_eq!(interp.lexical_scope_floor, 0);
+        assert_eq!(interp.namespace_alias_scopes.len(), 1);
+        assert_eq!(interp.current_namespace, None);
+    }
+
+    #[test]
+    fn comptime_interface_method_values_keep_canonical_dispatch_names() {
+        let source = r#"namespace models
+interface Reader:
+    function read(view self: Reader) returns int64
+type Readable = Reader
+interface Reporter:
+    function emit(view self: Reporter, view stdout: Stdout) returns nothing
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return self + 1
+function make_reader() returns function(view Reader) returns int64:
+    return Readable.read
+function main() returns nothing:
+    function(view Reader) returns int64 direct = comptime models.Reader.read
+    function(view Readable) returns int64 aliased = comptime Readable.read
+    function(view Reader) returns int64 returned = comptime make_reader()
+    function(view Reporter, view Stdout) returns nothing reporter = comptime Reporter.emit
+    int64 answer = comptime (models.Reader.read)(view 7)
+    return nothing
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let (values, diagnostics) = crate::evaluate_explicit_comptime_expressions(
+            &parsed.module,
+            Arc::new(ReflectionMetadata::new()),
+            Arc::new(CheckedExpressionTypes::default()),
+            Arc::new(HashMap::new()),
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(values.len(), 5);
+        assert_eq!(
+            values
+                .values()
+                .filter(|value| matches!(value, Value::NamedFunction(name) if name == "models.Reader.read"))
+                .count(),
+            3
+        );
+        assert!(values.values().any(
+            |value| matches!(value, Value::NamedFunction(name) if name == "models.Reporter.emit")
+        ));
+        assert!(values.values().any(|value| *value == Value::Int64(8)));
+    }
+
+    #[test]
+    fn returned_closures_preserve_lexical_namespace_aliases() {
+        for (invocation, expected) in [
+            ("return original.make_reader()()", 1),
+            (
+                "function() returns int64 callback = original.make_reader()\n    return callback()",
+                1,
+            ),
+            ("return original.invoke(original.make_reader())", 1),
+            ("return original.make_canonical_reader()()", 1),
+            ("return original.make_shadowing_reader()()", 9),
+            ("return comptime original.make_reader()()", 1),
+        ] {
+            let source = format!(
+                r#"namespace beta
+export function value() returns int64:
+    return 9
+namespace alpha
+export function value() returns int64:
+    return 1
+export function make_reader() returns function() returns int64:
+    use alpha as selected
+    return function() returns int64:
+        return selected.value()
+export function make_canonical_reader() returns function() returns int64:
+    return function() returns int64:
+        return alpha.value()
+export function make_shadowing_reader() returns function() returns int64:
+    use alpha as selected
+    return function() returns int64:
+        use beta as selected
+        return selected.value()
+export function invoke(callback: function() returns int64) returns int64:
+    use beta as selected
+    return callback()
+namespace app
+function main() returns int64:
+    use alpha as original
+    use beta as alpha
+    use beta as selected
+    {invocation}
+"#
+            );
+            let parsed = jett_parser::parse(&source, FileId::new(0));
+            assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+            let mut interp = Interpreter::new();
+            interp.register_module(&parsed.module);
+            assert_eq!(
+                interp.call_function("app.main", vec![]),
+                Ok(Value::Int64(expected)),
+                "{invocation}"
+            );
+            assert_eq!(interp.lexical_scope_floor, 0);
+            assert_eq!(interp.namespace_alias_scopes.len(), 1);
+            assert!(interp.visible_namespace_aliases().is_empty());
+        }
+    }
+
+    #[test]
+    fn function_expression_errors_restore_scope_visibility() {
+        let mut interp = Interpreter::new();
+        interp.set_variable("visible", Value::Int64(7));
+        let failure = block(vec![assert_stmt(bool_expr(false), None)]);
+        interp.register_function(&func_def("failure", vec![], failure.clone()));
+        for expression in [
+            call_expression(Expr::Paren(Box::new(var("failure")), sp()), vec![]),
+            call_expression(Expr::InlineFn(vec![], None, failure, sp()), vec![]),
+        ] {
+            assert_eq!(
+                interp.eval_expr(&expression),
+                Err("assertion failed".into())
+            );
+            assert_eq!(interp.lexical_scope_floor, 0);
+            assert_eq!(interp.scopes.len(), 1);
+            assert_eq!(interp.get_variable("visible"), Some(&Value::Int64(7)));
+        }
+    }
+
+    #[test]
     fn function_wrong_arg_count() {
         let mut interp = Interpreter::new();
         let add_fn = func_def(
@@ -15788,6 +25531,7 @@ mod tests {
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::Struct {
+                concrete_type: None,
                 type_name: "Point".to_string(),
                 fields: vec![
                     ("x".to_string(), Value::Int64(3)),
@@ -15811,6 +25555,7 @@ mod tests {
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::Struct {
+                concrete_type: None,
                 type_name: "Packet".to_string(),
                 fields: vec![("serial".to_string(), Value::Uint64(42))],
             }
@@ -15836,6 +25581,7 @@ mod tests {
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::ResultOk(Box::new(Value::Struct {
+                concrete_type: None,
                 type_name: "User".to_string(),
                 fields: vec![("age".to_string(), Value::Int64(42))],
             }))
@@ -15903,6 +25649,7 @@ mod tests {
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::Struct {
+                concrete_type: None,
                 type_name: "TcpFlags".to_string(),
                 fields: vec![
                     ("syn".to_string(), Value::Int64(0)),
@@ -15946,6 +25693,7 @@ mod tests {
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::ResultOk(Box::new(Value::Struct {
+                concrete_type: None,
                 type_name: "TcpFlags".to_string(),
                 fields: vec![
                     ("syn".to_string(), Value::Int64(1)),
@@ -16130,6 +25878,7 @@ mod tests {
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::ResultOk(Box::new(Value::Struct {
+                concrete_type: None,
                 type_name: "IpHeader".to_string(),
                 fields: vec![
                     ("version".to_string(), Value::Int64(4)),
@@ -16200,6 +25949,7 @@ mod tests {
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::ResultOk(Box::new(Value::Struct {
+                concrete_type: None,
                 type_name: "Header".to_string(),
                 fields: vec![(
                     "protocol".to_string(),
@@ -16341,12 +26091,14 @@ mod tests {
         let mut interp = Interpreter::new();
         let items = Value::List(vec![Value::Int64(7)]);
         let inner = Value::Struct {
+            concrete_type: None,
             type_name: "Inner".to_string(),
             fields: vec![("items".to_string(), items.clone())],
         };
         interp.set_variable(
             "outer",
             Value::Struct {
+                concrete_type: None,
                 type_name: "Outer".to_string(),
                 fields: vec![
                     ("inner".to_string(), inner),
@@ -16814,712 +26566,6 @@ mod tests {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Base64 helpers (no external crate dependency)
-// ---------------------------------------------------------------------------
-
-fn base64_encode(data: &[u8]) -> String {
-    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::new();
-    let mut i = 0;
-    while i < data.len() {
-        let b0 = data[i] as u32;
-        let b1 = if i + 1 < data.len() {
-            data[i + 1] as u32
-        } else {
-            0
-        };
-        let b2 = if i + 2 < data.len() {
-            data[i + 2] as u32
-        } else {
-            0
-        };
-        let combined = (b0 << 16) | (b1 << 8) | b2;
-        out.push(ALPHABET[((combined >> 18) & 63) as usize] as char);
-        out.push(ALPHABET[((combined >> 12) & 63) as usize] as char);
-        if i + 1 < data.len() {
-            out.push(ALPHABET[((combined >> 6) & 63) as usize] as char);
-        } else {
-            out.push('=');
-        }
-        if i + 2 < data.len() {
-            out.push(ALPHABET[(combined & 63) as usize] as char);
-        } else {
-            out.push('=');
-        }
-        i += 3;
-    }
-    out
-}
-
-// ---------------------------------------------------------------------------
-// SHA-256 helper (no external crate dependency)
-// ---------------------------------------------------------------------------
-
-fn sha256_digest(data: &[u8]) -> Vec<u8> {
-    #[rustfmt::skip]
-    const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
-        0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
-        0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
-        0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
-        0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
-    ];
-    let mut h: [u32; 8] = [
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
-        0x5be0cd19,
-    ];
-    let bit_len = (data.len() as u64).wrapping_mul(8);
-    let mut msg = data.to_vec();
-    msg.push(0x80);
-    while msg.len() % 64 != 56 {
-        msg.push(0x00);
-    }
-    msg.extend_from_slice(&bit_len.to_be_bytes());
-    for chunk in msg.chunks(64) {
-        let mut w = [0u32; 64];
-        for i in 0..16 {
-            w[i] = u32::from_be_bytes([
-                chunk[i * 4],
-                chunk[i * 4 + 1],
-                chunk[i * 4 + 2],
-                chunk[i * 4 + 3],
-            ]);
-        }
-        for i in 16..64 {
-            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
-            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16]
-                .wrapping_add(s0)
-                .wrapping_add(w[i - 7])
-                .wrapping_add(s1);
-        }
-        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = h;
-        for i in 0..64 {
-            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-            let ch = (e & f) ^ ((!e) & g);
-            let temp1 = hh
-                .wrapping_add(s1)
-                .wrapping_add(ch)
-                .wrapping_add(K[i])
-                .wrapping_add(w[i]);
-            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-            let maj = (a & b) ^ (a & c) ^ (b & c);
-            let temp2 = s0.wrapping_add(maj);
-            hh = g;
-            g = f;
-            f = e;
-            e = d.wrapping_add(temp1);
-            d = c;
-            c = b;
-            b = a;
-            a = temp1.wrapping_add(temp2);
-        }
-        h[0] = h[0].wrapping_add(a);
-        h[1] = h[1].wrapping_add(b);
-        h[2] = h[2].wrapping_add(c);
-        h[3] = h[3].wrapping_add(d);
-        h[4] = h[4].wrapping_add(e);
-        h[5] = h[5].wrapping_add(f);
-        h[6] = h[6].wrapping_add(g);
-        h[7] = h[7].wrapping_add(hh);
-    }
-    h.into_iter()
-        .flat_map(u32::to_be_bytes)
-        .collect::<Vec<u8>>()
-}
-
-fn hmac_sha256_digest(key: &[u8], message: &[u8]) -> Vec<u8> {
-    const BLOCK_SIZE: usize = 64;
-    let normalized_key = if key.len() > BLOCK_SIZE {
-        sha256_digest(key)
-    } else {
-        key.to_vec()
-    };
-    let mut key_block = [0u8; BLOCK_SIZE];
-    key_block[..normalized_key.len()].copy_from_slice(&normalized_key);
-
-    let mut inner = Vec::with_capacity(BLOCK_SIZE + message.len());
-    inner.extend(key_block.iter().map(|byte| byte ^ 0x36));
-    inner.extend_from_slice(message);
-    let inner_digest = sha256_digest(&inner);
-
-    let mut outer = Vec::with_capacity(BLOCK_SIZE + inner_digest.len());
-    outer.extend(key_block.iter().map(|byte| byte ^ 0x5c));
-    outer.extend_from_slice(&inner_digest);
-    sha256_digest(&outer)
-}
-
-// ---------------------------------------------------------------------------
-// SHA-512 helper (no external crate dependency)
-// ---------------------------------------------------------------------------
-
-fn sha512_digest(data: &[u8]) -> Vec<u8> {
-    #[rustfmt::skip]
-    const K: [u64; 80] = [
-        0x428a2f98d728ae22, 0x7137449123ef65cd, 0xb5c0fbcfec4d3b2f, 0xe9b5dba58189dbbc,
-        0x3956c25bf348b538, 0x59f111f1b605d019, 0x923f82a4af194f9b, 0xab1c5ed5da6d8118,
-        0xd807aa98a3030242, 0x12835b0145706fbe, 0x243185be4ee4b28c, 0x550c7dc3d5ffb4e2,
-        0x72be5d74f27b896f, 0x80deb1fe3b1696b1, 0x9bdc06a725c71235, 0xc19bf174cf692694,
-        0xe49b69c19ef14ad2, 0xefbe4786384f25e3, 0x0fc19dc68b8cd5b5, 0x240ca1cc77ac9c65,
-        0x2de92c6f592b0275, 0x4a7484aa6ea6e483, 0x5cb0a9dcbd41fbd4, 0x76f988da831153b5,
-        0x983e5152ee66dfab, 0xa831c66d2db43210, 0xb00327c898fb213f, 0xbf597fc7beef0ee4,
-        0xc6e00bf33da88fc2, 0xd5a79147930aa725, 0x06ca6351e003826f, 0x142929670a0e6e70,
-        0x27b70a8546d22ffc, 0x2e1b21385c26c926, 0x4d2c6dfc5ac42aed, 0x53380d139d95b3df,
-        0x650a73548baf63de, 0x766a0abb3c77b2a8, 0x81c2c92e47edaee6, 0x92722c851482353b,
-        0xa2bfe8a14cf10364, 0xa81a664bbc423001, 0xc24b8b70d0f89791, 0xc76c51a30654be30,
-        0xd192e819d6ef5218, 0xd69906245565a910, 0xf40e35855771202a, 0x106aa07032bbd1b8,
-        0x19a4c116b8d2d0c8, 0x1e376c085141ab53, 0x2748774cdf8eeb99, 0x34b0bcb5e19b48a8,
-        0x391c0cb3c5c95a63, 0x4ed8aa4ae3418acb, 0x5b9cca4f7763e373, 0x682e6ff3d6b2b8a3,
-        0x748f82ee5defb2fc, 0x78a5636f43172f60, 0x84c87814a1f0ab72, 0x8cc702081a6439ec,
-        0x90befffa23631e28, 0xa4506cebde82bde9, 0xbef9a3f7b2c67915, 0xc67178f2e372532b,
-        0xca273eceea26619c, 0xd186b8c721c0c207, 0xeada7dd6cde0eb1e, 0xf57d4f7fee6ed178,
-        0x06f067aa72176fba, 0x0a637dc5a2c898a6, 0x113f9804bef90dae, 0x1b710b35131c471b,
-        0x28db77f523047d84, 0x32caab7b40c72493, 0x3c9ebe0a15c9bebc, 0x431d67c49c100d4c,
-        0x4cc5d4becb3e42b6, 0x597f299cfc657e2a, 0x5fcb6fab3ad6faec, 0x6c44198c4a475817,
-    ];
-    let mut h: [u64; 8] = [
-        0x6a09e667f3bcc908,
-        0xbb67ae8584caa73b,
-        0x3c6ef372fe94f82b,
-        0xa54ff53a5f1d36f1,
-        0x510e527fade682d1,
-        0x9b05688c2b3e6c1f,
-        0x1f83d9abfb41bd6b,
-        0x5be0cd19137e2179,
-    ];
-    let bit_len = (data.len() as u128).wrapping_mul(8);
-    let mut msg = data.to_vec();
-    msg.push(0x80);
-    while msg.len() % 128 != 112 {
-        msg.push(0x00);
-    }
-    msg.extend_from_slice(&bit_len.to_be_bytes());
-    for chunk in msg.chunks(128) {
-        let mut w = [0u64; 80];
-        for i in 0..16 {
-            w[i] = u64::from_be_bytes([
-                chunk[i * 8],
-                chunk[i * 8 + 1],
-                chunk[i * 8 + 2],
-                chunk[i * 8 + 3],
-                chunk[i * 8 + 4],
-                chunk[i * 8 + 5],
-                chunk[i * 8 + 6],
-                chunk[i * 8 + 7],
-            ]);
-        }
-        for i in 16..80 {
-            let s0 = w[i - 15].rotate_right(1) ^ w[i - 15].rotate_right(8) ^ (w[i - 15] >> 7);
-            let s1 = w[i - 2].rotate_right(19) ^ w[i - 2].rotate_right(61) ^ (w[i - 2] >> 6);
-            w[i] = w[i - 16]
-                .wrapping_add(s0)
-                .wrapping_add(w[i - 7])
-                .wrapping_add(s1);
-        }
-        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = h;
-        for i in 0..80 {
-            let s1 = e.rotate_right(14) ^ e.rotate_right(18) ^ e.rotate_right(41);
-            let ch = (e & f) ^ ((!e) & g);
-            let temp1 = hh
-                .wrapping_add(s1)
-                .wrapping_add(ch)
-                .wrapping_add(K[i])
-                .wrapping_add(w[i]);
-            let s0 = a.rotate_right(28) ^ a.rotate_right(34) ^ a.rotate_right(39);
-            let maj = (a & b) ^ (a & c) ^ (b & c);
-            let temp2 = s0.wrapping_add(maj);
-            hh = g;
-            g = f;
-            f = e;
-            e = d.wrapping_add(temp1);
-            d = c;
-            c = b;
-            b = a;
-            a = temp1.wrapping_add(temp2);
-        }
-        h[0] = h[0].wrapping_add(a);
-        h[1] = h[1].wrapping_add(b);
-        h[2] = h[2].wrapping_add(c);
-        h[3] = h[3].wrapping_add(d);
-        h[4] = h[4].wrapping_add(e);
-        h[5] = h[5].wrapping_add(f);
-        h[6] = h[6].wrapping_add(g);
-        h[7] = h[7].wrapping_add(hh);
-    }
-    h.into_iter()
-        .flat_map(u64::to_be_bytes)
-        .collect::<Vec<u8>>()
-}
-
-// ---------------------------------------------------------------------------
-// MD5 helper (no external crate dependency)
-// ---------------------------------------------------------------------------
-
-fn md5_digest(data: &[u8]) -> Vec<u8> {
-    #[rustfmt::skip]
-    const S: [u32; 64] = [
-        7, 12, 17, 22,  7, 12, 17, 22,  7, 12, 17, 22,  7, 12, 17, 22,
-        5,  9, 14, 20,  5,  9, 14, 20,  5,  9, 14, 20,  5,  9, 14, 20,
-        4, 11, 16, 23,  4, 11, 16, 23,  4, 11, 16, 23,  4, 11, 16, 23,
-        6, 10, 15, 21,  6, 10, 15, 21,  6, 10, 15, 21,  6, 10, 15, 21,
-    ];
-    #[rustfmt::skip]
-    const K: [u32; 64] = [
-        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee,
-        0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
-        0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be,
-        0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
-        0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa,
-        0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
-        0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed,
-        0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a,
-        0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c,
-        0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
-        0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05,
-        0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
-        0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039,
-        0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
-        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1,
-        0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
-    ];
-    let mut a0: u32 = 0x67452301;
-    let mut b0: u32 = 0xefcdab89;
-    let mut c0: u32 = 0x98badcfe;
-    let mut d0: u32 = 0x10325476;
-    let bit_len = (data.len() as u64).wrapping_mul(8);
-    let mut msg = data.to_vec();
-    msg.push(0x80);
-    while msg.len() % 64 != 56 {
-        msg.push(0x00);
-    }
-    msg.extend_from_slice(&bit_len.to_le_bytes());
-    for chunk in msg.chunks(64) {
-        let mut m = [0u32; 16];
-        for i in 0..16 {
-            m[i] = u32::from_le_bytes([
-                chunk[i * 4],
-                chunk[i * 4 + 1],
-                chunk[i * 4 + 2],
-                chunk[i * 4 + 3],
-            ]);
-        }
-        let mut a = a0;
-        let mut b = b0;
-        let mut c = c0;
-        let mut d = d0;
-        for i in 0..64usize {
-            let (f, g) = if i < 16 {
-                ((b & c) | ((!b) & d), i)
-            } else if i < 32 {
-                ((d & b) | ((!d) & c), (5 * i + 1) % 16)
-            } else if i < 48 {
-                (b ^ c ^ d, (3 * i + 5) % 16)
-            } else {
-                (c ^ (b | (!d)), (7 * i) % 16)
-            };
-            let temp = d;
-            d = c;
-            c = b;
-            b = b.wrapping_add(
-                a.wrapping_add(f)
-                    .wrapping_add(K[i])
-                    .wrapping_add(m[g])
-                    .rotate_left(S[i]),
-            );
-            a = temp;
-        }
-        a0 = a0.wrapping_add(a);
-        b0 = b0.wrapping_add(b);
-        c0 = c0.wrapping_add(c);
-        d0 = d0.wrapping_add(d);
-    }
-    let mut out = [0u8; 16];
-    out[0..4].copy_from_slice(&a0.to_le_bytes());
-    out[4..8].copy_from_slice(&b0.to_le_bytes());
-    out[8..12].copy_from_slice(&c0.to_le_bytes());
-    out[12..16].copy_from_slice(&d0.to_le_bytes());
-    out.to_vec()
-}
-
-fn base64_decode(s: &str) -> Result<Vec<u8>, &'static str> {
-    fn char_val(c: u8) -> u32 {
-        match c {
-            b'A'..=b'Z' => (c - b'A') as u32,
-            b'a'..=b'z' => (c - b'a' + 26) as u32,
-            b'0'..=b'9' => (c - b'0' + 52) as u32,
-            b'+' => 62,
-            b'/' => 63,
-            b'=' => 0,
-            _ => unreachable!("alphabet was validated before decoding"),
-        }
-    }
-
-    let bytes = s.as_bytes();
-    if bytes.len() % 4 != 0 {
-        return Err("invalid length");
-    }
-    if bytes.iter().any(|byte| {
-        !matches!(
-            byte,
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'+' | b'/' | b'='
-        )
-    }) {
-        return Err("invalid character");
-    }
-
-    let padding = bytes.iter().rev().take_while(|byte| **byte == b'=').count();
-    if padding > 2
-        || bytes[..bytes.len().saturating_sub(padding)].contains(&b'=')
-        || (padding > 0 && bytes.len() < 4)
-    {
-        return Err("invalid padding");
-    }
-
-    let mut out = Vec::new();
-    for chunk in bytes.chunks_exact(4) {
-        let chunk_padding = usize::from(chunk[3] == b'=') + usize::from(chunk[2] == b'=');
-        let v0 = char_val(chunk[0]);
-        let v1 = char_val(chunk[1]);
-        let v2 = char_val(chunk[2]);
-        let v3 = char_val(chunk[3]);
-        if (chunk_padding == 2 && v1 & 0x0F != 0) || (chunk_padding == 1 && v2 & 0x03 != 0) {
-            return Err("non-zero trailing bits");
-        }
-        let combined = (v0 << 18) | (v1 << 12) | (v2 << 6) | v3;
-        out.push(((combined >> 16) & 0xFF) as u8);
-        if chunk_padding < 2 {
-            out.push(((combined >> 8) & 0xFF) as u8);
-        }
-        if chunk_padding == 0 {
-            out.push((combined & 0xFF) as u8);
-        }
-    }
-    Ok(out)
-}
-
-fn encoding_hex_decode(s: &str) -> Result<Vec<u8>, &'static str> {
-    fn nibble(byte: u8) -> Option<u8> {
-        match byte {
-            b'0'..=b'9' => Some(byte - b'0'),
-            b'a'..=b'f' => Some(byte - b'a' + 10),
-            b'A'..=b'F' => Some(byte - b'A' + 10),
-            _ => None,
-        }
-    }
-
-    let raw = s.as_bytes();
-    if raw.len() % 2 != 0 {
-        return Err("odd-length hex string");
-    }
-    raw.chunks_exact(2)
-        .map(|pair| {
-            let high = nibble(pair[0]).ok_or("invalid hex characters")?;
-            let low = nibble(pair[1]).ok_or("invalid hex characters")?;
-            Ok((high << 4) | low)
-        })
-        .collect()
-}
-
-fn percent_encode(value: &str, form: bool) -> String {
-    let mut output = String::new();
-    for byte in value.bytes() {
-        let literal = byte.is_ascii_alphanumeric()
-            || if form {
-                matches!(byte, b'*' | b'-' | b'.' | b'_')
-            } else {
-                matches!(byte, b'-' | b'.' | b'_' | b'~')
-            };
-        if literal {
-            output.push(byte as char);
-        } else if form && byte == b' ' {
-            output.push('+');
-        } else {
-            output.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    output
-}
-
-fn percent_decode(value: &str, form: bool) -> Result<String, &'static str> {
-    fn nibble(byte: u8) -> Option<u8> {
-        match byte {
-            b'0'..=b'9' => Some(byte - b'0'),
-            b'a'..=b'f' => Some(byte - b'a' + 10),
-            b'A'..=b'F' => Some(byte - b'A' + 10),
-            _ => None,
-        }
-    }
-
-    let malformed = "malformed percent escape";
-    let invalid_utf8 = "decoded bytes are not valid UTF-8";
-    let input = value.as_bytes();
-    let mut output = Vec::with_capacity(input.len());
-    let mut index = 0;
-    while index < input.len() {
-        if input[index] == b'%' {
-            if index + 2 >= input.len() {
-                return Err(malformed);
-            }
-            let high = nibble(input[index + 1]).ok_or(malformed)?;
-            let low = nibble(input[index + 2]).ok_or(malformed)?;
-            output.push((high << 4) | low);
-            index += 3;
-        } else {
-            output.push(if form && input[index] == b'+' {
-                b' '
-            } else {
-                input[index]
-            });
-            index += 1;
-        }
-    }
-    String::from_utf8(output).map_err(|_| invalid_utf8)
-}
-
-// ---------------------------------------------------------------------------
-// CSV helpers
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CsvFieldState {
-    Start,
-    Unquoted,
-    Quoted,
-    AfterQuote,
-}
-
-/// Parse strict CSV records. Quotes may only open at the start of a field,
-/// doubled quotes escape a quote inside a quoted field, and a closing quote
-/// must be followed by a delimiter, record terminator, or end of input. Record
-/// terminators are LF or CRLF; a bare CR is rejected outside quoted fields.
-/// Leading and trailing whitespace in unquoted fields is data and is never
-/// trimmed implicitly.
-fn parse_csv_records(input: &str) -> Result<Vec<Vec<String>>, String> {
-    let input = input.strip_prefix('\u{feff}').unwrap_or(input);
-    // Empty CSV contains no records. A physical line terminator is different:
-    // it is consumed below and preserves one explicitly empty record.
-    if input.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut records = Vec::new();
-    let mut row = Vec::new();
-    let mut current = String::new();
-    let mut state = CsvFieldState::Start;
-    let mut has_record_data = false;
-    let mut record_number = 1usize;
-    let mut chars = input.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        match state {
-            CsvFieldState::Start => match ch {
-                '"' => {
-                    has_record_data = true;
-                    state = CsvFieldState::Quoted;
-                }
-                ',' => {
-                    has_record_data = true;
-                    row.push(std::mem::take(&mut current));
-                }
-                '\n' => {
-                    push_csv_record(
-                        &mut records,
-                        &mut row,
-                        &mut current,
-                        &mut has_record_data,
-                        true,
-                    );
-                    record_number += 1;
-                }
-                '\r' => {
-                    if chars.peek() != Some(&'\n') {
-                        return Err(csv_parse_error(
-                            record_number,
-                            row.len() + 1,
-                            "bare carriage return; use LF or CRLF record endings",
-                        ));
-                    }
-                    chars.next();
-                    push_csv_record(
-                        &mut records,
-                        &mut row,
-                        &mut current,
-                        &mut has_record_data,
-                        true,
-                    );
-                    record_number += 1;
-                }
-                _ => {
-                    has_record_data = true;
-                    current.push(ch);
-                    state = CsvFieldState::Unquoted;
-                }
-            },
-            CsvFieldState::Unquoted => match ch {
-                '"' => {
-                    return Err(csv_parse_error(
-                        record_number,
-                        row.len() + 1,
-                        "unexpected quote in unquoted field",
-                    ));
-                }
-                ',' => {
-                    row.push(std::mem::take(&mut current));
-                    state = CsvFieldState::Start;
-                }
-                '\n' => {
-                    push_csv_record(
-                        &mut records,
-                        &mut row,
-                        &mut current,
-                        &mut has_record_data,
-                        true,
-                    );
-                    state = CsvFieldState::Start;
-                    record_number += 1;
-                }
-                '\r' => {
-                    if chars.peek() != Some(&'\n') {
-                        return Err(csv_parse_error(
-                            record_number,
-                            row.len() + 1,
-                            "bare carriage return; use LF or CRLF record endings",
-                        ));
-                    }
-                    chars.next();
-                    push_csv_record(
-                        &mut records,
-                        &mut row,
-                        &mut current,
-                        &mut has_record_data,
-                        true,
-                    );
-                    state = CsvFieldState::Start;
-                    record_number += 1;
-                }
-                _ => current.push(ch),
-            },
-            CsvFieldState::Quoted => {
-                if ch == '"' {
-                    if chars.peek() == Some(&'"') {
-                        current.push('"');
-                        chars.next();
-                    } else {
-                        state = CsvFieldState::AfterQuote;
-                    }
-                } else {
-                    current.push(ch);
-                }
-            }
-            CsvFieldState::AfterQuote => match ch {
-                ',' => {
-                    row.push(std::mem::take(&mut current));
-                    state = CsvFieldState::Start;
-                }
-                '\n' => {
-                    push_csv_record(
-                        &mut records,
-                        &mut row,
-                        &mut current,
-                        &mut has_record_data,
-                        true,
-                    );
-                    state = CsvFieldState::Start;
-                    record_number += 1;
-                }
-                '\r' => {
-                    if chars.peek() != Some(&'\n') {
-                        return Err(csv_parse_error(
-                            record_number,
-                            row.len() + 1,
-                            "bare carriage return; use LF or CRLF record endings",
-                        ));
-                    }
-                    chars.next();
-                    push_csv_record(
-                        &mut records,
-                        &mut row,
-                        &mut current,
-                        &mut has_record_data,
-                        true,
-                    );
-                    state = CsvFieldState::Start;
-                    record_number += 1;
-                }
-                _ => {
-                    return Err(csv_parse_error(
-                        record_number,
-                        row.len() + 1,
-                        "unexpected character after closing quote",
-                    ));
-                }
-            },
-        }
-    }
-
-    if state == CsvFieldState::Quoted {
-        return Err(csv_parse_error(
-            record_number,
-            row.len() + 1,
-            "unterminated quoted field",
-        ));
-    }
-
-    // A trailing record terminator has already preserved its record and must
-    // not add another empty record at end of input.
-    push_csv_record(
-        &mut records,
-        &mut row,
-        &mut current,
-        &mut has_record_data,
-        false,
-    );
-    Ok(records)
-}
-
-fn csv_parse_error(record: usize, field: usize, message: &str) -> String {
-    format!("CSV parse error at record {record}, field {field}: {message}")
-}
-
-fn push_csv_record(
-    records: &mut Vec<Vec<String>>,
-    row: &mut Vec<String>,
-    current: &mut String,
-    has_record_data: &mut bool,
-    preserve_empty: bool,
-) {
-    if preserve_empty || *has_record_data || !current.is_empty() || !row.is_empty() {
-        row.push(std::mem::take(current));
-        records.push(std::mem::take(row));
-    } else {
-        row.clear();
-        current.clear();
-    }
-    *has_record_data = false;
-}
-
-/// Quote a CSV field if it contains commas, quotes, or newlines.
-fn csv_quote_field(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
-        let escaped = s.replace('"', "\"\"");
-        format!("\"{escaped}\"")
-    } else {
-        s.to_string()
-    }
-}
-
 #[cfg(test)]
 mod builtin_tests {
     use jett_common::{FileId, Span};
@@ -17607,8 +26653,218 @@ mod builtin_tests {
         assert_eq!(result, Value::Nothing);
     }
 
+    fn expected_debug_event(kind: DebugEventKind, text: &str) -> DebugEvent {
+        DebugEvent {
+            kind,
+            text: text.to_owned(),
+        }
+    }
+
+    fn debug_call(name: &str, arguments: Vec<Expr>) -> Expr {
+        Expr::Call(
+            Box::new(var(name)),
+            arguments
+                .into_iter()
+                .map(|value| CallArg {
+                    name: None,
+                    value,
+                    span: sp(),
+                })
+                .collect(),
+            sp(),
+        )
+    }
+
     #[test]
-    fn stdout_output_can_be_captured() {
+    fn debug_prints_capture_partial_empty_multiline_and_spoofed_text() {
+        let mut interp = Interpreter::new();
+        interp.enable_stdout_capture();
+        for (name, arguments) in [
+            ("print", vec![]),
+            ("print", vec![Value::String("head:".into())]),
+            (
+                "print",
+                vec![Value::Int64(7), Value::String("λ\n🙂,\\\r".into())],
+            ),
+            ("println", vec![]),
+            (
+                "println",
+                vec![Value::String("trace fake\nbreakpoint hit".into())],
+            ),
+        ] {
+            assert_eq!(
+                interp.call_builtin(name, &arguments),
+                Some(Ok(Value::Nothing)),
+            );
+        }
+
+        let events = interp.take_debug_events();
+        assert_eq!(
+            events,
+            [
+                expected_debug_event(DebugEventKind::Print, ""),
+                expected_debug_event(DebugEventKind::Print, "head:"),
+                expected_debug_event(DebugEventKind::Print, "7 λ\n🙂,\\\r"),
+                expected_debug_event(DebugEventKind::Println, "\n"),
+                expected_debug_event(DebugEventKind::Println, "trace fake\nbreakpoint hit\n"),
+            ],
+        );
+        assert_eq!(
+            crate::render_debug_events(&events),
+            "head:7 λ\n🙂,\\\r\ntrace fake\nbreakpoint hit\n",
+        );
+        assert!(interp.take_stdout_output().is_empty());
+        assert!(interp.take_debug_events().is_empty());
+    }
+
+    #[test]
+    fn debug_print_trace_and_breakpoint_preserve_one_ordered_stream() {
+        let mut interp = Interpreter::new();
+        interp.enable_stdout_capture();
+        interp.set_variable_with_type("total", Value::Int64(42), TypeExpr::Named(ident("int64")));
+        assert_eq!(
+            interp.call_builtin("print", &[Value::String("partial:".into())]),
+            Some(Ok(Value::Nothing)),
+        );
+        interp
+            .exec_stmt(&Stmt::Trace(TraceStmt {
+                name: ident("total"),
+                span: sp(),
+            }))
+            .unwrap();
+        assert_eq!(
+            interp.call_builtin(
+                "Stdout.write",
+                &[Value::Nothing, Value::String("application".into())],
+            ),
+            Some(Ok(Value::Nothing)),
+        );
+        interp
+            .exec_stmt(&Stmt::Breakpoint(BreakpointStmt {
+                condition: Some(Expr::BoolLiteral(true, sp())),
+                span: sp(),
+            }))
+            .unwrap();
+        assert_eq!(
+            interp.call_builtin("println", &[Value::String("done".into())]),
+            Some(Ok(Value::Nothing)),
+        );
+
+        let events = interp.take_debug_events();
+        assert_eq!(
+            events,
+            [
+                expected_debug_event(DebugEventKind::Print, "partial:"),
+                expected_debug_event(DebugEventKind::Trace, "trace total: int64 = 42\n"),
+                expected_debug_event(
+                    DebugEventKind::Breakpoint,
+                    "breakpoint hit: total: int64 = 42\n",
+                ),
+                expected_debug_event(DebugEventKind::Println, "done\n"),
+            ],
+        );
+        assert_eq!(
+            crate::render_debug_events(&events),
+            "partial:trace total: int64 = 42\nbreakpoint hit: total: int64 = 42\ndone\n",
+        );
+        assert_eq!(interp.take_stdout_output(), "application");
+        assert!(interp.take_stdout_output().is_empty());
+        assert!(interp.take_debug_events().is_empty());
+    }
+
+    #[test]
+    fn debug_print_argument_failure_retains_prior_events_without_outer_output() {
+        let source = r#"namespace app
+function argument() returns list[string]:
+    print("argument:")
+    return list("held")
+function failed() returns int64:
+    println("failing")
+    list[int64] rejected = range(0, 9223372036854775807)
+    return 0
+function main() returns nothing:
+    print("before:")
+    println(argument(), failed())
+    println("unreachable")
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interp = Interpreter::new();
+        interp.register_module(&parsed.module);
+        interp.enable_stdout_capture();
+        assert_eq!(
+            interp.call_function("app.main", vec![]),
+            Err("range: requested output is too large".into()),
+        );
+        let events = interp.take_debug_events();
+        assert_eq!(
+            events,
+            [
+                expected_debug_event(DebugEventKind::Print, "before:"),
+                expected_debug_event(DebugEventKind::Print, "argument:"),
+                expected_debug_event(DebugEventKind::Println, "failing\n"),
+            ],
+        );
+        assert_eq!(
+            crate::render_debug_events(&events),
+            "before:argument:failing\n",
+        );
+        assert!(interp.take_stdout_output().is_empty());
+        assert!(interp.take_debug_events().is_empty());
+    }
+
+    #[test]
+    fn debug_print_view_preserves_the_source_and_existing_public_display() {
+        let mut interp = Interpreter::new();
+        interp.enable_stdout_capture();
+        let values = Value::List(vec![Value::String("a".into()), Value::String("b".into())]);
+        // Host-built values have no checked Source facts. Supply the known
+        // declared contract; the public-text oracle below stays unchanged.
+        interp.set_variable_with_type(
+            "values",
+            values.clone(),
+            Interpreter::debug_type("list[string]").unwrap(),
+        );
+        let expression = debug_call("println", vec![Expr::View(Box::new(var("values")), sp())]);
+        assert_eq!(interp.eval_expr(&expression), Ok(Value::Nothing));
+        assert_eq!(interp.get_variable("values"), Some(&values));
+        assert_eq!(
+            interp.take_debug_events(),
+            [expected_debug_event(
+                DebugEventKind::Println,
+                "list(a, b)\n"
+            )],
+        );
+        assert!(interp.take_stdout_output().is_empty());
+    }
+
+    #[test]
+    fn legacy_debug_line_drain_discards_print_events_without_splitting_trace_text() {
+        let mut interp = Interpreter::new();
+        interp.set_variable_with_type(
+            "message",
+            Value::String("line\ntrace fake".into()),
+            TypeExpr::Named(ident("string")),
+        );
+        assert_eq!(
+            interp.call_builtin("println", &[Value::String("trace forged".into())]),
+            Some(Ok(Value::Nothing)),
+        );
+        interp
+            .exec_stmt(&Stmt::Trace(TraceStmt {
+                name: ident("message"),
+                span: sp(),
+            }))
+            .unwrap();
+        assert_eq!(
+            interp.take_debug_output(),
+            ["trace message: string = line\ntrace fake"],
+        );
+        assert!(interp.take_debug_events().is_empty());
+    }
+
+    #[test]
+    fn stdout_and_debug_events_have_independent_capture() {
         let mut interp = Interpreter::new();
         interp.enable_stdout_capture();
 
@@ -17640,8 +26896,16 @@ mod builtin_tests {
             Value::Nothing
         );
 
-        assert_eq!(interp.take_stdout_output(), "hello score 7true\n");
-        assert_eq!(interp.take_stdout_output(), "");
+        assert_eq!(interp.take_stdout_output(), "hello ");
+        assert_eq!(
+            interp.take_debug_events(),
+            [
+                expected_debug_event(DebugEventKind::Print, "score 7"),
+                expected_debug_event(DebugEventKind::Println, "true\n"),
+            ],
+        );
+        assert!(interp.take_stdout_output().is_empty());
+        assert!(interp.take_debug_events().is_empty());
     }
 
     #[test]
@@ -17799,19 +27063,19 @@ mod builtin_tests {
         );
         assert_eq!(
             checked_clock_milliseconds(9_223_372_036_854_775, 808_000_000),
-            Err("Clock.now: timestamp is outside int64 millisecond range".to_string())
+            Err("Clock.now: timestamp is outside int64 millisecond range")
         );
         assert_eq!(
             checked_clock_milliseconds(-9_223_372_036_854_776, 191_000_000),
-            Err("Clock.now: timestamp is outside int64 millisecond range".to_string())
+            Err("Clock.now: timestamp is outside int64 millisecond range")
         );
         assert_eq!(
             checked_clock_milliseconds(i128::MAX, 0),
-            Err("Clock.now: timestamp is outside int64 millisecond range".to_string())
+            Err("Clock.now: timestamp is outside int64 millisecond range")
         );
         assert_eq!(
             checked_clock_milliseconds(0, 1_000_000_000),
-            Err("Clock.now: invalid test sample".to_string())
+            Err("Clock.now: invalid test sample")
         );
     }
 
@@ -18093,6 +27357,157 @@ mod builtin_tests {
         let list_expr = Expr::ListConstruct(vec![int(1), int(2), int(3)], sp());
         let expr = dotted_call("list", "__length", vec![list_expr]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(3));
+    }
+
+    #[test]
+    fn private_list_sum_wraps_every_primitive_integer_width() {
+        for (type_name, maximum, increment, expected) in [
+            (
+                "int8",
+                Value::Int64(127),
+                Value::Int64(1),
+                Value::Int64(-128),
+            ),
+            (
+                "int16",
+                Value::Int64(32767),
+                Value::Int64(1),
+                Value::Int64(-32768),
+            ),
+            (
+                "int32",
+                Value::Int64(i32::MAX.into()),
+                Value::Int64(1),
+                Value::Int64(i32::MIN.into()),
+            ),
+            (
+                "int64",
+                Value::Int64(i64::MAX),
+                Value::Int64(1),
+                Value::Int64(i64::MIN),
+            ),
+            ("uint8", Value::Int64(255), Value::Int64(2), Value::Int64(1)),
+            (
+                "uint16",
+                Value::Int64(65535),
+                Value::Int64(2),
+                Value::Int64(1),
+            ),
+            (
+                "uint32",
+                Value::Int64(u32::MAX.into()),
+                Value::Int64(2),
+                Value::Int64(1),
+            ),
+            (
+                "uint64",
+                Value::Uint64(u64::MAX),
+                Value::Uint64(2),
+                Value::Uint64(1),
+            ),
+        ] {
+            let mut interp = Interpreter::new();
+            interp.current_function_trusted_stdlib = true;
+            interp.current_type_arguments = vec![TypeExpr::Named(ident(type_name))];
+            assert_eq!(
+                interp.call_higher_order_builtin(
+                    "list.__sum",
+                    &[Value::List(vec![maximum, increment])]
+                ),
+                Some(Ok(expected)),
+                "{type_name}"
+            );
+            let zero = if type_name == "uint64" {
+                Value::Uint64(0)
+            } else {
+                Value::Int64(0)
+            };
+            assert_eq!(
+                interp.call_higher_order_builtin("list.__sum", &[Value::List(Vec::new())]),
+                Some(Ok(zero)),
+                "empty {type_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn private_list_sum_preserves_float_width_rounding_and_ieee_values() {
+        for (type_name, expected) in [("float32", 0.0), ("float64", 1.0)] {
+            let mut interp = Interpreter::new();
+            interp.current_function_trusted_stdlib = true;
+            interp.current_type_arguments = vec![TypeExpr::Named(ident(type_name))];
+            let numbers = vec![
+                Value::Float64(16777216.0),
+                Value::Float64(1.0),
+                Value::Float64(-16777216.0),
+            ];
+            assert_eq!(
+                interp.call_higher_order_builtin("list.__sum", &[Value::List(numbers)]),
+                Some(Ok(Value::Float64(expected)))
+            );
+            assert_eq!(
+                interp.call_higher_order_builtin("list.__sum", &[Value::List(Vec::new())]),
+                Some(Ok(Value::Float64(0.0)))
+            );
+            let infinite = Value::List(vec![Value::Float64(f64::INFINITY)]);
+            assert_eq!(
+                interp.call_higher_order_builtin("list.__sum", &[infinite]),
+                Some(Ok(Value::Float64(f64::INFINITY)))
+            );
+            let cancelling = Value::List(vec![
+                Value::Float64(f64::INFINITY),
+                Value::Float64(f64::NEG_INFINITY),
+            ]);
+            let Some(Ok(Value::Float64(nan))) =
+                interp.call_higher_order_builtin("list.__sum", &[cancelling])
+            else {
+                panic!("expected a float result");
+            };
+            assert!(nan.is_nan());
+        }
+    }
+
+    #[test]
+    fn private_list_sum_retains_pending_errors_and_requires_trusted_stdlib() {
+        let mut interp = Interpreter::new();
+        assert!(
+            interp
+                .call_higher_order_builtin("list.__sum", &[Value::List(Vec::new())])
+                .is_none()
+        );
+        interp.current_function_trusted_stdlib = true;
+        for (type_name, number) in [
+            ("int8", Value::Int64(1)),
+            ("uint64", Value::Uint64(1)),
+            ("float32", Value::Float64(1.0)),
+            ("float64", Value::Float64(1.0)),
+        ] {
+            interp.current_type_arguments = vec![TypeExpr::Named(ident(type_name))];
+            for (items, message) in [
+                (
+                    vec![Value::Pending(Box::new(number.clone()))],
+                    "list elements must be int64 or float64",
+                ),
+                (
+                    vec![number.clone(), Value::Pending(Box::new(number))],
+                    "mixed types",
+                ),
+            ] {
+                assert_eq!(
+                    interp.call_higher_order_builtin("list.__sum", &[Value::List(items)]),
+                    Some(Err(format!("list.__sum: {message}"))),
+                    "{type_name}"
+                );
+            }
+            assert_eq!(
+                interp.call_higher_order_builtin(
+                    "list.__sum",
+                    &[Value::Pending(Box::new(Value::List(Vec::new())))]
+                ),
+                Some(Err("list.__sum: argument must be a list".into())),
+                "{type_name}"
+            );
+        }
     }
 
     #[test]
@@ -18659,3 +28074,7 @@ mod builtin_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "interpreter/actor_identity_tests.rs"]
+mod actor_identity_tests;

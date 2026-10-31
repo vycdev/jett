@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    string value = run "abc"
+    string encoded = json.serialize[string](view value)
+    trace encoded
+    return nothing

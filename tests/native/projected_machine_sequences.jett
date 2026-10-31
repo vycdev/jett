@@ -1,0 +1,29 @@
+namespace app
+machine Basket:
+    states:
+        ready(items: list[int64], tags: set[int64], scores: map[string, int64])
+function borrowed_total(view basket: Basket at ready) returns int64:
+    mutable int64 total = 0
+    for item in view basket.items:
+        total = total + item
+    for tag in view basket.tags:
+        total = total + tag
+    for key, score in view basket.scores:
+        total = total + score
+    return total
+function main() returns nothing:
+    mutable set[int64] tags = set.new[int64]()
+    tags = set.add[int64](tags, 3)
+    tags = set.add[int64](tags, 9)
+    Basket at ready basket = Basket(ready, list(2, 4), tags, map("a": 5, "b": 7))
+    mutable int64 total = 0
+    for item in view basket.items:
+        total = total + item
+    for tag in view basket.tags:
+        total = total + tag
+    for key, score in view basket.scores:
+        println(key, score)
+        total = total + score
+    println(total, list.length[int64](view basket.items), set.length[int64](view basket.tags), map.length[string, int64](view basket.scores))
+    println(borrowed_total(view basket), borrowed_total(view basket))
+    return nothing

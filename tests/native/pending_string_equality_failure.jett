@@ -1,0 +1,7 @@
+namespace app
+function identity(value: string) returns string:
+    return value
+function main() returns nothing:
+    string pending = run identity("Ada")
+    println(pending == "Ada")
+    return nothing

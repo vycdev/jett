@@ -1,0 +1,23 @@
+namespace app
+function inspect(view source: result[list[int64], string], label: string, view stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "before:{label}\n")
+    list[int64] alias = view((view source) handle error:
+        Stdout.write(view stdout, "fail:{label}:{error}\n")
+        return nothing
+    )
+    list[int64] repeated = view((view source) handle error:
+        Stdout.write(view stdout, "unexpected repeat:{label}:{error}\n")
+        return nothing
+    )
+    Stdout.write(view stdout, "ok:{label}:{list.length[int64](view alias)}:{list.sum[int64](view alias)}:{list.sum[int64](view repeated)}\n")
+    return nothing
+function main(stdout: Stdout) returns nothing:
+    result[list[int64], string] written_ok = ok(list(2, 3))
+    result[list[int64], string] written_fail = fail("written error")
+    result[list[int64], string] bare_ok = ok(list(5, 7))
+    result[list[int64], string] bare_fail = fail("bare error")
+    inspect(view written_ok, "written-ok", view stdout)
+    inspect(view written_fail, "written-fail", view stdout)
+    inspect(bare_ok, "bare-ok", view stdout)
+    inspect(bare_fail, "bare-fail", view stdout)
+    return nothing

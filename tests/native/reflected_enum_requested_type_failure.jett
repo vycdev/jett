@@ -1,0 +1,12 @@
+namespace app
+enum Choice:
+    text(value: string)
+    number(value: int64)
+function main() returns nothing:
+    Choice selected = Choice.text("hello")
+    TypeVariant variant = type.variant_value[Choice](view selected)
+    TypeField field = list.get[TypeField](variant.fields, 0) handle:
+        return nothing
+    int64 wrong = type.variant_field_value[Choice, int64](view selected, view field)
+    println(wrong)
+    return nothing

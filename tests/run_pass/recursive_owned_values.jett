@@ -29,8 +29,8 @@ function recursive_enum_has_a_finite_base() returns bool:
     IntList values = IntList.item(1, IntList.item(2, IntList.empty))
     return list_total(values) == 3
 function recursive_struct_reflection_is_finite() returns bool:
-    int64 count = 0
-    bool found_next = false
+    mutable int64 count = 0
+    mutable bool found_next = false
     for field in type.fields[Node]():
         count = count + 1
         if field.name == "next":

@@ -1,0 +1,18 @@
+namespace app
+struct PendingPrefix:
+    token: resource_probe.TestHandle
+    pending: int64
+    marker: int64
+function fail_marker() returns int64:
+    use resource_companion_probe
+    resource_companion_probe.terminal_failure()
+    return 0
+function retire_prefix(token: resource_probe.TestHandle) returns nothing:
+    PendingPrefix held = PendingPrefix(token: token, pending: run run 17, marker: fail_marker())
+    return nothing
+export function main(net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle token = resource_probe.create(view net, 1105) handle error:
+        return nothing
+    retire_prefix(token)
+    return nothing

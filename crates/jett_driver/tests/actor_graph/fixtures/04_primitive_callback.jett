@@ -1,0 +1,13 @@
+namespace app
+function create_callback() returns function() returns string:
+    string text = "baked"
+    return function() returns string: return text
+actor Keeper:
+    mutable function() returns string callback = create_callback()
+    receive read responds string:
+        respond callback()
+function main() returns nothing:
+    Keeper worker = comptime spawn Keeper()
+    string text = ask worker.read
+    println(text)
+    return nothing

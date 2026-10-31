@@ -1,0 +1,54 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "integer:{self}"
+implement Named for float64:
+    function name(view self: float64) returns string:
+        return "fraction:{self}"
+implement Named for secret[int64]:
+    function name(view self: secret[int64]) returns string:
+        return "hidden-integer"
+implement Named for secret[float64]:
+    function name(view self: secret[float64]) returns string:
+        return "hidden-fraction"
+function primitive_facades() returns list[Named]:
+    return list(math.abs(-3), math.abs(-1.25), math.min(1, 2), math.min(1.25, 2.5), math.max(1, 2), math.max(1.25, 2.5))
+function secret_facades() returns list[Named]:
+    secret[int64] integer = -4
+    secret[float64] fraction = -1.25
+    return list(math.abs(clone integer), math.abs(clone fraction), math.min(clone integer, 1), math.min(clone fraction, 1.25), math.max(1, clone integer), math.max(1.25, clone fraction))
+function maximum[T](first: T, second: T) returns Named:
+    return math.max(first, second)
+function factory[T](value: T) returns function() returns Named:
+    return function() returns Named:
+        return math.max(value, value)
+function closures() returns list[Named]:
+    function() returns Named first = factory[int64](3)
+    function() returns Named second = factory[float64](1.25)
+    return list(first(), second(), maximum[secret[int64]](4, 4), maximum[secret[float64]](1.25, 1.25))
+function baked_closures() returns list[Named]:
+    function() returns Named first = comptime factory[int64](3)
+    function() returns Named second = comptime factory[float64](1.25)
+    return list(first(), second(), maximum[secret[int64]](4, 4), maximum[secret[float64]](1.25, 1.25))
+function describe(view values: list[Named]) returns string:
+    mutable string output = ""
+    for value in view values:
+        output = "{output}{Named.name(view value)};"
+    return "{output}\n"
+function main(stdout: Stdout) returns nothing:
+    list[Named] primitive = primitive_facades()
+    list[Named] hidden = secret_facades()
+    list[Named] callbacks = closures()
+    list[Named] baked_primitive = comptime primitive_facades()
+    list[Named] baked_hidden = comptime secret_facades()
+    list[Named] baked_callbacks = comptime closures()
+    list[Named] materialized = baked_closures()
+    Stdout.write(view stdout, describe(view primitive))
+    Stdout.write(view stdout, describe(view hidden))
+    Stdout.write(view stdout, describe(view callbacks))
+    Stdout.write(view stdout, describe(view baked_primitive))
+    Stdout.write(view stdout, describe(view baked_hidden))
+    Stdout.write(view stdout, describe(view baked_callbacks))
+    Stdout.write(view stdout, describe(view materialized))

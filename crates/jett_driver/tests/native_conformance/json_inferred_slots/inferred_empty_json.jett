@@ -1,0 +1,7 @@
+namespace app
+function encode[T](view values: list[T]) returns string:
+    use json
+    return json.serialize[list[T]](view values)
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "{encode(view list())}\n")
+    return nothing

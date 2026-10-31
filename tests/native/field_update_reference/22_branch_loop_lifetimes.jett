@@ -1,0 +1,33 @@
+namespace app
+struct Inner:
+    value: int64
+struct Record:
+    inner: Inner
+    label: string
+function update(mutable record: Record, take_first: bool) returns Record:
+    if take_first:
+        record.inner.value = 1
+    else:
+        record.inner.value = 2
+    if take_first:
+        record.label = "first"
+    else:
+        record.label = "second"
+    record.inner.value = 3
+    mutable int64 step = 0
+    while step < 3:
+        step = step + 1
+        if step == 1:
+            continue
+        record.inner.value = record.inner.value + step
+        if step == 2:
+            break
+    return record
+function report(take_first: bool) returns string:
+    Record changed = update(Record(inner: Inner(value: 1), label: "before"), take_first)
+    return "{changed.inner.value}:{changed.label}"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "{report(true)}:{report(false)}\n")
+verify branch_loop_places:
+    assert report(true) == "5:first"
+    assert report(false) == "5:second"

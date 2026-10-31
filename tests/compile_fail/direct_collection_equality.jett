@@ -1,0 +1,26 @@
+# ERROR: E0376 x12
+namespace app
+function bytes_equal(view left: bytes, view right: bytes) returns bool:
+    return left == right
+function bytes_unequal(view left: bytes, view right: bytes) returns bool:
+    return left != right
+function lists_equal(view left: list[int64], view right: list[int64]) returns bool:
+    return left == right
+function lists_unequal(view left: list[int64], view right: list[int64]) returns bool:
+    return left != right
+function maps_equal(view left: map[string, int64], view right: map[string, int64]) returns bool:
+    return left == right
+function maps_unequal(view left: map[string, int64], view right: map[string, int64]) returns bool:
+    return left != right
+function sets_equal(view left: set[int64], view right: set[int64]) returns bool:
+    return left == right
+function sets_unequal(view left: set[int64], view right: set[int64]) returns bool:
+    return left != right
+function optionals_equal(view left: optional[int64], view right: optional[int64]) returns bool:
+    return left == right
+function optionals_unequal(view left: optional[int64], view right: optional[int64]) returns bool:
+    return left != right
+function results_equal(view left: result[int64, string], view right: result[int64, string]) returns bool:
+    return left == right
+function results_unequal(view left: result[int64, string], view right: result[int64, string]) returns bool:
+    return left != right

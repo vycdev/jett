@@ -1,0 +1,41 @@
+namespace app
+function unit_check(value: nothing) returns bool:
+    string marker = "predicate"
+    trace marker
+    return true
+type ReadyUnit = nothing where unit_check(value)
+function higher_unit_check(value: nothing) returns bool:
+    string marker = "higher"
+    trace marker
+    return true
+type HigherUnit = ReadyUnit where higher_unit_check(value)
+function rejected_unit_check(value: nothing) returns bool:
+    string marker = "rejected"
+    trace marker
+    return false
+type RejectedUnit = nothing where rejected_unit_check(value)
+struct UnitHolder:
+    callback: function() returns nothing
+function unit_source() returns nothing:
+    string marker = "source"
+    trace marker
+    return nothing
+function pending_unit_source() returns nothing:
+    string marker = "source"
+    trace marker
+    return run run nothing
+function unit_field() returns TypeField:
+    return list.get[TypeField](type.fields[UnitHolder](), 0) handle:
+        return unit_field()
+function main(stdout: Stdout) returns nothing:
+    nothing delayed = run run nothing
+    function() returns nothing captured = function() returns nothing:
+        string marker = "source"
+        trace marker
+        return delayed
+    UnitHolder holder = UnitHolder(callback: captured)
+    TypeField field = unit_field()
+    function() returns ReadyUnit observed = type.field_value[UnitHolder, function() returns ReadyUnit](view holder, view field)
+    ReadyUnit returned = observed()
+    Stdout.write(view stdout, "consumer\n")
+    return nothing

@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    map[int64, int64] values = run map(2: 3)
+    map[int64, int64] changed = map.insert[int64, int64](values, 4, 5)
+    trace changed
+    return nothing

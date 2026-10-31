@@ -1,0 +1,57 @@
+namespace app
+function echo_int(value: int64) returns int64:
+    return value
+function capture_task() returns function() returns int64:
+    int64 pending = run 23
+    return function() returns int64: return pending
+function main() returns nothing:
+    int64 pending = run 17
+    trace pending
+    int64 nested = run echo_int(pending)
+    trace nested
+    int64 inner = join nested handle error:
+        return nothing
+    trace inner
+    int64 joined = join inner handle error:
+        return nothing
+    trace joined
+    float64 decimal = run 2.5
+    trace decimal
+    float64 resolved = join decimal handle error:
+        return nothing
+    trace resolved
+    bool flag = run true
+    trace flag
+    bool ready = join flag handle error:
+        return nothing
+    trace ready
+    uint64 wide = run 18446744073709551615
+    trace wide
+    uint64 wide_joined = join wide handle error:
+        return nothing
+    trace wide_joined
+    float32 narrow = run float32.from_float64(1.25)
+    trace narrow
+    float32 narrow_joined = join narrow handle error:
+        return nothing
+    trace narrow_joined
+    function(int64) returns int64 relay = echo_int
+    int64 indirect = relay(run 9)
+    trace indirect
+    int64 indirect_joined = join indirect handle error:
+        return nothing
+    trace indirect_joined
+    result[int64, string] boxed = ok(run 31)
+    trace boxed
+    result[int64, string] copied = clone boxed
+    trace copied
+    int64 extracted = boxed handle error:
+        return nothing
+    trace extracted
+    function() returns int64 captured = capture_task()
+    int64 captured_pending = captured()
+    trace captured_pending
+    int64 captured_joined = join captured_pending handle error:
+        return nothing
+    trace captured_joined
+    return nothing

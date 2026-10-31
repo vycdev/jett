@@ -1,0 +1,7 @@
+namespace app
+type MyInt = int64
+type OtherInt = int64
+function describe[T]() returns string:
+    return type.name[T]()
+function main() returns nothing:
+    println(type.name[MyInt](), type.kind[MyInt](), type.has_secret[MyInt](), describe[MyInt](), describe[OtherInt](), describe[int64](), type.name[secret[string]](), type.kind[secret[string]](), type.has_secret[secret[string]]())

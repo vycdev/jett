@@ -1,0 +1,58 @@
+namespace app
+struct PendingPrimitives:
+    token: resource_probe.TestHandle
+    small: int8
+    large: uint64
+    rounded: float32
+    wide: float64
+    marker: string
+    enabled: bool
+    unit: nothing
+function expect(condition: bool) returns nothing:
+    use resource_companion_probe
+    if not condition:
+        resource_companion_probe.terminal_failure()
+    return nothing
+function ready_small(value: int8) returns int8:
+    int8 once = join value handle error: default 0
+    return join once handle error: default 0
+function ready_large(value: uint64) returns uint64:
+    uint64 once = join value handle error: default 0
+    return join once handle error: default 0
+function ready_rounded(value: float32) returns float32:
+    float32 once = join value handle error: default 0.0
+    return join once handle error: default 0.0
+function ready_wide(value: float64) returns float64:
+    float64 once = join value handle error: default 0.0
+    return join once handle error: default 0.0
+function ready_marker(value: string) returns string:
+    string once = join value handle error: default "missing"
+    return join once handle error: default "missing"
+function ready_enabled(value: bool) returns bool:
+    bool once = join value handle error: default false
+    return join once handle error: default false
+function ready_unit(value: nothing) returns nothing:
+    nothing once = join value handle error: default nothing
+    return join once handle error: default nothing
+function retire_pending_primitives(token: resource_probe.TestHandle) returns nothing:
+    PendingPrimitives held = PendingPrimitives(marker: run run "retained", small: run run -128, unit: run run nothing, token: token, large: run run 18446744073709551615, rounded: run run 0.1, wide: run run 1.5, enabled: run run true)
+    int8 expected_small = -128
+    expect(ready_small(held.small) == expected_small)
+    uint64 expected_large = 18446744073709551615
+    expect(ready_large(held.large) == expected_large)
+    float32 expected_rounded = 0.1
+    expect(ready_rounded(held.rounded) == expected_rounded)
+    float64 expected_wide = 1.5
+    expect(ready_wide(held.wide) == expected_wide)
+    string expected_marker = "retained"
+    expect(ready_marker(held.marker) == expected_marker)
+    expect(ready_enabled(held.enabled))
+    nothing expected_unit = nothing
+    expect(ready_unit(held.unit) == expected_unit)
+    return nothing
+export function main(net: Network) returns nothing:
+    use resource_probe
+    resource_probe.TestHandle token = resource_probe.create(view net, 1104) handle error:
+        return nothing
+    retire_pending_primitives(token)
+    return nothing

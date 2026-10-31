@@ -1,0 +1,12 @@
+namespace app
+machine Session:
+    states:
+        ready(count: int64)
+        cached(entries: map[int64, int64])
+    transitions:
+        ready to cached
+function main(stdout: Stdout) returns nothing:
+    string raw = "{{\"state\":\"ready\",\"payload\":{{\"count\":9}}}}"
+    Session at ready value = json.parse[Session at ready](raw) handle error:
+        return Stdout.write(view stdout, "error:{error}\n")
+    Stdout.write(view stdout, "{value.count}\n")

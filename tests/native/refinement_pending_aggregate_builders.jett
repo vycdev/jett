@@ -1,0 +1,67 @@
+namespace app
+type Positive = int64 where run(value > 0)
+type StrictPositive = int64 where value > 0
+struct Record:
+    value: Positive
+struct PendingRecord:
+    value: StrictPositive
+enum Event:
+    item(value: Positive)
+machine Session:
+    states:
+        ready(value: app.Positive)
+    transitions:
+        ready to ready
+function direct_record() returns string:
+    Record record = Record(value: 7) handle error:
+        return error
+    return "unexpected record"
+function reflected_record() returns string:
+    TypeField field = list.get[TypeField](type.fields[Record](), 0) handle:
+        return "missing record field"
+    TypeConstruction builder = type.construct_start[Record]()
+    TypeConstruction filled = type.construct_put[Record, int64](builder, view field, 7) handle error:
+        return error
+    Record record = type.construct_finish[Record](filled) handle error:
+        return error
+    return "unexpected reflected record"
+function reflected_pending_record() returns string:
+    TypeField field = list.get[TypeField](type.fields[PendingRecord](), 0) handle:
+        return "missing pending record field"
+    TypeConstruction builder = type.construct_start[PendingRecord]()
+    TypeConstruction filled = type.construct_put[PendingRecord, int64](builder, view field, run 7) handle error:
+        return error
+    PendingRecord record = type.construct_finish[PendingRecord](filled) handle error:
+        return error
+    return "unexpected pending record"
+function reflected_event() returns string:
+    TypeVariant variant = list.get[TypeVariant](type.variants[Event](), 0) handle:
+        return "missing variant"
+    TypeField field = list.get[TypeField](variant.fields, 0) handle:
+        return "missing event field"
+    TypeConstruction builder = type.construct_variant_start[Event](view variant) handle error:
+        return error
+    TypeConstruction filled = type.construct_put[Event, int64](builder, view field, 7) handle error:
+        return error
+    Event event = type.construct_finish[Event](filled) handle error:
+        return error
+    return "unexpected event"
+function reflected_session() returns string:
+    TypeMachineState state = list.get[TypeMachineState](type.machine_states[Session](), 0) handle:
+        return "missing state"
+    TypeField field = list.get[TypeField](state.fields, 0) handle:
+        return "missing session field"
+    TypeConstruction builder = type.construct_machine_start[Session](view state) handle error:
+        return error
+    TypeConstruction filled = type.construct_put[Session, int64](builder, view field, 7) handle error:
+        return error
+    Session session = type.construct_finish[Session](filled) handle error:
+        return error
+    return "unexpected session"
+function main() returns nothing:
+    println(direct_record())
+    println(reflected_record())
+    println(reflected_pending_record())
+    println(reflected_event())
+    println(reflected_session())
+    return nothing

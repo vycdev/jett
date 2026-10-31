@@ -1,0 +1,16 @@
+namespace app
+type Positive = int64 where value > 0
+function maybe_number(present: bool) returns optional[int64]:
+    if present:
+        return some(7)
+    return none
+function checked(present: bool) returns string:
+    Positive number =(maybe_number(present) handle:
+        default -1
+    ) handle error:
+        return error
+    return "{coarsen number}"
+function main() returns nothing:
+    println(checked(true))
+    println(checked(false))
+    return nothing

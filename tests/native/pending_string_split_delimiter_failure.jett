@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    string delimiter = run ","
+    list[string] parts = string.split("a,b", delimiter)
+    trace parts
+    return nothing

@@ -1,0 +1,12 @@
+namespace app
+enum Message:
+    named(value: string)
+function main() returns nothing:
+    Message message = Message.named("Ada")
+    TypeVariant variant = type.variant_value[Message](view message)
+    TypeField field = list.get[TypeField](variant.fields, 0) handle:
+        return nothing
+    TypeField pending_field = run field
+    string copied = type.variant_field_value[Message, string](view message, view pending_field)
+    println(copied)
+    return nothing

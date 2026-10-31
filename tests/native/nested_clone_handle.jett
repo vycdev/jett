@@ -1,0 +1,15 @@
+namespace app
+function maybe_items(valid: bool) returns result[list[string], string]:
+    if valid:
+        return ok(list("Ada"))
+    return fail("missing")
+function first_item(valid: bool) returns string:
+    list[string] items = clone(maybe_items(valid) handle error:
+        default list("fallback")
+    )
+    return list.get[string](items, 0) handle:
+        return "empty"
+function main() returns nothing:
+    println(first_item(true))
+    println(first_item(false))
+    return nothing

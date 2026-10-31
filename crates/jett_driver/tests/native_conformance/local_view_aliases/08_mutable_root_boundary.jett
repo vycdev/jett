@@ -1,0 +1,6 @@
+namespace app
+struct Packet:
+    data: bytes
+function main() returns nothing:
+    mutable Packet packet = Packet(data: bytes.from_string("AB"))
+    bytes borrowed = view packet.data

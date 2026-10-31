@@ -1,0 +1,37 @@
+namespace app
+struct Packet:
+    value: int64
+enum Choice:
+    number(value: int64)
+    empty
+function main() returns nothing:
+    Packet record = Packet(value: run 7)
+    trace record
+    int64 field = record.value
+    trace field
+    int64 field_joined = join field handle error:
+        return nothing
+    trace field_joined
+    Choice choice = Choice.number(run 9)
+    trace choice
+    list[int64] numbers = list(run 2, run 3)
+    trace numbers
+    int64 first = list.first[int64](view numbers) handle:
+        return nothing
+    trace first
+    int64 first_joined = join first handle error:
+        return nothing
+    trace first_joined
+    list[int64] changed = list.insert_at[int64](numbers, 1, run 4)
+    trace changed
+    mutable list[int64] copied = list()
+    for number in view changed:
+        copied = list.append[int64](copied, number)
+    trace copied
+    list[int64] removed = list.remove_at[int64](clone changed, 0)
+    trace removed
+    bool sorted_already = list.is_sorted[int64](view changed)
+    trace sorted_already
+    list[int64] sorted = list.sort[int64](clone changed)
+    trace sorted
+    return nothing

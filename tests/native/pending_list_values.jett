@@ -1,0 +1,29 @@
+namespace app
+enum Batch:
+    numbers(values: list[int64])
+    empty
+function identity(value: list[int64]) returns list[int64]:
+    return value
+function make_pending() returns list[int64]:
+    return run identity(list(2, 3))
+function main() returns nothing:
+    list[int64] plain = list(1)
+    list[int64] pending = run clone plain
+    list[int64] nested = run make_pending()
+    list[list[int64]] tasks = list(clone pending, clone nested)
+    trace plain
+    trace pending
+    trace nested
+    trace tasks
+    println(Batch.numbers(clone pending) == Batch.numbers(clone pending))
+    println(Batch.numbers(clone pending) == Batch.numbers(clone plain))
+    list[int64] first = join pending handle error:
+        default list(-1)
+    list[int64] inner = join nested handle error:
+        default list(-1)
+    trace first
+    trace inner
+    list[int64] last = join inner handle error:
+        default list(-1)
+    trace last
+    return nothing

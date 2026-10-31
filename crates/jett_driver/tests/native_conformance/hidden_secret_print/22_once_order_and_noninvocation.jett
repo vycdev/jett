@@ -1,0 +1,33 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+struct Hidden:
+    token: secret[string]
+implement Named for Hidden:
+    function name(view self: Hidden) returns string:
+        print("getter:")
+        return "public"
+function argument(marker: string) returns Named:
+    print(marker)
+    return Hidden(token: "unpublished-argument")
+function positive_check(value: int64) returns bool:
+    print("predicate:")
+    return value > 0
+type Positive = int64 where positive_check(value)
+struct CallbackHolder:
+    callback: function() returns int64
+function callback() returns int64:
+    print("callback:")
+    return 7
+function main() returns nothing:
+    println(argument("first:"), argument("second:"))
+    Named retained = Hidden(token: "unpublished-retained")
+    println(view retained)
+    println(Named.name(view retained))
+    CallbackHolder holder = CallbackHolder(callback: callback)
+    for field in type.fields[CallbackHolder]():
+        function() returns Positive observed = type.field_value[CallbackHolder, function() returns Positive](view holder, view field)
+        println(view observed)
+        Positive returned = observed()
+        println(coarsen returned)
+    return nothing

@@ -1,0 +1,13 @@
+namespace app
+function pending_true() returns bool:
+    println("wrong and branch")
+    return run true
+function pending_false() returns bool:
+    println("wrong or branch")
+    return run false
+function main() returns nothing:
+    bool first = false and pending_true()
+    bool second = true or pending_false()
+    trace first
+    trace second
+    return nothing

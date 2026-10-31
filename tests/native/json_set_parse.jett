@@ -1,0 +1,38 @@
+namespace app
+function parse_int_set() returns string:
+    set[int64] values = json.parse[set[int64]]("[1,1,2]") handle error:
+        return error
+    int64 length = set.length[int64](values)
+    set[int64] values_for_one = json.parse[set[int64]]("[1,1,2]") handle error:
+        return error
+    bool has_one = set.contains[int64](values_for_one, 1)
+    set[int64] values_for_two = json.parse[set[int64]]("[1,1,2]") handle error:
+        return error
+    bool has_two = set.contains[int64](values_for_two, 2)
+    return "{length}:{has_one}:{has_two}"
+function parse_string_set_exact() returns string:
+    set[string] values = json.parse_exact[set[string]]("[\"Ada\",\"Ada\",\"Lin\"]") handle error:
+        return error
+    int64 length = set.length[string](values)
+    set[string] for_lin = json.parse_exact[set[string]]("[\"Ada\",\"Ada\",\"Lin\"]") handle error:
+        return error
+    bool has_lin = set.contains[string](for_lin, "Lin")
+    return "{length}:{has_lin}"
+function parse_bool_set() returns string:
+    set[bool] values = json.parse[set[bool]]("[true,false,true]") handle error:
+        return error
+    return "{set.length[bool](values)}"
+function parse_uint_set() returns string:
+    set[uint64] values = json.parse[set[uint64]]("[0,42,42]") handle error:
+        return error
+    return "{set.length[uint64](values)}"
+function parse_set_error() returns string:
+    set[int64] values = json.parse_exact[set[int64]]("[1,true]") handle error:
+        return error
+    return "unexpected {set.length[int64](values)}"
+function main() returns nothing:
+    println(parse_int_set())
+    println(parse_string_set_exact())
+    println(parse_bool_set())
+    println(parse_uint_set())
+    println(parse_set_error())

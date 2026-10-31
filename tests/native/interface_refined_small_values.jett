@@ -1,0 +1,85 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+type Unit = nothing where true
+type Again = Unit where true
+type Enabled = bool where value
+type Data = bytes where bytes.length(value) > 0
+implement Named for nothing:
+    function name(view self: nothing) returns string:
+        return "nothing"
+implement Named for Unit:
+    function name(view self: Unit) returns string:
+        return "unit"
+implement Named for Again:
+    function name(view self: Again) returns string:
+        return "again"
+implement Named for bool:
+    function name(view self: bool) returns string:
+        return "bool:{self}"
+implement Named for Enabled:
+    function name(view self: Enabled) returns string:
+        return "enabled:{coarsen self}"
+implement Named for bytes:
+    function name(view self: bytes) returns string:
+        return "bytes:{bytes.to_hex(view self)}"
+implement Named for Data:
+    function name(view self: Data) returns string:
+        string text = bytes.to_hex(view coarsen self)
+        int64 length = bytes.length(view coarsen self)
+        if length == 0:
+            return "empty"
+        return "data:{text}"
+struct Packet:
+    data: Data
+    hidden: secret[bytes]
+function hex(view data: bytes) returns string:
+    return bytes.to_hex(view data)
+function sized(view data: bytes, length: int64) returns string:
+    return "{bytes.to_hex(view data)}:{length}"
+function borrowed() returns string:
+    Packet packet = Packet(data: bytes.from_string("ok"), hidden: bytes.from_string("sh")) handle error:
+        return error
+    function(view bytes) returns string reader = hex
+    string first = hex(view coarsen packet.data)
+    string second = reader(view coarsen packet.data)
+    string third = hex(view declassify packet.hidden)
+    string fourth = reader(view declassify packet.hidden)
+    optional[int64] absent = none
+    string fifth = sized(view declassify packet.hidden, absent handle:
+        default bytes.length(coarsen packet.data)
+    )
+    Data copied = clone packet.data
+    return "{first}:{second}:{third}:{fourth}:{fifth}:{Named.name(view copied)}:{bytes.length(coarsen packet.data)}:{bytes.length(declassify packet.hidden)}"
+function values() returns list[Named]:
+    Unit unit = nothing handle error:
+        return list()
+    Again again = unit handle error:
+        return list()
+    Enabled enabled = true handle error:
+        return list()
+    Data data = bytes.from_string("ok") handle error:
+        return list()
+    return list(nothing, unit, again, false, enabled, bytes.from_string("ok"), data)
+function restored() returns list[Named]:
+    Unit unit = nothing handle error:
+        return list()
+    Unit pending = run run unit
+    Named erased = pending
+    Named inner = join erased handle error:
+        return list()
+    Named ready = join inner handle error:
+        return list()
+    return list(ready)
+function main(stdout: Stdout) returns nothing:
+    for value in values():
+        Stdout.write(view stdout, "{Named.name(view value)}\n")
+    for value in comptime values():
+        Stdout.write(view stdout, "{Named.name(view value)}\n")
+    for value in restored():
+        Stdout.write(view stdout, "{Named.name(view value)}\n")
+    for value in comptime restored():
+        Stdout.write(view stdout, "{Named.name(view value)}\n")
+    Stdout.write(view stdout, "{borrowed()}\n")
+    string baked = comptime borrowed()
+    Stdout.write(view stdout, "{baked}\n")

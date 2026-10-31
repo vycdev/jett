@@ -1,0 +1,12 @@
+namespace app
+struct Holder:
+    selected: TypeInfo
+    label: string
+function report() returns string:
+    mutable Holder holder = Holder(selected: type.info[int64](), label: "stable")
+    holder.selected = type.info[string]()
+    return "{holder.selected.type_name}:{holder.label}"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "metadata:{report()}\n")
+verify terminal_metadata_replacement:
+    assert report() == "string:stable"

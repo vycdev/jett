@@ -1,0 +1,115 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+implement Named for int8:
+    function name(view self: int8) returns string:
+        return "small:{self}"
+implement Named for string:
+    function name(view self: string) returns string:
+        return self
+function accepted_maybe(view source: optional[Named]) returns bool:
+    Named found = clone source handle: return false
+    return Named.name(view found) != "reject"
+function accepted_outcome(view source: result[Named, string]) returns bool:
+    Named found = clone source handle error: return error == "kept"
+    return Named.name(view found) != "reject"
+type Choice = optional[Named] where accepted_maybe(view value)
+type Again = Choice where true
+type Outcome = result[Named, string] where accepted_outcome(view value)
+implement Named for Choice:
+    function name(view self: Choice) returns string:
+        optional[Named] base = coarsen clone self
+        Named found = base handle: return "unexpected absent"
+        return "choice:{Named.name(view found)}"
+implement Named for Again:
+    function name(view self: Again) returns string:
+        Choice parent = coarsen clone self
+        return "again:{Named.name(view parent)}"
+implement Named for Outcome:
+    function name(view self: Outcome) returns string:
+        result[Named, string] base = coarsen clone self
+        Named found = base handle error: return "outcome-fail:{error}"
+        return "outcome:{Named.name(view found)}"
+struct Stored:
+    choice: Choice
+    outcome: Outcome
+struct ChoiceHolder:
+    choice: Choice
+function values() returns result[list[Named], string]:
+    int8 small = 7
+    optional[Named] input = some(small)
+    Choice choice = input handle error: return fail(error)
+    Again again = clone choice handle error: return fail(error)
+    result[Named, string] success = ok("text")
+    Outcome outcome = success handle error: return fail(error)
+    result[Named, string] failure = fail("kept")
+    Outcome kept = failure handle error: return fail(error)
+    Stored stored = Stored(choice: clone choice, outcome: clone outcome) handle error: return fail(error)
+    return ok(list(choice, again, outcome, kept, stored.choice, stored.outcome))
+function rejected() returns string:
+    optional[Named] input = some("reject")
+    Choice invalid = input handle error: return "choice rejected"
+    return "unexpected choice"
+function rejected_outcome() returns string:
+    result[Named, string] input = fail("bad")
+    Outcome invalid = input handle error: return "outcome rejected"
+    return "unexpected outcome"
+function show(view source: list[Named]) returns string:
+    mutable string text = ""
+    for item in view source:
+        text = "{text}{Named.name(view item)};"
+    return text
+function choice_factory() returns result[Choice, string]:
+    int8 small = 11
+    optional[Named] input = some(small)
+    ChoiceHolder holder = ChoiceHolder(choice: input) handle error: return fail(error)
+    return ok(holder.choice)
+function callbacks() returns string:
+    function() returns result[Named, string] live = choice_factory
+    function() returns result[Named, string] baked = comptime choice_factory
+    Named first = live() handle error: return error
+    Named second = baked() handle error: return error
+    return "{Named.name(view first)};{Named.name(view second)};"
+function tasks() returns string:
+    Choice ready = choice_factory() handle error: return error
+    Choice pending = run ready
+    Named erased = pending
+    Named joined = join erased handle error: return error
+    return Named.name(view joined)
+function absent_rejected() returns string:
+    optional[Named] input = none
+    Choice invalid = input handle error: return "absent rejected"
+    return "unexpected absent"
+function pending_rejected() returns string:
+    optional[Named] input = some("text")
+    optional[Named] pending = run input
+    Choice invalid = pending handle error: return "pending rejected"
+    return "unexpected pending"
+function extracted() returns string:
+    Choice choice = choice_factory() handle error: return error
+    result[Choice, int64] outer = ok(choice)
+    Choice found = outer handle error: return "unexpected outer:{error}"
+    optional[Choice] maybe = some(found)
+    Choice final = maybe handle: return "unexpected missing"
+    return Named.name(view final)
+function accepted_integer_outcome(view source: result[int8, int64]) returns bool:
+    int8 found = clone source handle error: return error == 17
+    return found > 0
+type IntegerOutcome = result[int8, int64] where accepted_integer_outcome(view value)
+function integer_failure(view source: IntegerOutcome) returns int64:
+    int8 found = coarsen clone source handle error: return error
+    return 0
+function typed_errors() returns string:
+    result[int8, int64] source = fail(17)
+    IntegerOutcome valid = source handle error: return "unexpected typed failure"
+    result[int8, int64] rejected = fail(19)
+    IntegerOutcome invalid = rejected handle error:
+        return "{integer_failure(view valid)}:{string.length(error) > 0}"
+    return "unexpected typed acceptance"
+function main(stdout: Stdout) returns nothing:
+    list[Named] live = values() handle error: return Stdout.write(view stdout, error)
+    list[Named] baked = comptime values() handle error: return Stdout.write(view stdout, error)
+    Stdout.write(view stdout, "{show(view live)}\n{show(view baked)}\n")
+    Stdout.write(view stdout, "{rejected()}\n{comptime rejected()}\n{rejected_outcome()}\n{comptime rejected_outcome()}\n")
+    Stdout.write(view stdout, "{callbacks()}\n{tasks()}\n")
+    Stdout.write(view stdout, "{absent_rejected()}\n{comptime absent_rejected()}\n{pending_rejected()}\n{extracted()}\n{typed_errors()}\n{comptime typed_errors()}\n")

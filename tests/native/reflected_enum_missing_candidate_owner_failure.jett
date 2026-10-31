@@ -1,0 +1,13 @@
+namespace app
+enum Choice:
+    first(value: int64)
+    second(label: string, value: int64)
+function main() returns nothing:
+    Choice selected = Choice.first(7)
+    TypeVariant other = list.get[TypeVariant](type.variants[Choice](), 1) handle:
+        return nothing
+    TypeField foreign = list.get[TypeField](other.fields, 1) handle:
+        return nothing
+    int64 value = type.variant_field_value[Choice, int64](view selected, view foreign)
+    println(value)
+    return nothing

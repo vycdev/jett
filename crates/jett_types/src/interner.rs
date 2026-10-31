@@ -1,10 +1,18 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::defs::{
     ActorDef, ActorId, BitfieldDef, BitfieldId, EnumDef, EnumId, InterfaceDef, InterfaceId,
     MachineDef, MachineId, StructDef, StructId,
 };
-use crate::types::{Type, TypeId};
+use crate::types::{CapabilityKind, Type, TypeId};
+
+/// Invalid registration of canonical arguments for a nominal type instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NominalTypeArgumentsError {
+    InvalidOwner(TypeId),
+    InvalidArgument(TypeId),
+    ConflictingArguments(TypeId),
+}
 
 /// Type interner that deduplicates types and provides stable [`TypeId`] handles.
 ///
@@ -18,6 +26,8 @@ pub struct TypeInterner {
     types: Vec<Type>,
     /// User-defined struct definitions.
     structs: Vec<StructDef>,
+    /// Exact builtin metadata owners, immutable under Source operations.
+    compiler_metadata_structs: HashSet<StructId>,
     /// User-defined bitfield definitions.
     bitfields: Vec<BitfieldDef>,
     /// User-defined enum definitions.
@@ -28,6 +38,9 @@ pub struct TypeInterner {
     actors: Vec<ActorDef>,
     /// User-defined state machine definitions.
     machines: Vec<MachineDef>,
+    /// Checker-selected arguments for concrete nominal generic instances.
+    /// Ordinary nominal definitions have no arguments, regardless of fields.
+    nominal_type_arguments: HashMap<TypeId, Vec<TypeId>>,
 }
 
 // Constant TypeId values for every primitive type.
@@ -49,44 +62,103 @@ impl TypeInterner {
     pub const NOTHING: TypeId = TypeId(13);
     pub const ERROR: TypeId = TypeId(14);
     pub const TYPE_CONSTRUCTION: TypeId = TypeId(15);
+    pub const NEVER: TypeId = TypeId(16);
+    pub const STDOUT: TypeId = TypeId(17);
+    pub const STDERR: TypeId = TypeId(18);
+    pub const STDIN: TypeId = TypeId(19);
+    pub const FILESYSTEM: TypeId = TypeId(20);
+    pub const NETWORK: TypeId = TypeId(21);
+    pub const CLOCK: TypeId = TypeId(22);
+    pub const RANDOM: TypeId = TypeId(23);
+    pub const PROCESS: TypeId = TypeId(24);
+    pub const ENVIRONMENT: TypeId = TypeId(25);
+    pub const LOG: TypeId = TypeId(26);
+    pub const GRAPHICS: TypeId = TypeId(27);
+
+    pub const fn capability(kind: CapabilityKind) -> TypeId {
+        match kind {
+            CapabilityKind::Stdout => Self::STDOUT,
+            CapabilityKind::Stderr => Self::STDERR,
+            CapabilityKind::Stdin => Self::STDIN,
+            CapabilityKind::Filesystem => Self::FILESYSTEM,
+            CapabilityKind::Network => Self::NETWORK,
+            CapabilityKind::Clock => Self::CLOCK,
+            CapabilityKind::Random => Self::RANDOM,
+            CapabilityKind::Process => Self::PROCESS,
+            CapabilityKind::Environment => Self::ENVIRONMENT,
+            CapabilityKind::Log => Self::LOG,
+            CapabilityKind::Graphics => Self::GRAPHICS,
+        }
+    }
 }
 
 impl TypeInterner {
-    /// Creates a new interner with all primitive types pre-registered.
+    /// Copy all type metadata into an independent owned table with the same IDs.
+    /// This preserves lookup meanings, not checked Source or witness authority.
+    pub fn snapshot(&self) -> Self {
+        Self {
+            map: self.map.clone(),
+            types: self.types.clone(),
+            structs: self.structs.clone(),
+            compiler_metadata_structs: self.compiler_metadata_structs.clone(),
+            bitfields: self.bitfields.clone(),
+            enums: self.enums.clone(),
+            interfaces: self.interfaces.clone(),
+            actors: self.actors.clone(),
+            machines: self.machines.clone(),
+            nominal_type_arguments: self.nominal_type_arguments.clone(),
+        }
+    }
+
+    /// Creates a new interner with all compiler-known leaf types pre-registered.
     pub fn new() -> Self {
-        let primitives = vec![
-            Type::Int8,             // 0
-            Type::Int16,            // 1
-            Type::Int32,            // 2
-            Type::Int64,            // 3
-            Type::Uint8,            // 4
-            Type::Uint16,           // 5
-            Type::Uint32,           // 6
-            Type::Uint64,           // 7
-            Type::Float32,          // 8
-            Type::Float64,          // 9
-            Type::String,           // 10
-            Type::Bool,             // 11
-            Type::Bytes,            // 12
-            Type::Nothing,          // 13
-            Type::Error,            // 14
-            Type::TypeConstruction, // 15
+        let builtins = vec![
+            Type::Int8,                                    // 0
+            Type::Int16,                                   // 1
+            Type::Int32,                                   // 2
+            Type::Int64,                                   // 3
+            Type::Uint8,                                   // 4
+            Type::Uint16,                                  // 5
+            Type::Uint32,                                  // 6
+            Type::Uint64,                                  // 7
+            Type::Float32,                                 // 8
+            Type::Float64,                                 // 9
+            Type::String,                                  // 10
+            Type::Bool,                                    // 11
+            Type::Bytes,                                   // 12
+            Type::Nothing,                                 // 13
+            Type::Error,                                   // 14
+            Type::TypeConstruction,                        // 15
+            Type::Never,                                   // 16
+            Type::Capability(CapabilityKind::Stdout),      // 17
+            Type::Capability(CapabilityKind::Stderr),      // 18
+            Type::Capability(CapabilityKind::Stdin),       // 19
+            Type::Capability(CapabilityKind::Filesystem),  // 20
+            Type::Capability(CapabilityKind::Network),     // 21
+            Type::Capability(CapabilityKind::Clock),       // 22
+            Type::Capability(CapabilityKind::Random),      // 23
+            Type::Capability(CapabilityKind::Process),     // 24
+            Type::Capability(CapabilityKind::Environment), // 25
+            Type::Capability(CapabilityKind::Log),         // 26
+            Type::Capability(CapabilityKind::Graphics),    // 27
         ];
 
-        let mut map = HashMap::with_capacity(primitives.len());
-        for (i, ty) in primitives.iter().enumerate() {
+        let mut map = HashMap::with_capacity(builtins.len());
+        for (i, ty) in builtins.iter().enumerate() {
             map.insert(ty.clone(), TypeId(i as u32));
         }
 
         Self {
-            types: primitives,
+            types: builtins,
             map,
             structs: Vec::new(),
+            compiler_metadata_structs: HashSet::new(),
             bitfields: Vec::new(),
             enums: Vec::new(),
             interfaces: Vec::new(),
             actors: Vec::new(),
             machines: Vec::new(),
+            nominal_type_arguments: HashMap::new(),
         }
     }
 
@@ -100,6 +172,45 @@ impl TypeInterner {
         self.map.insert(ty.clone(), id);
         self.types.push(ty);
         id
+    }
+
+    /// Record the canonical arguments selected when the checker instantiates a
+    /// generic nominal declaration. Structs are the only current generic
+    /// nominal kind. Repeating the same facts is harmless; they cannot change.
+    pub fn register_nominal_type_arguments(
+        &mut self,
+        owner: TypeId,
+        arguments: Vec<TypeId>,
+    ) -> Result<(), NominalTypeArgumentsError> {
+        if !matches!(
+            self.types.get(owner.index() as usize),
+            Some(Type::Struct(_))
+        ) {
+            return Err(NominalTypeArgumentsError::InvalidOwner(owner));
+        }
+        if let Some(argument) = arguments
+            .iter()
+            .find(|argument| argument.index() as usize >= self.types.len())
+        {
+            return Err(NominalTypeArgumentsError::InvalidArgument(*argument));
+        }
+        if let Some(existing) = self.nominal_type_arguments.get(&owner) {
+            return if existing == &arguments {
+                Ok(())
+            } else {
+                Err(NominalTypeArgumentsError::ConflictingArguments(owner))
+            };
+        }
+        self.nominal_type_arguments.insert(owner, arguments);
+        Ok(())
+    }
+
+    /// Borrow the canonical arguments of a nominal generic instance. Plain
+    /// nominal definitions have no arguments; their fields are not arguments.
+    pub fn nominal_type_arguments(&self, owner: TypeId) -> &[TypeId] {
+        self.nominal_type_arguments
+            .get(&owner)
+            .map_or(&[], Vec::as_slice)
     }
 
     /// Look up a type by its [`TypeId`].
@@ -116,11 +227,43 @@ impl TypeInterner {
         (0..self.types.len()).map(|index| TypeId(index as u32))
     }
 
+    /// Whether this nominal header addresses an existing definition and state.
+    /// This is bounds validation only, never Source or ownership authority.
+    pub fn contains_nominal_definition(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Struct(id) => (id.index() as usize) < self.structs.len(),
+            Type::Bitfield(id) => (id.index() as usize) < self.bitfields.len(),
+            Type::Enum(id) => (id.index() as usize) < self.enums.len(),
+            Type::Interface(id) => (id.index() as usize) < self.interfaces.len(),
+            Type::Actor(id) => (id.index() as usize) < self.actors.len(),
+            Type::Machine(id) => (id.index() as usize) < self.machines.len(),
+            Type::MachineState { machine, state } => self
+                .machines
+                .get(machine.index() as usize)
+                .is_some_and(|definition| (state.index() as usize) < definition.states.len()),
+            _ => true,
+        }
+    }
+
     /// Register a new struct definition and return its [`StructId`].
     pub fn add_struct(&mut self, def: StructDef) -> StructId {
         let id = StructId(self.structs.len() as u32);
         self.structs.push(def);
         id
+    }
+
+    /// Allocate a compiler-produced metadata owner with a permanent exact ID.
+    /// Only compiler builtin registration uses this operation; ordinary Source
+    /// structs and user lookalikes continue through `add_struct`.
+    pub fn add_compiler_metadata_struct(&mut self, definition: StructDef) -> StructId {
+        let id = self.add_struct(definition);
+        self.compiler_metadata_structs.insert(id);
+        id
+    }
+
+    /// This is identity policy, independent of names, aliases and field shape.
+    pub fn is_compiler_metadata_struct(&self, id: StructId) -> bool {
+        self.compiler_metadata_structs.contains(&id)
     }
 
     /// Look up a struct definition by its [`StructId`].
@@ -244,6 +387,8 @@ impl TypeInterner {
             Type::Bytes => "bytes".to_string(),
             Type::Nothing => "nothing".to_string(),
             Type::TypeConstruction => "TypeConstruction".to_string(),
+            Type::Never => "<never>".to_string(),
+            Type::Capability(kind) => kind.name().to_string(),
             Type::List(inner) => format!("list[{}]", self.type_name(*inner)),
             Type::Map(k, v) => format!("map[{}, {}]", self.type_name(*k), self.type_name(*v)),
             Type::Set(inner) => format!("set[{}]", self.type_name(*inner)),
@@ -269,9 +414,17 @@ impl TypeInterner {
             Type::Refinement { name, .. } => name.clone(),
             Type::Function {
                 params,
+                view_params,
                 return_type,
             } => {
-                let params: Vec<String> = params.iter().map(|p| self.type_name(*p)).collect();
+                let params: Vec<String> = params
+                    .iter()
+                    .zip(view_params)
+                    .map(|(param, view)| {
+                        let name = self.type_name(*param);
+                        if *view { format!("view {name}") } else { name }
+                    })
+                    .collect();
                 format!(
                     "function({}) returns {}",
                     params.join(", "),
@@ -304,6 +457,133 @@ mod tests {
     use super::*;
     use crate::defs::{MachineDef, MachineStateDef, MachineTransitionDef, VariantDef};
 
+    #[test]
+    fn snapshot_preserves_nominal_refinement_instantiation_lookups_and_is_independent() {
+        let mut original = TypeInterner::new();
+        let positive = original.intern(Type::Refinement {
+            name: "models.Positive".into(),
+            base: TypeInterner::INT64,
+        });
+        let record = original.add_struct(StructDef {
+            name: "models.Record[models.Positive]".into(),
+            fields: vec![("value".into(), positive)],
+            methods: Vec::new(),
+        });
+        let record_type = original.intern(Type::Struct(record));
+        original
+            .register_nominal_type_arguments(record_type, vec![positive])
+            .unwrap();
+        let bits = original.add_bitfield(BitfieldDef {
+            name: "models.Bits".into(),
+            network_order: true,
+            fields: vec![crate::defs::BitfieldFieldDef {
+                name: "flag".into(),
+                ty: TypeInterner::UINT8,
+                kind: crate::defs::BitfieldFieldKind::Bits { width: 8 },
+            }],
+        });
+        original.intern(Type::Bitfield(bits));
+        let choice = original.add_enum(EnumDef {
+            name: "models.Choice".into(),
+            variants: vec![VariantDef {
+                name: "value".into(),
+                fields: vec![("record".into(), record_type)],
+                discriminant: 3,
+            }],
+        });
+        original.intern(Type::Enum(choice));
+        let interface = original.add_interface(InterfaceDef {
+            name: "models.Reader".into(),
+            methods: vec![crate::defs::FunctionSig {
+                name: "read".into(),
+                params: vec![("value".into(), positive, true)],
+                return_type: record_type,
+                is_pure: true,
+            }],
+        });
+        original.intern(Type::Interface(interface));
+        let actor = original.add_actor(ActorDef {
+            name: "models.Worker".into(),
+            capability_params: vec![("network".into(), TypeInterner::NETWORK)],
+            state_fields: vec![("record".into(), record_type)],
+            messages: vec![crate::defs::ActorMessageDef {
+                name: "read".into(),
+                params: vec![("value".into(), positive)],
+                responds: record_type,
+            }],
+        });
+        original.intern(Type::Actor(actor));
+        let machine = original.add_machine(MachineDef {
+            name: "models.Session".into(),
+            states: vec![MachineStateDef {
+                name: "ready".into(),
+                fields: vec![("value".into(), positive)],
+            }],
+            transitions: vec![MachineTransitionDef {
+                from: crate::defs::MachineStateId::new(0),
+                to: crate::defs::MachineStateId::new(0),
+            }],
+        });
+        original.intern(Type::Machine(machine));
+        original.intern(Type::MachineState {
+            machine,
+            state: crate::defs::MachineStateId::new(0),
+        });
+        let callable = original.intern(Type::Function {
+            params: vec![record_type],
+            view_params: vec![true],
+            return_type: positive,
+        });
+
+        let mut snapshot = original.snapshot();
+        assert_eq!(snapshot.len(), original.len());
+        for ty in original.type_ids() {
+            assert_eq!(snapshot.resolve(ty), original.resolve(ty));
+            assert_eq!(snapshot.intern(original.resolve(ty).clone()), ty);
+            assert_eq!(
+                snapshot.nominal_type_arguments(ty),
+                original.nominal_type_arguments(ty)
+            );
+            assert!(snapshot.contains_nominal_definition(original.resolve(ty)));
+        }
+        assert_eq!(
+            snapshot.resolve_struct(record),
+            original.resolve_struct(record)
+        );
+        assert_eq!(
+            snapshot.resolve_bitfield(bits),
+            original.resolve_bitfield(bits)
+        );
+        assert_eq!(snapshot.resolve_enum(choice), original.resolve_enum(choice));
+        assert_eq!(
+            snapshot.resolve_interface(interface),
+            original.resolve_interface(interface)
+        );
+        assert_eq!(snapshot.resolve_actor(actor), original.resolve_actor(actor));
+        assert_eq!(
+            snapshot.resolve_machine(machine),
+            original.resolve_machine(machine)
+        );
+        assert_eq!(snapshot.type_name(callable), original.type_name(callable));
+        assert_eq!(snapshot.nominal_type_arguments(record_type), &[positive]);
+
+        let original_length = original.len();
+        let added = snapshot.intern(Type::List(TypeInterner::BOOL));
+        assert_eq!(added.index() as usize, original_length);
+        assert_eq!(original.len(), original_length);
+        let mut changed = snapshot.resolve_struct(record).clone();
+        changed.fields[0].1 = TypeInterner::STRING;
+        snapshot.update_struct(record, changed);
+        assert_eq!(original.resolve_struct(record).fields[0].1, positive);
+        let mut changed = original.resolve_machine(machine).clone();
+        changed.states[0].fields[0].1 = TypeInterner::INT64;
+        original.update_machine(machine, changed);
+        assert_eq!(
+            snapshot.resolve_machine(machine).states[0].fields[0].1,
+            positive
+        );
+    }
+
     // -- Primitive constant IDs -----------------------------------------------
 
     #[test]
@@ -328,6 +608,23 @@ mod tests {
             *interner.resolve(TypeInterner::TYPE_CONSTRUCTION),
             Type::TypeConstruction
         );
+        assert_eq!(TypeInterner::NEVER.index(), 16);
+        assert_eq!(*interner.resolve(TypeInterner::NEVER), Type::Never);
+    }
+
+    #[test]
+    fn capability_type_ids_are_stable_and_distinct() {
+        let interner = TypeInterner::new();
+        let ids = CapabilityKind::ALL.map(TypeInterner::capability);
+
+        assert_eq!(
+            ids.map(TypeId::index),
+            [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]
+        );
+        for (kind, id) in CapabilityKind::ALL.into_iter().zip(ids) {
+            assert_eq!(*interner.resolve(id), Type::Capability(kind));
+            assert_eq!(interner.type_name(id), kind.name());
+        }
     }
 
     // -- Basic interning ------------------------------------------------------
@@ -429,10 +726,12 @@ mod tests {
         let mut interner = TypeInterner::new();
         let fn_type = interner.intern(Type::Function {
             params: vec![TypeInterner::INT64, TypeInterner::STRING],
+            view_params: vec![false, false],
             return_type: TypeInterner::BOOL,
         });
         let fn_type_again = interner.intern(Type::Function {
             params: vec![TypeInterner::INT64, TypeInterner::STRING],
+            view_params: vec![false, false],
             return_type: TypeInterner::BOOL,
         });
         assert_eq!(fn_type, fn_type_again);
@@ -440,9 +739,21 @@ mod tests {
         // Different param order -> different type
         let fn_different = interner.intern(Type::Function {
             params: vec![TypeInterner::STRING, TypeInterner::INT64],
+            view_params: vec![false, false],
             return_type: TypeInterner::BOOL,
         });
         assert_ne!(fn_type, fn_different);
+
+        let fn_view = interner.intern(Type::Function {
+            params: vec![TypeInterner::INT64, TypeInterner::STRING],
+            view_params: vec![false, true],
+            return_type: TypeInterner::BOOL,
+        });
+        assert_ne!(fn_type, fn_view);
+        assert_eq!(
+            interner.type_name(fn_view),
+            "function(int64, view string) returns bool"
+        );
     }
 
     // -- Struct and enum definitions ------------------------------------------
@@ -470,6 +781,84 @@ mod tests {
         // Intern the struct type and check round-trip
         let struct_type_id = interner.intern(Type::Struct(sid));
         assert_eq!(*interner.resolve(struct_type_id), Type::Struct(sid));
+    }
+
+    #[test]
+    fn nominal_arguments_are_explicit_immutable_and_independent_of_fields() {
+        let mut interner = TypeInterner::new();
+        let positive = interner.intern(Type::Refinement {
+            name: "models.Positive".into(),
+            base: TypeInterner::INT64,
+        });
+        let element = interner.add_struct(StructDef {
+            name: "models.Element".into(),
+            fields: vec![("value".into(), positive)],
+            methods: Vec::new(),
+        });
+        let element = interner.intern(Type::Struct(element));
+        let marker = interner.add_struct(StructDef {
+            name: "models.Marker[models.Positive]".into(),
+            fields: vec![("value".into(), TypeInterner::INT64)],
+            methods: Vec::new(),
+        });
+        let marker = interner.intern(Type::Struct(marker));
+        assert!(interner.nominal_type_arguments(element).is_empty());
+        assert!(interner.nominal_type_arguments(marker).is_empty());
+        interner
+            .register_nominal_type_arguments(marker, vec![positive])
+            .unwrap();
+        interner
+            .register_nominal_type_arguments(marker, vec![positive])
+            .unwrap();
+        assert_eq!(interner.nominal_type_arguments(marker), [positive]);
+        assert!(interner.nominal_type_arguments(element).is_empty());
+        assert_eq!(
+            interner.register_nominal_type_arguments(marker, vec![TypeInterner::STRING]),
+            Err(NominalTypeArgumentsError::ConflictingArguments(marker))
+        );
+        assert_eq!(interner.nominal_type_arguments(marker), [positive]);
+        let Type::Struct(id) = interner.resolve(marker) else {
+            panic!("marker");
+        };
+        assert_eq!(
+            interner.resolve_struct(*id).fields[0].1,
+            TypeInterner::INT64
+        );
+    }
+
+    #[test]
+    fn nominal_argument_registration_rejects_unknown_ids_without_mutation() {
+        let mut interner = TypeInterner::new();
+        let marker = interner.add_struct(StructDef {
+            name: "Marker".into(),
+            fields: Vec::new(),
+            methods: Vec::new(),
+        });
+        let marker = interner.intern(Type::Struct(marker));
+        let unknown = TypeId(interner.len() as u32);
+        for owner in [unknown, TypeInterner::INT64] {
+            assert_eq!(
+                interner.register_nominal_type_arguments(owner, vec![TypeInterner::INT64]),
+                Err(NominalTypeArgumentsError::InvalidOwner(owner))
+            );
+            assert!(interner.nominal_type_arguments(owner).is_empty());
+        }
+        assert_eq!(
+            interner.register_nominal_type_arguments(marker, vec![unknown]),
+            Err(NominalTypeArgumentsError::InvalidArgument(unknown))
+        );
+        assert!(interner.nominal_type_arguments(marker).is_empty());
+        interner
+            .register_nominal_type_arguments(marker, vec![TypeInterner::INT64])
+            .unwrap();
+        assert_eq!(
+            interner.register_nominal_type_arguments(marker, vec![unknown]),
+            Err(NominalTypeArgumentsError::InvalidArgument(unknown))
+        );
+        assert_eq!(
+            interner.nominal_type_arguments(marker),
+            [TypeInterner::INT64]
+        );
     }
 
     #[test]
@@ -622,9 +1011,9 @@ mod tests {
     #[test]
     fn interner_len_includes_primitives() {
         let interner = TypeInterner::new();
-        // 16 built-in leaves: int8..uint64 (8) + float32/64 (2) +
-        // string, bool, bytes, nothing, error, TypeConstruction (6)
-        assert_eq!(interner.len(), 16);
+        // 16 existing built-in leaves, the internal bottom type, and the
+        // closed set of 11 nominal capabilities.
+        assert_eq!(interner.len(), 28);
     }
 
     #[test]
@@ -638,3 +1027,6 @@ mod tests {
         assert_eq!(interner.len(), before + 1);
     }
 }
+
+#[cfg(test)]
+mod compiler_metadata_tests;

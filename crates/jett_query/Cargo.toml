@@ -10,6 +10,9 @@ jett_common.workspace = true
 jett_diagnostics.workspace = true
 jett_parser.workspace = true
 salsa.workspace = true
+# Salsa interned expansion uses a private macro/runtime contract.
+# 0.28.4 macro rules are incompatible with the pinned 0.28.2 runtime.
+salsa-macro-rules = "=0.28.2"
 sha2.workspace = true
 hmac.workspace = true
 subtle.workspace = true

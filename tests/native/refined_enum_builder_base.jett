@@ -1,0 +1,50 @@
+namespace app
+type NonEmpty = string where value != ""
+type Long = NonEmpty where string.char_count(value) >= 3
+enum Event:
+    idle
+    named(name: NonEmpty, alias: Long, note: string)
+function create_event(raw: string, raw_alias: string) returns result[Event, string]:
+    TypeVariant variant = list.get[TypeVariant](type.variants[Event](), 1) handle:
+        return fail("missing variant")
+    mutable TypeConstruction builder = type.construct_variant_start[Event](view variant) handle error:
+        return fail(error)
+    TypeField name_field = list.get[TypeField](variant.fields, 0) handle:
+        return fail("missing field")
+    builder = type.construct_put[Event, string](builder, view name_field, raw) handle error:
+        return fail(error)
+    TypeField alias_field = list.get[TypeField](variant.fields, 1) handle:
+        return fail("missing field")
+    builder = type.construct_put[Event, string](builder, view alias_field, raw_alias) handle error:
+        return fail(error)
+    TypeField note_field = list.get[TypeField](variant.fields, 2) handle:
+        return fail("missing field")
+    builder = type.construct_put[Event, string](builder, view note_field, "ready") handle error:
+        return fail(error)
+    return type.construct_finish[Event](builder)
+function build_event(raw: string, raw_alias: string) returns string:
+    Event event = create_event(raw, raw_alias) handle error:
+        return error
+    match event:
+        idle:
+            return "idle"
+        named(name, alias, note):
+            return "{coarsen name}:{coarsen alias}:{note}"
+function build_idle() returns string:
+    TypeVariant variant = list.get[TypeVariant](type.variants[Event](), 0) handle:
+        return "missing variant"
+    TypeConstruction builder = type.construct_variant_start[Event](view variant) handle error:
+        return error
+    Event event = type.construct_finish[Event](builder) handle error:
+        return error
+    match event:
+        idle:
+            return "idle"
+        named(name, alias, note):
+            return "unexpected named"
+function main() returns nothing:
+    println(build_idle())
+    println(build_event("Ada", "Agent"))
+    println(build_event("", "Agent"))
+    println(build_event("Ada", "Al"))
+    return nothing

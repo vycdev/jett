@@ -1,0 +1,41 @@
+namespace app
+enum Envelope:
+    value(payload: optional[string])
+function check_optional() returns nothing:
+    optional[string] plain = some("Ada")
+    optional[string] absent = none
+    optional[string] pending = run clone plain
+    optional[string] pending_absent = run clone absent
+    optional[string] nested = run clone pending
+    trace plain
+    trace absent
+    trace pending
+    trace pending_absent
+    trace nested
+    Envelope plain_envelope = Envelope.value(clone plain)
+    Envelope pending_envelope = Envelope.value(clone pending)
+    println(plain_envelope == pending_envelope)
+    println(pending_envelope == Envelope.value(clone pending))
+    return nothing
+function check_result() returns nothing:
+    result[string, string] plain = ok("Ada")
+    result[string, string] failed = fail("missing")
+    result[string, string] pending = run clone plain
+    result[string, string] pending_failure = run clone failed
+    result[string, string] nested = run clone pending
+    trace plain
+    trace failed
+    trace pending
+    trace pending_failure
+    trace nested
+    string first = join pending handle error:
+        default error
+    string failed_value = join pending_failure handle error:
+        default error
+    println(first)
+    println(failed_value)
+    return nothing
+function main() returns nothing:
+    check_optional()
+    check_result()
+    return nothing

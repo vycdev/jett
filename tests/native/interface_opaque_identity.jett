@@ -1,0 +1,124 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+actor First:
+    mutable int64 count = 1
+    receive add(amount: int64):
+        count = count + amount
+    receive read responds int64:
+        respond count
+actor Second:
+    receive read responds int64:
+        respond 2
+implement Named for First:
+    function name(view self: First) returns string:
+        return "first"
+implement Named for Second:
+    function name(view self: Second) returns string:
+        return "second"
+struct ActorHolder:
+    worker: First
+function actors() returns nothing:
+    First first = spawn First()
+    First copied = clone first
+    send copied.add(4)
+    println(Named.name(view first))
+    println(ask first.read)
+    ActorHolder holder = ActorHolder(worker: copied)
+    println(Named.name(view holder.worker))
+    println(ask holder.worker.read)
+    First later = run holder.worker
+    First ready = join later handle error:
+        return nothing
+    println(Named.name(view ready))
+    send ready.add(2)
+    println(ask ready.read)
+    Second second = spawn Second()
+    println(ask second.read)
+    list[Named] mixed = list(first, second, ready)
+    for item in mixed:
+        println(Named.name(view item))
+    return nothing
+struct Record:
+    count: int64
+type CheckedBuilder = TypeConstruction where true
+implement Named for TypeConstruction:
+    function name(view self: TypeConstruction) returns string:
+        return "builder"
+implement Named for CheckedBuilder:
+    function name(view self: CheckedBuilder) returns string:
+        return "checked-builder"
+struct BuilderHolder:
+    builder: CheckedBuilder
+function builder(number: int64) returns optional[CheckedBuilder]:
+    TypeConstruction empty = type.construct_start[Record]()
+    TypeField field = list.get[TypeField](type.fields[Record](), 0) handle:
+        return none
+    TypeConstruction filled = type.construct_put[Record, int64](empty, view field, number) handle error:
+        return none
+    CheckedBuilder checked = filled handle error:
+        return none
+    return some(checked)
+function finish(builder: CheckedBuilder) returns string:
+    Record value = type.construct_finish[Record](coarsen builder) handle error:
+        return error
+    return "record:{value.count}"
+function erased_builder() returns Named:
+    CheckedBuilder checked = builder(15) handle:
+        return type.construct_start[Record]()
+    return checked
+function mixed_builders() returns list[Named]:
+    return list(erased_builder(), type.construct_start[Record]())
+function builders() returns nothing:
+    CheckedBuilder runtime = builder(7) handle:
+        return nothing
+    CheckedBuilder baked = comptime builder(9) handle:
+        return nothing
+    println(Named.name(view runtime))
+    println(Named.name(view baked))
+    println(finish(clone runtime))
+    println(finish(clone baked))
+    TypeConstruction base = coarsen clone baked
+    println(Named.name(view base))
+    BuilderHolder stored = BuilderHolder(builder: clone baked) handle error:
+        return nothing
+    println(Named.name(view stored.builder))
+    println(finish(stored.builder))
+    CheckedBuilder later = run clone baked
+    CheckedBuilder ready = join later handle error:
+        return nothing
+    println(Named.name(view ready))
+    println(finish(ready))
+    list[Named] mixed = list(runtime, baked, base)
+    for item in mixed:
+        println(Named.name(view item))
+    list[Named] baked_mixed = comptime mixed_builders()
+    for item in baked_mixed:
+        println(Named.name(view item))
+    return nothing
+type Output = Stdout where true
+implement Named for Stdout:
+    function name(view self: Stdout) returns string:
+        return "stdout"
+implement Named for Output:
+    function name(view self: Output) returns string:
+        return "output"
+function capabilities(view stdout: Stdout) returns nothing:
+    Output output = clone stdout handle error:
+        return nothing
+    println(Named.name(view output))
+    Output later = run clone output
+    Output ready = join later handle error:
+        return nothing
+    println(Named.name(view ready))
+    Stdout base = coarsen clone ready
+    Stdout.write(view base, "ready")
+    list[Named] mixed = list(output, ready, base)
+    for item in mixed:
+        println(Named.name(view item))
+    return nothing
+function main(stdout: Stdout) returns nothing:
+    actors()
+    builders()
+    capabilities(view stdout)
+    return nothing

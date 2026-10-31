@@ -1,0 +1,11 @@
+namespace app
+machine Session:
+    states:
+        closed
+        open(value: int64)
+    transitions:
+        closed to open
+function invalid(mutable session: Session) returns nothing:
+    session.value = 9
+function main() returns nothing:
+    invalid(Session(closed))

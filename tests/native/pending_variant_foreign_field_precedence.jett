@@ -1,0 +1,13 @@
+namespace app
+enum Message:
+    first(value: int64)
+    second(value: int64)
+function main() returns nothing:
+    Message message = run Message.first(7)
+    TypeVariant other = list.get[TypeVariant](type.variants[Message](), 1) handle:
+        return nothing
+    TypeField foreign = list.get[TypeField](other.fields, 0) handle:
+        return nothing
+    int64 copied = type.variant_field_value[Message, int64](view message, view foreign)
+    println(copied)
+    return nothing

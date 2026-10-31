@@ -1,0 +1,49 @@
+# ERROR: E0311 x2
+# ERROR: E0375 x28
+namespace test
+function take(items: list[int64]) returns int64:
+    return list.length[int64](view items)
+function count(view items: list[int64]) returns int64:
+    return list.length[int64](view items)
+function pair(amount: int64, items: list[int64]) returns int64:
+    return amount + list.length[int64](view items)
+function generic_take[T](items: list[T]) returns int64:
+    return list.length[T](view items)
+function generic_pair[T](amount: int64, items: list[T]) returns int64:
+    return amount + list.length[T](view items)
+function main() returns nothing:
+    list[int64] items = list(1, 2)
+    function(view list[int64]) returns int64 callback = count
+    println(take(view items))
+    function(list[int64]) returns int64 wrong = count
+    println(wrong(view items))
+    function(view list[int64]) returns int64 wrong_view = take
+    println(generic_take[int64](view items))
+    println(generic_take(view items))
+    println(generic_pair[int64](items: view items, amount: 1))
+    println(generic_pair(items: view items, amount: 1))
+    println(items into view take)
+    println(1 into pair(view items))
+    function(list[int64]) returns int64 owned_callback = take
+    println(items into view owned_callback)
+    function(int64, list[int64]) returns int64 owned_pair = pair
+    println(1 into owned_pair(view items))
+    println(items into view generic_take[int64]())
+    println(items into view generic_take())
+    println(1 into generic_pair[int64](view items))
+    println(1 into generic_pair(view items))
+    println(take((view items)))
+    println(owned_callback(((view items))))
+    println(generic_take[int64]((view items)))
+    println(generic_take((view items)))
+    println(generic_pair[int64](items:(view items), amount: 1))
+    println(generic_pair(items:(view items), amount: 1))
+    println(1 into pair((view items)))
+    println(1 into owned_pair((view items)))
+    println(1 into generic_pair[int64]((view items)))
+    println(1 into generic_pair((view items)))
+    println((view items) into take)
+    println(((view items)) into owned_callback)
+    println((view items) into generic_take[int64]())
+    println((view items) into generic_take())
+    return nothing

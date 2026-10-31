@@ -1,0 +1,36 @@
+namespace app
+actor Counter:
+    mutable int64 count = 1
+    receive read responds int64:
+        respond count
+enum Leaf:
+    held(worker: Counter)
+    vacant
+enum Tree:
+    leaf(worker: Counter)
+    children(values: list[Tree])
+enum Bundle:
+    grouped(values: list[Leaf], worker: optional[Counter])
+struct Keyed:
+    key: int64
+    worker: Counter
+implement Equatable for Keyed:
+    function equals(view self: Keyed, view other: Keyed) returns bool:
+        return self.key == other.key
+enum Custom:
+    keyed(value: Keyed)
+function main() returns nothing:
+    Counter worker = spawn Counter()
+    Counter other = spawn Counter()
+    Bundle first = Bundle.grouped(list(Leaf.held(clone worker)), some(clone worker))
+    Bundle alias = clone first
+    Bundle different = Bundle.grouped(list(Leaf.held(clone other)), some(clone other))
+    println(first == alias, first != alias, first == different, first != different)
+    Tree original = Tree.children(list(Tree.leaf(clone worker)))
+    Tree repeated = Tree.children(list(Tree.leaf(clone worker)))
+    Tree distinct = Tree.children(list(Tree.leaf(clone other)))
+    println(original == repeated, original != distinct)
+    Custom left = Custom.keyed(Keyed(key: 7, worker: clone worker))
+    Custom right = Custom.keyed(Keyed(key: 7, worker: clone other))
+    println(left == right, left != right)
+    return nothing

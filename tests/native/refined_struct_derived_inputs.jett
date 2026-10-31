@@ -1,0 +1,53 @@
+namespace test
+type NonEmpty = string where string.char_count(value) > 0
+type Long = NonEmpty where string.char_count(value) >= 3
+type SecretPositive = secret[int64] where value > 0
+type SecretNonEmpty = secret[string] where string.char_count(value) > 0
+type SecretLong = SecretNonEmpty where string.char_count(value) >= 3
+struct Label:
+    value: Long
+struct SecretCounter:
+    value: SecretPositive
+struct SecretLabel:
+    value: SecretLong
+function derived_label(value: string) returns string:
+    NonEmpty checked = value handle error:
+        return error
+    Label label = Label(value: checked) handle error:
+        return error
+    return coarsen label.value
+function secret_count(value: int64) returns string:
+    secret[int64] hidden = value
+    SecretCounter counter = SecretCounter(value: hidden) handle error:
+        return error
+    return "accepted"
+function derived_handle(value: string) returns string:
+    NonEmpty checked = value handle error:
+        return error
+    Long longer = checked handle error:
+        return error
+    return coarsen longer
+function secret_handle(value: int64) returns string:
+    secret[int64] hidden = value
+    SecretPositive checked = hidden handle error:
+        return error
+    return "accepted"
+function secret_label(value: string) returns string:
+    secret[string] hidden = value
+    SecretNonEmpty checked = hidden handle error:
+        return error
+    SecretLabel label = SecretLabel(value: checked) handle error:
+        return error
+    return declassify coarsen label.value
+function main() returns nothing:
+    println(derived_label("Agent"))
+    println(derived_label("Al"))
+    println(secret_count(7))
+    println(secret_count(0))
+    println(derived_handle("Agent"))
+    println(derived_handle("Al"))
+    println(secret_handle(7))
+    println(secret_handle(0))
+    println(secret_label("Agent"))
+    println(secret_label("Al"))
+    println(secret_label(""))

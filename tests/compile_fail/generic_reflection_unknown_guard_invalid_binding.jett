@@ -1,0 +1,22 @@
+# ERROR: E0345
+# ERROR: E0345
+function invalid_match[T](view kind: TypeKind) returns int64:
+    match kind:
+        list_type:
+            comptime type Elem = type.arg[T](0):
+                return 1
+        other:
+            return 0
+function invalid_callback[T](flag: bool) returns function() returns int64:
+    return function() returns int64:
+        if flag:
+            comptime type Elem = type.arg[T](0):
+                return 1
+        return 0
+function main() returns nothing:
+    TypeKind kind = TypeKind.primitive_type
+    int64 count = invalid_match[string](view kind)
+    function() returns int64 callback = invalid_callback[string](false)
+    println(count)
+    println(callback())
+    return nothing

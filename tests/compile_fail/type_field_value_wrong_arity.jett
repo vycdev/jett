@@ -8,7 +8,7 @@ struct User:
 function bad_field_value_arity() returns string:
     User user = User(id: "u1")
     list[TypeField] fields = type.fields[User]()
-    string found = "missing"
+    mutable string found = "missing"
     for field in fields:
         found = type.field_value[User](view user, view field)
     return found

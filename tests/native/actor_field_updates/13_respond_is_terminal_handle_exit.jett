@@ -1,0 +1,32 @@
+namespace app
+struct Inner:
+    value: int64
+actor Store:
+    mutable Inner inner = Inner(value: 4)
+    receive set(value: int64):
+        inner.value = value
+    receive replace(candidate: optional[int64]) responds int64:
+        inner.value = candidate handle:
+            respond inner.value
+        respond inner.value
+    receive read responds int64:
+        respond inner.value
+function round_trip(value: int64) returns int64:
+    Store store = spawn Store()
+    send store.set(value)
+    int64 echoed = ask store.replace(none)
+    return echoed
+function main(stdout: Stdout) returns nothing:
+    Store store = spawn Store()
+    int64 first = ask store.replace(none)
+    int64 before = ask store.read
+    int64 changed = ask store.replace(some(9))
+    int64 second = ask store.replace(none)
+    int64 after = ask store.read
+    Stdout.write(view stdout, "early:{first}:{before}:{changed}:{second}:{after}\n")
+    return nothing
+verify actor_early_response:
+    assert round_trip(17) == 17
+property actor_early_response_trials:
+    given value: int64
+    assert round_trip(value) == value

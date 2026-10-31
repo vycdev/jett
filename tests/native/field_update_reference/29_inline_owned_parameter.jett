@@ -1,0 +1,16 @@
+namespace app
+struct Record:
+    value: int64
+    label: string
+function report() returns string:
+    function(Record) returns Record change = function(mutable owned: Record) returns Record:
+        owned.value = 7
+        owned.label = "changed"
+        return owned
+    Record original = Record(value: 1, label: "stable")
+    Record changed = change(clone original)
+    return "{original.value}:{original.label}|{changed.value}:{changed.label}"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "inline:{report()}\n")
+verify inline_owned_parameter:
+    assert report() == "1:stable|7:changed"

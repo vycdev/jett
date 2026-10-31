@@ -1,0 +1,21 @@
+namespace app
+actor Counter:
+    mutable int64 count = 1
+struct Pair:
+    ready: Counter
+    pending: Counter
+    twice: Counter
+function create() returns Pair:
+    Counter ready = spawn Counter()
+    Counter pending = run clone ready
+    Counter twice = run clone pending
+    return Pair(ready: ready, pending: pending, twice: twice)
+function main() returns nothing:
+    Pair pair = comptime create()
+    println(pair.ready, pair.pending, pair.twice)
+    Counter once = join clone pair.twice handle error:
+        return println(error)
+    Counter ready = join once handle error:
+        return println(error)
+    println(pair.ready, ready)
+    return nothing

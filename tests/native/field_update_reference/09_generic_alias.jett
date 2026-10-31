@@ -1,0 +1,17 @@
+namespace app
+struct Boxed[T]:
+    value: T
+    label: string
+type NumberBox = Boxed[int64]
+function update[T](mutable boxed: Boxed[T], replacement: T) returns Boxed[T]:
+    boxed.value = replacement
+    return boxed
+function report() returns string:
+    NumberBox original = Boxed[int64](value: 1, label: "number")
+    NumberBox changed = update[int64](clone original, 9)
+    Boxed[string] text = update[string](Boxed[string](value: "old", label: "text"), "new")
+    return "{original.value}:{changed.value}:{changed.label}:{text.value}:{text.label}"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "{report()}\n")
+verify generic_place_selection:
+    assert report() == "1:9:number:new:text"

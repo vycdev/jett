@@ -1,0 +1,17 @@
+# ERROR: E0375 x6
+namespace app
+function consume(values: list[int64]) returns int64:
+    return list.length[int64](view values)
+function generic_consume[T](values: list[T]) returns int64:
+    return list.length[T](view values)
+function consume_more(amount: int64, values: list[int64]) returns int64:
+    return amount + list.length[int64](view values)
+function explicit_modes(view values: list[int64]) returns nothing:
+    println(consume(view values))
+    function(list[int64]) returns int64 callback = consume
+    println(callback((view values)))
+    println(generic_consume[int64](view values))
+    println(values into view consume)
+    println((view values) into consume)
+    println(1 into consume_more(view values))
+    return nothing

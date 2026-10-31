@@ -1,0 +1,30 @@
+namespace app
+function positive_check(value: int64) returns bool:
+    string marker = "predicate"
+    trace marker
+    return value > 0
+type Positive = int64 where positive_check(value)
+struct Holder:
+    callback: function() returns int64
+function source_five() returns int64:
+    string marker = "source"
+    trace marker
+    return 5
+function source_zero() returns int64:
+    string marker = "source"
+    trace marker
+    return 0
+function source_pending() returns int64:
+    string marker = "source"
+    trace marker
+    return run 5
+function selected_field() returns TypeField:
+    return list.get[TypeField](type.fields[Holder](), 0) handle:
+        return selected_field()
+function main(stdout: Stdout) returns nothing:
+    Holder holder = Holder(callback: run source_five)
+    TypeField field = selected_field()
+    function() returns Positive observed = type.field_value[Holder, function() returns Positive](view holder, view field)
+    Positive returned = observed()
+    Stdout.write(view stdout, "consumer:{coarsen returned}\n")
+    return nothing

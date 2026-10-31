@@ -1,0 +1,26 @@
+namespace app
+enum Message:
+    named(value: string)
+machine Session:
+    states:
+        active(name: string)
+    transitions:
+        active to active
+function variant_error() returns string:
+    TypeVariant variant = list.get[TypeVariant](type.variants[Message](), 0) handle:
+        return "missing variant"
+    TypeVariant pending_variant = run variant
+    TypeConstruction builder = type.construct_variant_start[Message](view pending_variant) handle error:
+        return error
+    return "unexpected variant success"
+function state_error() returns string:
+    TypeMachineState state = list.get[TypeMachineState](type.machine_states[Session](), 0) handle:
+        return "missing state"
+    TypeMachineState pending_state = run state
+    TypeConstruction builder = type.construct_machine_start[Session](view pending_state) handle error:
+        return error
+    return "unexpected state success"
+function main() returns nothing:
+    println(variant_error())
+    println(state_error())
+    return nothing

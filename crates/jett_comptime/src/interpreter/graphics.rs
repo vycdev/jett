@@ -5,12 +5,7 @@ use jett_runtime::graphics::{self, Color, Config, Key, Rect, Scene, Text};
 use super::{Interpreter, Value};
 
 /// Input supplied by a deterministic graphics provider. It never opens a window.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GraphicsTestEvent {
-    Key(Key),
-    Close,
-    HostError(String),
-}
+pub use jett_runtime::graphics::TestEvent as GraphicsTestEvent;
 
 /// Observable graphics operations recorded by a deterministic provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,7 +224,12 @@ fn key_value(key: Key) -> Value {
 }
 
 fn field<'a>(value: &'a Value, expected_type: &str, name: &str) -> Result<&'a Value, String> {
-    let Value::Struct { type_name, fields } = value else {
+    let Value::Struct {
+        concrete_type: _,
+        type_name,
+        fields,
+    } = value
+    else {
         return Err(format!("graphics: expected {expected_type}"));
     };
     if type_name != expected_type {

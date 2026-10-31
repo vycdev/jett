@@ -1,0 +1,172 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+type Numbers = list[int64]
+type NonEmpty = list[int64] where list.length[int64](view value) > 0
+implement Named for Numbers:
+    function name(view self: Numbers) returns string:
+        return "numbers:{list.length[int64](view self)}"
+implement Named for list[string]:
+    function name(view self: list[string]) returns string:
+        return "words:{list.length[string](view self)}"
+implement Named for list[secret[string]]:
+    function name(view self: list[secret[string]]) returns string:
+        return "secrets:{list.length[secret[string]](view self)}"
+implement Named for NonEmpty:
+    function name(view self: NonEmpty) returns string:
+        list[int64] items = coarsen self
+        return "nonempty:{list.length[int64](view items)}"
+implement Named for map[string, int64]:
+    function name(view self: map[string, int64]) returns string:
+        return "number-map:{map.length[string, int64](view self)}"
+implement Named for map[string, string]:
+    function name(view self: map[string, string]) returns string:
+        return "word-map:{map.length[string, string](view self)}"
+implement Named for set[int64]:
+    function name(view self: set[int64]) returns string:
+        return "number-set:{set.length[int64](view self)}"
+implement Named for set[string]:
+    function name(view self: set[string]) returns string:
+        return "word-set:{set.length[string](view self)}"
+implement Named for optional[int64]:
+    function name(view self: optional[int64]) returns string:
+        int64 found = clone self handle:
+            return "no-number"
+        return "maybe-number:{found}"
+implement Named for optional[string]:
+    function name(view self: optional[string]) returns string:
+        string found = clone self handle:
+            return "no-word"
+        return "maybe-word:{found}"
+implement Named for result[int64, string]:
+    function name(view self: result[int64, string]) returns string:
+        int64 found = clone self handle error:
+            return "number-fail:{error}"
+        return "number-ok:{found}"
+implement Named for result[string, int64]:
+    function name(view self: result[string, int64]) returns string:
+        string found = clone self handle error:
+            return "word-fail:{error}"
+        return "word-ok:{found}"
+implement Named for list[Named]:
+    function name(view self: list[Named]) returns string:
+        return "interfaces:{list.length[Named](view self)}"
+struct Record:
+    count: int64
+type Counted = Record where value.count > 0
+implement Named for Record:
+    function name(view self: Record) returns string:
+        return "record:{self.count}"
+implement Named for Counted:
+    function name(view self: Counted) returns string:
+        Record plain = coarsen self
+        return "counted:{plain.count}"
+function show(view value: Named) returns string:
+    return Named.name(view value)
+function mixed() returns list[Named]:
+    list[int64] numbers = list(1, 2)
+    list[string] words = list("a", "b")
+    list[secret[string]] hidden = list("hidden-collection-secret")
+    NonEmpty checked = list(3, 4, 5) handle error:
+        return list()
+    map[string, int64] number_map = map("a": 1)
+    map[string, string] word_map = map("a": "b", "c": "d")
+    set[int64] number_set = set.add[int64](set.new[int64](), 3)
+    set[string] word_set = set.add[string](set.new[string](), "word")
+    optional[int64] number_some = some(7)
+    optional[string] word_some = some("hello")
+    optional[int64] number_none = none
+    optional[string] word_none = none
+    result[int64, string] number_ok = ok(9)
+    result[string, int64] word_ok = ok("yes")
+    result[int64, string] number_fail = fail("bad")
+    result[string, int64] word_fail = fail(11)
+    return list(numbers, words, hidden, checked, number_map, word_map, number_set, word_set, number_some, word_some, number_none, word_none, number_ok, word_ok, number_fail, word_fail)
+function numbers() returns Named:
+    return list(1, 2)
+function callback() returns function() returns Named:
+    return function() returns Named:
+        return numbers()
+struct Holder:
+    item: Named
+function converted() returns list[Named]:
+    list[list[int64]] source = list(list(1), list(2, 3))
+    list[Named] erased = source
+    return list.append[Named](erased, list("last"))
+function counted() returns Named:
+    Counted value = Record(count: 4) handle error:
+        return Record(count: 0)
+    return value
+struct CollectionHolder:
+    items: list[int64]
+function reflected() returns Named:
+    CollectionHolder source = CollectionHolder(items: list(5, 6, 7))
+    mutable TypeConstruction builder = type.construct_start[CollectionHolder]()
+    for field in type.fields[CollectionHolder]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[CollectionHolder, Field](view source, view field)
+            builder = type.construct_put[CollectionHolder, Field](builder, view field, value) handle error:
+                return Record(count: 0)
+    CollectionHolder built = type.construct_finish[CollectionHolder](builder) handle error:
+        return Record(count: 0)
+    return built.items
+function concrete_operations() returns nothing:
+    list[int64] values = list.append[int64](list(2, 1), 3)
+    list[int64] sorted = list.sort[int64](values)
+    mutable int64 total = 0
+    for value in sorted:
+        total = total + value
+    println(total)
+    map[string, int64] entries = map.insert[string, int64](map("a": 1), "b", 2)
+    int64 mapped = map.get[string, int64](entries, "b") handle:
+        return nothing
+    println(mapped)
+    set[int64] items = set.add[int64](set.new[int64](), 9)
+    for value in items:
+        println(value)
+    result[int64, string] later = run ok(17)
+    int64 found = join later handle error:
+        return nothing
+    println(found)
+    return nothing
+function main() returns nothing:
+    for value in mixed():
+        println(show(view value))
+    list[Named] baked = comptime mixed()
+    trace baked
+    for value in baked:
+        println(show(view value))
+    Named direct = numbers()
+    Named copied = clone direct
+    println(show(view copied))
+    Holder holder = Holder(item: numbers())
+    println(show(view holder.item))
+    function() returns Named live = callback()
+    function() returns Named frozen = comptime callback()
+    println(show(view live()))
+    println(show(view frozen()))
+    Named pending = run numbers()
+    Named ready = join pending handle error:
+        return nothing
+    println(show(view ready))
+    list[Named] converted_values = converted()
+    println(show(view converted_values))
+    for value in converted_values:
+        println(show(view value))
+    Named converted_baked = comptime converted()
+    println(show(view converted_baked))
+    Named nominal = counted()
+    Named nominal_baked = comptime counted()
+    println(show(view nominal))
+    println(show(view nominal_baked))
+    Named reflected_value = reflected()
+    Named reflected_baked = comptime reflected()
+    println(show(view reflected_value))
+    println(show(view reflected_baked))
+    list[int64] alias_value = list(1, 2, 3, 4)
+    println(Numbers.name(view alias_value))
+    function(view Numbers) returns string reader = Numbers.name
+    println(reader(view alias_value))
+    concrete_operations()
+    trace holder
+    return nothing

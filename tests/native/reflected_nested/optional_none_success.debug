@@ -1,0 +1,3 @@
+trace record: app.Holder = app.Holder(payload: none)
+trace event: app.Event = app.Event.content(none)
+trace session: app.Session = app.Session@content(none)

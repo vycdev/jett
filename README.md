@@ -59,7 +59,7 @@ Core ideas already present in the implementation include:
 Jett is experimental, but the compiler front half is substantial.
 
 - The lexer, parser, formatter, resolver, typechecker, ownership checker, comptime interpreter, runtime interpreter, CLI, fixture suite, and VS Code extension are working.
-- `jett build` currently validates and type-checks programs. Native LLVM code generation is planned but not implemented yet.
+- `jett build` emits native executables through Cranelift on x86-64 Linux GNU and Windows MSVC. `build --check` validates source without an executable or runtime bundle.
 - `jett run` executes programs through the tree-walking interpreter.
 - `jett test` runs `verify` and `property` blocks.
 - `graphics.run` can open a native 2D window through an explicit `Graphics`
@@ -89,7 +89,7 @@ cargo run -p jett_cli -- run tests/run_pass/hello_print.jett
 Type-check a file:
 
 ```bash
-cargo run -p jett_cli -- build tests/run_pass/hello_print.jett
+cargo run -p jett_cli -- build --check tests/run_pass/hello_print.jett
 ```
 
 Format a file:
@@ -117,7 +117,7 @@ The main binary is `jett`.
 
 ```text
 jett format [--check] [--agent] <file.jett>
-jett build [--release] [--agent] [--target <triple>] <file.jett>
+jett build [--check] [--release] [--agent] [--target <triple>] [-o <output>] [--runtime-bundle <manifest>] <file.jett>
 jett run [--agent] <file.jett>
 jett test [--agent] [file.jett]
 jett bundle [--agent] --output <file.jett> [project-file-or-directory]
@@ -127,7 +127,26 @@ jett lsp
 
 `format`, `build`, `run`, `test`, `bundle`, and `query` accept `--agent` to emit structured TOON output that a coding agent can parse mechanically. `query` requires exactly one of the listed query options.
 
-`build` currently type-checks without generating native code; `--release` and `--target` are accepted but currently have no effect and reserve the intended code-generation interface.
+Package the compiler, stdlib, debug/release runtime archives, and dependency notices:
+
+```bash
+python3 tools/package_native.py --output target/package
+python3 tools/smoke_native_package.py target/package
+target/package/bin/jett build tests/run_pass/hello_print.jett
+```
+
+Native builds require the host C linker and SDK. Keep the package's `bin` and
+`lib` directories together when relocating it. The installed compiler never
+invokes Cargo. The default output is `target/<host>/<debug|release>/<source-stem>`
+(with `.exe` on Windows); `-o` selects another destination. `--release` optimizes
+code, rejects debug printing, and removes traces and breakpoint conditions.
+`--target` accepts only the current supported host triple; cross-compilation
+is not implemented.
+
+`--runtime-bundle` or `JETT_NATIVE_RUNTIME_BUNDLE` can select an explicit
+`launcher.json`; the driver validates its compiler version, target, ABI, CRT,
+profile, and ordered system libraries. Stdlib discovery uses `JETT_STDLIB_DIR`
+when set, then the package's `lib/jett/stdlib`, then the development checkout.
 
 ## Repository Layout
 
@@ -176,6 +195,25 @@ cargo test -p jett_comptime
 ```
 
 Compile-fail fixtures live in `tests/compile_fail` and assert specific diagnostics. Run-pass fixtures live in `tests/run_pass` and exercise interpreter behavior.
+
+### Private Resource native gates
+
+The archive measurement helper builds fresh compiler-test runtimes and runs
+pinned Source execution gates. On Linux GNU, its default target measures the
+dynamic CRT. On Windows MSVC, use an x64 Visual Studio Developer PowerShell
+with `link.exe` on PATH and LLVM's `llvm-nm` and `llvm-readobj` installed:
+
+```powershell
+python tools/measure_resource_native_archives.py prepare --target x86_64-pc-windows-msvc --nm llvm-nm --readobj llvm-readobj --linker link.exe --output target/native/private-resource
+python tools/measure_resource_native_archives.py run --target x86_64-pc-windows-msvc --suite occupied-structs --reuse-target-dir --receipt RECEIPT_PATH --expected-sha256 MEASURED_DIGEST --target-dir target/native
+```
+
+Preparation returns the receipt path and measured digest. The MSVC path checks
+static CRT, exact runtime exports, compiler and linker identity, and the SDK LIB
+environment. The two occupied-struct gates use both fresh archive profiles;
+ordinary Runtime test counts do not establish their linked Source execution.
+Reusing the MSVC test target requires a newly compiled gate with that receipt
+pin. The default `original` suite retains the complete shared Source gate.
 
 The language intentionally enforces function complexity limits. The current checker caps functions at 100 statements, nesting depth 4, and cyclomatic complexity 10.
 

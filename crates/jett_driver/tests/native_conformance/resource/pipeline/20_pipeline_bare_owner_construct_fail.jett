@@ -1,0 +1,17 @@
+namespace app
+function read_first(view token: resource_probe.TestHandle, view net: Network) returns result[int64, string]:
+    use resource_probe
+    return resource_probe.borrow(view net, view token)
+export function scenario(view net: Network) returns int64:
+    use resource_probe
+    resource_probe.TestHandle token = resource_probe.create(view net, 2001) handle error:
+        return -1
+    int64 observed = token into read_first(view net) handle error:
+        return -2
+    return observed
+export function main(net: Network) returns nothing:
+    use resource_probe
+    int64 observed = scenario(view net)
+    if observed != -1:
+        int64 ignored = resource_probe.terminal_label()
+    return nothing

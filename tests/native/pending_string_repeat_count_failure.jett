@@ -1,0 +1,5 @@
+namespace app
+function main() returns nothing:
+    string value = string.repeat("ab", run 2)
+    trace value
+    return nothing

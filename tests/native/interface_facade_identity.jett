@@ -1,0 +1,92 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+implement Named for int8:
+    function name(view self: int8) returns string:
+        return "small:{self}"
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "wide:{self}"
+implement Named for float32:
+    function name(view self: float32) returns string:
+        return "float32:{self}"
+implement Named for float64:
+    function name(view self: float64) returns string:
+        return "float64:{self}"
+implement Named for list[int8]:
+    function name(view self: list[int8]) returns string:
+        return "small-list:{list.length[int8](view self)}"
+implement Named for list[int64]:
+    function name(view self: list[int64]) returns string:
+        return "wide-list:{list.length[int64](view self)}"
+type Positive = int8 where value > 0
+implement Named for Positive:
+    function name(view self: Positive) returns string:
+        return "positive:{coarsen self}"
+struct Box[T]:
+    item: T
+implement Named for Box[int8]:
+    function name(view self: Box[int8]) returns string:
+        return "small-box:{self.item}"
+implement Named for Box[secret[string]]:
+    function name(view self: Box[secret[string]]) returns string:
+        return "secret-box"
+enum Event:
+    idle
+    named(count: int8)
+implement Named for Event:
+    function name(view self: Event) returns string:
+        match self:
+            idle:
+                return "idle"
+            named(count):
+                return "event:{count}"
+bitfield Header:
+    count: 8 bits
+implement Named for Header:
+    function name(view self: Header) returns string:
+        return "header:{self.count}"
+machine Session:
+    states:
+        active(count: int8)
+    transitions:
+        active to active
+implement Named for Session:
+    function name(view self: Session) returns string:
+        if self at active:
+            return "session:{self.count}"
+        return "unexpected"
+implement Named for Session at active:
+    function name(view self: Session at active) returns string:
+        return "active:{self.count}"
+function parsed[T](text: string) returns Named:
+    T value = json.parse[T](text) handle error:
+        return 0
+    return value
+function roundtrip[T](value: T) returns Named:
+    string text = json.serialize[T](view value)
+    return parsed[T](text)
+function mixed() returns list[Named]:
+    Session bare = Session(active, 17)
+    return list(parsed[int8]("7"), parsed[int64]("7"), parsed[float32]("1.5"), parsed[float64]("1.5"), parsed[list[int8]]("[1,2]"), parsed[list[int64]]("[1,2]"), parsed[Positive]("9"), parsed[Box[int8]]("{{\"item\":11}}"), parsed[Box[secret[string]]]("{{\"item\":\"hidden-json-interface\"}}"), roundtrip[Event](Event.named(13)), roundtrip[Header](Header(count: 15)), roundtrip[Session](bare), roundtrip[Session at active](Session(active, 19)))
+function math_values() returns list[Named]:
+    return list(math.abs(-3), math.abs(-3.5), math.min(5, 6), math.max(5.0, 6.0))
+function main() returns nothing:
+    list[Named] live = mixed()
+    trace live
+    for value in live:
+        println(Named.name(view value))
+    list[Named] baked = comptime mixed()
+    trace baked
+    for value in baked:
+        println(Named.name(view value))
+    list[int8] elements = json.parse[list[int8]]("[21,23]") handle error:
+        return nothing
+    for element in elements:
+        println(Named.name(view element))
+    for value in math_values():
+        println(Named.name(view value))
+    list[Named] math_baked = comptime math_values()
+    for value in math_baked:
+        println(Named.name(view value))
+    return nothing

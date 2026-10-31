@@ -1,0 +1,19 @@
+namespace app
+function main() returns nothing:
+    int8 small = -128
+    uint8 byte = 255
+    uint64 large = 18446744073709551615
+    float32 narrow = -2.5
+    float64 wide = 3.125
+    float64 not_a_number = 0.0 / 0.0
+    float64 infinity = 1.0 / 0.0
+    println(json.serialize[int8](small))
+    println(json.serialize_public[uint8](byte))
+    println(json.serialize[uint64](large))
+    println(json.serialize[float32](narrow))
+    println(json.serialize_public[float64](wide))
+    println(json.serialize[float64](not_a_number))
+    println(json.serialize[float64](infinity))
+    println(json.serialize[bool](true))
+    println(json.serialize[string]("quote \" slash \\ line\n€"))
+    println(json.serialize[nothing](nothing))

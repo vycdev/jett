@@ -1,0 +1,12 @@
+namespace app
+machine Session:
+    states:
+        ready(count: int64)
+        cached(entries: map[int64, int64])
+    transitions:
+        ready to cached
+function main(stdout: Stdout) returns nothing:
+    Session at ready value = Session(ready, 7)
+    string encoded = json.serialize[Session at ready](view value)
+    Stdout.write(view stdout, "{encoded}\n")
+    Stdout.write(view stdout, "alive:{value.count}\n")

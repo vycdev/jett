@@ -1,0 +1,13 @@
+namespace app
+struct Packet:
+    value: int64
+function consume(packet: Packet) returns int64:
+    return packet.value
+actor Store:
+    receive change(mutable supplied: Packet):
+        int64 consumed = consume(supplied)
+        supplied.value = consumed + 1
+function main() returns nothing:
+    Store store = spawn Store()
+    send store.change(Packet(value: 1))
+    return nothing

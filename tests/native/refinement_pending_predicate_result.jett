@@ -1,0 +1,9 @@
+namespace app
+type Positive = int8 where run(value > 0)
+function main() returns nothing:
+    int8 base = 7
+    Positive value = base handle error:
+        println(error)
+        return nothing
+    println(coarsen value)
+    return nothing

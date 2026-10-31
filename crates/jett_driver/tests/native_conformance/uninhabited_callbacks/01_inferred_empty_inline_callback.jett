@@ -1,0 +1,9 @@
+namespace app
+function mapped_report[T](values: list[T]) returns string:
+    function(T) returns int64 mapper = function(ignored: T) returns int64: return 7
+    list[int64] mapped = list.map[T, int64](values, mapper)
+    int64 first = list.get[int64](view mapped, 0) handle:
+        default -1
+    return "{list.length[int64](view mapped)}:{first}"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "direct:{mapped_report(list())}\n")

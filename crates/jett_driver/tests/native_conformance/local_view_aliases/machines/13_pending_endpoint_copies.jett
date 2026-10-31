@@ -1,0 +1,43 @@
+namespace app
+machine Packet:
+    states:
+        ready(data: bytes, items: list[int64])
+function ready_data(view packet: Packet at ready) returns result[bytes, string]:
+    bytes borrowed = view packet.data
+    bytes forwarded = borrowed
+    trace forwarded
+    bytes once = join clone forwarded handle error:
+        return fail(error)
+    trace once
+    bytes ready = join once handle error:
+        return fail(error)
+    return ok(ready)
+function ready_items(view packet: Packet at ready) returns result[list[int64], string]:
+    list[int64] borrowed = view packet.items
+    list[int64] forwarded = borrowed
+    trace forwarded
+    list[int64] once = join clone forwarded handle error:
+        return fail(error)
+    trace once
+    list[int64] ready = join once handle error:
+        return fail(error)
+    return ok(ready)
+function main(stdout: Stdout) returns nothing:
+    Packet at ready packet = Packet(ready, run run bytes.from_string("AB"), run run list(2, 3))
+    bytes ready_data_copy = ready_data(view packet) handle error:
+        Stdout.write(view stdout, "unexpected:{error}\n")
+        return nothing
+    bytes data_again = ready_data(view packet) handle error:
+        Stdout.write(view stdout, "unexpected:{error}\n")
+        return nothing
+    bytes grown = bytes.concat(ready_data_copy, bytes.from_string("C"))
+    list[int64] ready_items_copy = ready_items(view packet) handle error:
+        Stdout.write(view stdout, "unexpected:{error}\n")
+        return nothing
+    list[int64] items_again = ready_items(view packet) handle error:
+        Stdout.write(view stdout, "unexpected:{error}\n")
+        return nothing
+    list[int64] extended = list.append[int64](ready_items_copy, 7)
+    trace packet
+    Stdout.write(view stdout, "bytes:{bytes.to_hex(view grown)}:{bytes.to_hex(view data_again)}\n")
+    Stdout.write(view stdout, "items:{list.length(view extended)}:{list.length(view items_again)}\n")

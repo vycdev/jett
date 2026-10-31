@@ -1,0 +1,68 @@
+interface Displayable:
+    function display(view self: Displayable) returns string
+namespace domain
+export interface Named:
+    function name(view self: Named) returns string
+export struct Record:
+    name: string
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "number:{self}"
+implement Named for Record:
+    function name(view self: Record) returns string:
+        return "record:{self.name}"
+implement Displayable for Record:
+    function display(view self: Record) returns string:
+        return "concrete:{self.name}"
+implement Displayable for Named:
+    function display(view self: Named) returns string:
+        return "erased:{Named.name(view self)}"
+implement Displayable for bool:
+    function display(view self: bool) returns string:
+        if self:
+            return "enabled"
+        return "disabled"
+export function make() returns Named:
+    return Record(name: "returned")
+export function baked() returns string:
+    Named value = make()
+    return "{value}"
+namespace app
+struct Holder:
+    value: domain.Named
+function format[T](view value: T) returns string:
+    return "{value}"
+function marked() returns domain.Named:
+    use domain
+    println("evaluated")
+    return domain.make()
+function scoped() returns nothing:
+    use domain
+    comptime type Bound = type.info[domain.Named]():
+        Bound value = domain.make()
+        println("scoped:{value}")
+    return nothing
+function main() returns nothing:
+    use domain
+    domain.Named number = 7
+    domain.Record record = domain.Record(name: "Ada")
+    domain.Named erased = clone record
+    println("{number}")
+    println("{record}")
+    println("{erased}")
+    println(format[domain.Record](view record))
+    println(format[domain.Named](view number))
+    println(format[domain.Named](view erased))
+    Holder stored = Holder(value: erased)
+    println("field:{stored.value}")
+    println("call:{domain.make()}")
+    println("once:{marked()}")
+    println(domain.baked())
+    string baked = comptime domain.baked()
+    println(baked)
+    scoped()
+    println(domain.Named.name(view number), record.name)
+    println("{true}")
+    string flag = comptime "{false}"
+    println(flag)
+    return nothing

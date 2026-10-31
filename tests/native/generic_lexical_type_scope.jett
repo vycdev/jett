@@ -1,0 +1,25 @@
+struct T:
+    number: int64
+function global_name() returns string:
+    return type.name[T]()
+function global_closure() returns function() returns string:
+    return function() returns string: return type.name[T]()
+function invoke[T]() returns string:
+    return global_name()
+function make[T]() returns function() returns string:
+    return global_closure()
+function explicit_name[T]() returns string:
+    return type.name[T]()
+function invoke_explicit[T]() returns string:
+    return explicit_name[T]()
+function main() returns nothing:
+    println(global_name())
+    println(invoke[int64]())
+    println(comptime invoke[string]())
+    function() returns string baked = comptime make[int64]()
+    function() returns string live = make[string]()
+    println(baked())
+    println(live())
+    println(invoke_explicit[int64]())
+    println(invoke_explicit[string]())
+    return nothing

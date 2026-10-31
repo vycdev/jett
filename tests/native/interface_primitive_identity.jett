@@ -1,0 +1,138 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+type Small = int8
+type Positive = int64 where value > 0
+type NonEmpty = string where value != ""
+implement Named for Small:
+    function name(view self: Small) returns string:
+        return "int8:{self}"
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "int64:{self}"
+implement Named for uint8:
+    function name(view self: uint8) returns string:
+        return "uint8:{self}"
+implement Named for uint64:
+    function name(view self: uint64) returns string:
+        return "uint64:{self}"
+implement Named for float32:
+    function name(view self: float32) returns string:
+        return "float32"
+implement Named for float64:
+    function name(view self: float64) returns string:
+        return "float64"
+implement Named for int16:
+    function name(view self: int16) returns string:
+        return "int16:{self}"
+implement Named for int32:
+    function name(view self: int32) returns string:
+        return "int32:{self}"
+implement Named for uint16:
+    function name(view self: uint16) returns string:
+        return "uint16:{self}"
+implement Named for uint32:
+    function name(view self: uint32) returns string:
+        return "uint32:{self}"
+implement Named for Positive:
+    function name(view self: Positive) returns string:
+        return "positive:{coarsen self}"
+implement Named for NonEmpty:
+    function name(view self: NonEmpty) returns string:
+        return "nonempty:{coarsen self}"
+implement Named for string:
+    function name(view self: string) returns string:
+        return "string:{self}"
+function show(view value: Named) returns string:
+    return Named.name(view value)
+function narrow() returns Named:
+    int8 value = 7
+    return value
+function refined() returns Named:
+    Positive value = 7 handle error:
+        return "invalid"
+    return value
+function callback() returns function() returns Named:
+    Small value = 8
+    return function() returns Named:
+        return value
+struct Holder:
+    value: Named
+function mixed() returns list[Named]:
+    int8 small = 7
+    int64 large = 7
+    uint8 small_unsigned = 9
+    uint64 large_unsigned = 9
+    float32 narrow_float = 1.0
+    float64 wide_float = 1.0
+    int16 medium_signed = 15
+    int32 larger_signed = 31
+    uint16 medium_unsigned = 16
+    uint32 larger_unsigned = 32
+    Positive positive = 7 handle error:
+        return list()
+    NonEmpty nonempty = "yes" handle error:
+        return list()
+    string plain = "yes"
+    return list(small, large, small_unsigned, large_unsigned, narrow_float, wide_float, medium_signed, larger_signed, medium_unsigned, larger_unsigned, positive, nonempty, plain)
+function literal_sequence() returns list[Named]:
+    list[int8] values = list(12, 13)
+    return values
+function reflected() returns Named:
+    Holder original = Holder(value: narrow())
+    mutable TypeConstruction builder = type.construct_start[Holder]()
+    for field in type.fields[Holder]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[Holder, Field](view original, view field)
+            builder = type.construct_put[Holder, Field](builder, view field, value) handle error:
+                return "put failed"
+    Holder built = type.construct_finish[Holder](builder) handle error:
+        return "finish failed"
+    return built.value
+function main() returns nothing:
+    for value in mixed():
+        println(show(view value))
+    list[Named] baked = comptime mixed()
+    for value in baked:
+        println(show(view value))
+    Named direct = narrow()
+    Named copied = clone direct
+    println(show(view copied))
+    Named baked_narrow = comptime narrow()
+    println(show(view baked_narrow))
+    Named baked_refined = comptime refined()
+    println(show(view baked_refined))
+    function() returns Named live_callback = callback()
+    function() returns Named baked_callback = comptime callback()
+    println(show(view live_callback()))
+    println(show(view baked_callback()))
+    Holder stored = Holder(value: narrow())
+    println(show(view stored.value))
+    Named pending = run narrow()
+    Named ready = join pending handle error:
+        return nothing
+    println(show(view ready))
+    int8 small = 11
+    list[int8] source = list(small)
+    list[Named] converted = source
+    list[Named] appended = list.append[Named](converted, small)
+    for value in appended:
+        println(show(view value))
+    optional[int8] maybe = some(small)
+    optional[Named] erased = maybe
+    Named found = erased handle:
+        return nothing
+    println(show(view found))
+    map[string, Named] entries = map("key": small)
+    Named mapped = map.get[string, Named](entries, "key") handle:
+        return nothing
+    println(show(view mapped))
+    list[Named] literals = comptime literal_sequence()
+    for value in literals:
+        println(show(view value))
+    Named reflected_value = reflected()
+    Named reflected_baked = comptime reflected()
+    println(show(view reflected_value))
+    println(show(view reflected_baked))
+    trace stored
+    return nothing

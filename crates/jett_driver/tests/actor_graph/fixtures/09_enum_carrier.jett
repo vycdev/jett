@@ -1,0 +1,18 @@
+namespace app
+actor Counter:
+    mutable int64 count = 7
+    receive read responds int64:
+        respond count
+enum Carrier:
+    held(worker: Counter)
+    empty
+function create() returns Carrier:
+    return Carrier.held(spawn Counter())
+function main() returns nothing:
+    Carrier root = comptime create()
+    match root:
+        held(worker):
+            println(ask worker.read)
+        empty:
+            println(0)
+    return nothing

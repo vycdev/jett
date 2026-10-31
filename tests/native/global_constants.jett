@@ -1,0 +1,44 @@
+namespace app
+type Count = int8
+Count minimum = -128
+uint64 maximum = 18446744073709551615
+float32 rounded = 3.14
+string greeting = "hello"
+bool enabled = true
+nothing unit = nothing
+int64 base = 40
+int64 answer = comptime(base + 2)
+string label = comptime "{greeting}:{answer}"
+function calculate() returns int64:
+    return answer + 1
+int64 baked = comptime calculate()
+function describe() returns string:
+    bool unit_equal = unit == nothing
+    return "{minimum}:{maximum}:{rounded}:{label}:{enabled}:{unit_equal}:{baked}"
+function callback() returns function() returns string:
+    return function() returns string:
+        return describe()
+function generic_answer[T](value: T) returns int64:
+    return answer
+function main(stdout: Stdout) returns nothing:
+    trace minimum
+    trace label
+    trace unit
+    string baked_description = comptime describe()
+    function() returns string describe_later = callback()
+    function() returns string label_later = function() returns string: return label
+    Stdout.write(view stdout, "{describe()}\n{describe_later()}\n{baked_description}\n")
+    Stdout.write(view stdout, "{label_later()}:{generic_answer[bool](true)}:{generic_answer[string]("ignored")}\n")
+verify baked_constants:
+    trace answer
+    breakpoint
+    assert answer == 42
+    assert baked == 43
+    assert unit == nothing
+    assert label == "hello:42"
+property constant_reads:
+    given value: int64
+    trace greeting
+    assert value + answer - answer == value
+    assert generic_answer[int64](value) == 42
+    assert label == "hello:42"

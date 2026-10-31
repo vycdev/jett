@@ -1,0 +1,13 @@
+namespace app
+struct Inner:
+    value: int64
+type ValidInner = Inner where value.value > 0
+type Selected = ValidInner
+struct Record:
+    inner: Selected
+function main() returns nothing:
+    Selected initial = Inner(value: 1) handle error:
+        return nothing
+    mutable Record record = Record(inner: initial) handle error:
+        return nothing
+    record.inner.value = 0

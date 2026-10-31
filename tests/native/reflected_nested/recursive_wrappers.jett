@@ -1,0 +1,94 @@
+namespace app
+function positive_check(value: int64) returns bool:
+    string marker = "positive"
+    trace marker
+    return value > 0
+type Positive = int64 where positive_check(value)
+function text_check(value: string) returns bool:
+    string marker = "text"
+    trace marker
+    return string.char_count(value) > 0
+type Text = string where text_check(value)
+struct Holder:
+    payload: list[optional[result[map[int64, list[string]], set[int64]]]]
+enum Event:
+    content(payload: list[optional[result[map[int64, list[string]], set[int64]]]])
+machine Session:
+    states:
+        content(payload: list[optional[result[map[int64, list[string]], set[int64]]]])
+        empty
+    transitions:
+        content to empty
+function seed() returns list[optional[result[map[int64, list[string]], set[int64]]]]:
+    mutable set[int64] failed = set.new[int64]()
+    failed = set.add[int64](failed, 7)
+    failed = set.add[int64](failed, 9)
+    return list(none, some(ok(map(1: list("Agent-λ🙂", "next")))), some(fail(failed)))
+function record_field() returns TypeField:
+    return list.get[TypeField](type.fields[Holder](), 0) handle:
+        return record_field()
+function event_field(view source: Event) returns TypeField:
+    TypeVariant variant = type.variant_value[Event](view source)
+    return list.get[TypeField](variant.fields, 0) handle:
+        return event_field(view source)
+function session_field(view source: Session) returns TypeField:
+    TypeMachineState state = type.machine_state_value[Session](view source)
+    return list.get[TypeField](state.fields, 0) handle:
+        return session_field(view source)
+function read_record(view source: Holder, view field: TypeField) returns list[optional[result[map[Positive, list[Text]], set[Positive]]]]:
+    return type.field_value[Holder, list[optional[result[map[Positive, list[Text]], set[Positive]]]]](view source, view field)
+function read_event(view source: Event, view field: TypeField) returns list[optional[result[map[Positive, list[Text]], set[Positive]]]]:
+    return type.variant_field_value[Event, list[optional[result[map[Positive, list[Text]], set[Positive]]]]](view source, view field)
+function read_session(view source: Session, view field: TypeField) returns list[optional[result[map[Positive, list[Text]], set[Positive]]]]:
+    return type.machine_field_value[Session, list[optional[result[map[Positive, list[Text]], set[Positive]]]]](view source, view field)
+function summarize_text(items: list[Text]) returns string:
+    list[Text] reversed = list.reverse[Text](items)
+    mutable string output = ""
+    for item in reversed:
+        output = "{output}/{coarsen item}"
+    return output
+function summarize_map(items: map[Positive, list[Text]]) returns string:
+    mutable string output = "ok"
+    for key, value in items:
+        string text = summarize_text(value)
+        output = "{output}:{coarsen key}={text}"
+    return output
+function summarize_set(items: set[Positive]) returns string:
+    mutable string output = "fail"
+    for value in items:
+        output = "{output}:{coarsen value}"
+    return output
+function summarize_result(item: result[map[Positive, list[Text]], set[Positive]]) returns string:
+    map[Positive, list[Text]] success = item handle error:
+        return summarize_set(error)
+    return summarize_map(success)
+function summarize_optional(item: optional[result[map[Positive, list[Text]], set[Positive]]]) returns string:
+    result[map[Positive, list[Text]], set[Positive]] occupied = item handle:
+        return "none"
+    return summarize_result(occupied)
+function summarize(items: list[optional[result[map[Positive, list[Text]], set[Positive]]]]) returns string:
+    mutable string output = ""
+    for item in items:
+        string part = summarize_optional(item)
+        output = "{output}[{part}]"
+    return output
+function report() returns string:
+    Holder record = Holder(payload: seed())
+    Event event = Event.content(seed())
+    Session session = Session(content, seed())
+    TypeField record_selector = record_field()
+    TypeField event_selector = event_field(view event)
+    TypeField session_selector = session_field(view session)
+    string first = summarize(read_record(view record, view record_selector))
+    string second = summarize(read_event(view event, view event_selector))
+    string third = summarize(read_session(view session, view session_selector))
+    trace record
+    trace event
+    trace session
+    return "{first}|{second}|{third}"
+function main(stdout: Stdout) returns nothing:
+    bytes earlier = bytes.from_string("earlier-owned")
+    list[string] retained = list("kept", "owned")
+    Stdout.write(view stdout, "before\n")
+    string value = report()
+    Stdout.write(view stdout, "after:{value}:{bytes.to_hex(view earlier)}:{list.length(view retained)}\n")

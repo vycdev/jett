@@ -1,0 +1,33 @@
+namespace app
+type NonEmpty = string where string.char_count(value) > 0
+struct User:
+    name: NonEmpty
+function parse_valid() returns string:
+    User user = json.parse[User]("{{\"name\":\"Ada\"}}") handle error:
+        return error
+    return coarsen user.name
+function parse_invalid() returns string:
+    User user = json.parse[User]("{{\"name\":\"\"}}") handle error:
+        return error
+    return coarsen user.name
+function parse_exact_unknown() returns string:
+    User user = json.parse_exact[User]("{{\"name\":\"Ada\",\"extra\":1}}") handle error:
+        return error
+    return coarsen user.name
+function rebuild_refined() returns string:
+    User source = json.parse[User]("{{\"name\":\"Grace\"}}") handle error:
+        return error
+    mutable TypeConstruction builder = type.construct_start[User]()
+    for field in type.fields[User]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[User, Field](view source, view field)
+            builder = type.construct_put[User, Field](builder, view field, value) handle error:
+                return error
+    User built = type.construct_finish[User](builder) handle error:
+        return error
+    return coarsen built.name
+function main() returns nothing:
+    println(parse_valid())
+    println(parse_invalid())
+    println(parse_exact_unknown())
+    println(rebuild_refined())

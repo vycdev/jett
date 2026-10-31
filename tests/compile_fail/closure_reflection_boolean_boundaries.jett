@@ -1,0 +1,21 @@
+# ERROR: E0311
+# ERROR: E0311
+function is_list(kind: TypeKind) returns bool:
+    return kind == TypeKind.list_type
+function predicate[T]() returns function(T) returns int64:
+    return function(value: T) returns int64:
+        if is_list(type.kind_tag[T]()):
+            list[int64] items = value
+            return list.length[int64](view items)
+        return 0
+function detached[T]() returns function(T) returns int64:
+    return function(value: T) returns int64:
+        bool check = type.kind_tag[T]() == TypeKind.list_type
+        if check:
+            list[int64] items = value
+            return list.length[int64](view items)
+        return 0
+function main() returns nothing:
+    function(int64) returns int64 first = predicate[int64]()
+    function(int64) returns int64 second = detached[int64]()
+    return nothing

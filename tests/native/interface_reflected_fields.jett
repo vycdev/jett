@@ -1,0 +1,130 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+implement Named for int8:
+    function name(view self: int8) returns string:
+        return "small:{self}"
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "wide:{self}"
+implement Named for secret[string]:
+    function name(view self: secret[string]) returns string:
+        return "secret"
+struct Holder:
+    item: Named
+    items: list[Named]
+function seed() returns Holder:
+    int8 small = 7
+    secret[string] token = "hidden-reflected-interface"
+    list[Named] items = list(small, 9, token)
+    return Holder(item: small, items: items)
+function record_builder(source: Holder) returns TypeConstruction:
+    mutable TypeConstruction builder = type.construct_start[Holder]()
+    for field in type.fields[Holder]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[Holder, Field](view source, view field)
+            builder = type.construct_put[Holder, Field](builder, view field, value) handle error:
+                return type.construct_start[Holder]()
+    return builder
+function finish_record(builder: TypeConstruction) returns Holder:
+    return type.construct_finish[Holder](builder) handle error:
+        return Holder(item: 0, items: list())
+function show_record(source: Holder) returns nothing:
+    trace source
+    println(Named.name(view source.item))
+    for item in source.items:
+        println(Named.name(view item))
+    return nothing
+enum Event:
+    idle
+    active(item: Named, items: list[Named])
+function event_seed() returns Event:
+    Holder source = seed()
+    return Event.active(source.item, source.items)
+function event_builder(source: Event) returns TypeConstruction:
+    for variant in type.variants[Event]():
+        if variant.name != "active":
+            continue
+        mutable TypeConstruction builder = type.construct_variant_start[Event](view variant) handle error:
+            return type.construct_start[Holder]()
+        for field in variant.fields:
+            comptime type Field = field.type_info:
+                Field value = type.variant_field_value[Event, Field](view source, view field)
+                builder = type.construct_put[Event, Field](builder, view field, value) handle error:
+                    return type.construct_start[Holder]()
+        return builder
+    return type.construct_start[Holder]()
+function finish_event(builder: TypeConstruction) returns Event:
+    return type.construct_finish[Event](builder) handle error:
+        return Event.idle
+function show_event(source: Event) returns nothing:
+    trace source
+    match source:
+        idle:
+            println("idle")
+        active(item, items):
+            println(Named.name(view item))
+            for value in items:
+                println(Named.name(view value))
+    return nothing
+machine Session:
+    states:
+        empty
+        active(item: Named, items: list[Named])
+    transitions:
+        empty to active
+function session_seed() returns Session:
+    Holder source = seed()
+    return Session(active, source.item, source.items)
+function session_builder(source: Session) returns TypeConstruction:
+    for state in type.machine_states[Session]():
+        if state.name != "active":
+            continue
+        mutable TypeConstruction builder = type.construct_machine_start[Session](view state) handle error:
+            return type.construct_start[Holder]()
+        for field in state.fields:
+            comptime type Field = field.type_info:
+                Field value = type.machine_field_value[Session, Field](view source, view field)
+                builder = type.construct_put[Session, Field](builder, view field, value) handle error:
+                    return type.construct_start[Holder]()
+        return builder
+    return type.construct_start[Holder]()
+function finish_session(builder: TypeConstruction) returns Session:
+    return type.construct_finish[Session](builder) handle error:
+        return Session(empty)
+function show_session(source: Session) returns nothing:
+    trace source
+    if source at active:
+        println(Named.name(view source.item))
+        for item in source.items:
+            println(Named.name(view item))
+    return nothing
+function records() returns nothing:
+    show_record(finish_record(record_builder(seed())))
+    Holder baked = comptime finish_record(record_builder(seed()))
+    show_record(baked)
+    TypeConstruction builder = comptime record_builder(seed())
+    trace builder
+    show_record(finish_record(builder))
+    return nothing
+function events() returns nothing:
+    show_event(finish_event(event_builder(event_seed())))
+    Event baked = comptime finish_event(event_builder(event_seed()))
+    show_event(baked)
+    TypeConstruction builder = comptime event_builder(event_seed())
+    trace builder
+    show_event(finish_event(builder))
+    return nothing
+function sessions() returns nothing:
+    show_session(finish_session(session_builder(session_seed())))
+    Session baked = comptime finish_session(session_builder(session_seed()))
+    show_session(baked)
+    TypeConstruction builder = comptime session_builder(session_seed())
+    trace builder
+    show_session(finish_session(builder))
+    return nothing
+function main() returns nothing:
+    records()
+    events()
+    sessions()
+    return nothing

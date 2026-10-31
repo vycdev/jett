@@ -1,0 +1,20 @@
+namespace app
+actor Counter:
+    mutable int64 count = 4
+    receive read responds int64:
+        respond count
+struct Envelope:
+    ready: optional[Counter]
+    completed: result[Counter, string]
+function create() returns Envelope:
+    Counter worker = spawn Counter()
+    return Envelope(ready: some(clone worker), completed: ok(worker))
+function main() returns nothing:
+    Envelope root = comptime create()
+    Envelope copy = clone root
+    Counter first = copy.ready handle:
+        return nothing
+    Counter second = root.completed handle error:
+        return nothing
+    println(first == second, ask first.read)
+    return nothing

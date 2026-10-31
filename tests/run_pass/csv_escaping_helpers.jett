@@ -13,7 +13,7 @@ verify csv_escaped_quote_test:
 function csv_trailing_crlf_test() returns string:
     list[list[string]] rows = csv.parse("a,b\r\n1,2\r\n") handle error:
         return error
-    list[string] second_row = list.get[list[string]](rows, 1) handle:
+    list[string] second_row = list.get[list[string]](view rows, 1) handle:
         default list()
     return "{list.length(rows)}:{list.length[string](second_row)}"
 verify csv_trailing_crlf_test:

@@ -1,0 +1,9 @@
+namespace app
+export function main(net: Network) returns nothing:
+    use resource_probe
+    function(resource_probe.TestHandle) returns nothing dispose = comptime resource_probe.descriptor()
+    function(resource_probe.TestHandle) returns nothing alias = dispose
+    resource_probe.TestHandle token = resource_probe.create(view net, 761) handle error:
+        return nothing
+    alias(token)
+    return nothing

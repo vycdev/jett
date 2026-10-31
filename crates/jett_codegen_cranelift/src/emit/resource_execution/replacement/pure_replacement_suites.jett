@@ -1,0 +1,43 @@
+namespace app
+function optional_marker() returns int64:
+    use resource_probe
+    mutable optional[resource_probe.TestHandle] token = none
+    token = resource_probe.empty()
+    resource_probe.TestHandle unexpected = token handle:
+        return 7
+    return 9
+function string_marker() returns string:
+    use resource_probe
+    mutable result[resource_probe.TestHandle, string] token = fail("before")
+    token = fail("after")
+    resource_probe.TestHandle unexpected = token handle error:
+        return error
+    return "unexpected"
+function integer_marker() returns int64:
+    use resource_probe
+    mutable result[resource_probe.TestHandle, int64] token = fail(11)
+    token = fail(23)
+    resource_probe.TestHandle unexpected = token handle error:
+        return error
+    return 0
+int64 baked_optional = comptime optional_marker()
+string baked_string = comptime string_marker()
+int64 baked_integer = comptime integer_marker()
+export function main(net: Network) returns nothing:
+    int64 selected = optional_marker()
+    string text = string_marker()
+    int64 number = integer_marker()
+    return nothing
+verify pure_replacements:
+    assert optional_marker() == baked_optional
+    assert string_marker() == baked_string
+    assert integer_marker() == baked_integer
+    assert baked_optional == 7
+    assert baked_string == "after"
+    assert baked_integer == 23
+property pure_replacements_trials:
+    given input: int64
+    assert optional_marker() == 7
+    assert string_marker() == "after"
+    assert integer_marker() == 23
+    assert input == input

@@ -1,0 +1,139 @@
+name: Native compiler and installed packages
+
+on:
+  push:
+    branches: [main, codex/native-codegen]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            rustflags: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            rustflags: -Ctarget-feature=+crt-static
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install tested Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal
+      - run: rustup override set 1.97.1
+      - name: Package release compiler and both runtime profiles
+        run: python tools/package_native.py --output dist/package
+      - name: Check compiler and native conformance
+        env:
+          JETT_ACTOR_GRAPH_BUNDLE_MANIFEST: ${{ github.workspace }}/dist/package/lib/jett/runtime/${{ matrix.target }}/debug/launcher.json
+          JETT_ACTOR_GRAPH_EVIDENCE_DIR: ${{ github.workspace }}/target/native-actor-graph
+        run: cargo test --locked --workspace --no-fail-fast --target ${{ matrix.target }}
+      - name: Check public graph execution with the Release runtime
+        env:
+          JETT_ACTOR_GRAPH_BUNDLE_MANIFEST: ${{ github.workspace }}/dist/package/lib/jett/runtime/${{ matrix.target }}/release/launcher.json
+          JETT_ACTOR_GRAPH_EVIDENCE_DIR: ${{ github.workspace }}/target/native-actor-graph
+        run: >-
+          cargo test --locked --release -p jett_driver --test actor_graph_native
+          --target ${{ matrix.target }}
+          actor_graph_public_driver_reference_and_native_without_source
+          -- --exact
+      - name: Check protected graph hooks with the Release runtime
+        env:
+          JETT_ACTOR_GRAPH_BUNDLE_MANIFEST: ${{ github.workspace }}/dist/package/lib/jett/runtime/${{ matrix.target }}/release/launcher.json
+          JETT_ACTOR_GRAPH_EVIDENCE_DIR: ${{ github.workspace }}/target/native-actor-graph
+        run: >-
+          cargo test --locked --release -p jett_driver --lib
+          --target ${{ matrix.target }}
+          native::actor_graph_hooks_tests::actor_graph_checked_hook_original_initializer_and_capture_native
+          -- --exact
+      - name: Retain compact graph execution evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-actor-graph-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            target/native-actor-graph/*.json
+            target/native-actor-graph/**/*.stdout
+            target/native-actor-graph/**/*.stderr
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Check GNU Resource measurement controls
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python -m unittest tools.tests.test_measure_resource_native_archives
+      - name: Measure fresh GNU private Resource runtime archives
+        id: resource_archives
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: >-
+          python tools/measure_resource_native_archives.py prepare
+          --output target/native-resource-gnu
+          --github-output "$GITHUB_OUTPUT"
+      - name: Execute complete GNU Resource corpus with compiled receipt pin
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: >-
+          python tools/measure_resource_native_archives.py run
+          --receipt "${{ steps.resource_archives.outputs.receipt }}"
+          --expected-sha256 "${{ steps.resource_archives.outputs.sha256 }}"
+          --target-dir target/native-resource-gnu-gate
+      - name: Retain GNU Resource measurements and execution evidence
+        if: always() && matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-resource-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            target/native-resource-gnu/*.json
+            target/native-resource-gnu/*.jsonl
+            target/native-resource-gnu/*.log
+            target/native-resource-gnu/*-crt-probe
+            target/native-resource-gnu/*-crt-probe.c
+            target/native-resource-gnu/*-build/x86_64-unknown-linux-gnu/*/libjett_runtime.a
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Check installed compiler
+        run: python tools/smoke_native_package.py dist/package
+      - name: Archive package with executable permissions
+        run: tar -czf native-package.tar.gz -C dist package
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-${{ matrix.target }}
+          path: native-package.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  installed:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      # Deliberately no checkout: this job has no compiler sources or build tree.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: native-${{ matrix.target }}
+      - run: tar -xzf native-package.tar.gz
+      - name: Build and execute with the relocated package
+        run: python package/tools/smoke_native_package.py package

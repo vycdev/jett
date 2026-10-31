@@ -1,0 +1,20 @@
+namespace app
+function main() returns nothing:
+    println(crypto.sha256("abc"), crypto.sha512("abc"), crypto.md5("abc"))
+    println(crypto.sha256(""), crypto.sha512("Jett 🚀"), crypto.md5(""))
+    secret[bytes] key = bytes.from_hex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b") handle error:
+        return nothing
+    bytes message = bytes.from_string("Hi There")
+    secret[bytes] tag = crypto.hmac_sha256(view key, view message)
+    secret[bytes] expected = bytes.from_hex("b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7") handle error:
+        return nothing
+    println(secret.compare(clone tag, expected), secret.redact(clone tag))
+    bytes public_tag = declassify tag
+    println(bytes.to_hex(view public_tag))
+    secret[bytes] long_key = bytes.from_hex(string.repeat("aa", 131)) handle error:
+        return nothing
+    bytes long_message = bytes.from_string("Test Using Larger Than Block-Size Key - Hash Key First")
+    secret[bytes] long_tag = crypto.hmac_sha256(view long_key, view long_message)
+    secret[bytes] long_expected = bytes.from_hex("60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54") handle error:
+        return nothing
+    println(secret.compare(long_tag, long_expected))

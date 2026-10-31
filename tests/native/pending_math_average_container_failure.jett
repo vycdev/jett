@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    list[int64] values = run list(2, 3)
+    float64 average = math.average(values)
+    trace average
+    return nothing

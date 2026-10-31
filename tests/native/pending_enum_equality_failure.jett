@@ -1,0 +1,9 @@
+namespace app
+enum Message:
+    text(value: string)
+    empty
+function main() returns nothing:
+    Message plain = Message.text("Ada")
+    Message pending = run clone plain
+    println(pending == plain)
+    return nothing

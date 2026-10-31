@@ -1,0 +1,29 @@
+namespace app
+enum Protocol:
+    tcp = 6
+    udp = 17
+bitfield Header:
+    version: 4 bits
+    flags: 4 bits
+    protocol: 8 bits as Protocol
+    payload: list[uint8]
+struct Envelope:
+    title: string
+    header: Header
+function roundtrip() returns string:
+    Envelope value = json.parse_exact[Envelope]("{{\"title\":\"packet\",\"header\":{{\"version\":4,\"flags\":2,\"protocol\":\"tcp\",\"payload\":[1,255]}}}}") handle error:
+        return error
+    return json.serialize[Envelope](view value)
+function bad_protocol() returns string:
+    Envelope value = json.parse_exact[Envelope]("{{\"title\":\"packet\",\"header\":{{\"version\":4,\"flags\":2,\"protocol\":6,\"payload\":[1,255]}}}}") handle error:
+        return error
+    return json.serialize[Envelope](view value)
+function bad_payload() returns string:
+    Envelope value = json.parse_exact[Envelope]("{{\"title\":\"packet\",\"header\":{{\"version\":4,\"flags\":2,\"protocol\":\"tcp\",\"payload\":[256]}}}}") handle error:
+        return error
+    return json.serialize[Envelope](view value)
+function main() returns nothing:
+    println(roundtrip())
+    println(bad_protocol())
+    println(bad_payload())
+    return nothing

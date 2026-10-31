@@ -1,0 +1,27 @@
+namespace test
+struct Reading:
+    value: float32
+function parse_value(raw: string) returns string:
+    float32 value = json.parse_exact[float32](raw) handle error:
+        return error
+    return "{value}"
+function parse_reading(raw: string) returns string:
+    Reading reading = json.parse[Reading](raw) handle error:
+        return error
+    return "{reading.value}"
+function roundtrip_reading(raw: string) returns string:
+    Reading reading = json.parse_exact[Reading](raw) handle error:
+        return error
+    return json.serialize[Reading](view reading)
+function conversion_summary() returns string:
+    float32 runtime = float32.from_float64(0.1)
+    float32 baked = comptime float32.from_float64(2.5)
+    return "{runtime}:{baked}"
+function main() returns nothing:
+    println(parse_value("2.5"))
+    println(parse_value("0.1"))
+    println(parse_value("\"2.5\""))
+    println(parse_reading("{{\"value\":2.5}}"))
+    println(parse_reading("{{\"value\":\"2.5\"}}"))
+    println(roundtrip_reading("{{\"value\":2.5}}"))
+    println(conversion_summary())

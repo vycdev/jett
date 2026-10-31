@@ -1,0 +1,73 @@
+namespace test
+struct Pair:
+    first: int64
+    second: string
+enum Choice:
+    empty
+    number(value: int64)
+bitfield Header:
+    version: 4 bits
+    length: 8 bits
+machine Session:
+    states:
+        guest
+        active(user: string)
+    transitions:
+        guest to active
+function baked_success() returns result[int64, string]:
+    return ok(13)
+function main() returns nothing:
+    uint64 wide = comptime 18446744073709551615
+    println(string.from_uint64(wide))
+    list[int64] baked = comptime list(3, 5, 8)
+    int64 first = list.get[int64](view baked, 0) handle:
+        default 0
+    println(first, list.length[int64](view baked))
+    list[list[int64]] nested = comptime list(list(1), list(2, 3))
+    println(list.length[list[int64]](view nested))
+    map[string, int64] mapped = comptime map("a": 7, "b": 9)
+    println(map.get_or[string, int64](clone mapped, "b", 0))
+    set[int64] selected = comptime set.add[int64](set.add[int64](set.new[int64](), 3), 5)
+    println(set.contains[int64](view selected, 5))
+    optional[int64] present = comptime some(11)
+    int64 unwrapped = present handle:
+        default 0
+    println(unwrapped)
+    optional[int64] absent = comptime none
+    int64 absent_value = absent handle:
+        default 12
+    println(absent_value)
+    result[int64, string] success = comptime ok(13)
+    int64 result_value = success handle error:
+        default 0
+    println(result_value)
+    result[int64, string] from_function = comptime baked_success()
+    int64 from_function_value = from_function handle error:
+        default 0
+    println(from_function_value)
+    result[int64, string] direct_success = ok(21)
+    int64 direct_value = direct_success handle error:
+        default 0
+    println(direct_value)
+    result[int64, string] failure = comptime fail("bad")
+    int64 failure_value = failure handle error:
+        println(error)
+        default 0
+    println(failure_value)
+    Pair pair = comptime Pair(first: 17, second: "hi")
+    println(pair.first, pair.second)
+    Header header = comptime Header(version: 4, length: 12)
+    println(header.version, header.length)
+    Session at active session = comptime Session(active, "Lin")
+    println(session.user)
+    Session broad = comptime Session(guest)
+    println(broad at guest)
+    bytes raw = comptime bytes.from_string("Hi")
+    println(bytes.to_hex(view raw))
+    Choice choice = comptime Choice.number(19)
+    match choice:
+        empty:
+            println(0)
+        number(value):
+            println(value)
+    return nothing

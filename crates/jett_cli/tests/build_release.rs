@@ -14,6 +14,7 @@ fn build_release_rejects_debug_printing() {
 
     let debug = Command::new(env!("CARGO_BIN_EXE_jett"))
         .arg("build")
+        .arg("--check")
         .arg(&fixture)
         .output()
         .expect("debug build command should run");
@@ -25,6 +26,7 @@ fn build_release_rejects_debug_printing() {
 
     let release = Command::new(env!("CARGO_BIN_EXE_jett"))
         .arg("build")
+        .arg("--check")
         .arg("--release")
         .arg(&fixture)
         .output()

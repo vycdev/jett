@@ -1,0 +1,13 @@
+# ERROR: E0376 x2
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return string.from_int64(self)
+function erased() returns Named:
+    return 7
+function equal() returns bool:
+    return comptime(erased() == erased())
+function unequal() returns bool:
+    return comptime(erased() != erased())

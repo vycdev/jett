@@ -1,0 +1,6623 @@
+mod actor_graph;
+pub(crate) mod debug;
+mod field_updates;
+mod graph_constructors;
+mod graphics;
+pub(super) mod ordinary_borrowed_sums;
+mod resource_execution;
+mod resource_layout;
+mod values;
+use jett_mir::move_values::{
+    MoveValuePlan, is_copy_owned, is_function, is_linear, is_string, representation_type,
+};
+use jett_runtime::native_abi::values::{
+    DEBUG_BYTES_KIND, DEBUG_NOTHING_KIND, NATIVE_FUNCTION_CODE_FIELD,
+    NATIVE_FUNCTION_ENVIRONMENT_FIELD, NATIVE_FUNCTION_FIELD_COUNT, NATIVE_FUNCTION_LABEL_FIELD,
+    NativeLeaf, NativePendingBinaryOp, NativeSequenceKind, NativeSortKind,
+};
+use std::str::FromStr;
+
+use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
+use cranelift_codegen::ir::immediates::{Ieee32, Ieee64};
+use cranelift_codegen::ir::{self, AbiParam, InstBuilder, TrapCode, Value};
+use cranelift_codegen::{Context, isa, settings};
+use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
+use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
+use cranelift_object::{ObjectBuilder, ObjectModule};
+use jett_common::Span;
+use jett_hir::{BinaryOp, Expression, ExpressionKind, FunctionId, UnaryOp};
+use jett_mir::{
+    ControlFlowGraph, Function, Program, Statement, StatementKind, Terminator, TerminatorKind,
+};
+use jett_types::{ReflectionTypeInfo, Type, TypeId, TypeInterner};
+use target_lexicon::{HOST, Triple};
+
+use crate::CodegenError;
+use crate::verify::{
+    ScalarKind, VerifiedProgram, known_unit_enum_variant, native_storage_kind, scalar_kind,
+    verify_program,
+};
+
+/// One emitted target object and its deterministic defined symbol table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectArtifact {
+    pub target: String,
+    pub symbols: Vec<String>,
+    pub bytes: Vec<u8>,
+}
+
+/// Backend policy independent of source-language checking.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CodegenOptions {
+    pub optimize: bool,
+}
+
+/// Version 1 exported C symbol used by a launcher to enter one AOT Jett object.
+pub const JETT_AOT_ENTRY_SYMBOL_V1: &str = "jett_aot_v1_entry";
+
+/// Success status returned by [`JETT_AOT_ENTRY_SYMBOL_V1`].
+pub const JETT_AOT_ENTRY_SUCCESS_V1: u32 = 0;
+
+struct DeclaredFunction {
+    mir_id: FunctionId,
+    native_id: FuncId,
+    symbol: String,
+    signature: ir::Signature,
+    modes: Vec<jett_mir::ParamMode>,
+    parameter_types: Vec<TypeId>,
+    debug_label: String,
+}
+
+/// Sparse original-MIR-index mapping. Only backend-reachable functions have a
+/// slot, and every lookup checks the preserved `FunctionId` before returning a
+/// Cranelift identity.
+struct DeclaredFunctions {
+    ordered: Vec<DeclaredFunction>,
+    by_mir_index: Vec<Option<usize>>,
+}
+
+impl DeclaredFunctions {
+    fn new(function_count: usize, reachable_count: usize) -> Self {
+        Self {
+            ordered: Vec::with_capacity(reachable_count),
+            by_mir_index: vec![None; function_count],
+        }
+    }
+
+    fn insert(&mut self, function: DeclaredFunction) -> Result<(), CodegenError> {
+        let index = usize::try_from(function.mir_id.index()).map_err(|_| {
+            CodegenError::Backend("MIR function index does not fit this host".to_string())
+        })?;
+        let Some(slot) = self.by_mir_index.get_mut(index) else {
+            return Err(CodegenError::Backend(
+                "reachable MIR function index is absent from the sparse declaration table"
+                    .to_string(),
+            ));
+        };
+        if slot.is_some() {
+            return Err(CodegenError::Backend(
+                "reachable MIR function was declared more than once".to_string(),
+            ));
+        }
+        *slot = Some(self.ordered.len());
+        self.ordered.push(function);
+        Ok(())
+    }
+
+    fn get(&self, id: FunctionId) -> Option<&DeclaredFunction> {
+        let index = usize::try_from(id.index()).ok()?;
+        let declared_index = self.by_mir_index.get(index).copied().flatten()?;
+        self.ordered
+            .get(declared_index)
+            .filter(|function| function.mir_id == id)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &DeclaredFunction> {
+        self.ordered.iter()
+    }
+
+    fn symbols(&self) -> Vec<String> {
+        self.ordered
+            .iter()
+            .map(|function| function.symbol.clone())
+            .collect()
+    }
+}
+
+/// The one target accepted by this host-only backend slice.
+pub fn host_target() -> Triple {
+    HOST
+}
+
+/// Emit an object for the compiler host target.
+pub fn emit_host_object(
+    program: &Program,
+    types: &TypeInterner,
+) -> Result<ObjectArtifact, CodegenError> {
+    emit_for_triple(program, types, HOST, None, CodegenOptions::default())
+}
+
+/// Emit a host object with one exported versioned program-entry wrapper.
+///
+/// `entry` is an exact checked MIR identity; this API never selects an entry by
+/// source name. The wrapper has the target C ABI `uint32_t(void *context)`,
+/// forwards its opaque runtime context to a `nothing`-returning Jett function,
+/// supplies explicit tokens for checked Stdout, Clock, Random, and Environment parameters, and returns the
+/// terminal failure status (or [`JETT_AOT_ENTRY_SUCCESS_V1`]).
+pub fn emit_host_program_object(
+    program: &Program,
+    types: &TypeInterner,
+    entry: FunctionId,
+) -> Result<ObjectArtifact, CodegenError> {
+    emit_host_program_object_with_options(program, types, entry, CodegenOptions::default())
+}
+
+pub fn emit_host_program_object_with_options(
+    program: &Program,
+    types: &TypeInterner,
+    entry: FunctionId,
+    options: CodegenOptions,
+) -> Result<ObjectArtifact, CodegenError> {
+    emit_for_triple(program, types, HOST, Some(entry), options)
+}
+
+/// Emit an object only when `requested_target` exactly matches the compiler
+/// host. Cross-target layouts and linker inputs are intentionally not guessed.
+pub fn emit_object_for_target(
+    program: &Program,
+    types: &TypeInterner,
+    requested_target: &str,
+) -> Result<ObjectArtifact, CodegenError> {
+    let requested =
+        Triple::from_str(requested_target).map_err(|error| CodegenError::InvalidTarget {
+            target: requested_target.to_string(),
+            message: error.to_string(),
+        })?;
+    if requested != HOST {
+        return Err(CodegenError::UnsupportedTarget {
+            requested: requested.to_string(),
+            supported: HOST.to_string(),
+        });
+    }
+    emit_for_triple(program, types, requested, None, CodegenOptions::default())
+}
+
+/// Emit a host-target object with an explicit checked MIR program entry.
+///
+/// Cross-target layouts remain unsupported, matching
+/// [`emit_object_for_target`].
+pub fn emit_program_object_for_target(
+    program: &Program,
+    types: &TypeInterner,
+    requested_target: &str,
+    entry: FunctionId,
+) -> Result<ObjectArtifact, CodegenError> {
+    let requested =
+        Triple::from_str(requested_target).map_err(|error| CodegenError::InvalidTarget {
+            target: requested_target.to_string(),
+            message: error.to_string(),
+        })?;
+    if requested != HOST {
+        return Err(CodegenError::UnsupportedTarget {
+            requested: requested.to_string(),
+            supported: HOST.to_string(),
+        });
+    }
+    emit_for_triple(
+        program,
+        types,
+        requested,
+        Some(entry),
+        CodegenOptions::default(),
+    )
+}
+
+fn emit_for_triple(
+    program: &Program,
+    types: &TypeInterner,
+    target: Triple,
+    entry: Option<FunctionId>,
+    options: CodegenOptions,
+) -> Result<ObjectArtifact, CodegenError> {
+    if let Some(entry) = entry {
+        validate_program_entry_contract(program, types, entry)?;
+    }
+    if !program.resource_manifest.kinds().is_empty() {
+        return resource_execution::emit(program, types, target, entry, options);
+    }
+    jett_mir::validate(program).map_err(CodegenError::InvalidMir)?;
+    ordinary_borrowed_sums::validate_public_program(program, types)?;
+    for function in &program.functions {
+        jett_mir::move_values::validate_local_view_initializers(function, types).map_err(
+            |message| CodegenError::InvalidMirContract {
+                function: function.identity.declaration.name.clone(),
+                span: function.span,
+                message,
+            },
+        )?;
+    }
+    // Graph imports can require protected ordinary storage even when their
+    // manifest has no Resource kinds. This plan supplies storage evidence only;
+    // the ordinary path still emits no Resource layout or hidden Scope.
+    let original_storage = graph_storage_plan(program, types)?;
+    if let Some(plan) = original_storage.as_ref() {
+        crate::verify::verify_resource_descriptor_bodies(plan)?;
+    } else {
+        crate::verify::verify_descriptor_bodies(program, types)?;
+    }
+    let mut prepared = program.clone();
+    jett_mir::prepare_native_sequences(&mut prepared, types);
+    jett_mir::prepare_native_uninhabited_sums(&mut prepared, types);
+    jett_mir::prepare_native_generated_functions(&mut prepared, types);
+    let program = &prepared;
+    let storage = graph_storage_plan(program, types)?;
+    let verified = match storage.as_ref() {
+        Some(plan) => crate::verify::verify_resource_program(plan)?,
+        None => verify_program(program, types)?,
+    };
+    if let Some(entry) = entry
+        && verified.get(entry).is_none()
+    {
+        return Err(CodegenError::UnreachableProgramEntry {
+            function_id: entry.index(),
+        });
+    }
+    let mut flag_builder = settings::builder();
+    if options.optimize {
+        use cranelift_codegen::settings::Configurable;
+        flag_builder
+            .set("opt_level", "speed")
+            .map_err(|error| CodegenError::Backend(error.to_string()))?;
+    }
+    let flags = settings::Flags::new(flag_builder);
+    let isa_builder = isa::lookup(target.clone()).map_err(|error| {
+        CodegenError::Backend(format!(
+            "Cranelift does not support target `{target}`: {error}"
+        ))
+    })?;
+    let isa = isa_builder.finish(flags).map_err(|error| {
+        CodegenError::Backend(format!(
+            "failed to configure Cranelift target `{target}`: {error}"
+        ))
+    })?;
+    let builder =
+        ObjectBuilder::new(isa, b"jett".to_vec(), default_libcall_names()).map_err(|error| {
+            CodegenError::Backend(format!("failed to create object module: {error}"))
+        })?;
+    let mut module = ObjectModule::new(builder);
+
+    let declarations = declare_reachable_functions(&mut module, program, types, &verified)?;
+    for declaration in declarations.iter() {
+        let function = program_function(program, declaration.mir_id)?;
+        let mut context = module.make_context();
+        context.func.signature = declaration.signature.clone();
+        translate_function_with_storage(
+            &mut module,
+            &declarations,
+            program,
+            function,
+            types,
+            &declaration.symbol,
+            &mut context,
+            None,
+            storage.as_ref(),
+        )?;
+        module
+            .define_function(declaration.native_id, &mut context)
+            .map_err(|error| {
+                CodegenError::Backend(format!(
+                    "failed to define native function `{}`: {error}; details: {error:?}",
+                    declaration.symbol
+                ))
+            })?;
+    }
+
+    if let Some(entry) = entry {
+        define_program_entry_wrapper(&mut module, &declarations, entry)?;
+    }
+
+    let mut symbols = declarations.symbols();
+    if entry.is_some() {
+        symbols.push(JETT_AOT_ENTRY_SYMBOL_V1.to_string());
+    }
+    let bytes = module
+        .finish()
+        .emit()
+        .map_err(|error| CodegenError::Backend(format!("failed to serialize object: {error}")))?;
+    Ok(ObjectArtifact {
+        target: target.to_string(),
+        symbols,
+        bytes,
+    })
+}
+
+fn graph_storage_plan<'p>(
+    program: &'p Program,
+    types: &'p TypeInterner,
+) -> Result<Option<jett_mir::ResourceOwnershipPlan<'p>>, CodegenError> {
+    if !program
+        .functions
+        .iter()
+        .any(|function| jett_mir::native_graph_storage_has_records(function, types))
+    {
+        return Ok(None);
+    }
+    jett_mir::validate_resource_ownership(program, types)
+        .map(Some)
+        .map_err(CodegenError::InvalidMir)
+}
+
+fn declare_reachable_functions(
+    module: &mut ObjectModule,
+    program: &Program,
+    types: &TypeInterner,
+    verified: &VerifiedProgram,
+) -> Result<DeclaredFunctions, CodegenError> {
+    let mut declarations =
+        DeclaredFunctions::new(program.functions.len(), verified.functions().len());
+    for verified_function in verified.functions() {
+        let function = program_function(program, verified_function.mir_id)?;
+        let signature = signature(module, function, types)?;
+        let native_id = module
+            .declare_function(&verified_function.symbol, Linkage::Local, &signature)
+            .map_err(|error| {
+                CodegenError::Backend(format!(
+                    "failed to declare native function `{}`: {error}",
+                    verified_function.symbol
+                ))
+            })?;
+        declarations.insert(DeclaredFunction {
+            mir_id: verified_function.mir_id,
+            native_id,
+            symbol: verified_function.symbol.clone(),
+            signature,
+            modes: function.params.iter().map(|p| p.mode).collect(),
+            parameter_types: function.params.iter().map(|p| p.ty).collect(),
+            debug_label: debug::function_label(function).map_err(|message| {
+                contract_error(&verified_function.symbol, function.span, message)
+            })?,
+        })?;
+    }
+    Ok(declarations)
+}
+
+fn program_function(program: &Program, id: FunctionId) -> Result<&Function, CodegenError> {
+    let index = usize::try_from(id.index()).map_err(|_| {
+        CodegenError::Backend("MIR function index does not fit this host".to_string())
+    })?;
+    program
+        .functions
+        .get(index)
+        .filter(|function| function.id == id)
+        .ok_or_else(|| {
+            CodegenError::Backend(
+                "reachable function is absent from the original MIR function table".to_string(),
+            )
+        })
+}
+
+fn validate_program_entry_contract(
+    program: &Program,
+    types: &TypeInterner,
+    entry: FunctionId,
+) -> Result<(), CodegenError> {
+    let mut matches = program
+        .functions
+        .iter()
+        .filter(|function| function.id == entry);
+    let Some(function) = matches.next() else {
+        return Err(CodegenError::MissingProgramEntry {
+            function_id: entry.index(),
+        });
+    };
+    if matches.next().is_some() {
+        return Err(CodegenError::DuplicateProgramEntry {
+            function_id: entry.index(),
+        });
+    }
+    let type_count = u32::try_from(types.len()).unwrap_or(u32::MAX);
+    let unsupported = function
+        .params
+        .iter()
+        .filter(|p| {
+            !matches!(
+                p.ty,
+                TypeInterner::STDOUT
+                    | TypeInterner::STDERR
+                    | TypeInterner::STDIN
+                    | TypeInterner::FILESYSTEM
+                    | TypeInterner::NETWORK
+                    | TypeInterner::PROCESS
+                    | TypeInterner::LOG
+                    | TypeInterner::CLOCK
+                    | TypeInterner::RANDOM
+                    | TypeInterner::ENVIRONMENT
+                    | TypeInterner::GRAPHICS
+            )
+        })
+        .map(|p| {
+            if p.ty.index() < type_count {
+                types.type_name(p.ty)
+            } else {
+                format!("<invalid type {}>", p.ty.index())
+            }
+        })
+        .collect::<Vec<_>>();
+    if !unsupported.is_empty() {
+        return Err(CodegenError::IncompatibleProgramEntry {
+            function_id: entry.index(),
+            message: format!(
+                "unsupported native entry capability parameter(s): {}",
+                unsupported.join(", ")
+            ),
+        });
+    }
+
+    let returns_nothing = function.return_type.index() < type_count
+        && matches!(types.resolve(function.return_type), Type::Nothing);
+    if !returns_nothing {
+        let return_type = if function.return_type.index() < type_count {
+            types.type_name(function.return_type)
+        } else {
+            format!("<invalid type {}>", function.return_type.index())
+        };
+        return Err(CodegenError::IncompatibleProgramEntry {
+            function_id: entry.index(),
+            message: format!("expected return type `nothing`, found `{return_type}`"),
+        });
+    }
+    Ok(())
+}
+
+fn define_program_entry_wrapper(
+    module: &mut ObjectModule,
+    declarations: &DeclaredFunctions,
+    entry: FunctionId,
+) -> Result<(), CodegenError> {
+    let entry_function =
+        declarations
+            .get(entry)
+            .ok_or_else(|| CodegenError::UnreachableProgramEntry {
+                function_id: entry.index(),
+            })?;
+    if module.get_name(JETT_AOT_ENTRY_SYMBOL_V1).is_some() {
+        return Err(CodegenError::DuplicateSymbol(
+            JETT_AOT_ENTRY_SYMBOL_V1.to_string(),
+        ));
+    }
+
+    let signature = program_entry_signature(module);
+    let wrapper_id = module
+        .declare_function(JETT_AOT_ENTRY_SYMBOL_V1, Linkage::Export, &signature)
+        .map_err(|error| {
+            CodegenError::Backend(format!(
+                "failed to declare program entry `{JETT_AOT_ENTRY_SYMBOL_V1}`: {error}"
+            ))
+        })?;
+
+    let mut context = module.make_context();
+    context.func.signature = signature;
+    translate_program_entry_wrapper(module, entry_function, entry, &mut context)?;
+
+    module
+        .define_function(wrapper_id, &mut context)
+        .map_err(|error| {
+            CodegenError::Backend(format!(
+                "failed to define program entry `{JETT_AOT_ENTRY_SYMBOL_V1}`: {error}; details: {error:?}"
+            ))
+        })?;
+    Ok(())
+}
+
+fn program_entry_signature(module: &ObjectModule) -> ir::Signature {
+    let mut signature = module.make_signature();
+    signature.params.push(runtime_context_abi_param(module));
+    signature.returns.push(AbiParam::new(ir::types::I32));
+    signature
+}
+
+fn runtime_context_abi_param(module: &ObjectModule) -> AbiParam {
+    AbiParam::new(module.target_config().pointer_type())
+}
+
+fn translate_program_entry_wrapper(
+    module: &mut ObjectModule,
+    entry_function: &DeclaredFunction,
+    entry: FunctionId,
+    context: &mut Context,
+) -> Result<(), CodegenError> {
+    let mut builder_context = FunctionBuilderContext::new();
+    let mut builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
+    let block = builder.create_block();
+    builder.append_block_params_for_function_params(block);
+    builder.switch_to_block(block);
+    let runtime_context = builder
+        .block_params(block)
+        .first()
+        .copied()
+        .ok_or_else(|| CodegenError::IncompatibleProgramEntry {
+            function_id: entry.index(),
+            message: "exported entry wrapper is missing its runtime-context pointer".to_string(),
+        })?;
+    let entry_reference = module.declare_func_in_func(entry_function.native_id, builder.func);
+    let mut args = vec![runtime_context, builder.ins().iconst(ir::types::I64, 0)];
+    for parameter in &entry_function.parameter_types {
+        let grant = match *parameter {
+            TypeInterner::STDOUT => NativeLeaf::GrantStdout,
+            TypeInterner::STDERR => NativeLeaf::GrantStderr,
+            TypeInterner::STDIN => NativeLeaf::GrantStdin,
+            TypeInterner::FILESYSTEM => NativeLeaf::GrantFilesystem,
+            TypeInterner::NETWORK => NativeLeaf::GrantNetwork,
+            TypeInterner::PROCESS => NativeLeaf::GrantProcess,
+            TypeInterner::LOG => NativeLeaf::GrantLog,
+            TypeInterner::CLOCK => NativeLeaf::GrantClock,
+            TypeInterner::RANDOM => NativeLeaf::GrantRandom,
+            TypeInterner::ENVIRONMENT => NativeLeaf::GrantEnvironment,
+            TypeInterner::GRAPHICS => NativeLeaf::GrantGraphics,
+            _ => {
+                return Err(CodegenError::IncompatibleProgramEntry {
+                    function_id: entry.index(),
+                    message: "unsupported native entry capability".to_string(),
+                });
+            }
+        };
+        let leaf = crate::values::declare_leaf(module, grant)?;
+        let leaf = module.declare_func_in_func(leaf, builder.func);
+        let call = builder.ins().call(leaf, &[runtime_context]);
+        let authority = builder.func.dfg.inst_results(call)[0];
+        args.push(authority);
+    }
+    builder.ins().call(entry_reference, &args);
+    let leaf = crate::values::declare_leaf(module, NativeLeaf::Status)?;
+    let leaf = module.declare_func_in_func(leaf, builder.func);
+    let call = builder.ins().call(leaf, &[runtime_context]);
+    let status = builder.func.dfg.inst_results(call)[0];
+    builder.ins().return_(&[status]);
+    builder.seal_all_blocks();
+    builder.finalize();
+    Ok(())
+}
+
+fn signature(
+    module: &ObjectModule,
+    function: &Function,
+    types: &TypeInterner,
+) -> Result<ir::Signature, CodegenError> {
+    let mut signature = module.make_signature();
+    signature.params.push(runtime_context_abi_param(module));
+    signature.params.push(AbiParam::new(ir::types::I64));
+    if crate::verify::descriptor_only_function(function) {
+        // This non-null descriptor entry cannot be invoked by checked code.
+        // Its internal trap ABI contains no Never parameter or return carrier.
+        return Ok(signature);
+    }
+    for parameter in function.params.iter().skip(function.capture_count) {
+        if let Some(ty) = clif_type(types, parameter.ty, "function parameter")? {
+            signature.params.push(AbiParam::new(ty));
+            if is_task_scalar(types, parameter.ty)? {
+                signature.params.push(AbiParam::new(ir::types::I64));
+            }
+        }
+    }
+    if let Some(ty) = clif_type(types, function.return_type, "function return")? {
+        signature.returns.push(AbiParam::new(ty));
+        if is_task_scalar(types, function.return_type)? {
+            signature.returns.push(AbiParam::new(ir::types::I64));
+        }
+    }
+    Ok(signature)
+}
+
+fn is_task_scalar(types: &TypeInterner, ty: TypeId) -> Result<bool, CodegenError> {
+    Ok(matches!(
+        native_storage_kind(types, ty, "primitive task value")?,
+        ScalarKind::SignedInteger(_)
+            | ScalarKind::UnsignedInteger(_)
+            | ScalarKind::Float(_)
+            | ScalarKind::Bool
+    ))
+}
+
+fn task_scalar_debug_kind(
+    types: &TypeInterner,
+    ty: TypeId,
+) -> Result<Option<NativeSortKind>, CodegenError> {
+    Ok(Some(
+        match native_storage_kind(types, ty, "primitive task value")? {
+            ScalarKind::SignedInteger(8) => NativeSortKind::Int8,
+            ScalarKind::SignedInteger(16) => NativeSortKind::Int16,
+            ScalarKind::SignedInteger(32) => NativeSortKind::Int32,
+            ScalarKind::SignedInteger(64) => NativeSortKind::Int64,
+            ScalarKind::UnsignedInteger(8) => NativeSortKind::Uint8,
+            ScalarKind::UnsignedInteger(16) => NativeSortKind::Uint16,
+            ScalarKind::UnsignedInteger(32) => NativeSortKind::Uint32,
+            ScalarKind::UnsignedInteger(64) => NativeSortKind::Uint64,
+            ScalarKind::Float(32) => NativeSortKind::Float32,
+            ScalarKind::Float(64) => NativeSortKind::Float64,
+            ScalarKind::Bool => NativeSortKind::Bool,
+            _ => return Ok(None),
+        },
+    ))
+}
+
+fn native_pending_binary_op(op: BinaryOp) -> NativePendingBinaryOp {
+    match op {
+        BinaryOp::Add => NativePendingBinaryOp::Add,
+        BinaryOp::Subtract => NativePendingBinaryOp::Sub,
+        BinaryOp::Multiply => NativePendingBinaryOp::Mul,
+        BinaryOp::Divide => NativePendingBinaryOp::Div,
+        BinaryOp::Modulo => NativePendingBinaryOp::Modulo,
+        BinaryOp::Equal => NativePendingBinaryOp::Eq,
+        BinaryOp::NotEqual => NativePendingBinaryOp::NotEq,
+        BinaryOp::Less => NativePendingBinaryOp::Lt,
+        BinaryOp::Greater => NativePendingBinaryOp::Gt,
+        BinaryOp::LessEqual => NativePendingBinaryOp::LtEq,
+        BinaryOp::GreaterEqual => NativePendingBinaryOp::GtEq,
+        BinaryOp::And => NativePendingBinaryOp::And,
+        BinaryOp::Or => NativePendingBinaryOp::Or,
+    }
+}
+
+fn clif_type(
+    types: &TypeInterner,
+    ty: TypeId,
+    context: &str,
+) -> Result<Option<ir::Type>, CodegenError> {
+    let ty = match native_storage_kind(types, ty, context)? {
+        ScalarKind::SignedInteger(8) | ScalarKind::UnsignedInteger(8) | ScalarKind::Bool => {
+            Some(ir::types::I8)
+        }
+        ScalarKind::SignedInteger(16) | ScalarKind::UnsignedInteger(16) => Some(ir::types::I16),
+        ScalarKind::SignedInteger(32) | ScalarKind::UnsignedInteger(32) => Some(ir::types::I32),
+        ScalarKind::SignedInteger(64) | ScalarKind::UnsignedInteger(64) => Some(ir::types::I64),
+        ScalarKind::Float(32) => Some(ir::types::F32),
+        ScalarKind::Float(64) => Some(ir::types::F64),
+        // Unit values carry the current sequential task's Pending nesting.
+        // Zero is ordinary nothing; each enclosing Pending adds one.
+        ScalarKind::Nothing => Some(ir::types::I64),
+        ScalarKind::String
+        | ScalarKind::Bytes
+        | ScalarKind::Sum
+        | ScalarKind::List
+        | ScalarKind::Set
+        | ScalarKind::Map
+        | ScalarKind::Struct
+        | ScalarKind::Enum
+        | ScalarKind::Bitfield
+        | ScalarKind::Machine
+        | ScalarKind::Construction
+        | ScalarKind::Function
+        | ScalarKind::Actor
+        | ScalarKind::Stdout
+        | ScalarKind::Clock
+        | ScalarKind::Random
+        | ScalarKind::Environment
+        | ScalarKind::Graphics
+        | ScalarKind::OpaqueCapability => Some(ir::types::I64),
+        ScalarKind::Uninhabited => {
+            return Err(CodegenError::UnsupportedType {
+                type_name: types.type_name(ty),
+                context: context.to_string(),
+            });
+        }
+        ScalarKind::SignedInteger(bits)
+        | ScalarKind::UnsignedInteger(bits)
+        | ScalarKind::Float(bits) => {
+            return Err(CodegenError::UnsupportedType {
+                type_name: format!("{bits}-bit scalar"),
+                context: context.to_string(),
+            });
+        }
+    };
+    Ok(ty)
+}
+
+fn actor_handler_state_range(
+    function: &Function,
+    types: &TypeInterner,
+    symbol: &str,
+) -> Result<Option<(usize, usize)>, CodegenError> {
+    let entry = function
+        .actor_handler_entry()
+        .map_err(|message| contract_error(symbol, function.span, message))?;
+    let Some(entry) = entry else {
+        return Ok(None);
+    };
+    let definition = types.resolve_actor(entry.target().actor);
+    let start = definition.capability_params.len();
+    let end = start + definition.state_fields.len();
+    if function.capture_count != end || entry.roles().len() != function.params.len() {
+        return Err(contract_error(
+            symbol,
+            function.span,
+            "actor original capture projection changed",
+        ));
+    }
+    for (index, role) in entry.roles().iter().enumerate() {
+        if role.local().index() as usize != index
+            || function.params[index].local != role.local()
+            || function.params[index].ty != role.fact().ty
+        {
+            return Err(contract_error(
+                symbol,
+                function.span,
+                "actor original role/local projection changed",
+            ));
+        }
+    }
+    Ok(Some((start, end)))
+}
+
+fn translate_function(
+    module: &mut ObjectModule,
+    declarations: &DeclaredFunctions,
+    program: &Program,
+    function: &Function,
+    types: &TypeInterner,
+    symbol: &str,
+    context: &mut Context,
+) -> Result<(), CodegenError> {
+    translate_function_inner(
+        module,
+        declarations,
+        program,
+        function,
+        types,
+        symbol,
+        context,
+        None,
+    )
+}
+
+fn translate_function_inner(
+    module: &mut ObjectModule,
+    declarations: &DeclaredFunctions,
+    program: &Program,
+    function: &Function,
+    types: &TypeInterner,
+    symbol: &str,
+    context: &mut Context,
+    resource_layout: Option<&resource_layout::EmittedResourceLayout<'_>>,
+) -> Result<(), CodegenError> {
+    translate_function_with_storage(
+        module,
+        declarations,
+        program,
+        function,
+        types,
+        symbol,
+        context,
+        resource_layout,
+        resource_layout.map(|layout| layout.plan()),
+    )
+}
+
+/// A proof-only graph storage companion retains the whole immutable plan without
+/// adding the hidden Scope or Resource calling convention to an ordinary body.
+fn translate_function_with_storage(
+    module: &mut ObjectModule,
+    declarations: &DeclaredFunctions,
+    program: &Program,
+    function: &Function,
+    types: &TypeInterner,
+    symbol: &str,
+    context: &mut Context,
+    resource_layout: Option<&resource_layout::EmittedResourceLayout<'_>>,
+    storage_plan: Option<&jett_mir::ResourceOwnershipPlan<'_>>,
+) -> Result<(), CodegenError> {
+    if crate::verify::descriptor_only_function(function) {
+        let mut builder_context = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        builder.ins().trap(TrapCode::unwrap_user(1));
+        builder.seal_all_blocks();
+        builder.finalize();
+        return Ok(());
+    }
+    let actor_state_range = actor_handler_state_range(function, types, symbol)?;
+    let mut builder_context = FunctionBuilderContext::new();
+    let mut builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
+    let blocks = function
+        .blocks
+        .iter()
+        .map(|_| builder.create_block())
+        .collect::<Vec<_>>();
+    let entry = block_for(&blocks, function.entry.index(), function.span, symbol)?;
+    builder.append_block_params_for_function_params(entry);
+
+    let runtime_context = builder.declare_var(module.target_config().pointer_type());
+    let environment_variable = builder.declare_var(ir::types::I64);
+    let companion = storage_plan
+        .filter(|plan| {
+            plan.function(function.id).is_some()
+                || jett_mir::native_graph_storage_has_records(function, types)
+        })
+        .map(|plan| jett_mir::ResourceCompanionPlan::analyze(plan, function.id))
+        .transpose()
+        .map_err(|message| contract_error(symbol, function.span, message))?;
+    let ordinary_acquisitions = if companion.is_none() {
+        Some(
+            jett_mir::validate_caller_acquisitions(program, function, types)
+                .map_err(|message| contract_error(symbol, function.span, message))?,
+        )
+    } else {
+        None
+    };
+    let caller_acquisitions = companion
+        .as_ref()
+        .map(|plan| plan.caller_acquisitions())
+        .or(ordinary_acquisitions.as_ref())
+        .ok_or_else(|| {
+            contract_error(symbol, function.span, "missing exact Source acquisitions")
+        })?;
+    let ordinary_ownership = if companion.is_none() {
+        Some(
+            MoveValuePlan::analyze(program, function, types)
+                .map_err(|message| contract_error(symbol, function.span, message))?,
+        )
+    } else {
+        None
+    };
+    let ownership = companion
+        .as_ref()
+        .map(|plan| plan.storage())
+        .or(ordinary_ownership.as_ref())
+        .ok_or_else(|| {
+            contract_error(
+                symbol,
+                function.span,
+                "function has no exact ownership storage proof",
+            )
+        })?;
+    let local_slots = function
+        .locals
+        .iter()
+        .map(|l| {
+            if ownership.owned_locals.contains(&(l.id.index() as usize)) {
+                Some(builder.create_sized_stack_slot(ir::StackSlotData::new(
+                    ir::StackSlotKind::ExplicitSlot,
+                    8,
+                    3,
+                )))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    let actor_extra = if actor_state_range.is_some() {
+        function.capture_count + 2
+    } else {
+        0
+    };
+    let temporary_slots = (0..ownership.temporary_slots + actor_extra)
+        .map(|_| {
+            builder.create_sized_stack_slot(ir::StackSlotData::new(
+                ir::StackSlotKind::ExplicitSlot,
+                8,
+                3,
+            ))
+        })
+        .collect::<Vec<_>>();
+    let graph_constructor_slots = graph_constructors::storage(function, types, &mut builder)?;
+    let mut generation_slots = Vec::new();
+    let mut generation_ids = std::collections::BTreeSet::new();
+    let mut escrow_ids = std::collections::BTreeSet::new();
+    for slot in ownership.generation_storage().slots() {
+        let root = function.local(slot.root()).ok_or_else(|| {
+            contract_error(
+                symbol,
+                function.span,
+                "call owner generation root is absent",
+            )
+        })?;
+        let root_slot = local_slots
+            .get(slot.root().index() as usize)
+            .copied()
+            .flatten()
+            .ok_or_else(|| {
+                contract_error(
+                    symbol,
+                    function.span,
+                    "call owner generation has no owning root storage",
+                )
+            })?;
+        if !generation_ids.insert(slot.generation().index())
+            || !escrow_ids.insert(slot.escrow().index())
+            || root.ty != slot.ty()
+            || root.ty.index() as usize >= types.len()
+            || !matches!(types.resolve(root.ty), Type::TypeConstruction)
+            || root.view_source.is_some()
+        {
+            return Err(contract_error(
+                symbol,
+                function.span,
+                "call owner generation storage differs from its exact plan",
+            ));
+        }
+        generation_slots.push(NativeCallGenerationStorage {
+            generation: slot.generation(),
+            root: slot.root(),
+            ty: slot.ty(),
+            root_slot,
+            owner_slot: builder.create_sized_stack_slot(ir::StackSlotData::new(
+                ir::StackSlotKind::ExplicitSlot,
+                8,
+                3,
+            )),
+            retired_slot: builder.create_sized_stack_slot(ir::StackSlotData::new(
+                ir::StackSlotKind::ExplicitSlot,
+                8,
+                3,
+            )),
+        });
+    }
+    let failure_block = builder.create_block();
+    let resource_failure = resource_layout.map(|_| {
+        let block = builder.create_block();
+        builder.append_block_param(block, ir::types::I32);
+        block
+    });
+    let resource_scope = builder.declare_var(ir::types::I64);
+    let resource_slots = resource_layout.map(|_| {
+        let returned = builder.create_sized_stack_slot(ir::StackSlotData::new(
+            ir::StackSlotKind::ExplicitSlot,
+            8,
+            3,
+        ));
+        let finished = builder.create_sized_stack_slot(ir::StackSlotData::new(
+            ir::StackSlotKind::ExplicitSlot,
+            8,
+            3,
+        ));
+        (returned, finished)
+    });
+    let resource_status = builder.declare_var(ir::types::I32);
+    let mut resource_frames = Vec::new();
+    let mut resource_owners = Vec::new();
+    let mut resource_loans = Vec::new();
+    let mut carrier_owners = Vec::new();
+    let mut carrier_builders = Vec::new();
+    let mut carrier_loans = Vec::new();
+    if let Some(layout) = resource_layout {
+        let plan = layout.plan().function(function.id).ok_or_else(|| {
+            resource_layout::pending("function is outside its selected Resource family")
+        })?;
+        for storage in [
+            &mut resource_frames,
+            &mut resource_owners,
+            &mut resource_loans,
+            &mut carrier_owners,
+            &mut carrier_builders,
+            &mut carrier_loans,
+        ]
+        .into_iter()
+        .zip([
+            (plan.frames().len(), 16),
+            (plan.owner_slots().len(), 8),
+            (plan.loans().len(), 8),
+            (plan.carriers().map_or(0, |plan| plan.slots().len()), 8),
+            (plan.carriers().map_or(0, |plan| plan.slots().len()), 8),
+            (plan.carriers().map_or(0, |plan| plan.loans().len()), 8),
+        ]) {
+            for _ in 0..storage.1.0 {
+                storage
+                    .0
+                    .push(builder.create_sized_stack_slot(ir::StackSlotData::new(
+                        ir::StackSlotKind::ExplicitSlot,
+                        storage.1.1,
+                        3,
+                    )));
+            }
+        }
+    }
+
+    let mut variables = Vec::with_capacity(function.locals.len());
+    let mut pending_variables = Vec::with_capacity(function.locals.len());
+    for local in &function.locals {
+        variables.push(
+            resource_execution::clif_type(resource_layout, types, local.ty, "function local")?
+                .map(|ty| builder.declare_var(ty)),
+        );
+        pending_variables.push(
+            if resource_execution::task_scalar(resource_layout, types, local.ty)? {
+                Some(builder.declare_var(ir::types::I64))
+            } else {
+                None
+            },
+        );
+    }
+
+    let control_flow = ControlFlowGraph::analyze(function).map_err(|errors| {
+        let details = errors
+            .into_iter()
+            .map(|error| error.message)
+            .collect::<Vec<_>>()
+            .join("; ");
+        contract_error(
+            symbol,
+            function.span,
+            format!("cannot analyze MIR control flow: {details}"),
+        )
+    })?;
+    for block_id in control_flow.reverse_postorder() {
+        let block_index = usize::try_from(block_id.index()).map_err(|_| {
+            contract_error(symbol, function.span, "block index does not fit this host")
+        })?;
+        let block = function.blocks.get(block_index).ok_or_else(|| {
+            contract_error(symbol, function.span, "reachable block is absent from MIR")
+        })?;
+        let native_block = block_for(&blocks, block.id.index(), function.span, symbol)?;
+        builder.switch_to_block(native_block);
+        if block.id == function.entry {
+            let incoming = builder.block_params(native_block).to_vec();
+            let context_value = incoming.first().copied().ok_or_else(|| {
+                contract_error(
+                    symbol,
+                    function.span,
+                    "missing hidden native runtime-context parameter",
+                )
+            })?;
+            builder
+                .try_def_var(runtime_context, context_value)
+                .map_err(|error| {
+                    contract_error(
+                        symbol,
+                        function.span,
+                        format!("cannot bind native runtime context: {error}"),
+                    )
+                })?;
+            let zero = builder.ins().iconst(ir::types::I64, 0);
+            for slot in local_slots.iter().flatten().chain(&temporary_slots) {
+                builder.ins().stack_store(zero, *slot, 0);
+            }
+            for storage in &graph_constructor_slots {
+                builder.ins().stack_store(zero, storage.slot, 0);
+            }
+            for storage in &generation_slots {
+                builder.ins().stack_store(zero, storage.owner_slot, 0);
+                builder.ins().stack_store(zero, storage.retired_slot, 0);
+            }
+            if let Some((returned, finished)) = resource_slots {
+                builder.ins().stack_store(zero, returned, 0);
+                builder.ins().stack_store(zero, finished, 0);
+                for slot in resource_frames
+                    .iter()
+                    .chain(&resource_owners)
+                    .chain(&resource_loans)
+                    .chain(&carrier_owners)
+                    .chain(&carrier_builders)
+                    .chain(&carrier_loans)
+                {
+                    builder.ins().stack_store(zero, *slot, 0);
+                }
+                for slot in &resource_frames {
+                    builder.ins().stack_store(zero, *slot, 8);
+                }
+                let failed = builder.ins().iconst(ir::types::I32, 1);
+                builder.def_var(resource_status, failed);
+            }
+        }
+
+        let mut translator = Translator {
+            builder: &mut builder,
+            module,
+            declarations,
+            blocks: &blocks,
+            variables: &variables,
+            pending_variables: &pending_variables,
+            runtime_context,
+            environment_variable,
+            actor_state_range,
+            types,
+            equality_methods: &program.equality_methods,
+            symbol,
+            function,
+            local_types: &function.locals,
+            caller_acquisitions,
+            taking_binding: None,
+            test_ownership: matches!(
+                function.identity.declaration.kind,
+                jett_hir::DeclarationKind::Verify | jett_hir::DeclarationKind::Property
+            ),
+            local_slots: &local_slots,
+            temporary_slots: &temporary_slots,
+            generation_slots: &generation_slots,
+            graph_constructor_slots: &graph_constructor_slots,
+            next_temporary: 0,
+            failure_block,
+            resource: None,
+        };
+        translator.resource = resource_layout.map(|layout| resource_execution::ResourceEmission {
+            layout,
+            function: function.id,
+            scope: resource_scope,
+            return_companion: resource_slots.expect("selected Resource storage").0,
+            scope_finished: resource_slots.expect("selected Resource storage").1,
+            status: resource_status,
+            frames: &resource_frames,
+            owners: &resource_owners,
+            loans: &resource_loans,
+            carrier_owners: &carrier_owners,
+            carrier_builders: &carrier_builders,
+            carrier_loans: &carrier_loans,
+            failure: resource_failure.expect("selected Resource failure block"),
+            block: block.id,
+            position: jett_mir::ResourcePosition::Terminator,
+        });
+        if block.id == function.entry {
+            let incoming = translator.builder.block_params(native_block).to_vec();
+            if let Some(resource) = translator.resource {
+                let scope = incoming.get(2).copied().ok_or_else(|| {
+                    resource_layout::pending("dedicated function lost its hidden Scope")
+                })?;
+                translator.builder.def_var(resource.scope, scope);
+                translator.resource_validate_scope()?;
+            }
+            let environment = incoming.get(1).copied().ok_or_else(|| {
+                contract_error(
+                    symbol,
+                    function.span,
+                    "missing hidden native environment parameter",
+                )
+            })?;
+            translator
+                .builder
+                .try_def_var(environment_variable, environment)
+                .map_err(|error| {
+                    contract_error(
+                        symbol,
+                        function.span,
+                        format!("cannot bind native actor environment: {error}"),
+                    )
+                })?;
+            let mut incoming_index = if resource_layout.is_some() {
+                3_usize
+            } else {
+                2_usize
+            };
+            if actor_state_range.is_some() {
+                let mut message_index = incoming_index;
+                for parameter in function.params.iter().skip(function.capture_count) {
+                    if variables[parameter.local.index() as usize].is_none() {
+                        continue;
+                    }
+                    let value = *incoming.get(message_index).ok_or_else(|| {
+                        contract_error(
+                            symbol,
+                            parameter.span,
+                            "actor incoming message value absent",
+                        )
+                    })?;
+                    message_index += 1;
+                    if pending_variables[parameter.local.index() as usize].is_some() {
+                        message_index += 1;
+                    }
+                    if is_linear(types, parameter.ty) {
+                        let slot =
+                            local_slots[parameter.local.index() as usize].ok_or_else(|| {
+                                contract_error(
+                                    symbol,
+                                    parameter.span,
+                                    "actor incoming owner lacks cleanup storage",
+                                )
+                            })?;
+                        translator.builder.ins().stack_store(value, slot, 0);
+                    }
+                }
+            }
+            for (index, parameter) in function.params.iter().enumerate() {
+                let variable =
+                    variable_for(&variables, parameter.local.index(), parameter.span, symbol)?;
+                let Some(variable) = variable else {
+                    continue;
+                };
+                let (value, pending_depth) = if index < function.capture_count {
+                    let field = translator
+                        .builder
+                        .ins()
+                        .iconst(ir::types::I64, index as i64);
+                    let bits =
+                        translator.leaf(NativeLeaf::StructField, &[environment, field], true)?;
+                    let native =
+                        clif_type(types, parameter.ty, "closure capture")?.ok_or_else(|| {
+                            contract_error(
+                                symbol,
+                                parameter.span,
+                                "nothing capture has no native value",
+                            )
+                        })?;
+                    let value = if native == ir::types::F64 {
+                        translator
+                            .builder
+                            .ins()
+                            .bitcast(native, ir::MemFlags::new(), bits)
+                    } else if native == ir::types::F32 {
+                        let bits = translator.builder.ins().ireduce(ir::types::I32, bits);
+                        translator
+                            .builder
+                            .ins()
+                            .bitcast(native, ir::MemFlags::new(), bits)
+                    } else if native != ir::types::I64 {
+                        translator.builder.ins().ireduce(native, bits)
+                    } else {
+                        bits
+                    };
+                    let pending_depth =
+                        if pending_variables[parameter.local.index() as usize].is_some() {
+                            if actor_state_range.is_some() {
+                                translator.leaf(
+                                    NativeLeaf::StructFieldPendingDepth,
+                                    &[environment, field],
+                                    true,
+                                )?
+                            } else {
+                                let depth_index = function.capture_count + index;
+                                let depth_field = translator
+                                    .builder
+                                    .ins()
+                                    .iconst(ir::types::I64, depth_index as i64);
+                                translator.leaf(
+                                    NativeLeaf::StructField,
+                                    &[environment, depth_field],
+                                    true,
+                                )?
+                            }
+                        } else {
+                            translator.builder.ins().iconst(ir::types::I64, 0)
+                        };
+                    (value, pending_depth)
+                } else {
+                    let value = incoming.get(incoming_index).copied().ok_or_else(|| {
+                        contract_error(symbol, parameter.span, "missing native function parameter")
+                    })?;
+                    incoming_index += 1;
+                    let pending_depth =
+                        if pending_variables[parameter.local.index() as usize].is_some() {
+                            let depth = incoming.get(incoming_index).copied().ok_or_else(|| {
+                                contract_error(
+                                    symbol,
+                                    parameter.span,
+                                    "missing native primitive pending depth",
+                                )
+                            })?;
+                            incoming_index += 1;
+                            depth
+                        } else {
+                            translator.builder.ins().iconst(ir::types::I64, 0)
+                        };
+                    (value, pending_depth)
+                };
+                translator
+                    .builder
+                    .try_def_var(variable, value)
+                    .map_err(|error| {
+                        contract_error(
+                            symbol,
+                            parameter.span,
+                            format!("cannot bind native function parameter: {error}"),
+                        )
+                    })?;
+                if let Some(pending_variable) = pending_variables[parameter.local.index() as usize]
+                {
+                    translator
+                        .builder
+                        .try_def_var(pending_variable, pending_depth)
+                        .map_err(|error| {
+                            contract_error(
+                                symbol,
+                                parameter.span,
+                                format!("cannot bind primitive pending depth: {error}"),
+                            )
+                        })?;
+                }
+            }
+            if translator.resource.is_some() {
+                translator.resource_bind_parameters(function)?;
+            }
+            for parameter in &function.params {
+                if let Some(slot) = local_slots[parameter.local.index() as usize] {
+                    let v = translator
+                        .builder
+                        .use_var(variables[parameter.local.index() as usize].unwrap());
+                    let owned = if is_linear(types, parameter.ty) {
+                        if actor_state_range.is_some()
+                            && function
+                                .params
+                                .iter()
+                                .take(function.capture_count)
+                                .any(|capture| capture.local == parameter.local)
+                        {
+                            translator.clone_linear_handle(v, parameter.ty)?
+                        } else {
+                            v
+                        }
+                    } else if is_function(types, parameter.ty) {
+                        translator.leaf(NativeLeaf::StructClone, &[v], true)?
+                    } else {
+                        translator.leaf(NativeLeaf::Retain, &[v], true)?
+                    };
+                    translator.builder.ins().stack_store(owned, slot, 0);
+                }
+            }
+            if actor_state_range.is_some() {
+                for parameter in function.params.iter().take(function.capture_count) {
+                    if function
+                        .actor_state_view(parameter.local)
+                        .map_err(|message| contract_error(symbol, parameter.span, message))?
+                    {
+                        let initializer = function
+                            .actor_handler_entry()
+                            .map_err(|message| contract_error(symbol, parameter.span, message))?
+                            .and_then(|entry| {
+                                entry
+                                    .roles()
+                                    .iter()
+                                    .find(|role| role.local() == parameter.local)
+                            })
+                            .and_then(|role| role.state_view())
+                            .map(|view| view.initializer())
+                            .ok_or_else(|| {
+                                contract_error(
+                                    symbol,
+                                    parameter.span,
+                                    "actor state alias lost its original typed initializer",
+                                )
+                            })?;
+                        let lowered = translator.expression(initializer)?;
+                        let value = translator.scalar(lowered, parameter.span)?;
+                        translator.builder.def_var(
+                            variables[parameter.local.index() as usize].ok_or_else(|| {
+                                contract_error(
+                                    symbol,
+                                    parameter.span,
+                                    "actor alias variable absent",
+                                )
+                            })?,
+                            value,
+                        );
+                    }
+                }
+            }
+        }
+        translator.drop_dead_locals(&ownership.live_in[block_index])?;
+        for (index, statement) in block.statements.iter().enumerate() {
+            if let Some(resource) = &mut translator.resource {
+                resource.position = jett_mir::ResourcePosition::Statement(index);
+            }
+            translator.statement(block.id, index, statement)?;
+            translator.drop_temporaries()?;
+            translator.drop_dead_locals(&ownership.live_after_statement[block_index][index])?;
+        }
+        if let Some(resource) = &mut translator.resource {
+            resource.position = jett_mir::ResourcePosition::Terminator;
+        }
+        translator.terminator(&block.terminator)?;
+    }
+
+    if let Some(resource_failure) = resource_failure {
+        builder.switch_to_block(resource_failure);
+        let status = builder.block_params(resource_failure)[0];
+        builder.def_var(resource_status, status);
+        builder.ins().jump(failure_block, &[]);
+    }
+    builder.switch_to_block(failure_block);
+    let mut translator = Translator {
+        builder: &mut builder,
+        module,
+        declarations,
+        blocks: &blocks,
+        variables: &variables,
+        pending_variables: &pending_variables,
+        runtime_context,
+        environment_variable,
+        actor_state_range,
+        types,
+        equality_methods: &program.equality_methods,
+        symbol,
+        function,
+        local_types: &function.locals,
+        caller_acquisitions,
+        taking_binding: None,
+        test_ownership: matches!(
+            function.identity.declaration.kind,
+            jett_hir::DeclarationKind::Verify | jett_hir::DeclarationKind::Property
+        ),
+        local_slots: &local_slots,
+        temporary_slots: &temporary_slots,
+        generation_slots: &generation_slots,
+        graph_constructor_slots: &graph_constructor_slots,
+        next_temporary: temporary_slots.len(),
+        failure_block,
+        resource: None,
+    };
+    translator.resource = resource_layout.map(|layout| resource_execution::ResourceEmission {
+        layout,
+        function: function.id,
+        scope: resource_scope,
+        return_companion: resource_slots.expect("selected Resource storage").0,
+        scope_finished: resource_slots.expect("selected Resource storage").1,
+        status: resource_status,
+        frames: &resource_frames,
+        owners: &resource_owners,
+        loans: &resource_loans,
+        carrier_owners: &carrier_owners,
+        carrier_builders: &carrier_builders,
+        carrier_loans: &carrier_loans,
+        failure: resource_failure.expect("selected Resource failure block"),
+        block: function.entry,
+        position: jett_mir::ResourcePosition::Terminator,
+    });
+    translator.drop_all()?;
+    translator.resource_failure_cleanup()?;
+    let mut results = match resource_execution::clif_type(
+        resource_layout,
+        types,
+        function.return_type,
+        "failure return",
+    )? {
+        None => vec![],
+        Some(ir::types::F32) => vec![translator.builder.ins().f32const(0.0)],
+        Some(ir::types::F64) => vec![translator.builder.ins().f64const(0.0)],
+        Some(t) => vec![translator.builder.ins().iconst(t, 0)],
+    };
+    if resource_execution::task_scalar(resource_layout, types, function.return_type)? {
+        results.push(translator.builder.ins().iconst(ir::types::I64, 0));
+    }
+    translator.builder.ins().return_(&results);
+    builder.seal_all_blocks();
+    builder.finalize();
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum LoweredValue {
+    Scalar(Value),
+    ScalarTask(Value, Value),
+    Owned(Value, ir::StackSlot),
+}
+
+/// Internal owning storage from one freshly validated Function plan. Neither
+/// this handle slot nor its retired state can be addressed as a Jett Local.
+#[derive(Clone, Copy)]
+struct NativeCallGenerationStorage {
+    generation: jett_mir::CallOwnerGenerationId,
+    root: jett_mir::LocalId,
+    ty: TypeId,
+    root_slot: ir::StackSlot,
+    owner_slot: ir::StackSlot,
+    retired_slot: ir::StackSlot,
+}
+
+struct Translator<'a, 'builder> {
+    equality_methods: &'a std::collections::HashMap<TypeId, FunctionId>,
+    builder: &'a mut FunctionBuilder<'builder>,
+    module: &'a mut ObjectModule,
+    declarations: &'a DeclaredFunctions,
+    blocks: &'a [ir::Block],
+    variables: &'a [Option<Variable>],
+    pending_variables: &'a [Option<Variable>],
+    runtime_context: Variable,
+    environment_variable: Variable,
+    actor_state_range: Option<(usize, usize)>,
+    types: &'a TypeInterner,
+    symbol: &'a str,
+    function: &'a Function,
+    local_types: &'a [jett_mir::Local],
+    caller_acquisitions: &'a jett_mir::CallerAcquisitions<'a>,
+    taking_binding: Option<jett_hir::LocalId>,
+    test_ownership: bool,
+    local_slots: &'a [Option<ir::StackSlot>],
+    temporary_slots: &'a [ir::StackSlot],
+    generation_slots: &'a [NativeCallGenerationStorage],
+    graph_constructor_slots: &'a [graph_constructors::Storage],
+    next_temporary: usize,
+    failure_block: ir::Block,
+    resource: Option<resource_execution::ResourceEmission<'a>>,
+}
+
+impl Translator<'_, '_> {
+    fn statement(
+        &mut self,
+        block: jett_mir::BlockId,
+        index: usize,
+        statement: &Statement,
+    ) -> Result<(), CodegenError> {
+        if self.ordinary_borrowed_sum_statement(block, index, statement)? {
+            return Ok(());
+        }
+        if self.graph_constructor_statement(statement)? {
+            return Ok(());
+        }
+        if self.resource_statement(statement)? {
+            return Ok(());
+        }
+        match &statement.kind {
+            StatementKind::ResourceCall(_)
+            | StatementKind::ResourceLexicalExit(_)
+            | StatementKind::ResourceConstructor(_) => Err(resource_layout::pending(
+                "Resource node has no constructor-owned native family",
+            )),
+            StatementKind::ReflectedContainerReady { source, kind } => {
+                let ty = self.local_types[source.index() as usize].ty;
+                let expression = Expression {
+                    kind: ExpressionKind::Local(*source),
+                    ty,
+                    span: statement.span,
+                };
+                let handle = self.argument(&expression, true)?;
+                let handle = self.scalar(handle, statement.span)?;
+                // Extend only dispatch tags of the existing custom-message leaf.
+                let tag = match kind {
+                    jett_mir::ReflectedContainerKind::List => 2,
+                    jett_mir::ReflectedContainerKind::Set => 5,
+                    jett_mir::ReflectedContainerKind::Map => 6,
+                    jett_mir::ReflectedContainerKind::Optional
+                    | jett_mir::ReflectedContainerKind::Result => 7,
+                };
+                let tag = self.builder.ins().iconst(ir::types::I32, tag);
+                let (pointer, length) = self.static_data(kind.message().as_bytes())?;
+                self.leaf(
+                    NativeLeaf::RejectPendingHandle,
+                    &[handle, tag, pointer, length],
+                    true,
+                )?;
+                Ok(())
+            }
+            StatementKind::ReflectedValueReady {
+                source,
+                inspect_pending,
+            } => {
+                if !*inspect_pending {
+                    return Ok(());
+                }
+                let ty = self.local_types[source.index() as usize].ty;
+                let expression = Expression {
+                    kind: ExpressionKind::Local(*source),
+                    ty,
+                    span: statement.span,
+                };
+                let value = self.argument(&expression, true)?;
+                self.reflected_value_ready(value, ty, statement.span)
+            }
+            StatementKind::IterationBorrow { .. } => Ok(()),
+            StatementKind::SequenceLength { source, target }
+            | StatementKind::SequenceGet { source, target, .. } => {
+                let ty = match source {
+                    jett_mir::SequenceSource::Local(local) => {
+                        self.local_types[local.index() as usize].ty
+                    }
+                    jett_mir::SequenceSource::Projected { ty, .. } => *ty,
+                };
+                let set = matches!(self.types.resolve(ty), Type::Set(_));
+                let map = matches!(self.types.resolve(ty), Type::Map(..));
+                let string = matches!(self.types.resolve(ty), Type::String);
+                let value = match source {
+                    jett_mir::SequenceSource::Local(local) if string => {
+                        let slot = self.local_slots[local.index() as usize].ok_or_else(|| {
+                            self.unsupported(statement.span, "string iteration source")
+                        })?;
+                        self.builder.ins().stack_load(ir::types::I64, slot, 0)
+                    }
+                    jett_mir::SequenceSource::Local(local) => {
+                        let source_expr = Expression {
+                            kind: ExpressionKind::Local(*local),
+                            ty,
+                            span: statement.span,
+                        };
+                        let value = self.argument(&source_expr, true)?;
+                        self.scalar(value, statement.span)?
+                    }
+                    jett_mir::SequenceSource::Projected { owner, path, .. } => {
+                        let owner_ty = self.local_types[owner.index() as usize].ty;
+                        let owner_expr = Expression {
+                            kind: ExpressionKind::Local(*owner),
+                            ty: owner_ty,
+                            span: statement.span,
+                        };
+                        let borrowed = self.argument(&owner_expr, true)?;
+                        let mut value = self.scalar(borrowed, statement.span)?;
+                        for step in path {
+                            self.check_struct_pending_access(
+                                value,
+                                step.owner_type,
+                                "field access is not supported on ",
+                                true,
+                            )?;
+                            let index = self
+                                .builder
+                                .ins()
+                                .iconst(ir::types::I64, i64::from(step.field.index()));
+                            value = self.leaf(NativeLeaf::StructField, &[value, index], true)?;
+                        }
+                        value
+                    }
+                };
+                let output = if let StatementKind::SequenceGet {
+                    index,
+                    consume,
+                    part,
+                    ..
+                } = statement.kind
+                {
+                    let index = self
+                        .builder
+                        .use_var(self.variables[index.index() as usize].unwrap());
+                    let leaf = if string {
+                        NativeLeaf::StringScalarAt
+                    } else if map {
+                        match (part, consume) {
+                            (jett_mir::SequencePart::Key, true) => NativeLeaf::MapKeyTake,
+                            (jett_mir::SequencePart::Key, false) => NativeLeaf::MapKeyClone,
+                            (jett_mir::SequencePart::Value, true) => NativeLeaf::MapValueTake,
+                            (jett_mir::SequencePart::Value, false) => NativeLeaf::MapValueClone,
+                            _ => {
+                                return Err(
+                                    self.unsupported(statement.span, "map iteration projection")
+                                );
+                            }
+                        }
+                    } else if set {
+                        if consume {
+                            NativeLeaf::SetElementTake
+                        } else {
+                            NativeLeaf::SetElementClone
+                        }
+                    } else if consume {
+                        NativeLeaf::ListElementTake
+                    } else {
+                        NativeLeaf::ListElementClone
+                    };
+                    let target_ty = self.local_types[target.index() as usize].ty;
+                    let depth = if !string && is_task_scalar(self.types, target_ty)? {
+                        if map {
+                            let key = self.builder.ins().iconst(
+                                ir::types::I32,
+                                i64::from(matches!(part, jett_mir::SequencePart::Key)),
+                            );
+                            Some(self.leaf(
+                                NativeLeaf::MapElementPendingDepth,
+                                &[value, index, key],
+                                true,
+                            )?)
+                        } else {
+                            let depth_leaf = if set {
+                                NativeLeaf::SetElementPendingDepth
+                            } else {
+                                NativeLeaf::ListElementPendingDepth
+                            };
+                            Some(self.leaf(depth_leaf, &[value, index], true)?)
+                        }
+                    } else {
+                        None
+                    };
+                    let bits = self.leaf(leaf, &[value, index], true)?;
+                    let output = self.unpack_payload(bits, target_ty, statement.span)?;
+                    match depth {
+                        Some(depth) => {
+                            LoweredValue::ScalarTask(self.scalar(output, statement.span)?, depth)
+                        }
+                        None => output,
+                    }
+                } else {
+                    let kind = if string {
+                        NativeSequenceKind::String
+                    } else if map {
+                        NativeSequenceKind::Map
+                    } else if set {
+                        NativeSequenceKind::Set
+                    } else {
+                        NativeSequenceKind::List
+                    };
+                    let kind = self.builder.ins().iconst(ir::types::I32, kind as i64);
+                    self.leaf(NativeLeaf::SequenceCheckIterable, &[value, kind], true)?;
+                    let leaf = if string {
+                        NativeLeaf::StringScalarCount
+                    } else if map {
+                        NativeLeaf::MapLength
+                    } else if set {
+                        NativeLeaf::SetLength
+                    } else {
+                        NativeLeaf::ListLength
+                    };
+                    LoweredValue::Scalar(self.leaf(leaf, &[value], true)?)
+                };
+                self.define_local(*target, output, statement.span)
+            }
+
+            StatementKind::SumTag { source, target } => {
+                let slot = self.local_slots[source.index() as usize]
+                    .ok_or_else(|| self.unsupported(statement.span, "sum view tag place"))?;
+                let v = self.builder.ins().stack_load(ir::types::I64, slot, 0);
+                let ty = self.local_types[source.index() as usize].ty;
+                let layout = debug::debug_layout(self.types, ty)
+                    .ok_or_else(|| self.unsupported(statement.span, "sum handle debug layout"))?;
+                let (pointer, length) = self.static_data(&layout)?;
+                let tag = self.leaf(NativeLeaf::SumHandleTag, &[v, pointer, length], true)?;
+                let flag = self.builder.ins().ireduce(ir::types::I8, tag);
+                self.define_local(*target, LoweredValue::Scalar(flag), statement.span)
+            }
+            StatementKind::SumTake {
+                source,
+                target,
+                success,
+            } => {
+                let slot = self.local_slots[source.index() as usize]
+                    .ok_or_else(|| self.unsupported(statement.span, "take borrowed sum"))?;
+                let v = self.builder.ins().stack_load(ir::types::I64, slot, 0);
+                let tag = self
+                    .builder
+                    .ins()
+                    .iconst(ir::types::I32, i64::from(*success));
+                let depth = self.leaf(NativeLeaf::SumPayloadPendingDepth, &[v], true)?;
+                let bits = self.leaf(NativeLeaf::SumTake, &[v, tag], true)?;
+                self.clear_slot(slot);
+                let ty = self.local_types[target.index() as usize].ty;
+                let value = self.unpack_payload(bits, ty, statement.span)?;
+                let value = if is_task_scalar(self.types, ty)? {
+                    LoweredValue::ScalarTask(self.scalar(value, statement.span)?, depth)
+                } else {
+                    value
+                };
+                self.define_local(*target, value, statement.span)
+            }
+
+            StatementKind::Let { local, value } | StatementKind::BeginCallView { local, value } => {
+                let borrowed = self.local_types[local.index() as usize]
+                    .view_source
+                    .is_some();
+                let value = if borrowed {
+                    self.argument(value, true)?
+                } else {
+                    let source = self
+                        .caller_acquisitions
+                        .owner_initializer(*local)
+                        .and_then(|source| source.binding);
+                    let previous = std::mem::replace(&mut self.taking_binding, source);
+                    let result = self.expression(value);
+                    self.taking_binding = previous;
+                    result?
+                };
+                self.define_local(*local, value, statement.span)
+            }
+            StatementKind::EndCallView { .. } => Ok(()),
+            StatementKind::OpenCallOwnerGeneration { generation, root } => {
+                let storage =
+                    self.call_generation_storage(*generation, Some(*root), statement.span)?;
+                self.clear_slot(storage.owner_slot);
+                self.clear_slot(storage.retired_slot);
+                Ok(())
+            }
+            StatementKind::ReplaceCallOwnerGeneration {
+                generation,
+                root,
+                rhs_owner,
+            } => self.replace_call_generation(*generation, *root, *rhs_owner, statement.span),
+            StatementKind::CloseCallOwnerGeneration { generation } => {
+                let storage = self.call_generation_storage(*generation, None, statement.span)?;
+                self.drop_slot(storage.owner_slot)?;
+                self.clear_slot(storage.retired_slot);
+                Ok(())
+            }
+            StatementKind::CheckRefinement {
+                local,
+                call,
+                type_name,
+            } => {
+                let slot = self.local_slots[local.index() as usize].ok_or_else(|| {
+                    self.unsupported(statement.span, "refinement error text place")
+                })?;
+                let caught = self.builder.create_block();
+                let accepted = self.builder.create_block();
+                let rejected = self.builder.create_block();
+                let continuation = self.builder.create_block();
+                let original_failure = std::mem::replace(&mut self.failure_block, caught);
+                let result = self.expression(call)?;
+                self.failure_block = original_failure;
+                let (passed, depth) = self.scalar_task(result, statement.span)?;
+                let pending = self.builder.create_block();
+                let ready = self.builder.create_block();
+                let is_pending = self.builder.ins().icmp_imm(IntCC::NotEqual, depth, 0);
+                self.builder
+                    .ins()
+                    .brif(is_pending, pending, &[], ready, &[]);
+
+                self.builder.switch_to_block(ready);
+                self.builder
+                    .ins()
+                    .brif(passed, accepted, &[], rejected, &[]);
+
+                self.builder.switch_to_block(pending);
+                let (pointer, length) = self.static_bytes(type_name)?;
+                let bits = self.builder.ins().uextend(ir::types::I64, passed);
+                let text = self.leaf(
+                    NativeLeaf::RefinementPendingBoolText,
+                    &[bits, depth, pointer, length],
+                    true,
+                )?;
+                self.drop_slot(slot)?;
+                self.builder.ins().stack_store(text, slot, 0);
+                self.builder.ins().jump(continuation, &[]);
+
+                self.builder.switch_to_block(accepted);
+                let (pointer, length) = self.static_bytes("")?;
+                let empty = self.leaf(NativeLeaf::Literal, &[pointer, length], true)?;
+                self.drop_slot(slot)?;
+                self.builder.ins().stack_store(empty, slot, 0);
+                self.builder.ins().jump(continuation, &[]);
+
+                self.builder.switch_to_block(rejected);
+                let message = format!("refinement type constraint failed for '{type_name}'");
+                let (pointer, length) = self.static_bytes(&message)?;
+                let text = self.leaf(NativeLeaf::Literal, &[pointer, length], true)?;
+                self.drop_slot(slot)?;
+                self.builder.ins().stack_store(text, slot, 0);
+                self.builder.ins().jump(continuation, &[]);
+
+                self.builder.switch_to_block(caught);
+                let prefix = format!("error evaluating refinement constraint for '{type_name}': ");
+                let (pointer, length) = self.static_bytes(&prefix)?;
+                let text = self.leaf(
+                    NativeLeaf::FailureTakePrefixedText,
+                    &[pointer, length],
+                    true,
+                )?;
+                self.drop_slot(slot)?;
+                self.builder.ins().stack_store(text, slot, 0);
+                self.builder.ins().jump(continuation, &[]);
+
+                self.builder.switch_to_block(continuation);
+                Ok(())
+            }
+            StatementKind::PrepareFieldUpdate { place, begin } => {
+                if !*begin {
+                    return Ok(());
+                }
+                self.field_update_parent(place)?;
+                Ok(())
+            }
+            StatementKind::UpdateField { value, place, .. } => {
+                self.commit_field_update(place, value, statement.span)
+            }
+            StatementKind::Assign { target, value } => {
+                let ExpressionKind::Local(local) = &target.kind else {
+                    return Err(self.unsupported(statement.span, "non-local assignment"));
+                };
+                let value = self.expression(value)?;
+                self.define_local(*local, value, statement.span)
+            }
+            StatementKind::Evaluate(value) => {
+                self.expression(value)?;
+                Ok(())
+            }
+            StatementKind::HandleDefault(_) => {
+                Err(self.unsupported(statement.span, "handle default"))
+            }
+            StatementKind::Assert { condition, message } => {
+                let value = self.expression(condition)?;
+                self.check_pending_bool_condition(value, 1, condition.span)?;
+                let flag = self.scalar(value, condition.span)?;
+                let passed = self.builder.create_block();
+                let failed = self.builder.create_block();
+                self.builder.ins().brif(flag, passed, &[], failed, &[]);
+                self.builder.switch_to_block(failed);
+                if let Some(message) = message {
+                    let value = self.expression(message)?;
+                    let handle = self.scalar(value, message.span)?;
+                    self.leaf(NativeLeaf::AssertFailMessage, &[handle], true)?;
+                } else {
+                    self.leaf(NativeLeaf::AssertFail, &[], true)?;
+                }
+                self.builder.ins().jump(passed, &[]);
+                self.builder.switch_to_block(passed);
+                Ok(())
+            }
+            StatementKind::Trace(local) => self.debug_line("trace ", &[*local], statement.span),
+            StatementKind::Breakpoint {
+                condition,
+                bindings,
+            } => {
+                let enabled = match condition {
+                    Some(condition) => {
+                        let value = self.expression(condition)?;
+                        self.check_pending_bool_condition(value, 2, condition.span)?;
+                        self.scalar(value, statement.span)?
+                    }
+                    None => self.builder.ins().iconst(ir::types::I8, 1),
+                };
+                match bindings.as_slice() {
+                    [] => {
+                        let enabled = self.builder.ins().uextend(ir::types::I32, enabled);
+                        self.leaf(NativeLeaf::BreakpointEmpty, &[enabled], true)?;
+                    }
+                    _ => {
+                        let hit = self.builder.create_block();
+                        let done = self.builder.create_block();
+                        self.builder.ins().brif(enabled, hit, &[], done, &[]);
+                        self.builder.switch_to_block(hit);
+                        self.debug_line("breakpoint hit: ", bindings, statement.span)?;
+                        self.builder.ins().jump(done, &[]);
+                        self.builder.switch_to_block(done);
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn debug_line(
+        &mut self,
+        prefix: &str,
+        bindings: &[jett_mir::LocalId],
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let (pointer, length) = self.static_bytes(prefix)?;
+        let text = self.leaf(NativeLeaf::Literal, &[pointer, length], true)?;
+        let owned = self.own(text)?;
+        for (index, binding) in bindings.iter().enumerate() {
+            let local = self
+                .local_types
+                .get(binding.index() as usize)
+                .ok_or_else(|| contract_error(self.symbol, span, "debug binding is absent"))?;
+            let kind = crate::values::list_sort_kind(self.types, local.ty)
+                .map(|kind| kind as u32)
+                .or_else(|| match self.types.resolve(local.ty) {
+                    Type::Nothing => Some(DEBUG_NOTHING_KIND),
+                    Type::Bytes => Some(DEBUG_BYTES_KIND),
+                    _ => None,
+                });
+            let type_name = local
+                .debug_type_name
+                .clone()
+                .unwrap_or_else(|| self.types.type_name(local.debug_ty));
+            let label = format!(
+                "{}{}: {} = ",
+                if index == 0 { "" } else { ", " },
+                local.name,
+                type_name
+            );
+            let value = if let Some(slot) = self.local_slots[binding.index() as usize] {
+                self.builder.ins().stack_load(ir::types::I64, slot, 0)
+            } else {
+                let variable = variable_for(self.variables, binding.index(), span, self.symbol)?
+                    .ok_or_else(|| {
+                        self.unsupported(span, "debug binding has no native variable")
+                    })?;
+                self.builder.try_use_var(variable).map_err(|error| {
+                    contract_error(
+                        self.symbol,
+                        span,
+                        format!("cannot read native debug binding: {error}"),
+                    )
+                })?
+            };
+            let bits = self.payload_bits(LoweredValue::Scalar(value)).0;
+            let (label_pointer, label_length) = self.static_bytes(&label)?;
+            if let Some(kind) = kind {
+                let kind = self.builder.ins().iconst(ir::types::I32, i64::from(kind));
+                if let Some(pending_variable) = self.pending_variables[binding.index() as usize] {
+                    let depth = self.builder.use_var(pending_variable);
+                    self.leaf(
+                        NativeLeaf::DebugAppendPendingScalar,
+                        &[text, label_pointer, label_length, bits, kind, depth],
+                        true,
+                    )?;
+                } else {
+                    self.leaf(
+                        NativeLeaf::DebugAppend,
+                        &[text, label_pointer, label_length, bits, kind],
+                        true,
+                    )?;
+                }
+            } else {
+                let layout = debug::debug_layout(self.types, local.ty)
+                    .ok_or_else(|| self.unsupported(span, "aggregate debug value"))?;
+                let (layout_pointer, layout_length) = self.static_data(&layout)?;
+                self.leaf(
+                    NativeLeaf::DebugAppendAggregate,
+                    &[
+                        text,
+                        label_pointer,
+                        label_length,
+                        bits,
+                        layout_pointer,
+                        layout_length,
+                    ],
+                    true,
+                )?;
+            }
+        }
+        self.leaf(NativeLeaf::DebugEmit, &[text], true)?;
+        if let LoweredValue::Owned(_, slot) = owned {
+            self.clear_slot(slot);
+        }
+        Ok(())
+    }
+
+    fn flush_actor_state(&mut self, span: Span) -> Result<(), CodegenError> {
+        let Some((start, end)) = self.actor_state_range else {
+            return Ok(());
+        };
+        let actor = self.builder.use_var(self.environment_variable);
+        let mut displaced = Vec::new();
+        for index in start..end {
+            let (value, owned) = if let Some(slot) = self.local_slots[index] {
+                (self.builder.ins().stack_load(ir::types::I64, slot, 0), true)
+            } else {
+                let variable = self.variables[index].ok_or_else(|| {
+                    contract_error(self.symbol, span, "actor state has no native variable")
+                })?;
+                (self.builder.use_var(variable), false)
+            };
+            let bits = if owned {
+                value
+            } else {
+                self.payload_bits(LoweredValue::Scalar(value)).0
+            };
+            let depth = if let Some(variable) = self.pending_variables[index] {
+                self.builder.use_var(variable)
+            } else {
+                self.builder.ins().iconst(ir::types::I64, 0)
+            };
+            let field = self.builder.ins().iconst(ir::types::I64, index as i64);
+            let owns = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
+            let old = self.leaf(
+                NativeLeaf::ActorReplaceOccupied,
+                &[actor, field, bits, owns, depth],
+                true,
+            )?;
+            // Successful swap transfers incoming ownership before ANY fallible cleanup.
+            if let Some(slot) = self.local_slots[index] {
+                self.clear_slot(slot);
+            }
+            if owned {
+                displaced.push(self.own(old)?);
+            }
+        }
+        // All persistent aliases now point at the new owner generation. Keep old
+        // owners alive until every dependent nonowning actor slot is published.
+        for value in displaced {
+            if let LoweredValue::Owned(_, slot) = value {
+                self.drop_slot(slot)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn return_value(&mut self, value: Option<&Expression>, span: Span) -> Result<(), CodegenError> {
+        if self.resource.is_some() {
+            return self.resource_return(value, span);
+        }
+        let mut result = match value {
+            Some(value) => self.expression(value)?,
+            None => self.nothing(),
+        };
+        if value.is_some_and(|value| is_copy_owned(self.types, value.ty)) {
+            let v = self.scalar(result, span)?;
+            let leaf = if value.is_some_and(|value| is_function(self.types, value.ty)) {
+                NativeLeaf::StructClone
+            } else {
+                NativeLeaf::Retain
+            };
+            let acquired = self.leaf(leaf, &[v], true)?;
+            result = if self.actor_state_range.is_some() {
+                self.own(acquired)?
+            } else {
+                LoweredValue::Scalar(acquired)
+            };
+        }
+        let actor_reply = if self.actor_state_range.is_some() {
+            match result {
+                LoweredValue::Owned(_, slot) => Some(slot),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if actor_reply.is_none() {
+            if let LoweredValue::Owned(v, slot) = result {
+                self.clear_slot(slot);
+                result = LoweredValue::Scalar(v);
+            }
+        }
+        let primitive_return = match value {
+            Some(expression) => is_task_scalar(self.types, expression.ty)?,
+            None => false,
+        };
+        let primitive = if primitive_return {
+            Some(self.scalar_task(result, span)?)
+        } else {
+            None
+        };
+        self.flush_actor_state(span)?;
+        if let Some(slot) = actor_reply {
+            self.drop_all_except(slot)?;
+            self.clear_slot(slot);
+        } else {
+            self.drop_all()?;
+        }
+        if let Some((bits, depth)) = primitive {
+            self.builder.ins().return_(&[bits, depth]);
+        } else {
+            let value = self.scalar(result, span)?;
+            self.builder.ins().return_(&[value]);
+        }
+        Ok(())
+    }
+
+    fn terminator(&mut self, terminator: &Terminator) -> Result<(), CodegenError> {
+        self.carrier_iteration_boundary(terminator.span)?;
+        match &terminator.kind {
+            TerminatorKind::Return(value) => self.return_value(value.as_ref(), terminator.span),
+            TerminatorKind::Goto(target) => {
+                self.drop_temporaries()?;
+                let target = block_for(self.blocks, target.index(), terminator.span, self.symbol)?;
+                self.builder.ins().jump(target, &[]);
+                Ok(())
+            }
+            TerminatorKind::Branch {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                let lowered_condition = self.expression(condition)?;
+                self.check_pending_bool_condition(lowered_condition, 0, condition.span)?;
+                let condition = self.scalar(lowered_condition, condition.span)?;
+                self.drop_temporaries()?;
+                let then_block = block_for(
+                    self.blocks,
+                    then_block.index(),
+                    terminator.span,
+                    self.symbol,
+                )?;
+                let else_block = block_for(
+                    self.blocks,
+                    else_block.index(),
+                    terminator.span,
+                    self.symbol,
+                )?;
+                self.builder
+                    .ins()
+                    .brif(condition, then_block, &[], else_block, &[]);
+                Ok(())
+            }
+            TerminatorKind::Unreachable => {
+                self.builder.ins().trap(TrapCode::unwrap_user(1));
+                Ok(())
+            }
+            TerminatorKind::Respond(value) => self.return_value(Some(value), terminator.span),
+            TerminatorKind::Switch {
+                scrutinee,
+                variants,
+                otherwise,
+            } => {
+                if self.carrier_switch(scrutinee, variants, *otherwise, terminator.span)? {
+                    return Ok(());
+                }
+                let lowered = self.expression(scrutinee)?;
+                let handle = self.scalar(lowered, scrutinee.span)?;
+                self.check_struct_pending_access(
+                    handle,
+                    scrutinee.ty,
+                    "match requires an enum value, got ",
+                    true,
+                )?;
+                let zero = self.builder.ins().iconst(ir::types::I64, 0);
+                let tag = self.leaf(NativeLeaf::StructField, &[handle, zero], true)?;
+                let switch_temporaries = self.next_temporary;
+                for (variant, target, bindings) in variants {
+                    let match_tag =
+                        self.builder
+                            .ins()
+                            .icmp_imm(IntCC::Equal, tag, i64::from(variant.index()));
+                    let target =
+                        block_for(self.blocks, target.index(), terminator.span, self.symbol)?;
+                    let selected = self.builder.create_block();
+                    let next = self.builder.create_block();
+                    self.builder.ins().brif(match_tag, selected, &[], next, &[]);
+                    self.builder.switch_to_block(selected);
+                    for (index, binding) in bindings.iter().enumerate() {
+                        let field = self.builder.ins().iconst(ir::types::I64, index as i64 + 1);
+                        let ty = self.local_types[binding.index() as usize].ty;
+                        let depth = if is_task_scalar(self.types, ty)? {
+                            Some(self.leaf(
+                                NativeLeaf::StructFieldPendingDepth,
+                                &[handle, field],
+                                true,
+                            )?)
+                        } else {
+                            None
+                        };
+                        let bits = self.leaf(NativeLeaf::StructTake, &[handle, field], true)?;
+                        let value = self.unpack_payload(bits, ty, terminator.span)?;
+                        let value = if let Some(depth) = depth {
+                            LoweredValue::ScalarTask(self.scalar(value, terminator.span)?, depth)
+                        } else {
+                            value
+                        };
+                        self.define_local(*binding, value, terminator.span)?;
+                    }
+                    self.drop_temporaries()?;
+                    self.builder.ins().jump(target, &[]);
+                    self.next_temporary = switch_temporaries;
+                    self.builder.switch_to_block(next);
+                }
+                self.drop_temporaries()?;
+                if let Some(otherwise) = otherwise {
+                    let target =
+                        block_for(self.blocks, otherwise.index(), terminator.span, self.symbol)?;
+                    self.builder.ins().jump(target, &[]);
+                } else {
+                    self.builder.ins().trap(TrapCode::unwrap_user(1));
+                }
+                Ok(())
+            }
+            TerminatorKind::ForEach { .. } => {
+                Err(self.unsupported(terminator.span, "for-each loop"))
+            }
+            TerminatorKind::ReflectedTypeDispatch {
+                type_info,
+                arms,
+                otherwise,
+            } => {
+                let lowered = self.argument(type_info, true)?;
+                let type_info = self.scalar(lowered, terminator.span)?;
+                let dispatch_temporaries = self.next_temporary;
+                for arm in arms {
+                    let (expected, length) = self.static_bytes(&arm.reflection_identity)?;
+                    let matches = self.leaf(
+                        NativeLeaf::TypeInfoReflectionMatches,
+                        &[type_info, expected, length],
+                        true,
+                    )?;
+                    let selected = self.builder.create_block();
+                    let next = self.builder.create_block();
+                    self.builder.ins().brif(matches, selected, &[], next, &[]);
+                    self.builder.switch_to_block(selected);
+                    self.drop_temporaries()?;
+                    let target = block_for(
+                        self.blocks,
+                        arm.target.index(),
+                        terminator.span,
+                        self.symbol,
+                    )?;
+                    self.builder.ins().jump(target, &[]);
+                    self.next_temporary = dispatch_temporaries;
+                    self.builder.switch_to_block(next);
+                }
+                self.drop_temporaries()?;
+                let otherwise =
+                    block_for(self.blocks, otherwise.index(), terminator.span, self.symbol)?;
+                self.builder.ins().jump(otherwise, &[]);
+                Ok(())
+            }
+        }
+    }
+
+    fn expression(&mut self, expression: &Expression) -> Result<LoweredValue, CodegenError> {
+        let source = self.caller_acquisitions.argument_binding(expression);
+        let previous = self.taking_binding;
+        if source.is_some() {
+            self.taking_binding = source;
+        }
+        let result = self.expression_inner(expression);
+        self.taking_binding = previous;
+        result
+    }
+
+    fn expression_inner(&mut self, expression: &Expression) -> Result<LoweredValue, CodegenError> {
+        if let Some(value) = self.resource_expression(expression)? {
+            return Ok(value);
+        }
+        let kind = if self.resource_is_named_value(expression)? {
+            ScalarKind::Function
+        } else {
+            native_storage_kind(self.types, expression.ty, "native expression")?
+        };
+        match &expression.kind {
+            ExpressionKind::ResourceHookValue { .. } | ExpressionKind::ResourceInvoke { .. } => {
+                Err(contract_error(
+                    self.symbol,
+                    expression.span,
+                    "pending ResourceOwnershipPlan: native Resource custody and descriptor emission are not admitted",
+                ))
+            }
+            ExpressionKind::Int(value) => {
+                let ty = self.required_clif_type(expression.ty, expression.span)?;
+                let immediate = integer_immediate(*value, kind).ok_or_else(|| {
+                    contract_error(
+                        self.symbol,
+                        expression.span,
+                        "integer literal is out of range",
+                    )
+                })?;
+                Ok(LoweredValue::Scalar(
+                    self.builder.ins().iconst(ty, immediate),
+                ))
+            }
+            ExpressionKind::Float(value) => {
+                let value = match kind {
+                    ScalarKind::Float(32) => self
+                        .builder
+                        .ins()
+                        .f32const(Ieee32::with_float(*value as f32)),
+                    ScalarKind::Float(64) => {
+                        self.builder.ins().f64const(Ieee64::with_float(*value))
+                    }
+                    _ => {
+                        return Err(contract_error(
+                            self.symbol,
+                            expression.span,
+                            "float literal has a non-float type",
+                        ));
+                    }
+                };
+                Ok(LoweredValue::Scalar(value))
+            }
+            ExpressionKind::Bool(value) => Ok(LoweredValue::Scalar(
+                self.builder.ins().iconst(ir::types::I8, i64::from(*value)),
+            )),
+            ExpressionKind::Nothing => Ok(self.nothing()),
+            ExpressionKind::Local(local) => {
+                let variable =
+                    variable_for(self.variables, local.index(), expression.span, self.symbol)?;
+                let variable = variable.ok_or_else(|| {
+                    contract_error(self.symbol, expression.span, "local has no native variable")
+                })?;
+                if let Some(slot) = self.local_slots[local.index() as usize] {
+                    let v = self.builder.ins().stack_load(ir::types::I64, slot, 0);
+                    self.expect_machine_state(local.index() as usize, expression.ty, v)?;
+                    if self.taking_binding == Some(*local) {
+                        self.clear_slot(slot);
+                        return if is_linear(self.types, expression.ty) {
+                            self.own_linear(v)
+                        } else {
+                            self.own(v)
+                        };
+                    }
+                    if is_linear(self.types, expression.ty) {
+                        if self.test_ownership {
+                            return self.clone_linear(
+                                LoweredValue::Scalar(v),
+                                expression.ty,
+                                expression.span,
+                            );
+                        }
+                        self.clear_slot(slot);
+                        return self.own_linear(v);
+                    }
+                    let leaf = if is_function(self.types, expression.ty) {
+                        NativeLeaf::StructClone
+                    } else {
+                        NativeLeaf::Retain
+                    };
+                    let v = self.leaf(leaf, &[v], true)?;
+                    return self.own(v);
+                }
+                let value = self.builder.try_use_var(variable).map_err(|error| {
+                    contract_error(
+                        self.symbol,
+                        expression.span,
+                        format!("cannot read native local: {error}"),
+                    )
+                })?;
+                if is_copy_owned(self.types, expression.ty) {
+                    return self.own_copy_value(
+                        LoweredValue::Scalar(value),
+                        expression.ty,
+                        expression.span,
+                    );
+                }
+                if let Some(pending_variable) = self.pending_variables[local.index() as usize] {
+                    let depth = self
+                        .builder
+                        .try_use_var(pending_variable)
+                        .map_err(|error| {
+                            contract_error(
+                                self.symbol,
+                                expression.span,
+                                format!("cannot read primitive pending depth: {error}"),
+                            )
+                        })?;
+                    Ok(LoweredValue::ScalarTask(value, depth))
+                } else {
+                    Ok(LoweredValue::Scalar(value))
+                }
+            }
+            ExpressionKind::FunctionRef(function) => {
+                self.resource_validate_named_producer(expression, *function)?;
+                self.function_descriptor(*function, None, expression.span)
+            }
+            ExpressionKind::ClosureRef { function, captures } => {
+                let field_count = captures.len().checked_mul(2).ok_or_else(|| {
+                    contract_error(self.symbol, expression.span, "too many closure captures")
+                })?;
+                let field_count = i64::try_from(field_count).map_err(|_| {
+                    contract_error(self.symbol, expression.span, "too many closure captures")
+                })?;
+                let count = self.builder.ins().iconst(ir::types::I64, field_count);
+                let environment = self.leaf(NativeLeaf::StructNew, &[count], true)?;
+                let environment_owned = self.own(environment)?;
+                for (index, capture) in captures.iter().enumerate() {
+                    let ty = self
+                        .local_types
+                        .get(capture.index() as usize)
+                        .ok_or_else(|| {
+                            contract_error(
+                                self.symbol,
+                                expression.span,
+                                "closure capture is absent",
+                            )
+                        })?
+                        .ty;
+                    let captured = self.expression(&Expression {
+                        kind: ExpressionKind::Local(*capture),
+                        ty,
+                        span: expression.span,
+                    })?;
+                    let depth = if is_task_scalar(self.types, ty)? {
+                        self.scalar_task(captured, expression.span)?.1
+                    } else {
+                        self.builder.ins().iconst(ir::types::I64, 0)
+                    };
+                    let (bits, owned) = self.payload_bits(captured);
+                    let field_index = self.builder.ins().iconst(ir::types::I64, index as i64);
+                    let owned_flag = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
+                    self.leaf(
+                        NativeLeaf::StructInit,
+                        &[environment, field_index, bits, owned_flag],
+                        true,
+                    )?;
+                    let depth_index = self
+                        .builder
+                        .ins()
+                        .iconst(ir::types::I64, (captures.len() + index) as i64);
+                    let false_flag = self.builder.ins().iconst(ir::types::I32, 0);
+                    self.leaf(
+                        NativeLeaf::StructInit,
+                        &[environment, depth_index, depth, false_flag],
+                        true,
+                    )?;
+                    if let LoweredValue::Owned(_, slot) = captured {
+                        self.clear_slot(slot);
+                    }
+                }
+                self.function_descriptor(*function, Some(environment_owned), expression.span)
+            }
+            ExpressionKind::Unary { op, value } => {
+                let lowered_value = self.expression(value)?;
+                if is_task_scalar(self.types, value.ty)? {
+                    let (_, depth) = self.scalar_task(lowered_value, value.span)?;
+                    let negate = self
+                        .builder
+                        .ins()
+                        .iconst(ir::types::I32, i64::from(matches!(op, UnaryOp::Negate)));
+                    self.leaf(NativeLeaf::ScalarPendingUnaryCheck, &[depth, negate], true)?;
+                }
+                let value = self.scalar(lowered_value, value.span)?;
+                let value = match op {
+                    UnaryOp::Not => self.builder.ins().bxor_imm(value, 1),
+                    UnaryOp::Negate if kind.is_integer() => self.builder.ins().ineg(value),
+                    UnaryOp::Negate => self.builder.ins().fneg(value),
+                };
+                Ok(LoweredValue::Scalar(value))
+            }
+            ExpressionKind::Binary { left, op, right } => {
+                let operand_kind = native_storage_kind(self.types, left.ty, "binary operand")?;
+                let enum_equality = operand_kind == ScalarKind::Enum
+                    && matches!(op, BinaryOp::Equal | BinaryOp::NotEqual);
+                let lowered_left = self.argument(left, enum_equality)?;
+                let left_value = self.scalar(lowered_left, left.span)?;
+                if matches!(op, BinaryOp::And | BinaryOp::Or) {
+                    let value = self.short_circuit_boolean(
+                        lowered_left,
+                        *op,
+                        right,
+                        operand_kind,
+                        expression.span,
+                    )?;
+                    return Ok(LoweredValue::Scalar(value));
+                }
+                let lowered_right = self.argument(right, enum_equality)?;
+                let right_value = self.scalar(lowered_right, right.span)?;
+                self.check_pending_scalar_binary(
+                    lowered_left,
+                    left.ty,
+                    *op,
+                    lowered_right,
+                    right.ty,
+                    expression.span,
+                )?;
+                if operand_kind == ScalarKind::Actor {
+                    let not_equal = self
+                        .builder
+                        .ins()
+                        .iconst(ir::types::I32, i64::from(*op == BinaryOp::NotEqual));
+                    let value = self.leaf(
+                        NativeLeaf::ActorIdentityEqual,
+                        &[left_value, right_value, not_equal],
+                        true,
+                    )?;
+                    let value = self.builder.ins().ireduce(ir::types::I8, value);
+                    return Ok(LoweredValue::Scalar(value));
+                }
+                if operand_kind == ScalarKind::String {
+                    let leaf = if *op == BinaryOp::NotEqual {
+                        NativeLeaf::StringNotEqual
+                    } else {
+                        NativeLeaf::Equal
+                    };
+                    let value = self.leaf(leaf, &[left_value, right_value], true)?;
+                    let value = self.builder.ins().ireduce(ir::types::I8, value);
+                    return Ok(LoweredValue::Scalar(value));
+                }
+                if operand_kind == ScalarKind::Enum {
+                    let debug_layout = debug::debug_layout(self.types, left.ty)
+                        .ok_or_else(|| self.unsupported(expression.span, "enum debug layout"))?;
+                    let (debug_pointer, debug_length) = self.static_data(&debug_layout)?;
+                    let not_equal = self
+                        .builder
+                        .ins()
+                        .iconst(ir::types::I32, i64::from(*op == BinaryOp::NotEqual));
+                    self.leaf(
+                        NativeLeaf::EnumPendingComparisonCheck,
+                        &[
+                            left_value,
+                            right_value,
+                            not_equal,
+                            debug_pointer,
+                            debug_length,
+                        ],
+                        true,
+                    )?;
+                    let Type::Enum(enum_id) =
+                        self.types.resolve(representation_type(self.types, left.ty))
+                    else {
+                        return Err(self.unsupported(expression.span, "enum equality type"));
+                    };
+                    let variants = &self.types.resolve_enum(*enum_id).variants;
+                    if variants.iter().any(|variant| !variant.fields.is_empty())
+                        && !known_unit_enum_variant(left)
+                        && !known_unit_enum_variant(right)
+                    {
+                        let aggregate = variants.iter().flat_map(|variant| &variant.fields).any(
+                            |(_, field_ty)| {
+                                !matches!(
+                                    native_storage_kind(
+                                        self.types,
+                                        *field_ty,
+                                        "enum equality payload"
+                                    ),
+                                    Ok(ScalarKind::SignedInteger(_)
+                                        | ScalarKind::UnsignedInteger(_)
+                                        | ScalarKind::Float(32 | 64)
+                                        | ScalarKind::Bool
+                                        | ScalarKind::String)
+                                )
+                            },
+                        );
+                        let (layout, leaf) = if aggregate {
+                            let layout =
+                                debug::equality_layout(self.types, left.ty, self.equality_methods)
+                                    .ok_or_else(|| {
+                                        self.unsupported(
+                                            expression.span,
+                                            "enum equality payload type",
+                                        )
+                                    })?;
+                            if !layout.custom.is_empty() {
+                                let value = self.custom_enum_equality(
+                                    left_value,
+                                    right_value,
+                                    &layout,
+                                    expression.span,
+                                )?;
+                                let value = if *op == BinaryOp::NotEqual {
+                                    self.builder.ins().bxor_imm(value, 1)
+                                } else {
+                                    value
+                                };
+                                return Ok(LoweredValue::Scalar(value));
+                            }
+                            (layout.bytes, NativeLeaf::EnumEqualAggregate)
+                        } else {
+                            let mut layout = b"JE\x01".to_vec();
+                            let count = u32::try_from(variants.len()).map_err(|_| {
+                                self.unsupported(expression.span, "enum variant count")
+                            })?;
+                            layout.extend_from_slice(&count.to_le_bytes());
+                            for variant in variants {
+                                let count = u32::try_from(variant.fields.len()).map_err(|_| {
+                                    self.unsupported(expression.span, "enum equality field count")
+                                })?;
+                                layout.extend_from_slice(&count.to_le_bytes());
+                                for (_, field_ty) in &variant.fields {
+                                    let kind = match native_storage_kind(
+                                        self.types,
+                                        *field_ty,
+                                        "enum equality payload",
+                                    )? {
+                                        ScalarKind::SignedInteger(_)
+                                        | ScalarKind::UnsignedInteger(_)
+                                        | ScalarKind::Bool => b'i',
+                                        ScalarKind::Float(32) => b'f',
+                                        ScalarKind::Float(64) => b'd',
+                                        ScalarKind::String => b's',
+                                        _ => {
+                                            return Err(self.unsupported(
+                                                expression.span,
+                                                "enum equality payload type",
+                                            ));
+                                        }
+                                    };
+                                    layout.push(kind);
+                                }
+                            }
+                            (layout, NativeLeaf::EnumEqual)
+                        };
+                        let (pointer, length) = self.static_data(&layout)?;
+                        let value =
+                            self.leaf(leaf, &[left_value, right_value, pointer, length], true)?;
+                        let value = self.builder.ins().ireduce(ir::types::I8, value);
+                        let value = if *op == BinaryOp::NotEqual {
+                            self.builder.ins().bxor_imm(value, 1)
+                        } else {
+                            value
+                        };
+                        return Ok(LoweredValue::Scalar(value));
+                    }
+                    let zero = self.builder.ins().iconst(ir::types::I64, 0);
+                    let left_tag = self.leaf(NativeLeaf::StructField, &[left_value, zero], true)?;
+                    let right_tag =
+                        self.leaf(NativeLeaf::StructField, &[right_value, zero], true)?;
+                    let condition = if *op == BinaryOp::Equal {
+                        IntCC::Equal
+                    } else {
+                        IntCC::NotEqual
+                    };
+                    let value = self.builder.ins().icmp(condition, left_tag, right_tag);
+                    return Ok(LoweredValue::Scalar(value));
+                }
+                let value =
+                    self.binary(left_value, *op, right_value, operand_kind, expression.span)?;
+                Ok(LoweredValue::Scalar(value))
+            }
+            ExpressionKind::Call {
+                function,
+                args,
+                evaluation_order,
+                ..
+            } => self.call(*function, args, evaluation_order, expression),
+            ExpressionKind::FunctionAdapter { value, function } => {
+                let lowered = self.expression(value)?;
+                let source = self.scalar(lowered, value.span)?;
+                let declared = self.declarations.get(*function).ok_or_else(|| {
+                    contract_error(
+                        self.symbol,
+                        expression.span,
+                        "function adapter is not reachable",
+                    )
+                })?;
+                let reference = self
+                    .module
+                    .declare_func_in_func(declared.native_id, self.builder.func);
+                let pointer_type = self.module.target_config().pointer_type();
+                let address = self.builder.ins().func_addr(pointer_type, reference);
+                let address = if pointer_type == ir::types::I64 {
+                    address
+                } else {
+                    self.builder.ins().uextend(ir::types::I64, address)
+                };
+                let adapted = self.leaf(NativeLeaf::FunctionAdapter, &[source, address], true)?;
+                self.own(adapted)
+            }
+            ExpressionKind::InterfaceCoerce { value, adapters } => {
+                self.interface_coerce(value, expression.ty, false, adapters)
+            }
+            ExpressionKind::InterfaceType(value) => {
+                let lowered = self.argument(value, true)?;
+                let handle = self.scalar(lowered, value.span)?;
+                Ok(LoweredValue::Scalar(self.leaf(
+                    NativeLeaf::InterfaceType,
+                    &[handle],
+                    true,
+                )?))
+            }
+            ExpressionKind::PropertyCaseContext(case) => {
+                if let Some(case) = case {
+                    let lowered =
+                        self.literal(&format!("property '{}' trial {}: ", case.name, case.trial))?;
+                    let handle = self.scalar(lowered, expression.span)?;
+                    self.leaf(NativeLeaf::PropertyCaseSet, &[handle], true)?;
+                } else {
+                    self.leaf(NativeLeaf::PropertyCaseClear, &[], true)?;
+                }
+                Ok(self.nothing())
+            }
+            ExpressionKind::RuntimeFailureMessage(message) => {
+                let lowered = self.argument(message, true)?;
+                let handle = self.scalar(lowered, message.span)?;
+                self.leaf(NativeLeaf::RuntimeFailMessage, &[handle], true)?;
+                Ok(self.nothing())
+            }
+            ExpressionKind::RuntimeFailure(message) => {
+                let lowered = self.literal(message)?;
+                let handle = self.scalar(lowered, expression.span)?;
+                self.leaf(NativeLeaf::RuntimeFailMessage, &[handle], true)?;
+                let native_ty = self.required_clif_type(expression.ty, expression.span)?;
+                let zero = if native_ty == ir::types::F32 {
+                    self.builder.ins().f32const(0.0)
+                } else if native_ty == ir::types::F64 {
+                    self.builder.ins().f64const(0.0)
+                } else {
+                    self.builder.ins().iconst(native_ty, 0)
+                };
+                Ok(LoweredValue::Scalar(zero))
+            }
+            ExpressionKind::Comptime { .. } => {
+                Err(self.unsupported(expression.span, "unbaked comptime expression"))
+            }
+            ExpressionKind::Constant { .. } => {
+                Err(self.unsupported(expression.span, "unbaked namespace constant"))
+            }
+            ExpressionKind::View(value) => {
+                let value = self.argument(value, true)?;
+                if is_copy_owned(self.types, expression.ty) {
+                    self.own_copy_value(value, expression.ty, expression.span)
+                } else {
+                    Ok(value)
+                }
+            }
+            ExpressionKind::Clone(value) if is_linear(self.types, value.ty) => {
+                let borrowed = self.argument(value, true)?;
+                self.clone_linear(borrowed, value.ty, value.span)
+            }
+            ExpressionKind::Clone(value) => self.expression(value),
+            ExpressionKind::String(text) => self.literal(text),
+            ExpressionKind::Intrinsic {
+                intrinsic,
+                type_arguments,
+                reflection_arguments,
+                field_validation,
+                args,
+                evaluation_order,
+                ..
+            } => self.intrinsic(
+                *intrinsic,
+                type_arguments,
+                reflection_arguments,
+                field_validation.as_ref(),
+                args,
+                evaluation_order,
+                expression.ty,
+                expression.span,
+            ),
+            ExpressionKind::IndirectCall {
+                callee,
+                args,
+                evaluation_order,
+                ..
+            } => self.indirect_call(callee, args, evaluation_order, expression),
+            ExpressionKind::StructConstruct {
+                fields,
+                evaluation_order,
+                validates_refinements,
+                ..
+            } => {
+                let record = self.construct_struct(fields, evaluation_order, expression.span)?;
+                if *validates_refinements {
+                    self.construct_sum_value(true, record, expression.span)
+                } else {
+                    Ok(record)
+                }
+            }
+            ExpressionKind::BitfieldConstruct {
+                bitfield_type,
+                fields,
+                evaluation_order,
+                validates_widths,
+            } => {
+                if *validates_widths {
+                    self.construct_validated_bitfield(
+                        *bitfield_type,
+                        fields,
+                        evaluation_order,
+                        expression.span,
+                    )
+                } else {
+                    self.construct_struct(fields, evaluation_order, expression.span)
+                }
+            }
+            ExpressionKind::MachineConstruct {
+                state, payloads, ..
+            } => self.construct_tagged_record(
+                state.index(),
+                payloads,
+                0..payloads.len(),
+                expression.span,
+            ),
+            ExpressionKind::MachineTransition {
+                source,
+                state_type,
+                target,
+                payloads,
+            } => {
+                let lowered = self.expression(source)?;
+                let value = self.scalar(lowered, source.span)?;
+                let machine = match self
+                    .types
+                    .resolve(representation_type(self.types, *state_type))
+                {
+                    Type::Machine(machine) | Type::MachineState { machine, .. } => *machine,
+                    _ => return Err(self.unsupported(expression.span, "machine transition type")),
+                };
+                let message = format!(
+                    "{}.transition: first argument must be a machine value",
+                    self.types.resolve_machine(machine).name
+                );
+                self.check_struct_pending_access(value, source.ty, &message, false)?;
+                self.construct_tagged_record(
+                    target.index(),
+                    payloads,
+                    0..payloads.len(),
+                    expression.span,
+                )
+            }
+            ExpressionKind::ListConstruct { elements } => {
+                self.construct_list(elements, expression.ty, expression.span)
+            }
+            ExpressionKind::MapConstruct { entries } => {
+                self.construct_map(entries, expression.ty, expression.span)
+            }
+            ExpressionKind::ResultOk(value) | ExpressionKind::OptionalSome(value) => {
+                self.construct_sum(true, Some(value), expression.span)
+            }
+            ExpressionKind::ResultFail(value) => {
+                self.construct_sum(false, Some(value), expression.span)
+            }
+            ExpressionKind::OptionalNone => self.construct_sum(false, None, expression.span),
+            ExpressionKind::Handle { .. } => {
+                Err(self.unsupported(expression.span, "failure handler"))
+            }
+            ExpressionKind::EnumConstruct {
+                variant,
+                payloads,
+                evaluation_order,
+                ..
+            } => self.construct_tagged_record(
+                variant.index(),
+                payloads,
+                evaluation_order.iter().copied(),
+                expression.span,
+            ),
+            ExpressionKind::StringInterpolation(segments) => {
+                self.interpolate(segments, expression.span)
+            }
+            ExpressionKind::DisplayResult(value) => {
+                let lowered = self.expression(value)?;
+                let handle = self.scalar(lowered, value.span)?;
+                self.leaf(NativeLeaf::DisplayResultCheck, &[handle], true)?;
+                Ok(lowered)
+            }
+            ExpressionKind::EquatableResult(value) => {
+                let lowered = self.expression(value)?;
+                self.reject_pending_scalars(&[lowered], "Equatable.equals must return bool")?;
+                Ok(lowered)
+            }
+            ExpressionKind::Declassify(value) => self.expression(value),
+            ExpressionKind::Coarsen(value) => self.expression(value),
+            ExpressionKind::RefinementValidated(value) => self.expression(value),
+            ExpressionKind::StateIs { value, state } => {
+                let borrowed = self.argument(value, true)?;
+                let machine = self.scalar(borrowed, value.span)?;
+                self.check_struct_pending_access(
+                    machine,
+                    value.ty,
+                    "'at' requires a machine value, got ",
+                    true,
+                )?;
+                let zero = self.builder.ins().iconst(ir::types::I64, 0);
+                let tag = self.leaf(NativeLeaf::StructField, &[machine, zero], true)?;
+                let expected = self
+                    .builder
+                    .ins()
+                    .iconst(ir::types::I64, i64::from(state.index()));
+                Ok(LoweredValue::Scalar(self.builder.ins().icmp(
+                    IntCC::Equal,
+                    tag,
+                    expected,
+                )))
+            }
+            // Tasks currently execute immediately. Unit values retain Pending
+            // nesting because joining bare nothing reports cancellation.
+            ExpressionKind::Run(value) => {
+                let lowered = self.expression(value)?;
+                let representation = representation_type(self.types, value.ty);
+                if native_storage_kind(self.types, value.ty, "task value")? == ScalarKind::Nothing {
+                    let depth = self.scalar(lowered, value.span)?;
+                    let depth = self.leaf(NativeLeaf::NothingRun, &[depth], true)?;
+                    Ok(LoweredValue::Scalar(depth))
+                } else if matches!(self.types.resolve(representation), Type::String) {
+                    let source = self.scalar(lowered, value.span)?;
+                    let pending = self.leaf(NativeLeaf::StringRun, &[source], true)?;
+                    self.own(pending)
+                } else if matches!(self.types.resolve(representation), Type::Bytes) {
+                    let source = self.scalar(lowered, value.span)?;
+                    let pending = self.leaf(NativeLeaf::BytesRun, &[source], true)?;
+                    self.own_linear(pending)
+                } else if matches!(self.types.resolve(representation), Type::List(_)) {
+                    let source = self.scalar(lowered, value.span)?;
+                    let pending = self.leaf(NativeLeaf::ListRun, &[source], true)?;
+                    self.own_linear(pending)
+                } else if matches!(self.types.resolve(representation), Type::Set(_)) {
+                    let source = self.scalar(lowered, value.span)?;
+                    let pending = self.leaf(NativeLeaf::SetRun, &[source], true)?;
+                    self.own_linear(pending)
+                } else if matches!(self.types.resolve(representation), Type::Map(..)) {
+                    let source = self.scalar(lowered, value.span)?;
+                    let pending = self.leaf(NativeLeaf::MapRun, &[source], true)?;
+                    self.own_linear(pending)
+                } else if matches!(
+                    self.types.resolve(representation),
+                    Type::Optional(_) | Type::Result(..)
+                ) {
+                    let source = self.scalar(lowered, value.span)?;
+                    let pending = self.leaf(NativeLeaf::SumRun, &[source], true)?;
+                    self.own_linear(pending)
+                } else if matches!(
+                    self.types.resolve(representation),
+                    Type::Struct(_)
+                        | Type::Enum(_)
+                        | Type::Bitfield(_)
+                        | Type::Machine(_)
+                        | Type::MachineState { .. }
+                        | Type::Function { .. }
+                        | Type::Interface(_)
+                        | Type::TypeConstruction
+                ) {
+                    let source = self.scalar(lowered, value.span)?;
+                    let pending = self.leaf(NativeLeaf::RecordRun, &[source], true)?;
+                    self.own_linear(pending)
+                } else if matches!(self.types.resolve(representation), Type::Actor(_)) {
+                    let source = self.scalar(lowered, value.span)?;
+                    let pending = self.leaf(NativeLeaf::ActorRun, &[source], true)?;
+                    Ok(LoweredValue::Scalar(pending))
+                } else if matches!(self.types.resolve(representation), Type::Capability(_)) {
+                    let source = self.scalar(lowered, value.span)?;
+                    let pending = self.leaf(NativeLeaf::CapabilityRun, &[source], true)?;
+                    Ok(LoweredValue::Scalar(pending))
+                } else if is_task_scalar(self.types, value.ty)? {
+                    let (bits, depth) = self.scalar_task(lowered, value.span)?;
+                    let depth = self.leaf(NativeLeaf::NothingRun, &[depth], true)?;
+                    Ok(LoweredValue::ScalarTask(bits, depth))
+                } else {
+                    Ok(lowered)
+                }
+            }
+            ExpressionKind::Join(value) => {
+                let result = self.expression(value)?;
+                let representation = representation_type(self.types, value.ty);
+                if native_storage_kind(self.types, value.ty, "task value")? == ScalarKind::Nothing {
+                    let depth = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::NothingJoin, &[depth], true)?;
+                    self.own_linear(joined)
+                } else if matches!(self.types.resolve(representation), Type::String) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::StringTaskJoin, &[source], true)?;
+                    let joined = self.own(joined)?;
+                    self.construct_sum_value(true, joined, expression.span)
+                } else if matches!(self.types.resolve(representation), Type::Bytes) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::BytesTaskJoin, &[source], true)?;
+                    let joined = self.own_linear(joined)?;
+                    self.construct_sum_value(true, joined, expression.span)
+                } else if matches!(self.types.resolve(representation), Type::List(_)) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::ListTaskJoin, &[source], true)?;
+                    let joined = self.own_linear(joined)?;
+                    self.construct_sum_value(true, joined, expression.span)
+                } else if matches!(self.types.resolve(representation), Type::Set(_)) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::SetTaskJoin, &[source], true)?;
+                    let joined = self.own_linear(joined)?;
+                    self.construct_sum_value(true, joined, expression.span)
+                } else if matches!(self.types.resolve(representation), Type::Map(..)) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::MapTaskJoin, &[source], true)?;
+                    let joined = self.own_linear(joined)?;
+                    self.construct_sum_value(true, joined, expression.span)
+                } else if matches!(self.types.resolve(representation), Type::Result(..)) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::SumTaskJoin, &[source], true)?;
+                    let joined = self.own_linear(joined)?;
+                    if value.ty == expression.ty {
+                        Ok(joined)
+                    } else {
+                        self.construct_sum_value(true, joined, expression.span)
+                    }
+                } else if matches!(self.types.resolve(representation), Type::Optional(_)) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::SumTaskJoin, &[source], true)?;
+                    let joined = self.own_linear(joined)?;
+                    self.construct_sum_value(true, joined, expression.span)
+                } else if matches!(
+                    self.types.resolve(representation),
+                    Type::Struct(_)
+                        | Type::Enum(_)
+                        | Type::Bitfield(_)
+                        | Type::Machine(_)
+                        | Type::MachineState { .. }
+                        | Type::Function { .. }
+                        | Type::Interface(_)
+                        | Type::TypeConstruction
+                ) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::RecordTaskJoin, &[source], true)?;
+                    let joined = self.own_linear(joined)?;
+                    self.construct_sum_value(true, joined, expression.span)
+                } else if matches!(self.types.resolve(representation), Type::Actor(_)) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::ActorTaskJoin, &[source], true)?;
+                    self.construct_sum_value(true, LoweredValue::Scalar(joined), expression.span)
+                } else if matches!(self.types.resolve(representation), Type::Capability(_)) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::CapabilityTaskJoin, &[source], true)?;
+                    self.own_linear(joined)
+                } else if is_task_scalar(self.types, value.ty)? {
+                    let (bits, depth) = self.scalar_task(result, value.span)?;
+                    let zero = self.builder.ins().iconst(ir::types::I64, 0);
+                    let empty = self.builder.ins().icmp(IntCC::Equal, depth, zero);
+                    let decreased = self.builder.ins().iadd_imm(depth, -1);
+                    let depth = self.builder.ins().select(empty, zero, decreased);
+                    self.construct_sum_value(
+                        true,
+                        LoweredValue::ScalarTask(bits, depth),
+                        expression.span,
+                    )
+                } else if value.ty == expression.ty {
+                    Ok(result)
+                } else {
+                    self.construct_sum_value(true, result, expression.span)
+                }
+            }
+            ExpressionKind::Cancel(value) => {
+                self.expression(value)?;
+                Ok(self.nothing())
+            }
+            ExpressionKind::InlineFunction { .. } => {
+                Err(self.unsupported(expression.span, "inline function"))
+            }
+            ExpressionKind::ActorGraphImport(_) => {
+                Err(self.unsupported(expression.span, "unexpanded actor graph import"))
+            }
+            ExpressionKind::ActorGraphStep { instruction, args } => {
+                self.actor_graph_step(instruction, args, expression)
+            }
+            ExpressionKind::ActorSpawn {
+                args,
+                evaluation_order,
+                constructor: Some(constructor),
+                ..
+            } => self.call(*constructor, args, evaluation_order, expression),
+            ExpressionKind::ActorSpawn {
+                args,
+                evaluation_order,
+                constructor: None,
+                ..
+            } => {
+                let record = self.construct_struct(args, evaluation_order, expression.span)?;
+                let handle = self.scalar(record, expression.span)?;
+                let actor = self.leaf(NativeLeaf::ActorRegister, &[handle], true)?;
+                if let LoweredValue::Owned(_, slot) = record {
+                    self.clear_slot(slot);
+                }
+                Ok(LoweredValue::Scalar(actor))
+            }
+            ExpressionKind::ActorMessage {
+                actor,
+                message,
+                handler,
+                args,
+                evaluation_order,
+                kind,
+                proof,
+            } => {
+                let Type::Actor(actor_id) = self.types.resolve(actor.ty) else {
+                    return Err(contract_error(
+                        self.symbol,
+                        expression.span,
+                        "actor message has no actor type",
+                    ));
+                };
+                let definition = self.types.resolve_actor(*actor_id);
+                if proof.target().actor != *actor_id {
+                    return Err(contract_error(
+                        self.symbol,
+                        expression.span,
+                        "actor message changed original actor target",
+                    ));
+                }
+                let responds = definition
+                    .messages
+                    .get(proof.target().handler_index)
+                    .filter(|entry| entry.name == *message)
+                    .ok_or_else(|| {
+                        contract_error(
+                            self.symbol,
+                            expression.span,
+                            "actor original message ordinal absent",
+                        )
+                    })?
+                    .responds;
+                let captured = definition.capability_params.len() + definition.state_fields.len();
+                let lowered_actor = self.expression(actor)?;
+                let environment = self.scalar(lowered_actor, actor.span)?;
+                self.leaf(NativeLeaf::ActorMessageCheck, &[environment], true)?;
+                let result = self.call_with_environment(
+                    *handler,
+                    args,
+                    evaluation_order,
+                    expression,
+                    environment,
+                    captured,
+                    responds,
+                    Some(proof),
+                )?;
+                if *kind == jett_hir::ActorMessageKind::Send {
+                    Ok(self.nothing())
+                } else {
+                    Ok(result)
+                }
+            }
+            ExpressionKind::Field { base, field, .. } => {
+                self.project_field(base, *field, expression.ty, expression.span, false)
+            }
+        }
+    }
+
+    fn custom_enum_equality(
+        &mut self,
+        left: Value,
+        right: Value,
+        layout: &debug::EqualityLayout,
+        span: Span,
+    ) -> Result<Value, CodegenError> {
+        let mut bytes = b"JQ\x01".to_vec();
+        let count = u32::try_from(layout.custom.len())
+            .map_err(|_| self.unsupported(span, "equality method count"))?;
+        bytes.extend_from_slice(&count.to_le_bytes());
+        for (node, _) in &layout.custom {
+            bytes.extend_from_slice(&node.to_le_bytes());
+        }
+        bytes.extend_from_slice(&layout.bytes);
+        let (pointer, length) = self.static_data(&bytes)?;
+        let cursor = self.leaf(
+            NativeLeaf::EnumEqualityStart,
+            &[left, right, pointer, length],
+            true,
+        )?;
+        let owned = self.own_linear(cursor)?;
+        let next = self.builder.create_block();
+        let dispatch = self.builder.create_block();
+        let done = self.builder.create_block();
+        self.builder.append_block_param(done, ir::types::I32);
+        self.builder.ins().jump(next, &[]);
+        self.builder.switch_to_block(next);
+        let status = self.leaf(NativeLeaf::EnumEqualityNext, &[cursor], true)?;
+        let complete = self
+            .builder
+            .ins()
+            .icmp_imm(IntCC::UnsignedLessThanOrEqual, status, 1);
+        self.builder
+            .ins()
+            .brif(complete, done, &[status.into()], dispatch, &[]);
+        self.builder.switch_to_block(dispatch);
+        for (ordinal, (_, method)) in layout.custom.iter().enumerate() {
+            let invoke = self.builder.create_block();
+            let following = self.builder.create_block();
+            let selected = self
+                .builder
+                .ins()
+                .icmp_imm(IntCC::Equal, status, ordinal as i64 + 2);
+            self.builder
+                .ins()
+                .brif(selected, invoke, &[], following, &[]);
+            self.builder.switch_to_block(invoke);
+            let zero = self.builder.ins().iconst(ir::types::I32, 0);
+            let one = self.builder.ins().iconst(ir::types::I32, 1);
+            let left = self.leaf(NativeLeaf::EnumEqualityArgument, &[cursor, zero], true)?;
+            let right = self.leaf(NativeLeaf::EnumEqualityArgument, &[cursor, one], true)?;
+            let declared = self.declarations.get(*method).ok_or_else(|| {
+                contract_error(self.symbol, span, "enum equality method is not reachable")
+            })?;
+            let reference = self
+                .module
+                .declare_func_in_func(declared.native_id, self.builder.func);
+            let context = self.builder.use_var(self.runtime_context);
+            let environment = self.builder.ins().iconst(ir::types::I64, 0);
+            let call = self
+                .builder
+                .ins()
+                .call(reference, &[context, environment, left, right]);
+            let results = self.builder.func.dfg.inst_results(call).to_vec();
+            self.check_failure()?;
+            let [equal, depth] = results.as_slice() else {
+                return Err(contract_error(
+                    self.symbol,
+                    span,
+                    "enum equality method has invalid bool ABI",
+                ));
+            };
+            let equal = self.builder.ins().uextend(ir::types::I32, *equal);
+            self.leaf(
+                NativeLeaf::EnumEqualityAnswer,
+                &[cursor, equal, *depth],
+                true,
+            )?;
+            self.builder.ins().jump(next, &[]);
+            self.builder.switch_to_block(following);
+        }
+        // An invalid cursor response must take the normal cleanup path.
+        let invalid_argument = self.builder.ins().iconst(ir::types::I32, 2);
+        self.leaf(
+            NativeLeaf::EnumEqualityArgument,
+            &[cursor, invalid_argument],
+            true,
+        )?;
+        let zero = self.builder.ins().iconst(ir::types::I32, 0);
+        self.builder.ins().jump(done, &[zero.into()]);
+        self.builder.switch_to_block(done);
+        let result = self.builder.block_params(done)[0];
+        self.leaf(NativeLeaf::DropValue, &[cursor], true)?;
+        if let LoweredValue::Owned(_, slot) = owned {
+            self.clear_slot(slot);
+        }
+        Ok(self.builder.ins().ireduce(ir::types::I8, result))
+    }
+
+    fn call(
+        &mut self,
+        function: jett_mir::FunctionId,
+        args: &[Expression],
+        evaluation_order: &[usize],
+        expression: &Expression,
+    ) -> Result<LoweredValue, CodegenError> {
+        if let ExpressionKind::Call {
+            ownership: jett_hir::CallOwnership::Generated(generated),
+            ..
+        } = &expression.kind
+            && matches!(
+                generated.operation,
+                jett_hir::GeneratedOperation::InterfaceDispatch { .. }
+            )
+        {
+            for argument in args {
+                self.preflight_interface_dispatch_argument(argument)?;
+            }
+        }
+        let environment = self.builder.ins().iconst(ir::types::I64, 0);
+        self.call_with_environment(
+            function,
+            args,
+            evaluation_order,
+            expression,
+            environment,
+            0,
+            expression.ty,
+            None,
+        )
+    }
+
+    fn call_with_environment(
+        &mut self,
+        function: jett_mir::FunctionId,
+        args: &[Expression],
+        evaluation_order: &[usize],
+        expression: &Expression,
+        environment: Value,
+        captured: usize,
+        result_type: TypeId,
+        actor_message: Option<&jett_hir::ActorMessageProof>,
+    ) -> Result<LoweredValue, CodegenError> {
+        let invalid_order = || {
+            contract_error(
+                self.symbol,
+                expression.span,
+                "call evaluation order is not a permutation",
+            )
+        };
+        let all_modes = self
+            .declarations
+            .get(function)
+            .ok_or_else(invalid_order)?
+            .modes
+            .clone();
+        let modes = all_modes.get(captured..).ok_or_else(invalid_order)?;
+        if modes.len() != args.len() {
+            return Err(invalid_order());
+        }
+        let indexed = args.iter().enumerate().collect::<Vec<_>>();
+        let evaluated = reordered_map(
+            &indexed,
+            evaluation_order,
+            |(index, argument)| {
+                if actor_message.is_some() {
+                    self.argument(argument, false)
+                } else if modes[*index] == jett_mir::ParamMode::Owned
+                    && is_linear(self.types, argument.ty)
+                    && matches!(argument.kind, ExpressionKind::View(_))
+                {
+                    let cloned = Expression {
+                        kind: ExpressionKind::Clone(Box::new((*argument).clone())),
+                        ty: argument.ty,
+                        span: argument.span,
+                    };
+                    self.expression(&cloned)
+                } else {
+                    self.argument(argument, modes[*index] == jett_mir::ParamMode::View)
+                }
+            },
+            invalid_order,
+        )?;
+        let runtime_context = self
+            .builder
+            .try_use_var(self.runtime_context)
+            .map_err(|error| {
+                contract_error(
+                    self.symbol,
+                    expression.span,
+                    format!("cannot read native runtime context: {error}"),
+                )
+            })?;
+        let mut native_args = Vec::with_capacity(evaluated.len() + 2);
+        native_args.push(runtime_context);
+        native_args.push(environment);
+        for (index, (argument, value)) in args.iter().zip(evaluated).enumerate() {
+            if is_task_scalar(self.types, argument.ty)? {
+                let (bits, depth) = self.scalar_task(value, argument.span)?;
+                native_args.push(bits);
+                native_args.push(depth);
+                continue;
+            }
+            match value {
+                LoweredValue::Scalar(value) => native_args.push(value),
+                LoweredValue::ScalarTask(value, _) => native_args.push(value),
+                LoweredValue::Owned(value, slot) => {
+                    if (actor_message.is_some() || modes[index] == jett_mir::ParamMode::Owned)
+                        && is_linear(self.types, argument.ty)
+                    {
+                        self.clear_slot(slot);
+                    }
+                    native_args.push(value);
+                }
+            }
+        }
+        let function_id = self
+            .declarations
+            .get(function)
+            .map(|function| function.native_id)
+            .ok_or_else(|| {
+                contract_error(
+                    self.symbol,
+                    expression.span,
+                    "direct call target is absent from the reachable function table",
+                )
+            })?;
+        let reference = self
+            .module
+            .declare_func_in_func(function_id, self.builder.func);
+        let call = self.builder.ins().call(reference, &native_args);
+        let results = self.builder.func.dfg.inst_results(call).to_vec();
+        self.check_failure()?;
+        let value = results.first().copied().ok_or_else(|| {
+            contract_error(
+                self.symbol,
+                expression.span,
+                "value-returning call produced no native value",
+            )
+        })?;
+        if is_task_scalar(self.types, result_type)? {
+            let depth = results.get(1).copied().ok_or_else(|| {
+                contract_error(
+                    self.symbol,
+                    expression.span,
+                    "primitive call produced no pending depth",
+                )
+            })?;
+            return Ok(LoweredValue::ScalarTask(value, depth));
+        }
+        if is_linear(self.types, result_type) {
+            self.own_linear(value)
+        } else if is_copy_owned(self.types, result_type) {
+            self.own(value)
+        } else {
+            Ok(LoweredValue::Scalar(value))
+        }
+    }
+
+    fn function_descriptor(
+        &mut self,
+        function: FunctionId,
+        environment: Option<LoweredValue>,
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        let declared = self.declarations.get(function).ok_or_else(|| {
+            contract_error(self.symbol, span, "function value target is not reachable")
+        })?;
+        let label = declared.debug_label.clone();
+        let reference = self
+            .module
+            .declare_func_in_func(declared.native_id, self.builder.func);
+        let pointer_type = self.module.target_config().pointer_type();
+        let address = self.builder.ins().func_addr(pointer_type, reference);
+        let address = if pointer_type == ir::types::I64 {
+            address
+        } else {
+            self.builder.ins().uextend(ir::types::I64, address)
+        };
+        let count = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, NATIVE_FUNCTION_FIELD_COUNT as i64);
+        let descriptor = self.leaf(NativeLeaf::StructNew, &[count], true)?;
+        let descriptor_owned = self.own(descriptor)?;
+        let code_index = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, NATIVE_FUNCTION_CODE_FIELD as i64);
+        let borrowed = self.builder.ins().iconst(ir::types::I32, 0);
+        self.leaf(
+            NativeLeaf::StructInit,
+            &[descriptor, code_index, address, borrowed],
+            true,
+        )?;
+        let environment_index = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, NATIVE_FUNCTION_ENVIRONMENT_FIELD as i64);
+        let environment_value = match environment {
+            Some(value) => self.scalar(value, span)?,
+            None => self.builder.ins().iconst(ir::types::I64, 0),
+        };
+        let owned_flag = self
+            .builder
+            .ins()
+            .iconst(ir::types::I32, i64::from(environment.is_some()));
+        self.leaf(
+            NativeLeaf::StructInit,
+            &[descriptor, environment_index, environment_value, owned_flag],
+            true,
+        )?;
+        if let Some(LoweredValue::Owned(_, slot)) = environment {
+            self.clear_slot(slot);
+        }
+        let label = self.literal(&label)?;
+        let label_value = self.scalar(label, span)?;
+        let label_index = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, NATIVE_FUNCTION_LABEL_FIELD as i64);
+        let owned_flag = self.builder.ins().iconst(ir::types::I32, 1);
+        self.leaf(
+            NativeLeaf::StructInit,
+            &[descriptor, label_index, label_value, owned_flag],
+            true,
+        )?;
+        if let LoweredValue::Owned(_, slot) = label {
+            self.clear_slot(slot);
+        }
+        Ok(descriptor_owned)
+    }
+
+    fn indirect_call(
+        &mut self,
+        callee: &Expression,
+        args: &[Expression],
+        evaluation_order: &[usize],
+        expression: &Expression,
+    ) -> Result<LoweredValue, CodegenError> {
+        let Type::Function {
+            params,
+            view_params,
+            return_type,
+        } = self.types.resolve(callee.ty)
+        else {
+            return Err(contract_error(
+                self.symbol,
+                expression.span,
+                "indirect call has no function type",
+            ));
+        };
+        let params = params.clone();
+        let view_params = view_params.clone();
+        let return_type = *return_type;
+        if params.len() != args.len() || view_params.len() != args.len() {
+            return Err(contract_error(
+                self.symbol,
+                expression.span,
+                "indirect call arguments disagree with checked parameter modes",
+            ));
+        }
+        let invalid_order = || {
+            contract_error(
+                self.symbol,
+                expression.span,
+                "indirect call evaluation order is not a permutation",
+            )
+        };
+        let indexed = args.iter().enumerate().collect::<Vec<_>>();
+        let evaluated = reordered_map(
+            &indexed,
+            evaluation_order,
+            |(index, argument)| self.argument(argument, view_params[*index]),
+            invalid_order,
+        )?;
+        // The interpreter resolves a function-valued local after evaluating
+        // source arguments, which can rebind that local through a handler.
+        let lowered_callee = self.expression(callee)?;
+        let descriptor = self.scalar(lowered_callee, callee.span)?;
+        self.leaf(NativeLeaf::FunctionCallableCheck, &[descriptor], true)?;
+        let code_index = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, NATIVE_FUNCTION_CODE_FIELD as i64);
+        let address = self.leaf(NativeLeaf::StructField, &[descriptor, code_index], true)?;
+        let environment_index = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, NATIVE_FUNCTION_ENVIRONMENT_FIELD as i64);
+        let environment = self.leaf(
+            NativeLeaf::StructField,
+            &[descriptor, environment_index],
+            true,
+        )?;
+        let pointer_type = self.module.target_config().pointer_type();
+        let address = if pointer_type == ir::types::I64 {
+            address
+        } else {
+            self.builder.ins().ireduce(pointer_type, address)
+        };
+        let context = self
+            .builder
+            .try_use_var(self.runtime_context)
+            .map_err(|error| {
+                contract_error(
+                    self.symbol,
+                    expression.span,
+                    format!("cannot read native runtime context: {error}"),
+                )
+            })?;
+        let mut native_args = vec![context, environment];
+        for ((argument, value), view) in args.iter().zip(evaluated).zip(&view_params) {
+            if is_task_scalar(self.types, argument.ty)? {
+                let (bits, depth) = self.scalar_task(value, argument.span)?;
+                native_args.push(bits);
+                native_args.push(depth);
+                continue;
+            }
+            match value {
+                LoweredValue::Scalar(value) => native_args.push(value),
+                LoweredValue::ScalarTask(value, _) => native_args.push(value),
+                LoweredValue::Owned(value, slot) => {
+                    if !view && is_linear(self.types, argument.ty) {
+                        self.clear_slot(slot);
+                    }
+                    native_args.push(value);
+                }
+            }
+        }
+        let mut signature = self.module.make_signature();
+        signature
+            .params
+            .push(runtime_context_abi_param(self.module));
+        signature.params.push(AbiParam::new(ir::types::I64));
+        for param in params {
+            if let Some(ty) = clif_type(self.types, param, "indirect call parameter")? {
+                signature.params.push(AbiParam::new(ty));
+                if is_task_scalar(self.types, param)? {
+                    signature.params.push(AbiParam::new(ir::types::I64));
+                }
+            }
+        }
+        if let Some(ty) = clif_type(self.types, return_type, "indirect call result")? {
+            signature.returns.push(AbiParam::new(ty));
+            if is_task_scalar(self.types, return_type)? {
+                signature.returns.push(AbiParam::new(ir::types::I64));
+            }
+        }
+        let signature = self.builder.import_signature(signature);
+        let call = self
+            .builder
+            .ins()
+            .call_indirect(signature, address, &native_args);
+        let results = self.builder.func.dfg.inst_results(call).to_vec();
+        self.check_failure()?;
+        let value = results.first().copied().ok_or_else(|| {
+            contract_error(
+                self.symbol,
+                expression.span,
+                "value-returning indirect call produced no value",
+            )
+        })?;
+        if is_task_scalar(self.types, expression.ty)? {
+            let depth = results.get(1).copied().ok_or_else(|| {
+                contract_error(
+                    self.symbol,
+                    expression.span,
+                    "primitive indirect call produced no pending depth",
+                )
+            })?;
+            return Ok(LoweredValue::ScalarTask(value, depth));
+        }
+        if is_linear(self.types, expression.ty) {
+            self.own_linear(value)
+        } else if is_copy_owned(self.types, expression.ty) {
+            self.own(value)
+        } else {
+            Ok(LoweredValue::Scalar(value))
+        }
+    }
+
+    fn binary(
+        &mut self,
+        left: Value,
+        op: BinaryOp,
+        right: Value,
+        kind: ScalarKind,
+        span: Span,
+    ) -> Result<Value, CodegenError> {
+        let value = match kind {
+            ScalarKind::SignedInteger(_) => match op {
+                BinaryOp::Add => self.builder.ins().iadd(left, right),
+                BinaryOp::Subtract => self.builder.ins().isub(left, right),
+                BinaryOp::Multiply => self.builder.ins().imul(left, right),
+                BinaryOp::Divide => self.signed_division(left, right),
+                BinaryOp::Modulo => self.signed_remainder(left, right),
+                BinaryOp::Equal => self.builder.ins().icmp(IntCC::Equal, left, right),
+                BinaryOp::NotEqual => self.builder.ins().icmp(IntCC::NotEqual, left, right),
+                BinaryOp::Less => self.builder.ins().icmp(IntCC::SignedLessThan, left, right),
+                BinaryOp::Greater => self
+                    .builder
+                    .ins()
+                    .icmp(IntCC::SignedGreaterThan, left, right),
+                BinaryOp::LessEqual => {
+                    self.builder
+                        .ins()
+                        .icmp(IntCC::SignedLessThanOrEqual, left, right)
+                }
+                BinaryOp::GreaterEqual => {
+                    self.builder
+                        .ins()
+                        .icmp(IntCC::SignedGreaterThanOrEqual, left, right)
+                }
+                BinaryOp::And | BinaryOp::Or => {
+                    return Err(contract_error(
+                        self.symbol,
+                        span,
+                        "boolean operator has a signed integer operand",
+                    ));
+                }
+            },
+            ScalarKind::UnsignedInteger(_) => match op {
+                BinaryOp::Add => self.builder.ins().iadd(left, right),
+                BinaryOp::Subtract => self.builder.ins().isub(left, right),
+                BinaryOp::Multiply => self.builder.ins().imul(left, right),
+                BinaryOp::Divide => self.builder.ins().udiv(left, right),
+                BinaryOp::Modulo => self.builder.ins().urem(left, right),
+                BinaryOp::Equal => self.builder.ins().icmp(IntCC::Equal, left, right),
+                BinaryOp::NotEqual => self.builder.ins().icmp(IntCC::NotEqual, left, right),
+                BinaryOp::Less => self
+                    .builder
+                    .ins()
+                    .icmp(IntCC::UnsignedLessThan, left, right),
+                BinaryOp::Greater => {
+                    self.builder
+                        .ins()
+                        .icmp(IntCC::UnsignedGreaterThan, left, right)
+                }
+                BinaryOp::LessEqual => {
+                    self.builder
+                        .ins()
+                        .icmp(IntCC::UnsignedLessThanOrEqual, left, right)
+                }
+                BinaryOp::GreaterEqual => {
+                    self.builder
+                        .ins()
+                        .icmp(IntCC::UnsignedGreaterThanOrEqual, left, right)
+                }
+                BinaryOp::And | BinaryOp::Or => {
+                    return Err(contract_error(
+                        self.symbol,
+                        span,
+                        "boolean operator has an unsigned integer operand",
+                    ));
+                }
+            },
+            ScalarKind::Float(bits) => match op {
+                BinaryOp::Add => self.builder.ins().fadd(left, right),
+                BinaryOp::Subtract => self.builder.ins().fsub(left, right),
+                BinaryOp::Multiply => self.builder.ins().fmul(left, right),
+                BinaryOp::Divide => self.builder.ins().fdiv(left, right),
+                BinaryOp::Modulo => {
+                    // Match the interpreter's binary64 carrier, rounding back
+                    // to binary32 at the checked expression boundary.
+                    let (left, right) = if bits == 32 {
+                        (
+                            self.builder.ins().fpromote(ir::types::F64, left),
+                            self.builder.ins().fpromote(ir::types::F64, right),
+                        )
+                    } else {
+                        (left, right)
+                    };
+                    let result = self.leaf(NativeLeaf::FloatRemainder, &[left, right], true)?;
+                    if bits == 32 {
+                        self.builder.ins().fdemote(ir::types::F32, result)
+                    } else {
+                        result
+                    }
+                }
+                BinaryOp::Equal => self.builder.ins().fcmp(FloatCC::Equal, left, right),
+                BinaryOp::NotEqual => self.builder.ins().fcmp(FloatCC::NotEqual, left, right),
+                BinaryOp::Less => self.builder.ins().fcmp(FloatCC::LessThan, left, right),
+                BinaryOp::Greater => self.builder.ins().fcmp(FloatCC::GreaterThan, left, right),
+                BinaryOp::LessEqual => {
+                    self.builder
+                        .ins()
+                        .fcmp(FloatCC::LessThanOrEqual, left, right)
+                }
+                BinaryOp::GreaterEqual => {
+                    self.builder
+                        .ins()
+                        .fcmp(FloatCC::GreaterThanOrEqual, left, right)
+                }
+                BinaryOp::And | BinaryOp::Or => {
+                    return Err(contract_error(
+                        self.symbol,
+                        span,
+                        "unsupported operator has a floating-point operand",
+                    ));
+                }
+            },
+            ScalarKind::Bool => match op {
+                BinaryOp::Equal => self.builder.ins().icmp(IntCC::Equal, left, right),
+                BinaryOp::NotEqual => self.builder.ins().icmp(IntCC::NotEqual, left, right),
+                BinaryOp::And | BinaryOp::Or => {
+                    return Err(contract_error(
+                        self.symbol,
+                        span,
+                        "short-circuit boolean operator reached eager binary lowering",
+                    ));
+                }
+                _ => {
+                    return Err(contract_error(
+                        self.symbol,
+                        span,
+                        "arithmetic or ordering operator has a bool operand",
+                    ));
+                }
+            },
+            ScalarKind::Nothing if matches!(op, BinaryOp::Equal | BinaryOp::NotEqual) => {
+                let not_equal = self
+                    .builder
+                    .ins()
+                    .iconst(ir::types::I32, i64::from(op == BinaryOp::NotEqual));
+                let value = self.leaf(NativeLeaf::NothingEqual, &[left, right, not_equal], true)?;
+                self.builder.ins().ireduce(ir::types::I8, value)
+            }
+            ScalarKind::Nothing
+            | ScalarKind::String
+            | ScalarKind::Bytes
+            | ScalarKind::Sum
+            | ScalarKind::List
+            | ScalarKind::Set
+            | ScalarKind::Map
+            | ScalarKind::Struct
+            | ScalarKind::Enum
+            | ScalarKind::Bitfield
+            | ScalarKind::Machine
+            | ScalarKind::Construction
+            | ScalarKind::Function
+            | ScalarKind::Actor
+            | ScalarKind::Stdout
+            | ScalarKind::Clock
+            | ScalarKind::Random
+            | ScalarKind::Environment
+            | ScalarKind::Graphics
+            | ScalarKind::OpaqueCapability
+            | ScalarKind::Uninhabited => {
+                return Err(contract_error(
+                    self.symbol,
+                    span,
+                    "binary operator has a nothing operand",
+                ));
+            }
+        };
+        Ok(value)
+    }
+
+    fn short_circuit_boolean(
+        &mut self,
+        left: LoweredValue,
+        op: BinaryOp,
+        right: &Expression,
+        kind: ScalarKind,
+        span: Span,
+    ) -> Result<Value, CodegenError> {
+        if kind != ScalarKind::Bool {
+            return Err(contract_error(
+                self.symbol,
+                span,
+                "short-circuit boolean operator has a non-bool operand",
+            ));
+        }
+
+        let (left_value, left_depth) = self.scalar_task(left, span)?;
+        let pending = self.builder.ins().icmp_imm(IntCC::NotEqual, left_depth, 0);
+
+        let right_block = self.builder.create_block();
+        let merge_block = self.builder.create_block();
+        let result = self.builder.append_block_param(merge_block, ir::types::I8);
+        let short_value = match op {
+            BinaryOp::And => self.builder.ins().iconst(ir::types::I8, 0),
+            BinaryOp::Or => self.builder.ins().iconst(ir::types::I8, 1),
+            _ => {
+                return Err(contract_error(
+                    self.symbol,
+                    span,
+                    "non-short-circuit operator reached boolean CFG lowering",
+                ));
+            }
+        };
+
+        match op {
+            BinaryOp::And => {
+                let evaluate_right = self.builder.ins().bor(left_value, pending);
+                self.builder.ins().brif(
+                    evaluate_right,
+                    right_block,
+                    &[],
+                    merge_block,
+                    &[short_value.into()],
+                )
+            }
+            BinaryOp::Or => {
+                let plain_true = self.builder.ins().band_not(left_value, pending);
+                self.builder.ins().brif(
+                    plain_true,
+                    merge_block,
+                    &[short_value.into()],
+                    right_block,
+                    &[],
+                )
+            }
+            _ => unreachable!("operator checked above"),
+        };
+
+        self.builder.switch_to_block(right_block);
+        let lowered_right = self.expression(right)?;
+        let right_value = self.scalar(lowered_right, right.span)?;
+        self.check_pending_scalar_binary(
+            left,
+            TypeInterner::BOOL,
+            op,
+            lowered_right,
+            right.ty,
+            span,
+        )?;
+        self.builder.ins().jump(merge_block, &[right_value.into()]);
+        self.builder.switch_to_block(merge_block);
+        Ok(result)
+    }
+
+    fn signed_division(&mut self, dividend: Value, divisor: Value) -> Value {
+        let ty = self.builder.func.dfg.value_type(dividend);
+        let zero = self.builder.ins().iconst(ty, 0);
+        let dividend_negative = self
+            .builder
+            .ins()
+            .icmp(IntCC::SignedLessThan, dividend, zero);
+        let divisor_negative = self
+            .builder
+            .ins()
+            .icmp(IntCC::SignedLessThan, divisor, zero);
+        let negated_dividend = self.builder.ins().ineg(dividend);
+        let negated_divisor = self.builder.ins().ineg(divisor);
+        let dividend_magnitude =
+            self.builder
+                .ins()
+                .select(dividend_negative, negated_dividend, dividend);
+        let divisor_magnitude =
+            self.builder
+                .ins()
+                .select(divisor_negative, negated_divisor, divisor);
+        let magnitude = self
+            .builder
+            .ins()
+            .udiv(dividend_magnitude, divisor_magnitude);
+        let negative = self.builder.ins().bxor(dividend_negative, divisor_negative);
+        let negated = self.builder.ins().ineg(magnitude);
+        self.builder.ins().select(negative, negated, magnitude)
+    }
+
+    fn signed_remainder(&mut self, dividend: Value, divisor: Value) -> Value {
+        let ty = self.builder.func.dfg.value_type(dividend);
+        let zero = self.builder.ins().iconst(ty, 0);
+        let dividend_negative = self
+            .builder
+            .ins()
+            .icmp(IntCC::SignedLessThan, dividend, zero);
+        let divisor_negative = self
+            .builder
+            .ins()
+            .icmp(IntCC::SignedLessThan, divisor, zero);
+        let negated_dividend = self.builder.ins().ineg(dividend);
+        let negated_divisor = self.builder.ins().ineg(divisor);
+        let dividend_magnitude =
+            self.builder
+                .ins()
+                .select(dividend_negative, negated_dividend, dividend);
+        let divisor_magnitude =
+            self.builder
+                .ins()
+                .select(divisor_negative, negated_divisor, divisor);
+        let magnitude = self
+            .builder
+            .ins()
+            .urem(dividend_magnitude, divisor_magnitude);
+        let negated = self.builder.ins().ineg(magnitude);
+        self.builder
+            .ins()
+            .select(dividend_negative, negated, magnitude)
+    }
+
+    fn define_local(
+        &mut self,
+        local: jett_mir::LocalId,
+        value: LoweredValue,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        if let Some(slot) = self.local_slots[local.index() as usize] {
+            let owned = if is_linear(self.types, self.local_types[local.index() as usize].ty) {
+                let LoweredValue::Owned(v, source) = value else {
+                    return Err(self.unsupported(span, "borrow escaping into owner"));
+                };
+                self.clear_slot(source);
+                v
+            } else if is_function(self.types, self.local_types[local.index() as usize].ty) {
+                let value = self.scalar(value, span)?;
+                self.leaf(NativeLeaf::StructClone, &[value], true)?
+            } else {
+                let value = self.scalar(value, span)?;
+                self.leaf(NativeLeaf::Retain, &[value], true)?
+            };
+            self.drop_slot(slot)?;
+            self.builder.ins().stack_store(owned, slot, 0);
+            return Ok(());
+        }
+        let variable = variable_for(self.variables, local.index(), span, self.symbol)?;
+        if let (Some(variable), Some(pending_variable)) =
+            (variable, self.pending_variables[local.index() as usize])
+        {
+            let (bits, depth) = self.scalar_task(value, span)?;
+            self.builder.try_def_var(variable, bits).map_err(|error| {
+                contract_error(
+                    self.symbol,
+                    span,
+                    format!("cannot define primitive native local: {error}"),
+                )
+            })?;
+            return self
+                .builder
+                .try_def_var(pending_variable, depth)
+                .map_err(|error| {
+                    contract_error(
+                        self.symbol,
+                        span,
+                        format!("cannot define primitive pending depth: {error}"),
+                    )
+                });
+        }
+        match (variable, value) {
+            (Some(variable), LoweredValue::Scalar(value)) => {
+                self.builder.try_def_var(variable, value).map_err(|error| {
+                    contract_error(
+                        self.symbol,
+                        span,
+                        format!("cannot define native local: {error}"),
+                    )
+                })
+            }
+            _ => Err(contract_error(
+                self.symbol,
+                span,
+                "native local and value representations differ",
+            )),
+        }
+    }
+
+    fn required_clif_type(&self, ty: TypeId, span: Span) -> Result<ir::Type, CodegenError> {
+        clif_type(self.types, ty, "native expression")?.ok_or_else(|| {
+            contract_error(
+                self.symbol,
+                span,
+                "expression requires a native scalar value",
+            )
+        })
+    }
+
+    fn nothing(&mut self) -> LoweredValue {
+        LoweredValue::Scalar(self.builder.ins().iconst(ir::types::I64, 0))
+    }
+
+    fn scalar(&self, value: LoweredValue, _span: Span) -> Result<Value, CodegenError> {
+        match value {
+            LoweredValue::Scalar(value)
+            | LoweredValue::ScalarTask(value, _)
+            | LoweredValue::Owned(value, _) => Ok(value),
+        }
+    }
+
+    fn scalar_task(
+        &mut self,
+        value: LoweredValue,
+        span: Span,
+    ) -> Result<(Value, Value), CodegenError> {
+        match value {
+            LoweredValue::ScalarTask(bits, depth) => Ok((bits, depth)),
+            LoweredValue::Scalar(bits) => {
+                let depth = self.builder.ins().iconst(ir::types::I64, 0);
+                Ok((bits, depth))
+            }
+            LoweredValue::Owned(_, _) => Err(self.unsupported(span, "owned primitive task")),
+        }
+    }
+
+    fn check_pending_scalar_binary(
+        &mut self,
+        left: LoweredValue,
+        left_ty: TypeId,
+        op: BinaryOp,
+        right: LoweredValue,
+        right_ty: TypeId,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let (Some(left_kind), Some(right_kind)) = (
+            task_scalar_debug_kind(self.types, left_ty)?,
+            task_scalar_debug_kind(self.types, right_ty)?,
+        ) else {
+            return Ok(());
+        };
+        let (_, left_depth) = self.scalar_task(left, span)?;
+        let (_, right_depth) = self.scalar_task(right, span)?;
+        let left_bits = self.payload_bits(left).0;
+        let right_bits = self.payload_bits(right).0;
+        let left_kind = self.builder.ins().iconst(ir::types::I32, left_kind as i64);
+        let right_kind = self.builder.ins().iconst(ir::types::I32, right_kind as i64);
+        let op = self
+            .builder
+            .ins()
+            .iconst(ir::types::I32, native_pending_binary_op(op) as i64);
+        self.leaf(
+            NativeLeaf::ScalarPendingBinaryCheck,
+            &[
+                left_bits,
+                left_kind,
+                left_depth,
+                right_bits,
+                right_kind,
+                right_depth,
+                op,
+            ],
+            true,
+        )?;
+        Ok(())
+    }
+
+    fn check_pending_bool_condition(
+        &mut self,
+        value: LoweredValue,
+        context: u32,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let (_, depth) = self.scalar_task(value, span)?;
+        let bits = self.payload_bits(value).0;
+        let context = self
+            .builder
+            .ins()
+            .iconst(ir::types::I32, i64::from(context));
+        self.leaf(
+            NativeLeaf::ScalarPendingBoolConditionCheck,
+            &[bits, depth, context],
+            true,
+        )?;
+        Ok(())
+    }
+
+    fn unsupported(&self, span: Span, construct: &str) -> CodegenError {
+        CodegenError::UnsupportedMir {
+            function: self.symbol.to_string(),
+            span,
+            construct: construct.to_string(),
+        }
+    }
+}
+
+fn integer_immediate(value: i128, kind: ScalarKind) -> Option<i64> {
+    match kind {
+        ScalarKind::SignedInteger(bits) => {
+            let value = i64::try_from(value).ok()?;
+            let encoded = u64::from_ne_bytes(value.to_ne_bytes());
+            let mask = match bits {
+                1..=63 => (1_u64 << u32::from(bits)) - 1,
+                64 => u64::MAX,
+                _ => return None,
+            };
+            Some(i64::from_ne_bytes((encoded & mask).to_ne_bytes()))
+        }
+        ScalarKind::UnsignedInteger(_) => {
+            let value = u64::try_from(value).ok()?;
+            Some(i64::from_ne_bytes(value.to_ne_bytes()))
+        }
+        _ => None,
+    }
+}
+
+fn variable_for(
+    variables: &[Option<Variable>],
+    index: u32,
+    span: Span,
+    symbol: &str,
+) -> Result<Option<Variable>, CodegenError> {
+    let index = usize::try_from(index)
+        .map_err(|_| contract_error(symbol, span, "local index does not fit this host"))?;
+    variables
+        .get(index)
+        .copied()
+        .ok_or_else(|| contract_error(symbol, span, "local is absent from the native local table"))
+}
+
+fn block_for(
+    blocks: &[ir::Block],
+    index: u32,
+    span: Span,
+    symbol: &str,
+) -> Result<ir::Block, CodegenError> {
+    let index = usize::try_from(index)
+        .map_err(|_| contract_error(symbol, span, "block index does not fit this host"))?;
+    blocks
+        .get(index)
+        .copied()
+        .ok_or_else(|| contract_error(symbol, span, "block is absent from the native block table"))
+}
+
+fn contract_error(symbol: &str, span: Span, message: impl Into<String>) -> CodegenError {
+    CodegenError::InvalidMirContract {
+        function: symbol.to_string(),
+        span,
+        message: message.into(),
+    }
+}
+
+fn reordered_map<T, U, E>(
+    items: &[T],
+    order: &[usize],
+    mut map: impl FnMut(&T) -> Result<U, E>,
+    invalid_order: impl Fn() -> E,
+) -> Result<Vec<U>, E> {
+    if order.len() != items.len() {
+        return Err(invalid_order());
+    }
+    let mut values = (0..items.len()).map(|_| None).collect::<Vec<Option<U>>>();
+    for &index in order {
+        let Some(item) = items.get(index) else {
+            return Err(invalid_order());
+        };
+        if values[index].is_some() {
+            return Err(invalid_order());
+        }
+        values[index] = Some(map(item)?);
+    }
+    values
+        .into_iter()
+        .map(|value| value.ok_or_else(&invalid_order))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use jett_common::{FileId, SourceOrigin};
+
+    use super::*;
+    use jett_mir::copy_values::CopyValuePlan;
+
+    fn lower_source(source: &str) -> (Program, TypeInterner) {
+        let file = FileId::new(0);
+        let parsed = jett_parser::parse(source, file);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = jett_resolve::resolve(&parsed.module);
+        let checked = jett_typecheck::check(&parsed.module, &resolved);
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "check errors: {:?}",
+            checked.diagnostics
+        );
+        let hir = jett_hir::lower(
+            &parsed.module,
+            &resolved,
+            &checked,
+            &HashMap::from([(file, SourceOrigin::Project)]),
+        )
+        .expect("HIR lowering");
+        let mir = jett_mir::lower(&hir, &checked.interner).expect("MIR lowering");
+        (mir, checked.interner)
+    }
+
+    const UNINHABITED_DESCRIPTOR_SOURCE: &str = r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns int64]:
+    function(T) returns int64 callback = function(ignored: T) returns int64: return 7
+    return list(callback)
+function root() returns int64:
+    return consume_value(stored(list()))
+"#;
+
+    #[test]
+    fn uninhabited_input_descriptor_emits_nonnull_trap_entry_without_value_abi() {
+        let (mut program, types) = lower_source(UNINHABITED_DESCRIPTOR_SOURCE);
+        crate::verify::verify_descriptor_bodies(&program, &types)
+            .expect("original descriptor metadata");
+        jett_mir::prepare_native_sequences(&mut program, &types);
+        jett_mir::prepare_native_uninhabited_sums(&mut program, &types);
+        jett_mir::prepare_native_generated_functions(&mut program, &types);
+        let verified = verify_program(&program, &types).expect("prepared native program");
+        let mut module = test_object_module();
+        let declarations = declare_reachable_functions(&mut module, &program, &types, &verified)
+            .expect("retained descriptor declaration");
+        let descriptor = program
+            .functions
+            .iter()
+            .find(|function| crate::verify::descriptor_only_function(function))
+            .expect("inferred Never-input inline target");
+        assert_eq!(descriptor.capture_count, 0);
+        assert_eq!(descriptor.params[0].ty, TypeInterner::NEVER);
+        let declaration = declarations
+            .get(descriptor.id)
+            .expect("retained descriptor entry");
+        assert_eq!(declaration.signature.params.len(), 2);
+        assert!(declaration.signature.returns.is_empty());
+        let mut context = module.make_context();
+        context.func.signature = declaration.signature.clone();
+        translate_function(
+            &mut module,
+            &declarations,
+            &program,
+            descriptor,
+            &types,
+            &declaration.symbol,
+            &mut context,
+        )
+        .expect("descriptor entry translation");
+        let opcodes = context
+            .func
+            .layout
+            .blocks()
+            .flat_map(|block| context.func.layout.block_insts(block))
+            .map(|instruction| context.func.dfg.insts[instruction].opcode())
+            .collect::<Vec<_>>();
+        assert_eq!(opcodes, [ir::Opcode::Trap]);
+        let object = emit_host_object(&program, &types).expect("owned stored descriptor object");
+        assert!(
+            object
+                .symbols
+                .iter()
+                .any(|symbol| symbol == &declaration.symbol)
+        );
+        assert!(!object.bytes.is_empty());
+    }
+
+    #[test]
+    fn uninhabited_input_descriptors_keep_captures_and_never_result_metadata() {
+        for source in [
+            r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns int64]:
+    int64 size = 7
+    function(T) returns int64 callback = function(ignored: T) returns int64: return size
+    return list(callback)
+function root() returns int64:
+    return consume_value(stored(list()))
+"#,
+            r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns T]:
+    function(T) returns T callback = function(value: T) returns T: return value
+    return list(callback)
+function root() returns int64:
+    return consume_value(stored(list()))
+"#,
+        ] {
+            let (program, types) = lower_source(source);
+            let descriptor = program
+                .functions
+                .iter()
+                .find(|function| crate::verify::descriptor_only_function(function))
+                .expect("inferred descriptor-only target");
+            assert!(
+                descriptor.params[descriptor.capture_count..]
+                    .iter()
+                    .any(|parameter| parameter.ty == TypeInterner::NEVER)
+            );
+            if descriptor.capture_count != 0 {
+                assert_eq!(descriptor.capture_count, 1);
+                assert_eq!(descriptor.params[0].ty, TypeInterner::INT64);
+            } else {
+                assert_eq!(descriptor.return_type, TypeInterner::NEVER);
+            }
+            let object = emit_host_object(&program, &types)
+                .expect("capture environment or uncallable Never-result descriptor");
+            assert!(!object.bytes.is_empty());
+        }
+    }
+
+    #[test]
+    fn descriptor_original_loop_body_validates_before_native_preparation() {
+        let source = r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns int64]:
+    function(T) returns int64 callback = function(ignored: T) returns int64:
+        mutable int64 total = 0
+        for item in list(1, 2):
+            total = total + item
+        return total
+    return list(callback)
+function root() returns int64:
+    return consume_value(stored(list()))
+"#;
+        let (program, types) = lower_source(source);
+        let descriptor = program
+            .functions
+            .iter()
+            .find(|function| crate::verify::descriptor_only_function(function))
+            .unwrap();
+        assert!(
+            descriptor
+                .blocks
+                .iter()
+                .any(|block| { matches!(block.terminator.kind, TerminatorKind::ForEach { .. }) })
+        );
+        assert!(
+            !emit_host_object(&program, &types)
+                .expect("original typed loop needs no callable frame")
+                .bytes
+                .is_empty()
+        );
+        let (mut invalid, types) = lower_source(source);
+        let descriptor = invalid
+            .functions
+            .iter_mut()
+            .find(|function| crate::verify::descriptor_only_function(function))
+            .unwrap();
+        let key = descriptor
+            .blocks
+            .iter()
+            .find_map(|block| {
+                if let TerminatorKind::ForEach { key, .. } = block.terminator.kind {
+                    Some(key)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        descriptor.locals[key.index() as usize].ty = TypeInterner::BOOL;
+        descriptor.locals[key.index() as usize].debug_ty = TypeInterner::BOOL;
+        assert!(matches!(
+            emit_host_object(&invalid, &types),
+            Err(CodegenError::InvalidMirContract { message, .. })
+                if message == "original descriptor loop key type does not match its iterable"
+        ));
+    }
+
+    #[test]
+    fn descriptor_original_never_equality_keeps_exact_operand_and_result_proof() {
+        for operator in ["==", "!="] {
+            let source = format!(
+                r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns bool]:
+    function(T) returns bool callback = function(value: T) returns bool: return value {operator} value
+    return list(callback)
+function root() returns int64:
+    return consume_value(stored(list()))
+"#
+            );
+            let (program, types) = lower_source(&source);
+            let descriptor = program
+                .functions
+                .iter()
+                .find(|function| crate::verify::descriptor_only_function(function))
+                .expect("inferred Never equality target");
+            assert_eq!(descriptor.return_type, TypeInterner::BOOL);
+            assert_eq!(descriptor.params[0].ty, TypeInterner::NEVER);
+            crate::verify::verify_descriptor_bodies(&program, &types)
+                .expect("exact Never equality is valid original metadata");
+            assert!(
+                !emit_host_object(&program, &types)
+                    .expect("uncallable equality needs no Never value carrier")
+                    .bytes
+                    .is_empty()
+            );
+
+            for corruption in 0..2 {
+                let (mut invalid, types) = lower_source(&source);
+                let descriptor = invalid
+                    .functions
+                    .iter_mut()
+                    .find(|function| crate::verify::descriptor_only_function(function))
+                    .unwrap();
+                let value = descriptor
+                    .blocks
+                    .iter_mut()
+                    .find_map(|block| {
+                        if let TerminatorKind::Return(Some(value)) = &mut block.terminator.kind {
+                            Some(value)
+                        } else {
+                            None
+                        }
+                    })
+                    .expect("inline equality return");
+                if corruption == 0 {
+                    value.ty = TypeInterner::INT64;
+                } else {
+                    let ExpressionKind::Binary { right, .. } = &mut value.kind else {
+                        panic!("inline equality expression");
+                    };
+                    right.ty = TypeInterner::INT64;
+                    right.kind = ExpressionKind::Int(7);
+                }
+                let expected = if corruption == 0 {
+                    "binary operation is inconsistent with checked type `int64`"
+                } else {
+                    "binary operand types differ"
+                };
+                assert!(
+                    matches!(
+                        emit_host_object(&invalid, &types),
+                        Err(CodegenError::InvalidMirContract { message, .. }) if message == expected
+                    ),
+                    "{operator} corruption {corruption}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn enclosing_descriptor_compaction_preserves_original_metadata_and_surviving_uses() {
+        for corruption in 0..4 {
+            let (mut program, types) = lower_source(UNINHABITED_DESCRIPTOR_SOURCE);
+            let factory = program
+                .functions
+                .iter_mut()
+                .find(|function| function.identity.declaration.name == "stored")
+                .expect("checked enclosing factory");
+            let detached = factory
+                .locals
+                .iter()
+                .position(|local| local.ty == TypeInterner::NEVER)
+                .expect("unused extracted inline formal");
+            assert!(
+                !factory
+                    .params
+                    .iter()
+                    .any(|param| { param.local == factory.locals[detached].id })
+            );
+            let mut invalid_metadata = None;
+            if corruption == 2 {
+                factory.blocks[0].statements.push(jett_mir::Statement {
+                    kind: StatementKind::Trace(factory.locals[detached].id),
+                    span: factory.span,
+                });
+            } else if corruption == 3 {
+                factory.blocks[0].statements.push(jett_mir::Statement {
+                    kind: StatementKind::Let {
+                        local: factory.locals[detached].id,
+                        value: Expression {
+                            kind: ExpressionKind::Int(7),
+                            ty: TypeInterner::NEVER,
+                            span: factory.span,
+                        },
+                    },
+                    span: factory.span,
+                });
+            } else {
+                let mut foreign = TypeInterner::new();
+                let mut invalid = TypeInterner::INT64;
+                for _ in 0..=types.len() {
+                    invalid = foreign.intern(jett_types::Type::List(invalid));
+                }
+                assert!(invalid.index() as usize >= types.len());
+                invalid_metadata = Some(invalid);
+                if corruption == 0 {
+                    factory.locals[detached].ty = invalid;
+                } else {
+                    factory.locals[detached].debug_ty = invalid;
+                }
+            }
+            let result = emit_host_object(&program, &types);
+            if let Some(invalid) = invalid_metadata {
+                assert!(
+                    matches!(result, Err(CodegenError::InvalidMir(errors))
+                        if errors.len() == 1 && errors[0].message
+                            == "Resource manifest type visitor is outside its interner"),
+                    "enclosing metadata corruption {corruption}"
+                );
+                assert!(matches!(
+                    crate::verify::scalar_kind(&types, invalid, "enclosing original metadata"),
+                    Err(CodegenError::UnsupportedType { type_name, context })
+                        if type_name == format!("<invalid type {}>", invalid.index())
+                            && context == "enclosing original metadata"
+                ));
+            } else {
+                // These live Trace/Let controls still demand a native Never
+                // carrier, independently of detached-slot compaction.
+                assert!(
+                    matches!(result, Err(CodegenError::UnsupportedType { .. })),
+                    "enclosing live slot corruption {corruption}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn descriptor_pruning_preserves_original_body_and_metadata_validation() {
+        for corruption in 0..6 {
+            let (mut program, types) = lower_source(UNINHABITED_DESCRIPTOR_SOURCE);
+            let function_count = program.functions.len();
+            let source_call = program
+                .functions
+                .iter()
+                .flat_map(|function| &function.blocks)
+                .find_map(|block| match &block.terminator.kind {
+                    TerminatorKind::Return(Some(value))
+                        if matches!(value.kind, ExpressionKind::Call { .. }) =>
+                    {
+                        Some(value.kind.clone())
+                    }
+                    _ => block
+                        .statements
+                        .iter()
+                        .find_map(|statement| match &statement.kind {
+                            StatementKind::Let { value, .. }
+                                if matches!(value.kind, ExpressionKind::Call { .. }) =>
+                            {
+                                Some(value.kind.clone())
+                            }
+                            _ => None,
+                        }),
+                })
+                .expect("fixture retains a checked source call packet");
+            let descriptor = program
+                .functions
+                .iter_mut()
+                .find(|function| crate::verify::descriptor_only_function(function))
+                .expect("descriptor target");
+            match corruption {
+                0 => {
+                    let Some(value) = descriptor.blocks.iter_mut().find_map(|block| {
+                        if let TerminatorKind::Return(Some(value)) = &mut block.terminator.kind {
+                            Some(value)
+                        } else {
+                            None
+                        }
+                    }) else {
+                        panic!("inline value return");
+                    };
+                    value.kind = ExpressionKind::Bool(true);
+                }
+                1 => {
+                    let local = descriptor.params[0].local;
+                    let mut foreign = TypeInterner::new();
+                    let mut invalid = TypeInterner::INT64;
+                    for _ in 0..=types.len() {
+                        invalid = foreign.intern(jett_types::Type::List(invalid));
+                    }
+                    assert!(invalid.index() as usize >= types.len());
+                    let unused = descriptor.locals.len();
+                    let mut copied = descriptor.locals[local.index() as usize].clone();
+                    copied.id = jett_hir::LocalId::new(unused as u32);
+                    copied.name = "unused".into();
+                    copied.ty = invalid;
+                    copied.debug_ty = invalid;
+                    descriptor.locals.push(copied);
+                }
+                2 => descriptor.capture_count = descriptor.params.len() + 1,
+                3 => {
+                    descriptor.debug_kind = jett_hir::FunctionDebugKind::Inline;
+                    descriptor.params[0].name = "bad\nname".into();
+                    let local = descriptor.params[0].local;
+                    descriptor.locals[local.index() as usize].name = "bad\nname".into();
+                }
+                4 => {
+                    let Some(value) = descriptor.blocks.iter_mut().find_map(|block| {
+                        if let TerminatorKind::Return(Some(value)) = &mut block.terminator.kind {
+                            Some(value)
+                        } else {
+                            None
+                        }
+                    }) else {
+                        panic!("inline value return");
+                    };
+                    value.kind = source_call;
+                    let ExpressionKind::Call { function, .. } = &mut value.kind else {
+                        panic!("source call fixture");
+                    };
+                    *function = FunctionId::new(function_count as u32 + 1);
+                }
+                5 => {
+                    let mut foreign = TypeInterner::new();
+                    let mut invalid = TypeInterner::INT64;
+                    for _ in 0..=types.len() {
+                        invalid = foreign.intern(jett_types::Type::List(invalid));
+                    }
+                    assert!(invalid.index() as usize >= types.len());
+                    let local = descriptor.params[0].local.index() as usize;
+                    descriptor.locals[local].debug_ty = invalid;
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                emit_host_object(&program, &types).is_err(),
+                "corruption {corruption}"
+            );
+        }
+    }
+
+    #[test]
+    fn callable_direct_edges_cannot_invoke_an_exact_never_input_descriptor() {
+        let (mut program, types) = lower_source(
+            r#"namespace app
+function target(value: int64) returns int64:
+    return 7
+function root() returns int64:
+    return target(1)
+"#,
+        );
+        let target = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "target")
+            .unwrap();
+        target.params[0].ty = TypeInterner::NEVER;
+        let argument = target.params[0].local.index() as usize;
+        target.locals[argument].ty = TypeInterner::NEVER;
+        target.locals[argument].debug_ty = TypeInterner::NEVER;
+        assert!(crate::verify::descriptor_only_function(target));
+        assert!(matches!(
+            emit_host_object(&program, &types),
+            Err(CodegenError::InvalidMir(errors))
+                if errors.len() == 1 && errors[0].message
+                    == "source function ownership signature differs from the exact HIR declaration"
+        ));
+        let root = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "root")
+            .expect("original checked caller");
+        let expression = root
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator.kind {
+                TerminatorKind::Return(Some(value)) => Some(value),
+                _ => None,
+            })
+            .expect("original callable return expression");
+        assert!(matches!(
+            crate::verify::verify_callable_expression_for_test(&program, &types, root, expression),
+            Err(CodegenError::InvalidMirContract { message, .. })
+                if message == "callable direct edge requires an uninhabited parameter"
+        ));
+    }
+
+    #[test]
+    fn callable_indirect_edges_cannot_invoke_an_exact_never_input_descriptor() {
+        let (mut program, mut types) = lower_source(
+            r#"namespace app
+function root() returns int64:
+    function(int64) returns int64 callback = function(value: int64) returns int64: return 7
+    return callback(1)
+"#,
+        );
+        let callback_type = types.intern(jett_types::Type::Function {
+            params: vec![TypeInterner::NEVER],
+            view_params: vec![false],
+            return_type: TypeInterner::INT64,
+        });
+        let descriptor = program
+            .functions
+            .iter_mut()
+            .find(|function| function.debug_kind == jett_hir::FunctionDebugKind::Inline)
+            .unwrap();
+        descriptor.params[0].ty = TypeInterner::NEVER;
+        let argument = descriptor.params[0].local.index() as usize;
+        descriptor.locals[argument].ty = TypeInterner::NEVER;
+        descriptor.locals[argument].debug_ty = TypeInterner::NEVER;
+        let root = &mut program.functions[0];
+        let StatementKind::Let { local, value } = &mut root.blocks[0].statements[0].kind else {
+            panic!("callback binding");
+        };
+        value.ty = callback_type;
+        root.locals[local.index() as usize].ty = callback_type;
+        root.locals[local.index() as usize].debug_ty = callback_type;
+        let TerminatorKind::Return(Some(value)) = &mut root.blocks[0].terminator.kind else {
+            panic!("indirect return");
+        };
+        let ExpressionKind::IndirectCall { callee, .. } = &mut value.kind else {
+            panic!("indirect callback use");
+        };
+        callee.ty = callback_type;
+        if let ExpressionKind::View(inner) | ExpressionKind::Clone(inner) = &mut callee.kind {
+            inner.ty = callback_type;
+        }
+        assert!(matches!(
+            emit_host_object(&program, &types),
+            Err(CodegenError::InvalidMir(errors))
+                if errors.len() == 1 && errors[0].message
+                    == "indirect call ownership signature differs from its actual callee"
+        ));
+        let root = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "root")
+            .expect("original checked caller");
+        let expression = root
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator.kind {
+                TerminatorKind::Return(Some(value)) => Some(value),
+                _ => None,
+            })
+            .expect("original callable return expression");
+        assert!(matches!(
+            crate::verify::verify_callable_expression_for_test(&program, &types, root, expression),
+            Err(CodegenError::InvalidMirContract { message, .. })
+                if message == "callable indirect edge requires an uninhabited parameter"
+        ));
+    }
+
+    #[test]
+    fn descriptor_metadata_cannot_manufacture_never_values_or_capture_them() {
+        for phantom in [ExpressionKind::Nothing, ExpressionKind::Int(7)] {
+            let (mut program, types) = lower_source(
+                r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns T]:
+    function(T) returns T callback = function(value: T) returns T: return value
+    return list(callback)
+function root() returns int64:
+    return consume_value(stored(list()))
+"#,
+            );
+            let descriptor = program
+                .functions
+                .iter_mut()
+                .find(|function| crate::verify::descriptor_only_function(function))
+                .unwrap();
+            let value = descriptor
+                .blocks
+                .iter_mut()
+                .find_map(|block| {
+                    if let TerminatorKind::Return(Some(value)) = &mut block.terminator.kind {
+                        Some(value)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            assert_eq!(value.ty, TypeInterner::NEVER);
+            value.kind = phantom;
+            assert!(matches!(
+                emit_host_object(&program, &types),
+                Err(CodegenError::InvalidMirContract { .. })
+            ));
+        }
+        for never_capture in [true, false] {
+            let (mut program, types) = lower_source(
+                r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns int64]:
+    int64 size = 7
+    function(T) returns int64 callback = function(ignored: T) returns int64: return size
+    return list(callback)
+function root() returns int64:
+    return consume_value(stored(list()))
+"#,
+            );
+            let descriptor = program
+                .functions
+                .iter_mut()
+                .find(|function| crate::verify::descriptor_only_function(function))
+                .unwrap();
+            assert_eq!(descriptor.capture_count, 1);
+            if never_capture {
+                descriptor.params[0].ty = TypeInterner::NEVER;
+                let capture = descriptor.params[0].local.index() as usize;
+                descriptor.locals[capture].ty = TypeInterner::NEVER;
+                descriptor.locals[capture].debug_ty = TypeInterner::NEVER;
+            } else {
+                descriptor.params[0].mode = jett_mir::ParamMode::View;
+            }
+            let expected_message = if never_capture {
+                "descriptor capture cannot be uninhabited"
+            } else {
+                "descriptor capture must use owned environment storage"
+            };
+            assert!(matches!(
+                emit_host_object(&program, &types),
+                Err(CodegenError::InvalidMirContract { message, .. })
+                    if message == expected_message
+            ));
+        }
+    }
+
+    #[test]
+    fn descriptor_authority_rejects_return_only_never_and_mismatched_view_modes() {
+        for mismatch in [false, true] {
+            let (mut program, mut types) = lower_source(UNINHABITED_DESCRIPTOR_SOURCE);
+            let descriptor = program
+                .functions
+                .iter_mut()
+                .find(|function| crate::verify::descriptor_only_function(function))
+                .expect("inline descriptor");
+            if mismatch {
+                descriptor.params[0].mode = jett_mir::ParamMode::View;
+            } else {
+                // A result-only Never cannot erase effects from a callable body.
+                descriptor.params[0].ty = TypeInterner::INT64;
+                let argument = descriptor.params[0].local.index() as usize;
+                descriptor.locals[argument].ty = TypeInterner::INT64;
+                descriptor.locals[argument].debug_ty = TypeInterner::INT64;
+                descriptor.return_type = TypeInterner::NEVER;
+                assert!(!crate::verify::descriptor_only_function(descriptor));
+                let result_only = types.intern(jett_types::Type::Function {
+                    params: vec![TypeInterner::INT64],
+                    view_params: vec![false],
+                    return_type: TypeInterner::NEVER,
+                });
+                assert!(matches!(
+                    scalar_kind(&types, result_only, "result-only descriptor"),
+                    Err(CodegenError::UnsupportedType { .. })
+                ));
+            }
+            assert!(emit_host_object(&program, &types).is_err());
+        }
+    }
+
+    const ABSENT_CAPTURED_RESULT_SOURCE: &str = r#"namespace app
+function capture_optional[T](candidate: optional[T]) returns nothing:
+    T item = candidate handle:
+        return nothing
+    function() returns T callback = function() returns T: return item
+    T copied = callback()
+    return nothing
+function capture_success[T, E](candidate: result[T, E]) returns nothing:
+    T item = candidate handle error:
+        return nothing
+    function() returns T callback = function() returns T: return item
+    T copied = callback()
+    return nothing
+function capture_failure[T, E](candidate: result[T, E]) returns nothing:
+    T item = candidate handle error:
+        function() returns E callback = function() returns E: return error
+        E copied = callback()
+        return nothing
+    return nothing
+function root() returns nothing:
+    capture_optional(none)
+    capture_success(fail("absent"))
+    capture_failure(ok(8))
+    return nothing
+"#;
+
+    #[test]
+    fn absent_sum_arms_keep_original_function_result_metadata_without_native_carriers() {
+        let (mut program, mut types) = lower_source(ABSENT_CAPTURED_RESULT_SOURCE);
+        let absent_closures = program
+            .functions
+            .iter()
+            .filter(|function| {
+                function.debug_kind == jett_hir::FunctionDebugKind::Inline
+                    && function.return_type == TypeInterner::NEVER
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(absent_closures.len(), 3);
+        assert!(absent_closures.iter().all(|function| {
+            function.capture_count == 1
+                && function.params.len() == 1
+                && function.params[0].ty == TypeInterner::NEVER
+                && !crate::verify::descriptor_only_function(function)
+        }));
+        let absent_symbols = absent_closures
+            .iter()
+            .map(|function| crate::symbol_name(&function.identity, &types).unwrap())
+            .collect::<Vec<_>>();
+        let result_only = types.intern(jett_types::Type::Function {
+            params: Vec::new(),
+            view_params: Vec::new(),
+            return_type: TypeInterner::NEVER,
+        });
+        let optional = types.intern(jett_types::Type::Optional(result_only));
+        let nested = types.intern(jett_types::Type::List(optional));
+        assert!(matches!(
+            scalar_kind(&types, nested, "nested runtime result"),
+            Err(CodegenError::UnsupportedType { .. })
+        ));
+        let factory = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "capture_optional")
+            .unwrap();
+        let mut unused = factory.locals[0].clone();
+        unused.id = jett_hir::LocalId::new(u32::try_from(factory.locals.len()).unwrap());
+        unused.name = "unused_nested_result_metadata".into();
+        unused.ty = nested;
+        unused.debug_ty = nested;
+        factory.locals.push(unused);
+        crate::verify::verify_descriptor_bodies(&program, &types)
+            .expect("valid original metadata in absent sum arms");
+        jett_mir::prepare_native_sequences(&mut program, &types);
+        jett_mir::prepare_native_uninhabited_sums(&mut program, &types);
+        jett_mir::prepare_native_generated_functions(&mut program, &types);
+        let verified = verify_program(&program, &types).expect("prepared inhabited sum arms");
+        assert!(
+            verified
+                .functions()
+                .iter()
+                .all(|function| !absent_symbols.contains(&function.symbol))
+        );
+        let object = emit_host_object(&program, &types).expect("absent closure object");
+        assert!(!object.bytes.is_empty());
+        assert!(
+            object
+                .symbols
+                .iter()
+                .all(|symbol| !absent_symbols.contains(symbol))
+        );
+    }
+
+    #[test]
+    fn absent_function_results_do_not_hide_malformed_original_type_metadata() {
+        for debug_type in [false, true] {
+            for corruption in 0..4 {
+                let (mut program, mut types) = lower_source(ABSENT_CAPTURED_RESULT_SOURCE);
+                let mut foreign = TypeInterner::new();
+                let mut invalid = TypeInterner::INT64;
+                for _ in 0..=types.len() + 2 {
+                    invalid = foreign.intern(jett_types::Type::List(invalid));
+                }
+                assert!(invalid.index() as usize > types.len() + 1);
+                let malformed = match corruption {
+                    0 => types.intern(jett_types::Type::Function {
+                        params: vec![TypeInterner::INT64],
+                        view_params: Vec::new(),
+                        return_type: TypeInterner::NEVER,
+                    }),
+                    1 => types.intern(jett_types::Type::Function {
+                        params: vec![invalid],
+                        view_params: vec![false],
+                        return_type: TypeInterner::NEVER,
+                    }),
+                    2 => types.intern(jett_types::Type::Function {
+                        params: Vec::new(),
+                        view_params: Vec::new(),
+                        return_type: invalid,
+                    }),
+                    3 => types.intern(jett_types::Type::Function {
+                        params: Vec::new(),
+                        view_params: Vec::new(),
+                        return_type: TypeInterner::ERROR,
+                    }),
+                    _ => unreachable!(),
+                };
+                let wrapped = types.intern(jett_types::Type::List(malformed));
+                let local = program
+                    .functions
+                    .iter_mut()
+                    .find(|function| function.identity.declaration.name == "capture_optional")
+                    .expect("optional specialization")
+                    .locals
+                    .iter_mut()
+                    .find(|local| {
+                        matches!(types.resolve(local.ty),
+                        jett_types::Type::Function { return_type, .. }
+                        if *return_type == TypeInterner::NEVER)
+                    })
+                    .expect("absent-arm callback local");
+                if debug_type {
+                    local.debug_ty = wrapped;
+                } else {
+                    local.ty = wrapped;
+                }
+                let result = emit_host_object(&program, &types);
+                if matches!(corruption, 1 | 2) {
+                    assert!(
+                        matches!(result, Err(CodegenError::InvalidMir(errors))
+                            if errors.len() == 1 && errors[0].message
+                                == "Resource manifest type visitor is outside its interner"),
+                        "debug={debug_type}, corruption={corruption}"
+                    );
+                } else {
+                    assert!(
+                        matches!(result, Err(CodegenError::UnsupportedType { .. })),
+                        "debug={debug_type}, corruption={corruption}"
+                    );
+                }
+                assert!(
+                    matches!(
+                        crate::verify::scalar_kind(&types, wrapped, "absent original metadata"),
+                        Err(CodegenError::UnsupportedType { .. })
+                    ),
+                    "native wrapped metadata debug={debug_type}, corruption={corruption}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn live_return_only_never_function_result_still_requires_native_representation() {
+        let (mut program, mut types) = lower_source(
+            "namespace app\nfunction root() returns nothing:\n    function() returns int64 callback = function() returns int64: return 7\n    trace callback\n    return nothing\n",
+        );
+        let result_only = types.intern(jett_types::Type::Function {
+            params: Vec::new(),
+            view_params: Vec::new(),
+            return_type: TypeInterner::NEVER,
+        });
+        let root = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "root")
+            .unwrap();
+        let local = root
+            .locals
+            .iter_mut()
+            .find(|local| matches!(types.resolve(local.ty), jett_types::Type::Function { .. }))
+            .unwrap();
+        local.ty = result_only;
+        local.debug_ty = result_only;
+        crate::verify::verify_descriptor_bodies(&program, &types)
+            .expect("return-only Never is valid type metadata");
+        assert!(matches!(
+            scalar_kind(&types, result_only, "live return-only function"),
+            Err(CodegenError::UnsupportedType { .. })
+        ));
+        assert!(matches!(
+            emit_host_object(&program, &types),
+            Err(CodegenError::UnsupportedType { .. })
+        ));
+    }
+
+    const LATENT_NESTED_CALLBACK_SOURCE: &str = r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns T]:
+    function(T) returns T callback = function(value: T) returns T:
+        function() returns T inner = function() returns T: return value
+        return inner()
+    return list(callback)
+function root() returns int64:
+    return consume_value(stored(list())) + consume_value(stored(list(7)))
+"#;
+
+    const SECRET_UNINHABITED_CALLBACK_SOURCE: &str = r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns secret[T]]:
+    function(T) returns secret[T] callback = function(value: T) returns secret[T]: return value
+    return list(clone callback)
+function root() returns int64:
+    return consume_value(stored(list())) + consume_value(stored(list(7)))
+"#;
+
+    #[test]
+    fn retained_never_input_descriptor_checks_latent_closure_without_emitting_it() {
+        let (program, types) = lower_source(LATENT_NESTED_CALLBACK_SOURCE);
+        let latent = program
+            .functions
+            .iter()
+            .find(|function| {
+                function.capture_count == 1
+                    && function.params.len() == 1
+                    && function.params[0].ty == TypeInterner::NEVER
+                    && function.return_type == TypeInterner::NEVER
+            })
+            .expect("zero-argument nested closure with a latent Never capture");
+        assert!(!crate::verify::descriptor_only_function(latent));
+        let latent_symbol = crate::symbol_name(&latent.identity, &types).unwrap();
+        let descriptor = program
+            .functions
+            .iter()
+            .find(|function| {
+                crate::verify::descriptor_only_function(function)
+                    && function.return_type == TypeInterner::NEVER
+            })
+            .expect("retained exact Never-input outer descriptor");
+        let descriptor_symbol = crate::symbol_name(&descriptor.identity, &types).unwrap();
+        let concrete = program
+            .functions
+            .iter()
+            .find(|function| {
+                function.debug_kind == jett_hir::FunctionDebugKind::Inline
+                    && function.capture_count == 1
+                    && function.params.len() == 1
+                    && function.params[0].ty == TypeInterner::INT64
+                    && function.return_type == TypeInterner::INT64
+            })
+            .expect("actually callable nested int64 specialization");
+        let concrete_symbol = crate::symbol_name(&concrete.identity, &types).unwrap();
+        crate::verify::verify_descriptor_bodies(&program, &types)
+            .expect("complete original nested typed contracts");
+        let object =
+            emit_host_object(&program, &types).expect("descriptor and concrete nested object");
+        assert!(!object.bytes.is_empty());
+        assert!(object.symbols.contains(&descriptor_symbol));
+        assert!(!object.symbols.contains(&latent_symbol));
+        assert!(object.symbols.contains(&concrete_symbol));
+    }
+
+    #[test]
+    fn never_input_secret_result_descriptor_does_not_create_a_secret_never_carrier() {
+        let (program, mut types) = lower_source(SECRET_UNINHABITED_CALLBACK_SOURCE);
+        let hidden_never = types.intern(jett_types::Type::Secret(TypeInterner::NEVER));
+        let descriptor_type = types.intern(jett_types::Type::Function {
+            params: vec![TypeInterner::NEVER],
+            view_params: vec![false],
+            return_type: hidden_never,
+        });
+        assert_eq!(
+            scalar_kind(&types, descriptor_type, "secret result descriptor").unwrap(),
+            ScalarKind::Function
+        );
+        assert!(matches!(
+            scalar_kind(&types, hidden_never, "live secret Never"),
+            Err(CodegenError::UnsupportedType { .. })
+        ));
+        let descriptor = program
+            .functions
+            .iter()
+            .find(|function| {
+                crate::verify::descriptor_only_function(function)
+                    && function.return_type == hidden_never
+            })
+            .expect("secret-qualified Never result retains exact input authority");
+        let symbol = crate::symbol_name(&descriptor.identity, &types).unwrap();
+        let object =
+            emit_host_object(&program, &types).expect("stored secret-result descriptor object");
+        assert!(object.symbols.contains(&symbol));
+        assert!(!object.bytes.is_empty());
+    }
+
+    #[test]
+    fn latent_nested_original_bodies_cannot_fabricate_uninhabited_results() {
+        for phantom in [ExpressionKind::Nothing, ExpressionKind::Int(7)] {
+            let (mut program, types) = lower_source(LATENT_NESTED_CALLBACK_SOURCE);
+            let latent = program
+                .functions
+                .iter_mut()
+                .find(|function| {
+                    function.capture_count == 1
+                        && function.params.len() == 1
+                        && function.params[0].ty == TypeInterner::NEVER
+                        && function.return_type == TypeInterner::NEVER
+                })
+                .unwrap();
+            let value = latent
+                .blocks
+                .iter_mut()
+                .find_map(|block| {
+                    if let TerminatorKind::Return(Some(value)) = &mut block.terminator.kind {
+                        Some(value)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            assert_eq!(value.ty, TypeInterner::NEVER);
+            value.kind = phantom;
+            assert!(matches!(
+                emit_host_object(&program, &types),
+                Err(CodegenError::InvalidMirContract { .. })
+            ));
+        }
+        for phantom in [ExpressionKind::Nothing, ExpressionKind::Int(7)] {
+            let (mut program, types) = lower_source(SECRET_UNINHABITED_CALLBACK_SOURCE);
+            let descriptor = program.functions.iter_mut().find(|function| {
+                crate::verify::descriptor_only_function(function)
+                    && matches!(types.resolve(function.return_type), jett_types::Type::Secret(inner) if *inner == TypeInterner::NEVER)
+            }).unwrap();
+            let value = descriptor
+                .blocks
+                .iter_mut()
+                .find_map(|block| {
+                    if let TerminatorKind::Return(Some(value)) = &mut block.terminator.kind {
+                        Some(value)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            assert!(
+                matches!(types.resolve(value.ty), jett_types::Type::Secret(inner) if *inner == TypeInterner::NEVER)
+            );
+            value.kind = phantom;
+            assert!(matches!(
+                emit_host_object(&program, &types),
+                Err(CodegenError::InvalidMirContract { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn latent_never_capture_edges_keep_exact_owned_capture_contracts() {
+        for corruption in 0..3 {
+            let (mut program, types) = lower_source(LATENT_NESTED_CALLBACK_SOURCE);
+            let latent = program
+                .functions
+                .iter_mut()
+                .find(|function| {
+                    function.capture_count == 1
+                        && function.params.len() == 1
+                        && function.params[0].ty == TypeInterner::NEVER
+                        && function.return_type == TypeInterner::NEVER
+                })
+                .unwrap();
+            match corruption {
+                0 => latent.params[0].mode = jett_mir::ParamMode::View,
+                1 => {
+                    latent.params[0].ty = TypeInterner::INT64;
+                    let local = latent.params[0].local.index() as usize;
+                    latent.locals[local].ty = TypeInterner::INT64;
+                    latent.locals[local].debug_ty = TypeInterner::INT64;
+                }
+                2 => latent.return_type = TypeInterner::INT64,
+                _ => unreachable!(),
+            }
+            assert!(
+                emit_host_object(&program, &types).is_err(),
+                "capture corruption {corruption}"
+            );
+        }
+    }
+
+    #[test]
+    fn latent_nested_type_metadata_cannot_hide_foreign_children_or_view_modes() {
+        for debug_type in [false, true] {
+            for corruption in 0..3 {
+                let (mut program, mut types) = lower_source(LATENT_NESTED_CALLBACK_SOURCE);
+                let mut foreign = TypeInterner::new();
+                let mut invalid = TypeInterner::INT64;
+                for _ in 0..=types.len() + 2 {
+                    invalid = foreign.intern(jett_types::Type::List(invalid));
+                }
+                assert!(invalid.index() as usize > types.len() + 1);
+                let malformed = types.intern(jett_types::Type::Function {
+                    params: if corruption == 0 {
+                        vec![TypeInterner::INT64]
+                    } else {
+                        Vec::new()
+                    },
+                    view_params: Vec::new(),
+                    return_type: match corruption {
+                        0 => TypeInterner::NEVER,
+                        1 => invalid,
+                        2 => TypeInterner::ERROR,
+                        _ => unreachable!(),
+                    },
+                });
+                let wrapped = types.intern(jett_types::Type::List(malformed));
+                let latent = program
+                    .functions
+                    .iter_mut()
+                    .find(|function| {
+                        function.capture_count == 1
+                            && function.params.len() == 1
+                            && function.params[0].ty == TypeInterner::NEVER
+                            && function.return_type == TypeInterner::NEVER
+                    })
+                    .unwrap();
+                let mut local = latent.locals[0].clone();
+                local.id = jett_hir::LocalId::new(u32::try_from(latent.locals.len()).unwrap());
+                local.name = "unused_latent_nested_metadata".into();
+                if debug_type {
+                    local.debug_ty = wrapped;
+                } else {
+                    local.ty = wrapped;
+                }
+                latent.locals.push(local);
+                let result = emit_host_object(&program, &types);
+                if corruption == 1 {
+                    assert!(
+                        matches!(result, Err(CodegenError::InvalidMir(errors))
+                            if errors.len() == 1 && errors[0].message
+                                == "Resource manifest type visitor is outside its interner"),
+                        "debug={debug_type}, corruption={corruption}"
+                    );
+                } else {
+                    assert!(
+                        matches!(result, Err(CodegenError::UnsupportedType { .. })),
+                        "debug={debug_type}, corruption={corruption}"
+                    );
+                }
+                assert!(
+                    matches!(
+                        crate::verify::scalar_kind(&types, wrapped, "latent original metadata"),
+                        Err(CodegenError::UnsupportedType { .. })
+                    ),
+                    "native wrapped metadata debug={debug_type}, corruption={corruption}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn latent_secret_result_support_does_not_grant_live_return_only_authority() {
+        let (mut program, mut types) = lower_source(
+            "namespace app\nfunction root() returns nothing:\n    function() returns int64 callback = function() returns int64: return 7\n    trace callback\n    return nothing\n",
+        );
+        let hidden_never = types.intern(jett_types::Type::Secret(TypeInterner::NEVER));
+        let result_only = types.intern(jett_types::Type::Function {
+            params: Vec::new(),
+            view_params: Vec::new(),
+            return_type: hidden_never,
+        });
+        assert!(matches!(
+            scalar_kind(&types, result_only, "live secret result-only function"),
+            Err(CodegenError::UnsupportedType { .. })
+        ));
+        let root = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "root")
+            .unwrap();
+        let local = root
+            .locals
+            .iter_mut()
+            .find(|local| matches!(types.resolve(local.ty), jett_types::Type::Function { .. }))
+            .unwrap();
+        local.ty = result_only;
+        local.debug_ty = result_only;
+        crate::verify::verify_descriptor_bodies(&program, &types)
+            .expect("latent type shape is metadata only");
+        assert!(matches!(
+            emit_host_object(&program, &types),
+            Err(CodegenError::UnsupportedType { .. })
+        ));
+    }
+
+    fn secret_gate_returned_call(function: &mut Function) -> &mut Expression {
+        let entry = function.entry.index() as usize;
+        let TerminatorKind::Return(Some(value)) = &mut function.blocks[entry].terminator.kind
+        else {
+            panic!("source returned invocation");
+        };
+        assert!(matches!(
+            value.kind,
+            ExpressionKind::Call { .. } | ExpressionKind::IndirectCall { .. }
+        ));
+        value
+    }
+
+    fn assert_checked_native_call_gate(program: &Program, types: &TypeInterner, expected: &str) {
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "caller")
+            .expect("source caller");
+        let expression = function
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator.kind {
+                TerminatorKind::Return(Some(value)) => Some(value),
+                _ => None,
+            })
+            .expect("source return expression");
+        assert!(
+            matches!(
+                crate::verify::verify_callable_expression_for_test(program, types, function, expression),
+                Err(CodegenError::InvalidMirContract { message, .. }) if message == expected
+            ),
+            "native expression must retain its precise gate: {expected}"
+        );
+    }
+
+    #[test]
+    fn native_secret_call_result_gate_remains_independent_of_source_certificates() {
+        for (callee, expected) in [
+            (
+                "callback",
+                "direct call result type does not match its signature",
+            ),
+            ("factory()", "indirect call result type mismatch"),
+        ] {
+            let source = format!(
+                "function callback(value: int64) returns int64:\n    return value\n\
+                 function factory() returns function(int64) returns int64:\n    return callback\n\
+                 function caller(value: secret[int64]) returns secret[int64]:\n    return {callee}(value)\n"
+            );
+            let (mut program, types) = lower_source(&source);
+            let caller = program
+                .functions
+                .iter_mut()
+                .find(|function| function.identity.declaration.name == "caller")
+                .unwrap();
+            caller.return_type = TypeInterner::INT64;
+            secret_gate_returned_call(caller).ty = TypeInterner::INT64;
+            assert_checked_native_call_gate(&program, &types, expected);
+        }
+    }
+
+    #[test]
+    fn native_secret_call_payload_gate_preserves_exact_primitive_and_nominal_types() {
+        for (callee, expected) in [
+            (
+                "callback",
+                "direct call argument type does not match its parameter",
+            ),
+            ("factory()", "indirect call argument type mismatch"),
+        ] {
+            for parameter in ["int64", "Positive"] {
+                let source = format!(
+                    "type Positive = int64 where value > 0\n\
+                     function callback(value: {parameter}) returns {parameter}:\n    return value\n\
+                     function factory() returns function({parameter}) returns {parameter}:\n    return callback\n\
+                     function caller(value: secret[{parameter}]) returns secret[{parameter}]:\n    return {callee}(value)\n"
+                );
+                let (mut program, mut types) = lower_source(&source);
+                let payload = if parameter == "Positive" {
+                    TypeInterner::INT64
+                } else {
+                    TypeInterner::INT32
+                };
+                let hidden = types.intern(jett_types::Type::Secret(payload));
+                let caller = program
+                    .functions
+                    .iter_mut()
+                    .find(|function| function.identity.declaration.name == "caller")
+                    .unwrap();
+                let expression = secret_gate_returned_call(caller);
+                let args = match &mut expression.kind {
+                    ExpressionKind::Call { args, .. }
+                    | ExpressionKind::IndirectCall { args, .. } => args,
+                    _ => unreachable!(),
+                };
+                args[0].ty = hidden;
+                args[0].kind = ExpressionKind::Int(7);
+                assert_checked_native_call_gate(&program, &types, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn native_secret_call_impurity_gate_remains_independent_of_source_certificates() {
+        for (callee, expected) in [
+            (
+                "callback",
+                "direct call argument type does not match its parameter",
+            ),
+            ("factory()", "indirect call argument type mismatch"),
+        ] {
+            let source = format!(
+                "function callback(view stdout: Stdout, value: int64) returns int64:\n    return value\n\
+                 function factory() returns function(view Stdout, int64) returns int64:\n    return callback\n\
+                 function caller(view stdout: Stdout, value: int64) returns int64:\n    return {callee}(view stdout, value)\n"
+            );
+            let (mut program, mut types) = lower_source(&source);
+            let hidden = types.intern(jett_types::Type::Secret(TypeInterner::INT64));
+            let caller = program
+                .functions
+                .iter_mut()
+                .find(|function| function.identity.declaration.name == "caller")
+                .unwrap();
+            let expression = secret_gate_returned_call(caller);
+            let args = match &mut expression.kind {
+                ExpressionKind::Call { args, .. } | ExpressionKind::IndirectCall { args, .. } => {
+                    args
+                }
+                _ => unreachable!(),
+            };
+            args[1].ty = hidden;
+            args[1].kind = ExpressionKind::Int(7);
+            assert_checked_native_call_gate(&program, &types, expected);
+        }
+    }
+
+    #[test]
+    fn native_reflected_metadata_expression_gates_preserve_arity_and_exact_types() {
+        let source = "enum Event:\n    empty = 17\n    content(text: string, values: list[optional[int64]])\n\
+            machine Session:\n    states:\n        empty\n        content(text: string, values: list[optional[int64]])\n    transitions:\n        empty to content\n\
+            function variant_pipe(view source: Event) returns TypeVariant:\n    TypeVariant selected = source into view type.variant_value[Event]()\n    return selected\n\
+            function state_pipe(view source: Session) returns TypeMachineState:\n    TypeMachineState selected = source into view type.machine_state_value[Session]()\n    return selected\n\
+            function narrowed_pipe(view source: Session at content) returns TypeMachineState:\n    TypeMachineState selected = source into view type.machine_state_value[Session at content]()\n    return selected\n\
+            function map_pipe(index: int64) returns TypeInfo:\n    TypeInfo selected = index into type.arg[map[string, list[optional[int64]]]]()\n    return selected\n";
+        for (name, expected) in [
+            (
+                "variant_pipe",
+                "invalid checked type.variant_value operands",
+            ),
+            (
+                "state_pipe",
+                "invalid checked type.machine_state_value operands",
+            ),
+            (
+                "narrowed_pipe",
+                "invalid checked type.machine_state_value operands",
+            ),
+            ("map_pipe", "invalid checked type.arg operands"),
+        ] {
+            for remove in [true, false] {
+                let (program, types) = lower_source(source);
+                let function = program
+                    .functions
+                    .iter()
+                    .find(|function| function.identity.declaration.name == name)
+                    .expect("source reflected observer");
+                let mut expression = function
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.statements)
+                    .find_map(|statement| match &statement.kind {
+                        StatementKind::Let { value, .. }
+                            if matches!(value.kind, ExpressionKind::Intrinsic { .. }) =>
+                        {
+                            Some(value.clone())
+                        }
+                        _ => None,
+                    })
+                    .expect("exact checked observer initializer");
+                let ExpressionKind::Intrinsic {
+                    args,
+                    evaluation_order,
+                    ..
+                } = &mut expression.kind
+                else {
+                    unreachable!()
+                };
+                assert!(args.len() > 1);
+                if remove {
+                    args.pop();
+                    evaluation_order.pop();
+                } else {
+                    let metadata = args.last_mut().unwrap();
+                    metadata.kind = ExpressionKind::Bool(false);
+                    metadata.ty = TypeInterner::BOOL;
+                }
+                assert!(
+                    matches!(
+                        crate::verify::verify_callable_expression_for_test(&program, &types, function, &expression),
+                        Err(CodegenError::InvalidMirContract { message, .. }) if message == expected
+                    ),
+                    "{name}/remove={remove}: native metadata expression gate remains exact"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn custom_assertion_message_in_verify_body_emits_native_entry() {
+        let file = FileId::new(0);
+        let parsed = jett_parser::parse(
+            "namespace test\nverify failure:\n    assert false \"custom failure\"\n",
+            file,
+        );
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        let checked = jett_typecheck::check(&parsed.module, &resolved);
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            checked.diagnostics
+        );
+        let hir = jett_hir::lower_with_test_bodies(
+            &parsed.module,
+            &resolved,
+            &checked,
+            &HashMap::from([(file, SourceOrigin::Project)]),
+        )
+        .expect("test-body HIR lowering");
+        let program = jett_mir::lower(&hir, &checked.interner).expect("test-body MIR lowering");
+        let entry = program
+            .functions
+            .iter()
+            .find(|function| {
+                function.identity.declaration.kind == jett_hir::DeclarationKind::Verify
+            })
+            .expect("verify body")
+            .id;
+        let object = emit_host_program_object(&program, &checked.interner, entry)
+            .expect("custom assertion message must emit native code");
+        assert!(!object.bytes.is_empty());
+    }
+
+    fn test_object_module() -> ObjectModule {
+        let flags = settings::Flags::new(settings::builder());
+        let isa = isa::lookup(HOST)
+            .expect("host ISA builder")
+            .finish(flags)
+            .expect("host ISA");
+        let object_builder =
+            ObjectBuilder::new(isa, b"jett-test".to_vec(), default_libcall_names())
+                .expect("object builder");
+        ObjectModule::new(object_builder)
+    }
+
+    fn declared_program(source: &str) -> (Program, TypeInterner, ObjectModule, DeclaredFunctions) {
+        let (program, types) = lower_source(source);
+        let verified = verify_program(&program, &types).expect("supported scalar MIR");
+        let mut module = test_object_module();
+        let declarations = declare_reachable_functions(&mut module, &program, &types, &verified)
+            .expect("function declarations");
+        (program, types, module, declarations)
+    }
+
+    fn translated_clif(source: &str) -> HashMap<String, String> {
+        let (program, types, mut module, declarations) = declared_program(source);
+
+        let mut translated = HashMap::new();
+        for declaration in declarations.iter() {
+            let function = program_function(&program, declaration.mir_id).expect("MIR function");
+            let mut context = module.make_context();
+            context.func.signature = declaration.signature.clone();
+            translate_function(
+                &mut module,
+                &declarations,
+                &program,
+                function,
+                &types,
+                &declaration.symbol,
+                &mut context,
+            )
+            .expect("function translation");
+            translated.insert(
+                function.identity.declaration.name.clone(),
+                context.func.display().to_string(),
+            );
+        }
+        translated
+    }
+
+    fn translated_function(source: &str, function_name: &str) -> ir::Function {
+        let (program, types, mut module, declarations) = declared_program(source);
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == function_name)
+            .expect("requested MIR function");
+        let declaration = declarations
+            .get(function.id)
+            .expect("requested native declaration");
+        let mut context = module.make_context();
+        context.func.signature = declaration.signature.clone();
+        translate_function(
+            &mut module,
+            &declarations,
+            &program,
+            function,
+            &types,
+            &declaration.symbol,
+            &mut context,
+        )
+        .expect("function translation");
+        context.func
+    }
+
+    fn direct_call_arguments(function: &ir::Function) -> Vec<Vec<Value>> {
+        function
+            .layout
+            .blocks()
+            .flat_map(|block| function.layout.block_insts(block))
+            .filter(|instruction| function.dfg.insts[*instruction].opcode() == ir::Opcode::Call)
+            .map(|instruction| function.dfg.inst_args(instruction).to_vec())
+            .collect()
+    }
+
+    #[test]
+    fn evaluates_arguments_in_lexical_order_and_returns_parameter_order() {
+        let arguments = ["first parameter", "second parameter"];
+        let mut evaluated = Vec::new();
+        let values = reordered_map(
+            &arguments,
+            &[1, 0],
+            |argument| {
+                evaluated.push(*argument);
+                Ok::<_, ()>(*argument)
+            },
+            || (),
+        )
+        .expect("valid permutation");
+
+        assert_eq!(evaluated, ["second parameter", "first parameter"]);
+        assert_eq!(values, ["first parameter", "second parameter"]);
+    }
+
+    #[test]
+    fn signed_minimum_immediates_use_width_correct_bit_patterns() {
+        assert_eq!(
+            integer_immediate(-128, ScalarKind::SignedInteger(8)),
+            Some(128)
+        );
+        assert_eq!(
+            integer_immediate(-32_768, ScalarKind::SignedInteger(16)),
+            Some(32_768)
+        );
+        assert_eq!(
+            integer_immediate(-2_147_483_648, ScalarKind::SignedInteger(32)),
+            Some(2_147_483_648)
+        );
+        assert_eq!(
+            integer_immediate(i128::from(i64::MIN), ScalarKind::SignedInteger(64)),
+            Some(i64::MIN)
+        );
+    }
+
+    #[test]
+    fn emitted_jett_signatures_prepend_runtime_context_and_environment() {
+        let (program, types, module, declarations) = declared_program(
+            r#"namespace app
+function leaf(value: int64, enabled: bool) returns int64:
+    if enabled:
+        return value
+    return 0
+function root() returns int64:
+    return leaf(7, true)
+"#,
+        );
+        let pointer_type = module.target_config().pointer_type();
+
+        for declaration in declarations.iter() {
+            let function = program_function(&program, declaration.mir_id).expect("MIR function");
+            let pending_parameters = function
+                .params
+                .iter()
+                .skip(function.capture_count)
+                .filter(|parameter| is_task_scalar(&types, parameter.ty).unwrap())
+                .count();
+            assert_eq!(
+                declaration.signature.params.len(),
+                function.params.len() - function.capture_count + pending_parameters + 2,
+                "{} must gain context, environment, and primitive depth parameters",
+                function.identity.declaration.name
+            );
+            assert_eq!(
+                declaration.signature.params[0],
+                AbiParam::new(pointer_type),
+                "{} must receive an ordinary runtime-context pointer first",
+                function.identity.declaration.name
+            );
+            assert_eq!(
+                declaration.signature.params[1],
+                AbiParam::new(ir::types::I64)
+            );
+        }
+
+        let leaf = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "leaf")
+            .expect("leaf MIR function");
+        let root = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "root")
+            .expect("root MIR function");
+        assert_eq!(leaf.params.len(), 2, "source parameters stay unchanged");
+        assert!(root.params.is_empty(), "source parameters stay unchanged");
+    }
+
+    #[test]
+    fn direct_jett_calls_forward_the_exact_current_runtime_context() {
+        let function = translated_function(
+            r#"namespace app
+function leaf(value: int64) returns int64:
+    return value
+function caller(value: int64, choose_original: bool) returns int64:
+    if choose_original:
+        return leaf(value)
+    return leaf(value + 1)
+"#,
+            "caller",
+        );
+        let entry = function.layout.entry_block().expect("native entry block");
+        let runtime_context = function.dfg.block_params(entry)[0];
+        let calls = direct_call_arguments(&function);
+
+        assert!(
+            calls.len() >= 4,
+            "Jett calls and failure checks remain present"
+        );
+        for arguments in calls {
+            assert!(
+                matches!(arguments.len(), 1 | 4 | 8),
+                "status and scalar checks receive context; Jett calls also receive environment, scalar bits, and depth"
+            );
+            assert_eq!(
+                function.dfg.resolve_aliases(arguments[0]),
+                runtime_context,
+                "direct calls must forward the caller's exact context value"
+            );
+        }
+    }
+
+    #[test]
+    fn unreachable_direct_call_blocks_are_not_emitted_with_an_undefined_context() {
+        let (mut program, types) = lower_source(
+            r#"namespace app
+function leaf(value: int64) returns int64:
+    return value
+function caller(value: int64, choose_original: bool) returns int64:
+    if choose_original:
+        return leaf(value)
+    return leaf(value + 1)
+"#,
+        );
+        let caller = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "caller")
+            .expect("caller MIR function");
+        let mut immediate_return = caller
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator.kind {
+                TerminatorKind::Return(Some(expression))
+                    if matches!(expression.kind, ExpressionKind::Call { .. }) =>
+                {
+                    Some(expression.clone())
+                }
+                _ => None,
+            })
+            .expect("branch-local direct call");
+        immediate_return.kind = ExpressionKind::Int(0);
+        let entry_index =
+            usize::try_from(caller.entry.index()).expect("entry index fits this host");
+        caller.blocks[entry_index].terminator.kind = TerminatorKind::Return(Some(immediate_return));
+
+        let control_flow = ControlFlowGraph::analyze(caller).expect("valid mutated control flow");
+        assert_eq!(control_flow.reverse_postorder(), [caller.entry]);
+        assert!(
+            caller.blocks.iter().any(|block| {
+                matches!(
+                    &block.terminator.kind,
+                    TerminatorKind::Return(Some(Expression {
+                        kind: ExpressionKind::Call { .. },
+                        ..
+                    }))
+                )
+            }),
+            "the test must retain a direct call in a disconnected MIR block"
+        );
+
+        let verified = verify_program(&program, &types).expect("valid mutated scalar MIR");
+        let mut module = test_object_module();
+        let declarations = declare_reachable_functions(&mut module, &program, &types, &verified)
+            .expect("function declarations");
+        let caller = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "caller")
+            .expect("caller MIR function");
+        let declaration = declarations.get(caller.id).expect("caller declaration");
+        let mut context = module.make_context();
+        context.func.signature = declaration.signature.clone();
+        translate_function(
+            &mut module,
+            &declarations,
+            &program,
+            caller,
+            &types,
+            &declaration.symbol,
+            &mut context,
+        )
+        .expect("reachable-only function translation");
+
+        assert_eq!(context.func.layout.blocks().count(), 2); // plus terminal-failure epilogue
+        assert!(direct_call_arguments(&context.func).is_empty());
+    }
+
+    #[test]
+    fn exported_entry_wrapper_forwards_its_incoming_runtime_context() {
+        let (program, _types, mut module, declarations) = declared_program(
+            r#"namespace app
+function selected_entry() returns nothing:
+    return nothing
+"#,
+        );
+        let entry = program.functions[0].id;
+        let entry_function = declarations.get(entry).expect("native entry declaration");
+        let mut context = module.make_context();
+        context.func.signature = program_entry_signature(&module);
+        translate_program_entry_wrapper(&mut module, entry_function, entry, &mut context)
+            .expect("entry wrapper translation");
+
+        let block = context
+            .func
+            .layout
+            .entry_block()
+            .expect("wrapper entry block");
+        let incoming_context = context.func.dfg.block_params(block)[0];
+        let calls = direct_call_arguments(&context.func);
+        assert_eq!(calls.len(), 2); // entry and failure status
+        assert_eq!(calls[0].len(), 2);
+        assert_eq!(calls[1], vec![incoming_context]);
+        assert_eq!(calls[0][0], incoming_context);
+        assert_eq!(
+            context.func.signature.params,
+            [AbiParam::new(module.target_config().pointer_type())]
+        );
+        assert!(program.functions[0].params.is_empty());
+    }
+
+    #[test]
+    fn boolean_and_or_branch_before_emitting_rhs_calls() {
+        let functions = translated_clif(
+            r#"namespace app
+function rhs() returns bool:
+    return true
+function and_value(left: bool) returns bool:
+    return left && rhs()
+function or_value(left: bool) returns bool:
+    return left || rhs()
+"#,
+        );
+
+        for name in ["and_value", "or_value"] {
+            let clif = functions.get(name).expect("translated test function");
+            let branch = clif.find("brif ").expect("short-circuit branch");
+            let call = clif.find(" = call ").expect("RHS call");
+            assert!(
+                branch < call,
+                "{name} eagerly emits its RHS before branching:\n{clif}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_ownership_rejects_read_before_initialization() {
+        let (mut program, types) = lower_source(
+            r#"
+function selected_entry() returns string:
+    string value = "live"
+    return value
+"#,
+        );
+        program.functions[0].blocks[0].statements.clear();
+        let error =
+            emit_host_object(&program, &types).expect_err("missing initializer is invalid MIR");
+        assert!(
+            error.to_string().contains("definite initialization"),
+            "{error}"
+        );
+    }
+
+    const CALL_VIEW_SOURCE: &str = r#"namespace app
+interface Named:
+    function name(view self: Named) returns string
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "member"
+struct Packet:
+    member: Named
+function report(view item: Named, extra: int64) returns string:
+    return Named.name(view item)
+function exercise(packet: Packet, incoming: optional[int64]) returns Packet:
+    string answer = report(view packet.member, incoming handle:
+        return packet
+    )
+    return packet
+"#;
+
+    #[test]
+    fn native_call_views_support_post_call_and_aborted_call_owner_returns() {
+        let prefix = CALL_VIEW_SOURCE.split("function exercise(").next().unwrap();
+        let mutable = format!(
+            r#"{prefix}function exercise(packet: Packet, incoming: optional[int64]) returns Packet:
+    mutable Packet current = packet
+    string answer = report(view current.member, incoming handle:
+        default 3
+    )
+    current = Packet(member: 9)
+    return current
+"#
+        );
+        let temporary = format!(
+            r#"{prefix}function make() returns Packet:
+    return Packet(member: 7)
+function exercise(incoming: optional[int64]) returns string:
+    return report(view make().member, incoming handle:
+        default 3
+    )
+"#
+        );
+        let direct_mutable = format!(
+            r#"{prefix}function exercise(incoming: optional[int64]) returns Named:
+    mutable Named current = 7
+    string answer = report(view current, incoming handle:
+        default 3
+    )
+    current = 9
+    return current
+"#
+        );
+        let direct_temporary = format!(
+            r#"{prefix}function make_named() returns Named:
+    return 7
+function exercise(incoming: optional[int64]) returns string:
+    return report(view make_named(), incoming handle:
+        default 3
+    )
+"#
+        );
+        for source in [
+            CALL_VIEW_SOURCE.to_owned(),
+            mutable,
+            temporary,
+            direct_mutable,
+            direct_temporary,
+        ] {
+            let (program, types) = lower_source(&source);
+            let exercise = program
+                .functions
+                .iter()
+                .find(|function| function.identity.declaration.name == "exercise")
+                .unwrap();
+            assert_eq!(
+                exercise
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.statements)
+                    .filter(|statement| matches!(
+                        statement.kind,
+                        StatementKind::BeginCallView { .. }
+                    ))
+                    .count(),
+                1
+            );
+            let object = emit_host_object(&program, &types).expect("exact borrowed field supports unchanged owner, post-call rebinding, owned temporary and aborted call cleanup");
+            assert!(!object.bytes.is_empty());
+        }
+    }
+
+    #[test]
+    fn native_call_view_scope_metadata_is_checked_before_dead_code_removal() {
+        for fault in ["no begin", "no end", "orphan end", "unused field metadata"] {
+            let (mut program, types) = lower_source(CALL_VIEW_SOURCE);
+            let exercise = program
+                .functions
+                .iter_mut()
+                .find(|function| function.identity.declaration.name == "exercise")
+                .unwrap();
+            let stage = exercise
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .find_map(|statement| match statement.kind {
+                    StatementKind::BeginCallView { local, .. } => Some(local),
+                    _ => None,
+                })
+                .unwrap();
+            match fault {
+                "no begin" | "no end" => {
+                    for block in &mut exercise.blocks {
+                        block.statements.retain(|statement| {
+                            if fault == "no begin" {
+                                !matches!(statement.kind, StatementKind::BeginCallView { .. })
+                            } else {
+                                !matches!(statement.kind, StatementKind::EndCallView { .. })
+                            }
+                        });
+                    }
+                }
+                "orphan end" => {
+                    exercise.blocks[exercise.entry.index() as usize]
+                        .statements
+                        .push(Statement {
+                            kind: StatementKind::EndCallView {
+                                local: exercise.params[0].local,
+                            },
+                            span: exercise.span,
+                        });
+                }
+                _ => {
+                    let value = exercise
+                        .blocks
+                        .iter_mut()
+                        .flat_map(|block| &mut block.statements)
+                        .find_map(|statement| match &mut statement.kind {
+                            StatementKind::BeginCallView { local, value } if *local == stage => {
+                                Some(value)
+                            }
+                            _ => None,
+                        })
+                        .unwrap();
+                    let ExpressionKind::View(inner) = &mut value.kind else {
+                        panic!("exact projected view")
+                    };
+                    let ExpressionKind::Field { owner_type, .. } = &mut inner.kind else {
+                        panic!("field metadata")
+                    };
+                    *owner_type = TypeInterner::STRING;
+                    exercise.blocks[exercise.entry.index() as usize]
+                        .terminator
+                        .kind = TerminatorKind::Unreachable;
+                }
+            }
+            let error = emit_host_object(&program, &types)
+                .expect_err("malformed internal stage cannot be pruned into validity");
+            assert!(
+                matches!(error, CodegenError::InvalidMirContract { .. }),
+                "{fault}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_projected_aliases_preserve_typed_path_proof_before_compaction() {
+        let source = r#"struct Packet:
+    items: list[int64]
+struct Envelope:
+    packet: Packet
+function selected_entry(view source: Envelope) returns list[int64]:
+    list[int64] borrowed = view source.packet.items
+    list[int64] forwarded = borrowed
+    for element in list():
+        trace forwarded
+    return clone forwarded
+"#;
+        let (program, types) = lower_source(source);
+        emit_host_object(&program, &types)
+            .expect("immutable struct projection has a native object");
+        for invalid in ["orphan", "unreachable path"] {
+            let (mut program, types) = lower_source(source);
+            let function = &mut program.functions[0];
+            let borrowed = function
+                .locals
+                .iter()
+                .find(|local| local.name == "borrowed")
+                .unwrap()
+                .id;
+            if invalid == "orphan" {
+                for block in &mut function.blocks {
+                    block.statements.retain(|statement| !matches!(statement.kind, StatementKind::Let { local, .. } if local == borrowed));
+                }
+            } else {
+                let mut value = function
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.statements)
+                    .find_map(|statement| match &statement.kind {
+                        StatementKind::Let { local, value } if *local == borrowed => {
+                            Some(value.clone())
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let ExpressionKind::View(field) = &mut value.kind else {
+                    panic!("explicit projected view");
+                };
+                let ExpressionKind::Field { owner_type, .. } = &mut field.kind else {
+                    panic!("nested projected field");
+                };
+                *owner_type = TypeInterner::STRING;
+                let span = value.span;
+                let body = function
+                    .blocks
+                    .iter()
+                    .find_map(|block| match block.terminator.kind {
+                        TerminatorKind::ForEach { body, .. } => Some(body),
+                        _ => None,
+                    })
+                    .unwrap();
+                // The empty-list body is removed by native preparation. Its
+                // forged typed path must fail before that removal occurs.
+                function.blocks[body.index() as usize]
+                    .statements
+                    .push(jett_mir::Statement {
+                        kind: StatementKind::Let {
+                            local: borrowed,
+                            value,
+                        },
+                        span,
+                    });
+            }
+            jett_mir::validate(&program).expect("forged path uses valid structural IDs");
+            let error = emit_host_object(&program, &types)
+                .expect_err("unproven projected alias must not be emitted");
+            assert!(
+                error.to_string().contains("borrowed alias")
+                    || error.to_string().contains("borrowed projection"),
+                "{invalid}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn actor_handler_state_is_initialized_for_native_ownership_analysis() {
+        let (program, types) = lower_source(
+            r#"namespace test
+actor ByteCounter(seed: uint8):
+    mutable uint8 count = seed + 1
+    receive add(delta: uint8):
+        count = count + delta
+    receive current responds uint8:
+        respond count + 1
+"#,
+        );
+        for handler in program.functions.iter().filter(|function| {
+            function.identity.declaration.kind == jett_hir::DeclarationKind::ActorHandler
+        }) {
+            assert_eq!(handler.capture_count, 2);
+            assert_eq!(handler.params[0].name, "seed");
+            assert_eq!(handler.params[1].name, "count");
+            MoveValuePlan::analyze(&program, handler, &types)
+                .expect("actor input state has a valid native ownership plan");
+        }
+    }
+
+    #[test]
+    fn native_ownership_plan_keeps_loop_carried_strings_live() {
+        let (program, types) = lower_source(
+            r#"
+function selected_entry(keep: bool) returns string:
+    mutable string value = "live"
+    while keep:
+        value = "next"
+    return value
+"#,
+        );
+        let function = &program.functions[0];
+        let plan = CopyValuePlan::analyze(function, &types).unwrap();
+        let local = function
+            .locals
+            .iter()
+            .find(|l| l.name == "value")
+            .unwrap()
+            .id
+            .index() as usize;
+        assert!(plan.owned_locals.contains(&local));
+        for block in &function.blocks {
+            if matches!(block.terminator.kind, TerminatorKind::Branch { .. }) {
+                assert!(plan.live_in[block.id.index() as usize].contains(&local));
+                assert!(plan.live_out[block.id.index() as usize].contains(&local));
+            }
+        }
+    }
+
+    #[test]
+    fn copy_value_plan_does_not_claim_move_only_ownership() {
+        let (program, types) = lower_source(
+            r#"
+function discard(view value: bytes) returns nothing:
+    return nothing
+"#,
+        );
+        let error = CopyValuePlan::analyze(&program.functions[0], &types)
+            .expect_err("bytes needs move/borrow/drop analysis");
+        assert!(error.contains("move/borrow/drop"), "{error}");
+    }
+    #[test]
+    fn native_linear_plan_rejects_move_across_loop_backedge() {
+        let (program, types) = lower_source(
+            r#"
+function consume(value: bytes) returns nothing:
+    return nothing
+function loop_move(value: bytes, repeat: bool) returns nothing:
+    while repeat:
+        consume(value)
+"#,
+        );
+        let error = emit_host_object(&program, &types)
+            .expect_err("loop reads moved place on next iteration");
+        assert!(
+            error.to_string().contains("moved or uninitialized"),
+            "{error}"
+        );
+    }
+    #[test]
+    fn native_linear_plan_rejects_borrow_escape_and_argument_alias() {
+        let (mut program, types) = lower_source(
+            r#"
+function identity(value: bytes) returns bytes:
+    return value
+"#,
+        );
+        program.functions[0].params[0].mode = jett_mir::ParamMode::View;
+        let error =
+            emit_host_object(&program, &types).expect_err("view cannot be returned as owner");
+        assert!(
+            error.to_string().contains("cannot move borrowed"),
+            "{error}"
+        );
+        let (program, types) = lower_source(
+            r#"
+function mixed(view first: bytes, second: bytes) returns nothing:
+    return nothing
+function alias(value: bytes) returns nothing:
+    mixed(view value, value)
+"#,
+        );
+        let error = emit_host_object(&program, &types)
+            .expect_err("loan must survive all argument evaluation");
+        assert!(error.to_string().contains("while borrowed"), "{error}");
+    }
+    #[test]
+    fn iteration_loan_survives_nested_loop_and_rejects_owner_escape() {
+        let (program, types) = lower_source(
+            r#"
+function escaped(items: list[int64]) returns list[int64]:
+    for item in view items:
+        for other in view items:
+            break
+        return items
+    return items
+"#,
+        );
+        let error =
+            emit_host_object(&program, &types).expect_err("outer iteration view remains active");
+        assert!(error.to_string().contains("while borrowed"), "{error}");
+    }
+    #[test]
+    fn consuming_sequence_cannot_take_from_a_borrowed_parameter() {
+        let (mut program, types) = lower_source(
+            r#"
+function visit(view items: list[int64]) returns nothing:
+    for item in view items:
+        break
+"#,
+        );
+        jett_mir::prepare_native_sequences(&mut program, &types);
+        emit_host_object(&program, &types)
+            .expect("checked borrowed iteration is valid before corruption");
+        for block in &mut program.functions[0].blocks {
+            for statement in &mut block.statements {
+                if let StatementKind::SequenceGet { consume, .. } = &mut statement.kind {
+                    *consume = true;
+                }
+            }
+        }
+        let error = emit_host_object(&program, &types).expect_err("cannot take a borrowed element");
+        let CodegenError::InvalidMir(errors) = error else {
+            panic!("prepared borrowed extraction must fail before emission: {error:?}");
+        };
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(
+            errors[0].message,
+            "call ownership viewed extraction changed source/cursor/target/role or consumption"
+        );
+    }
+    #[test]
+    fn sequence_preheader_is_selected_by_cfg_not_block_position() {
+        let (mut program, types) = lower_source(
+            r#"
+function visit(items: list[int64]) returns int64:
+    mutable int64 total = 0
+    for item in items:
+        total = total + item
+    return total
+"#,
+        );
+        let function = &mut program.functions[0];
+        let old_entry = function.entry;
+        let last = function.blocks.last().unwrap().id;
+        let remap = |id| {
+            if id == old_entry {
+                last
+            } else if id == last {
+                old_entry
+            } else {
+                id
+            }
+        };
+        function
+            .blocks
+            .swap(old_entry.index() as usize, last.index() as usize);
+        function.entry = remap(old_entry);
+        for block in &mut function.blocks {
+            block.id = remap(block.id);
+            match &mut block.terminator.kind {
+                TerminatorKind::Goto(target) => *target = remap(*target),
+                TerminatorKind::ForEach { body, exit, .. } => {
+                    *body = remap(*body);
+                    *exit = remap(*exit);
+                }
+                TerminatorKind::Return(_) | TerminatorKind::Unreachable => {}
+                other => panic!("unexpected fixture terminator {other:?}"),
+            }
+        }
+        emit_host_object(&program, &types).expect("late-numbered unique loop preheader");
+    }
+
+    const CALL_OWNER_GENERATION_SOURCE: &str = r#"namespace app
+struct User:
+    name: string
+struct Alternate:
+    code: int64
+function inspect_builder(view builder: TypeConstruction, extra: int64) returns int64:
+    return extra
+function maybe(flag: bool) returns optional[int64]:
+    if flag:
+        return some(11)
+    return none
+function exercise(flag: bool) returns int64:
+    mutable TypeConstruction switchable = type.construct_start[User]()
+    int64 selected = inspect_builder(view switchable, maybe(flag) handle:
+        switchable = type.construct_start[Alternate]()
+        switchable = type.construct_start[User]()
+        default 7
+    )
+    return selected
+"#;
+
+    fn emit_call_owner_generation(source: &str) -> (Program, TypeInterner) {
+        let (program, types) = lower_source(source);
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "exercise")
+            .expect("actual source exercise function");
+        let ownership = MoveValuePlan::analyze(&program, function, &types)
+            .expect("fresh generation ownership proof");
+        let slots = ownership.generation_storage().slots();
+        assert_eq!(slots.len(), 1, "one source captured generation");
+        let root = function.local(slots[0].root()).expect("generation root");
+        assert!(matches!(types.resolve(root.ty), Type::TypeConstruction));
+        assert_eq!(slots[0].ty(), root.ty);
+        assert!(root.mutable && root.view_source.is_none());
+        let verified = verify_program(&program, &types).expect("full typed generation program");
+        let mut module = test_object_module();
+        let declarations = declare_reachable_functions(&mut module, &program, &types, &verified)
+            .expect("native declarations");
+        let declaration = declarations.get(function.id).expect("exercise declaration");
+        let mut context = module.make_context();
+        context.func.signature = declaration.signature.clone();
+        translate_function(
+            &mut module,
+            &declarations,
+            &program,
+            function,
+            &types,
+            &declaration.symbol,
+            &mut context,
+        )
+        .expect("generation native translation");
+        // This function handles a produced sum, so there is no independent
+        // stable-sum snapshot to obscure a call-capture clone regression.
+        assert!(
+            module.get_name(NativeLeaf::StructClone.symbol()).is_none(),
+            "generation capture must stack-move its owner without cloning"
+        );
+        let object = emit_host_object(&program, &types).expect("generation object");
+        assert!(!object.bytes.is_empty());
+        (program, types)
+    }
+
+    #[test]
+    fn native_call_owner_generation_emits_repeated_replacement_without_capture_clone() {
+        let (program, _types) = emit_call_owner_generation(CALL_OWNER_GENERATION_SOURCE);
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "exercise")
+            .unwrap();
+        let replacements = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter(|statement| {
+                matches!(
+                    statement.kind,
+                    StatementKind::ReplaceCallOwnerGeneration { .. }
+                )
+            })
+            .count();
+        assert_eq!(
+            replacements, 2,
+            "both independent replacements share one escrow"
+        );
+    }
+
+    #[test]
+    fn native_call_owner_generation_emits_conditional_and_early_abort_cleanup() {
+        let conditional = CALL_OWNER_GENERATION_SOURCE
+            .replace("        switchable = type.construct_start[User]()\n", "");
+        emit_call_owner_generation(&conditional);
+        let abort = conditional.replace("        default 7\n", "        return 13\n");
+        emit_call_owner_generation(&abort);
+    }
+
+    #[test]
+    fn native_call_owner_generation_rejects_changed_storage_protocol_before_emission() {
+        let (program, types) = emit_call_owner_generation(CALL_OWNER_GENERATION_SOURCE);
+        let index = program
+            .functions
+            .iter()
+            .position(|function| function.identity.declaration.name == "exercise")
+            .unwrap();
+        for corruption in 0..4 {
+            let mut changed = program.clone();
+            let function = &mut changed.functions[index];
+            let mut applied = false;
+            for block in &mut function.blocks {
+                if applied {
+                    break;
+                }
+                let position = block
+                    .statements
+                    .iter()
+                    .position(|statement| match corruption {
+                        0 => matches!(
+                            statement.kind,
+                            StatementKind::OpenCallOwnerGeneration { .. }
+                        ),
+                        1 => matches!(
+                            statement.kind,
+                            StatementKind::ReplaceCallOwnerGeneration { .. }
+                        ),
+                        2 | 3 => matches!(
+                            statement.kind,
+                            StatementKind::PrepareFieldUpdate { .. }
+                                | StatementKind::CloseCallOwnerGeneration { .. }
+                        ),
+                        _ => unreachable!(),
+                    });
+                let Some(position) = position else {
+                    continue;
+                };
+                match corruption {
+                    0 | 2 => {
+                        block.statements.remove(position);
+                    }
+                    1 => {
+                        let StatementKind::ReplaceCallOwnerGeneration {
+                            root, rhs_owner, ..
+                        } = &mut block.statements[position].kind
+                        else {
+                            unreachable!();
+                        };
+                        *rhs_owner = *root;
+                    }
+                    3 => {
+                        let duplicate = block.statements[position].clone();
+                        block.statements.insert(position + 1, duplicate);
+                    }
+                    _ => unreachable!(),
+                }
+                applied = true;
+            }
+            assert!(
+                applied,
+                "corruption {corruption} found its canonical operation"
+            );
+            crate::verify::verify_descriptor_bodies(&changed, &types)
+                .expect_err("original metadata gate must retain generation integrity");
+            emit_host_object(&changed, &types)
+                .expect_err("changed generation storage protocol must fail before emission");
+        }
+    }
+}

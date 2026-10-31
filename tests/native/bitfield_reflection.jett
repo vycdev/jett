@@ -1,0 +1,20 @@
+namespace app
+enum Protocol:
+    tcp = 6
+    udp = 17
+bitfield network Packet:
+    version: 4 bits
+    reserved: 4 bits
+    protocol: 8 bits as Protocol
+    payload: list[uint8]
+type PacketAlias = Packet
+function main() returns nothing:
+    TypeBitfield layout = type.bitfield_layout[Packet]()
+    println(layout.network_order)
+    list[TypeBitfieldField] fields = type.bitfield_fields[Packet]()
+    for field in fields:
+        println(field.index, field.name, field.shape, field.shape_tag == TypeBitfieldFieldShape.payload_field, field.width, field.type_info.type_name)
+    list[TypeBitfieldField] aliases = type.bitfield_fields[PacketAlias]()
+    println(list.length[TypeBitfieldField](view aliases))
+    TypeBitfield other = type.bitfield_layout[int64]()
+    println(other.network_order)

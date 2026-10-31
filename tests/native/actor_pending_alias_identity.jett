@@ -1,0 +1,28 @@
+namespace app
+actor Counter:
+    mutable int64 count = 1
+    receive add(amount: int64):
+        count = count + amount
+    receive read responds int64:
+        respond count
+enum Holder:
+    held(worker: Counter)
+function main() returns nothing:
+    Counter worker = spawn Counter()
+    Counter alias = clone worker
+    Counter pending = run clone worker
+    Counter also_pending = run clone worker
+    Counter twice = run clone pending
+    println(worker == alias, worker != alias)
+    Holder first = Holder.held(clone pending)
+    Holder repeated = Holder.held(clone also_pending)
+    Holder deeper = Holder.held(clone twice)
+    Holder ready = Holder.held(clone worker)
+    println(first == repeated, first != repeated, first == deeper, first != deeper, first == ready, first != ready)
+    Counter once = join twice handle error:
+        return println(error)
+    Counter joined = join once handle error:
+        return println(error)
+    send joined.add(9)
+    println(worker == joined, worker != joined, ask worker.read, ask joined.read)
+    return nothing

@@ -1,0 +1,5 @@
+namespace app
+function main() returns nothing:
+    int64 value = math.abs(run 3)
+    trace value
+    return nothing

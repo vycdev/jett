@@ -1,0 +1,49 @@
+namespace app
+type Count = uint8
+struct Packet:
+    data: bytes
+function take(value: bytes) returns nothing:
+    breakpoint
+    return nothing
+actor Worker:
+    receive consume(value: bytes):
+        breakpoint
+        take(value)
+        breakpoint
+
+function branch(flag: bool) returns nothing:
+    bytes item = bytes.from_string("branch")
+    if flag:
+        take(item)
+    breakpoint
+    return nothing
+function main() returns nothing:
+    bytes initial = bytes.from_string("first")
+    bytes moved = initial
+    breakpoint
+    take(moved)
+    breakpoint
+    mutable bytes reused = bytes.from_string("old")
+    take(reused)
+    breakpoint
+    reused = bytes.from_string("new")
+    breakpoint
+    list[bytes] items = list(bytes.from_string("item"))
+    for item in items:
+        breakpoint
+        take(item)
+        breakpoint
+    breakpoint
+    result[bytes, string] failed = fail("failure")
+    bytes absent = failed handle error:
+        breakpoint
+        default bytes.new()
+    breakpoint
+    branch(true)
+    branch(false)
+    Worker worker = spawn Worker()
+    send worker.consume(bytes.from_string("actor"))
+    Count original_count = 7
+    Count copied_count = original_count
+    breakpoint
+    return nothing

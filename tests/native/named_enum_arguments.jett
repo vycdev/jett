@@ -1,0 +1,54 @@
+namespace test
+enum Payload:
+    packet(label: string, numbers: list[int64], amount: int64)
+function numbers(label: string) returns list[int64]:
+    println(label)
+    return list(2, 3)
+function amount(label: string, value: int64) returns int64:
+    println(label)
+    return value
+function text(label: string) returns string:
+    println(label)
+    return label
+function show(value: Payload) returns nothing:
+    match value:
+        packet(label, values, count):
+            println(label, list.length[int64](view values), count)
+    return nothing
+function reordered() returns Payload:
+    return Payload.packet(amount: amount("amount", 7), label: text("label"), numbers: numbers("numbers"))
+function handled() returns Payload:
+    mutable string label = "before"
+    optional[int64] missing = none
+    return(Payload.packet)(numbers: numbers("first"), amount: missing handle:
+        label = "after"
+        println("handler")
+        default 9
+    , label: text(label))
+function early_return() returns Payload:
+    optional[int64] missing = none
+    return Payload.packet(numbers: numbers("allocated"), amount: missing handle:
+        return Payload.packet(label: "returned", numbers: list(0), amount: 11)
+    , label: text("skipped"))
+function build_packet(label: string, values: list[int64], count: int64) returns Payload:
+    return Payload.packet(label, values, count)
+function mixed_arguments() returns nothing:
+    show(Payload.packet(amount: amount("mixed amount", 13), text("mixed label"), numbers("mixed numbers")))
+    Payload piped = text("mixed piped") into Payload.packet(amount: amount("mixed piped amount", 14), numbers("mixed piped numbers"))
+    show(piped)
+    Payload baked = comptime Payload.packet(amount: 15, "mixed baked", list(4))
+    show(baked)
+    show((build_packet)(count: 16, "mixed function", list(4, 5)))
+    Payload function_piped = "mixed function piped" into build_packet(count: 17, list(3))
+    show(function_piped)
+    return nothing
+function main() returns nothing:
+    show(reordered())
+    show(handled())
+    show(early_return())
+    Payload piped = text("piped") into Payload.packet(amount: amount("piped amount", 12), numbers: numbers("piped numbers"))
+    show(piped)
+    Payload baked = comptime Payload.packet(amount: 8, numbers: list(1, 2, 3), label: "baked")
+    show(baked)
+    mixed_arguments()
+    return nothing

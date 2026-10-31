@@ -1,0 +1,5 @@
+namespace app
+function main() returns nothing:
+    result[bytes, string] data = bytes.from_hex(run "6162")
+    trace data
+    return nothing

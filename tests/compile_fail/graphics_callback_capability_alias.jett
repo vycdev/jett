@@ -1,3 +1,5 @@
+# ERROR: E0300
+# The Graphics alias is not the int64 State required by render.
 # ERROR: E0372
 namespace app
 type Display = Graphics

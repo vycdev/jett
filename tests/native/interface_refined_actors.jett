@@ -1,0 +1,94 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+actor Counter:
+    mutable int64 count = 1
+    receive add(amount: int64):
+        count = count + amount
+    receive read responds int64:
+        respond count
+type Selected = Counter where true
+type Again = Selected where true
+implement Named for Counter:
+    function name(view self: Counter) returns string:
+        return "counter"
+implement Named for Selected:
+    function name(view self: Selected) returns string:
+        return "selected"
+implement Named for Again:
+    function name(view self: Again) returns string:
+        return "again"
+struct Holder:
+    worker: Selected
+function copy_holder(source: Holder) returns result[Holder, string]:
+    mutable TypeConstruction builder = type.construct_start[Holder]()
+    for field in type.fields[Holder]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[Holder, Field](view source, view field)
+            builder = type.construct_put[Holder, Field](builder, view field, value) handle error:
+                return fail(error)
+    return type.construct_finish[Holder](builder)
+function inspect(worker: Selected) returns int64:
+    Counter base = coarsen worker
+    send base.add(2)
+    return ask base.read
+function internal() returns int64:
+    Counter base = spawn Counter()
+    Selected selected = base handle error:
+        return -1
+    return inspect(selected)
+function erased_tasks(worker: Selected) returns nothing:
+    Named erased = worker
+    Named later = run run erased
+    trace later
+    Named inner = join later handle error:
+        return println(error)
+    Named ready = join inner handle error:
+        return println(error)
+    println(Named.name(view ready))
+    return nothing
+type Rejected = Counter where false
+struct RejectedHolder:
+    worker: Rejected
+function reject_pending() returns nothing:
+    Counter pending = run spawn Counter()
+    RejectedHolder holder = RejectedHolder(worker: pending) handle error:
+        return println(error)
+    trace holder
+    return nothing
+function main() returns nothing:
+    Counter base = spawn Counter()
+    Selected selected = clone base handle error:
+        return println(error)
+    Again again = clone selected handle error:
+        return println(error)
+    println(Named.name(view base), Named.name(view selected), Named.name(view again))
+    Holder holder = Holder(worker: clone selected) handle error:
+        return println(error)
+    println(inspect(holder.worker))
+    println(ask base.read)
+    Again later = run clone again
+    Again ready = join later handle error:
+        return println(error)
+    Selected parent = coarsen ready
+    println(Named.name(view parent), inspect(parent))
+    list[Named] mixed = list(clone base, clone selected, again)
+    for item in mixed:
+        println(Named.name(view item))
+    Selected pending = run run clone selected
+    Holder pending_holder = Holder(worker: pending) handle error:
+        return println(error)
+    Holder copied = copy_holder(pending_holder) handle error:
+        return println(error)
+    trace copied
+    Selected inner = join copied.worker handle error:
+        return println(error)
+    Selected restored = join inner handle error:
+        return println(error)
+    println(Named.name(view restored))
+    println(inspect(restored))
+    println(ask base.read)
+    erased_tasks(clone selected)
+    reject_pending()
+    println(internal(), comptime internal())
+    return nothing

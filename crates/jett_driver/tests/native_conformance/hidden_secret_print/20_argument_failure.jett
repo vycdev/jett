@@ -1,0 +1,20 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+struct Hidden:
+    token: secret[string]
+implement Named for Hidden:
+    function name(view self: Hidden) returns string:
+        return "hidden"
+function argument() returns Named:
+    print("argument:")
+    return Hidden(token: "argument-secret")
+function failed() returns int64:
+    println("failing")
+    string rejected = string.repeat("ab", 9223372036854775807)
+    return string.char_count(rejected)
+function main() returns nothing:
+    print("before:")
+    println(argument(), failed())
+    println("unreachable")
+    return nothing

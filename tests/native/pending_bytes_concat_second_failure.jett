@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    bytes second = run bytes.from_string("b")
+    bytes joined = bytes.concat(bytes.from_string("a"), second)
+    trace joined
+    return nothing

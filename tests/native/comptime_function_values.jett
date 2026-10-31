@@ -1,0 +1,26 @@
+namespace test
+function increment(value: int64) returns int64:
+    return value + 1
+function double(value: int64) returns int64:
+    return value * 2
+function choose(increment_first: bool) returns function(int64) returns int64:
+    if increment_first:
+        return increment
+    return double
+function make_shift() returns function(int64) returns int64:
+    return function(value: int64) returns int64: return value + 4
+function main() returns nothing:
+    function(int64) returns int64 baked = comptime increment
+    println(baked(7))
+    function(int64) returns int64 chosen = comptime choose(false)
+    println(chosen(7))
+    list[function(int64) returns int64] callbacks = comptime list(increment, double)
+    optional[function(int64) returns int64] last = list.get[function(int64) returns int64](view callbacks, 1)
+    function(int64) returns int64 selected = last handle:
+        default increment
+    println(selected(7))
+    function(int64) returns int64 inline = comptime function(value: int64) returns int64: return value + 3
+    println(inline(7))
+    function(int64) returns int64 from_call = comptime make_shift()
+    println(from_call(7))
+    return nothing

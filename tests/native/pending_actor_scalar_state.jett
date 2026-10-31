@@ -1,0 +1,17 @@
+namespace app
+actor Holder:
+    mutable int64 value = 0
+    receive set(amount: int64):
+        value = amount
+    receive read responds int64:
+        respond value
+function main() returns nothing:
+    Holder holder = spawn Holder()
+    int64 pending = run 7
+    send holder.set(pending)
+    int64 observed = ask holder.read
+    trace observed
+    int64 joined = join observed handle error:
+        return nothing
+    println(joined)
+    return nothing

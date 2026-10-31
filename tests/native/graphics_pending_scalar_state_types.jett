@@ -1,0 +1,27 @@
+namespace app
+function update_flag(state: bool, key: graphics.Key) returns bool:
+    trace state
+    return run state
+function render_flag(view state: bool) returns graphics.Scene:
+    trace state
+    graphics.Color color = graphics.Color(red: 0, green: 0, blue: 0)
+    return graphics.Scene(background: color, rectangles: list.new[graphics.Rect](), texts: list.new[graphics.Text]())
+function update_ratio(state: float64, key: graphics.Key) returns float64:
+    trace state
+    return run state
+function render_ratio(view state: float64) returns graphics.Scene:
+    trace state
+    graphics.Color color = graphics.Color(red: 0, green: 0, blue: 0)
+    return graphics.Scene(background: color, rectangles: list.new[graphics.Rect](), texts: list.new[graphics.Text]())
+function main(display: Graphics, stdout: Stdout) returns nothing:
+    graphics.Config config = graphics.Config(title: "Pending flag", width: 32, height: 32)
+    bool flag = run true
+    graphics.run[bool](view display, config, flag, update_flag, render_flag) handle error:
+        Stdout.write(view stdout, error)
+        return nothing
+    graphics.Config second = graphics.Config(title: "Pending ratio", width: 32, height: 32)
+    float64 ratio = run 1.25
+    graphics.run[float64](view display, second, ratio, update_ratio, render_ratio) handle error:
+        Stdout.write(view stdout, error)
+        return nothing
+    Stdout.write(view stdout, "closed twice\n")

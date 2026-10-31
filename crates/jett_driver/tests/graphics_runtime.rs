@@ -21,7 +21,7 @@ fn graphics_main_receives_authority_and_runs_checked_callbacks_without_a_window(
     )
     .expect("checked graphics callbacks should run through the scripted provider");
     assert_eq!(output.stdout, "closed\n");
-    assert!(output.debug_output.is_empty());
+    assert!(output.debug_events.is_empty());
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn graphics_pipelines_preserve_generic_calls_aliases_and_argument_order() {
     )
     .expect("explicit and inferred graphics pipelines should run through the scripted provider");
     assert_eq!(output.stdout, "closed three times\n");
-    assert!(output.debug_output.is_empty());
+    assert!(output.debug_events.is_empty());
 }
 
 #[test]

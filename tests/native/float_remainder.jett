@@ -1,0 +1,42 @@
+namespace app
+function remainder[T](left: T, right: T) returns T:
+    return left modulo right
+function finite32(view stdout: Stdout, left: float32, right: float32) returns nothing:
+    Stdout.write(view stdout, "{remainder[float32](left, right)} {remainder[float32](-left, right)} {remainder[float32](left, -right)} {remainder[float32](-left, -right)}\n")
+    float32 pending = run remainder[float32](left, right)
+    float32 ready = join pending handle error:
+        return nothing
+    Stdout.write(view stdout, "{ready}\n")
+function finite64(view stdout: Stdout, left: float64, right: float64) returns nothing:
+    Stdout.write(view stdout, "{remainder[float64](left, right)} {remainder[float64](-left, right)} {remainder[float64](left, -right)} {remainder[float64](-left, -right)}\n")
+    float64 pending = run remainder[float64](left, right)
+    float64 ready = join pending handle error:
+        return nothing
+    Stdout.write(view stdout, "{ready}\n")
+function edges32(view stdout: Stdout, zero: float32) returns nothing:
+    float32 infinity = 1.0 / zero
+    float32 nan = zero / zero
+    float32 zero_divisor = remainder[float32](5.5, zero)
+    float32 infinite_dividend = remainder[float32](infinity, 2.0)
+    float32 nan_dividend = remainder[float32](nan, 2.0)
+    float32 nan_divisor = remainder[float32](2.0, nan)
+    float32 negative_zero = remainder[float32](-zero, 2.0)
+    Stdout.write(view stdout, "{zero_divisor != zero_divisor} {infinite_dividend != infinite_dividend} {nan_dividend != nan_dividend} {nan_divisor != nan_divisor} {1.0 / negative_zero < 0.0} {remainder[float32](5.5, infinity) == 5.5}\n")
+function edges64(view stdout: Stdout, zero: float64) returns nothing:
+    float64 infinity = 1.0 / zero
+    float64 nan = zero / zero
+    float64 zero_divisor = remainder[float64](5.5, zero)
+    float64 infinite_dividend = remainder[float64](infinity, 2.0)
+    float64 nan_dividend = remainder[float64](nan, 2.0)
+    float64 nan_divisor = remainder[float64](2.0, nan)
+    float64 negative_zero = remainder[float64](-zero, 2.0)
+    Stdout.write(view stdout, "{zero_divisor != zero_divisor} {infinite_dividend != infinite_dividend} {nan_dividend != nan_dividend} {nan_divisor != nan_divisor} {1.0 / negative_zero < 0.0} {remainder[float64](5.5, infinity) == 5.5}\n")
+function main(stdout: Stdout) returns nothing:
+    finite32(view stdout, 5.5, 2.0)
+    finite64(view stdout, 5.5, 2.0)
+    edges32(view stdout, 0.0)
+    edges64(view stdout, 0.0)
+    float32 baked32 = comptime remainder[float32](5.5, 2.0)
+    float64 baked64 = comptime remainder[float64](-5.5, 2.0)
+    float32 rounded = comptime remainder[float32](5.3, 0.2)
+    Stdout.write(view stdout, "{baked32} {baked64}\n{remainder[float32](5.3, 0.2) == rounded}\n")

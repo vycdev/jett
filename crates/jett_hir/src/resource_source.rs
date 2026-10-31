@@ -1,0 +1,532 @@
+//! Original checked HIR and type meanings; raw lowering cannot mint this archive.
+use crate::{
+    Expression, Function, FunctionId, FunctionIdentity, Program, ReflectedFieldDispatchProof,
+    ReflectedTypeArm, ResourceHookRef, ResourceManifest,
+};
+use jett_comptime::CheckedRequiredValue;
+use jett_typecheck::CheckedResourceProgram;
+use jett_types::{Type, TypeId, TypeInterner};
+use std::{collections::HashMap, sync::Arc};
+
+#[derive(Debug)]
+enum Nominal {
+    Struct(jett_types::StructId, jett_types::StructDef),
+    Bitfield(jett_types::BitfieldId, jett_types::BitfieldDef),
+    Enum(jett_types::EnumId, jett_types::EnumDef),
+    Interface(jett_types::InterfaceId, jett_types::InterfaceDef),
+    Actor(jett_types::ActorId, jett_types::ActorDef),
+    Machine(jett_types::MachineId, jett_types::MachineDef),
+}
+impl Nominal {
+    fn capture(types: &TypeInterner, ty: &Type) -> Option<Self> {
+        Some(match ty {
+            Type::Struct(id) => Self::Struct(*id, types.resolve_struct(*id).clone()),
+            Type::Bitfield(id) => Self::Bitfield(*id, types.resolve_bitfield(*id).clone()),
+            Type::Enum(id) => Self::Enum(*id, types.resolve_enum(*id).clone()),
+            Type::Interface(id) => Self::Interface(*id, types.resolve_interface(*id).clone()),
+            Type::Actor(id) => Self::Actor(*id, types.resolve_actor(*id).clone()),
+            Type::Machine(id) | Type::MachineState { machine: id, .. } => {
+                Self::Machine(*id, types.resolve_machine(*id).clone())
+            }
+            _ => return None,
+        })
+    }
+    fn unchanged(&self, types: &TypeInterner) -> bool {
+        match self {
+            Self::Struct(id, original) => types.resolve_struct(*id) == original,
+            Self::Bitfield(id, original) => types.resolve_bitfield(*id) == original,
+            Self::Enum(id, original) => types.resolve_enum(*id) == original,
+            Self::Interface(id, original) => types.resolve_interface(*id) == original,
+            Self::Actor(id, original) => types.resolve_actor(*id) == original,
+            Self::Machine(id, original) => types.resolve_machine(*id) == original,
+        }
+    }
+}
+#[derive(Debug)]
+struct TypeRow {
+    ty: TypeId,
+    original: Type,
+    arguments: Vec<TypeId>,
+    nominal: Option<Nominal>,
+}
+#[derive(Debug)]
+struct Original {
+    checked: Arc<CheckedResourceProgram>,
+    manifest: ResourceManifest,
+    functions: Vec<Function>,
+    equality_methods: HashMap<TypeId, FunctionId>,
+    types: Vec<TypeRow>,
+    exported: Vec<FunctionId>,
+    reflected_fields: Vec<ReflectedFieldDispatchProof>,
+    inline_sources: Vec<crate::inline_functions::InlineSource>,
+}
+
+/// A checked required occurrence and the expression derived from its opaque value.
+#[derive(Clone)]
+pub struct RequiredMaterialization {
+    pub(crate) function: FunctionId,
+    pub(crate) identity: FunctionIdentity,
+    pub(crate) original: Expression,
+    pub(crate) current: Expression,
+    pub(crate) hook: Option<ResourceHookRef>,
+    pub(crate) proof: CheckedRequiredValue,
+    pub(crate) projection: Option<jett_comptime::CheckedActorGraphHook>,
+}
+impl std::fmt::Debug for RequiredMaterialization {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RequiredMaterialization")
+            .field("function", &self.function)
+            .field("original", &self.original)
+            .field("current", &self.current)
+            .finish()
+    }
+}
+impl RequiredMaterialization {
+    pub fn function(&self) -> FunctionId {
+        self.function
+    }
+    pub fn identity(&self) -> &FunctionIdentity {
+        &self.identity
+    }
+    pub fn original(&self) -> &Expression {
+        &self.original
+    }
+    pub fn current(&self) -> &Expression {
+        &self.current
+    }
+    pub fn hook(&self) -> Option<&ResourceHookRef> {
+        if let Some(projection) = &self.projection {
+            let hook = self.hook.as_ref()?;
+            let original = projection
+                .checked_hook(&projection.required().checked_program())
+                .ok()?;
+            if hook.definition() != original.definition
+                || hook.function_type() != projection.signature()
+            {
+                return None;
+            }
+        }
+        self.hook.as_ref()
+    }
+}
+#[derive(Debug)]
+pub(crate) struct Materialized {
+    pub(crate) functions: Vec<Function>,
+    pub(crate) values: Vec<RequiredMaterialization>,
+    pub(crate) required_only: Vec<FunctionId>,
+}
+/// Clone shares immutable records; empty/default supplies no Source authority.
+#[derive(Clone, Default)]
+pub struct ResourceSourceArchive {
+    data: Option<Arc<Original>>,
+    execution: Option<Arc<Materialized>>,
+    pub(crate) reflected_values: Option<Arc<super::reflected_callable::baked::Transition>>,
+    pub(crate) graph_values: Option<Arc<super::actor_graph::Transition>>,
+    pub(crate) native_suites: Option<Arc<super::native_suite_transition::Transition>>,
+    pub(crate) required_cache: Option<Arc<jett_comptime::ExplicitComptimeValues>>,
+}
+impl std::fmt::Debug for ResourceSourceArchive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResourceSourceArchive")
+            .field("authenticated", &self.data.is_some())
+            .finish()
+    }
+}
+fn same_optional_arc<T>(left: &Option<Arc<T>>, right: &Option<Arc<T>>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+        _ => false,
+    }
+}
+impl PartialEq for ResourceSourceArchive {
+    fn eq(&self, other: &Self) -> bool {
+        // Exhaustive patterns make new archive fields require an identity audit.
+        // Hidden views on an empty archive still participate in the comparison.
+        let Self {
+            data,
+            execution,
+            reflected_values,
+            graph_values,
+            native_suites,
+            required_cache,
+        } = self;
+        let Self {
+            data: other_data,
+            execution: other_execution,
+            reflected_values: other_reflected_values,
+            graph_values: other_graph_values,
+            native_suites: other_native_suites,
+            required_cache: other_required_cache,
+        } = other;
+        same_optional_arc(data, other_data)
+            && same_optional_arc(execution, other_execution)
+            && same_optional_arc(reflected_values, other_reflected_values)
+            && same_optional_arc(graph_values, other_graph_values)
+            && same_optional_arc(native_suites, other_native_suites)
+            && same_optional_arc(required_cache, other_required_cache)
+    }
+}
+impl Eq for ResourceSourceArchive {}
+impl ResourceSourceArchive {
+    pub fn empty() -> Self {
+        Self::default()
+    }
+    // Called only at successful completion of the original checked lowering.
+    pub(crate) fn checked(
+        program: &Program,
+        checked: &Arc<CheckedResourceProgram>,
+        types: &TypeInterner,
+        inline_sources: Vec<crate::inline_functions::InlineSource>,
+    ) -> Self {
+        let rows = types
+            .type_ids()
+            .map(|ty| TypeRow {
+                ty,
+                original: types.resolve(ty).clone(),
+                arguments: types.nominal_type_arguments(ty).to_vec(),
+                nominal: Nominal::capture(types, types.resolve(ty)),
+            })
+            .collect();
+        Self {
+            data: Some(Arc::new(Original {
+                checked: checked.clone(),
+                manifest: program.resource_manifest.clone(),
+                functions: program.functions.clone(),
+                equality_methods: program.equality_methods.clone(),
+                types: rows,
+                exported: super::resource_materialization::exported_functions(program, checked),
+                reflected_fields: super::reflected_field_sources::capture(program, checked),
+                inline_sources,
+            })),
+            execution: None,
+            reflected_values: None,
+            graph_values: None,
+            native_suites: None,
+            required_cache: None,
+        }
+    }
+    /// Original checked functions stay immutable; this view contains only checked replacements.
+    pub fn execution_functions(&self) -> &[Function] {
+        if let Some(suites) = &self.native_suites {
+            return suites.functions();
+        }
+        if let Some(view) = &self.execution {
+            return view.functions.as_slice();
+        }
+        self.reflected_values.as_ref().map_or_else(
+            || self.functions(),
+            |transition| transition.current_functions(),
+        )
+    }
+    /// Exact checked session identity; equal source text cannot replace it.
+    pub fn belongs_to(&self, checked: &Arc<CheckedResourceProgram>) -> bool {
+        self.data
+            .as_ref()
+            .is_some_and(|data| Arc::ptr_eq(&data.checked, checked))
+    }
+    pub fn required_materializations(&self) -> &[RequiredMaterialization] {
+        self.execution
+            .as_ref()
+            .map_or(&[], |view| view.values.as_slice())
+    }
+    /// Graph metadata handlers are selected through the retained constructor's
+    /// actor declaration and handler spans, never a current callable type/name.
+    pub fn graph_metadata_actor_handlers(&self) -> Vec<FunctionId> {
+        let Some(data) = &self.data else {
+            return Vec::new();
+        };
+        let mut spans = Vec::new();
+        for row in self.required_materializations() {
+            let Some(graph) = row.proof.actor_graph() else {
+                continue;
+            };
+            if !row.proof.belongs_to(&data.checked) || !graph.belongs_to(&data.checked) {
+                continue;
+            }
+            for node in graph.nodes() {
+                let name = data.checked.checked().interner.type_name(node.ty());
+                for item in &data.checked.module().items {
+                    let jett_parser::ast::Item::Actor(actor) = item else {
+                        continue;
+                    };
+                    let declarations = data
+                        .checked
+                        .resolved()
+                        .scope_table
+                        .definitions
+                        .iter()
+                        .filter(|definition| {
+                            definition.kind == jett_resolve::DefKind::Actor
+                                && definition.span == actor.name.span
+                                && definition.name == name
+                        })
+                        .count();
+                    if declarations == 1 {
+                        spans.extend(actor.handlers.iter().map(|handler| handler.span));
+                    }
+                }
+            }
+        }
+        self.execution_functions()
+            .iter()
+            .filter(|function| {
+                function.identity.declaration.kind == crate::DeclarationKind::ActorHandler
+                    && spans.contains(&function.span)
+            })
+            .map(|function| function.id)
+            .collect()
+    }
+    pub fn required_only_function_ids(&self) -> &[FunctionId] {
+        self.execution
+            .as_ref()
+            .map_or(&[], |view| view.required_only.as_slice())
+    }
+    pub fn exported_function_ids(&self) -> &[FunctionId] {
+        self.data
+            .as_ref()
+            .map_or(&[], |data| data.exported.as_slice())
+    }
+    pub fn materialized_hook(
+        &self,
+        function: FunctionId,
+        original: &Expression,
+        current: &Expression,
+    ) -> Option<&ResourceHookRef> {
+        self.required_materializations()
+            .iter()
+            .find(|row| {
+                row.function == function
+                    && super::resource_materialization::expression_equal(&row.original, original)
+                    && super::resource_materialization::expression_equal(&row.current, current)
+            })?
+            .hook()
+    }
+    pub(crate) fn checked_program(&self) -> Option<&Arc<CheckedResourceProgram>> {
+        self.data.as_ref().map(|data| &data.checked)
+    }
+    /// Bind an extracted function to its physical checked inline node and
+    /// retained enclosing callable. All records are minted during original lowering.
+    pub(crate) fn original_inline_root(
+        &self,
+        function: &Function,
+        expression: &Expression,
+        source: &jett_parser::ast::Expr,
+        checked: &Arc<CheckedResourceProgram>,
+    ) -> Option<&Function> {
+        let data = self.data.as_ref()?;
+        if !Arc::ptr_eq(&data.checked, checked) {
+            return None;
+        }
+        let mut matches = data.inline_sources.iter().filter(|row| {
+            row.function == function.id && row.source_node == std::ptr::from_ref(source).addr()
+        });
+        let row = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        self.original_required_function(function, expression, checked)?;
+        data.functions.iter().find(|f| f.id == row.root)
+    }
+
+    pub(crate) fn original_required_function(
+        &self,
+        function: &Function,
+        expression: &Expression,
+        checked: &Arc<CheckedResourceProgram>,
+    ) -> Option<&Function> {
+        let data = self.data.as_ref()?;
+        if !Arc::ptr_eq(&data.checked, checked) {
+            return None;
+        }
+        let original = data.functions.iter().find(|f| f.id == function.id)?;
+        // The caller separately authenticates the complete table transition.
+        // This join additionally checks the entire extracted header and exact
+        // original operand; modified bodies cannot forge extraction provenance.
+        let mut header = function.clone();
+        header.body = original.body.clone();
+        if !super::resource_materialization::functions_equal(
+            std::slice::from_ref(&header),
+            std::slice::from_ref(original),
+        ) {
+            return None;
+        }
+        let mut body = original.body.clone();
+        let mut occurrences = 0;
+        super::resource_materialization::walk_block(&mut body, &mut |candidate| {
+            if super::resource_materialization::expression_equal(candidate, expression) {
+                occurrences += 1;
+            }
+            Ok(())
+        })
+        .ok()?;
+        if occurrences != 1 {
+            return None;
+        }
+        Some(original)
+    }
+    pub(crate) fn install_materialized(&mut self, view: Materialized) {
+        self.execution = Some(Arc::new(view));
+    }
+    /// A constructor-authenticated generated suite, distinct from original Source.
+    pub fn native_suite_function(&self, id: FunctionId) -> Option<&Function> {
+        self.native_suites.as_ref()?.function(id)
+    }
+    /// Exact whole-wrapper preorder occurrence; duplicate trial values stay distinct.
+    pub fn native_suite_call(
+        &self,
+        owner: FunctionId,
+        expression: &Expression,
+        ordinal: usize,
+    ) -> Option<&crate::CheckedNativeSuiteCall> {
+        self.native_suites
+            .as_ref()?
+            .call(owner, expression, ordinal)
+    }
+    pub fn functions(&self) -> &[Function] {
+        self.data
+            .as_ref()
+            .map_or(&[], |data| data.functions.as_slice())
+    }
+    pub fn manifest(&self) -> Option<&ResourceManifest> {
+        self.data.as_ref().map(|data| &data.manifest)
+    }
+    pub fn equality_methods(&self) -> Option<&HashMap<TypeId, FunctionId>> {
+        self.data.as_ref().map(|data| &data.equality_methods)
+    }
+    /// Readonly eligibility for an original reflected-field proof-only witness.
+    /// This does not admit operands or grant a Resource execution family or scope.
+    pub fn has_reflected_field_dispatch(&self, function: FunctionId) -> bool {
+        self.data.as_ref().is_some_and(|data| {
+            data.reflected_fields.iter().any(|proof| {
+                proof.function() == function
+                    && proof.belongs_to(&data.checked)
+                    && proof.validate_original()
+            })
+        })
+    }
+
+    /// Exact original dispatch operands select a constructor-only Source proof.
+    /// Runtime TypeInfo values, field names, and caller-made arms grant no authority.
+    pub fn get_reflected_field_dispatch(
+        &self,
+        function: FunctionId,
+        type_info: &Expression,
+        arms: &[ReflectedTypeArm],
+    ) -> Option<&ReflectedFieldDispatchProof> {
+        let data = self.data.as_ref()?;
+        let mut matches = data.reflected_fields.iter().filter(|proof| {
+            proof.function() == function
+                && proof.belongs_to(&data.checked)
+                && proof.matches(data.functions.as_slice(), type_info, arms)
+        });
+        let proof = matches.next()?;
+        matches.next().is_none().then_some(proof)
+    }
+
+    /// Native normalization starts only from the unchanged checked HIR view.
+    pub fn validate_current(&self, program: &Program, types: &TypeInterner) -> Result<(), String> {
+        self.validate_types(types)?;
+        let data = self
+            .data
+            .as_ref()
+            .ok_or("Resource ownership has no original checked HIR archive")?;
+        if self != &program.resource_source
+            || self.manifest() != Some(&program.resource_manifest)
+            || self.equality_methods() != Some(&program.equality_methods)
+            || !super::resource_materialization::functions_equal(
+                self.execution_functions(),
+                &program.functions,
+            )
+            || data
+                .reflected_fields
+                .iter()
+                .any(|proof| !proof.belongs_to(&data.checked) || !proof.validate_original())
+        {
+            return Err(
+                "Resource original checked HIR or reflected-field Source proof changed".into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Additional canonical IDs cannot alter any original type's meaning.
+    /// Structural/backend type validation remains mandatory before this check.
+    pub fn validate_types(&self, types: &TypeInterner) -> Result<(), String> {
+        let data = self
+            .data
+            .as_ref()
+            .ok_or("Resource ownership has no original checked HIR archive")?;
+        if types.len() < data.types.len() {
+            return Err("Resource original checked type archive lost an original TypeId".into());
+        }
+        for row in &data.types {
+            if types.resolve(row.ty) != &row.original
+                || types.nominal_type_arguments(row.ty) != row.arguments.as_slice()
+            {
+                return Err(
+                    "Resource original checked type meaning or nominal metadata changed".into(),
+                );
+            }
+            if !types.contains_nominal_definition(types.resolve(row.ty)) {
+                return Err(
+                    "Resource original checked type archive has a missing nominal definition"
+                        .into(),
+                );
+            }
+            if row
+                .nominal
+                .as_ref()
+                .is_some_and(|nominal| !nominal.unchanged(types))
+            {
+                return Err(
+                    "Resource original checked type meaning or nominal metadata changed".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jett_common::{FileId, SourceOrigin};
+    #[test]
+    fn original_unused_nominal_row_with_missing_table_returns_error() {
+        for release in [false, true] {
+            let file = FileId::new(0);
+            let original = Arc::new(
+                jett_typecheck::CheckedResourceProgram::prepare(
+                    jett_parser::parse(
+                        "function main() returns nothing:\n    return nothing\n",
+                        file,
+                    ),
+                    HashMap::from([(file, SourceOrigin::Project)]),
+                    &[],
+                    jett_typecheck::CheckOptions { release },
+                )
+                .unwrap(),
+            );
+            let program = crate::lower_checked_resource_program(&original).unwrap();
+            let types = &original.checked().interner;
+            assert!(
+                types
+                    .type_ids()
+                    .any(|ty| matches!(types.resolve(ty), Type::Enum(_))),
+                "original unused reflection enum row"
+            );
+            let mut missing = TypeInterner::new();
+            for ty in types.type_ids() {
+                assert_eq!(missing.intern(types.resolve(ty).clone()), ty);
+            }
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                program.resource_source.validate_types(&missing)
+            }));
+            assert_eq!(
+                result.unwrap().unwrap_err(),
+                "Resource original checked type archive has a missing nominal definition"
+            );
+        }
+    }
+}

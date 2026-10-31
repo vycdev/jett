@@ -29,6 +29,7 @@ impl TypeChecker<'_> {
             }
             match self.interner.resolve(ty) {
                 Type::Error
+                | Type::Capability(_)
                 | Type::TypeConstruction
                 | Type::Function { .. }
                 | Type::Resource(_)
@@ -86,7 +87,8 @@ impl TypeChecker<'_> {
                 | Type::String
                 | Type::Bool
                 | Type::Bytes
-                | Type::Nothing => {}
+                | Type::Nothing
+                | Type::Never => {}
             }
         }
         false
@@ -183,7 +185,9 @@ impl TypeChecker<'_> {
             Expr::Ident(_) | Expr::FieldAccess(_, _, _) => {
                 self.audit_graphics_reference(expr, None);
                 if inline
-                    && self.graphics_audit_type(expr.span()) == Some(TypeInterner::ERROR)
+                    && self.graphics_audit_type(expr.span()).is_some_and(|ty| {
+                        matches!(self.interner.resolve(ty), Type::Capability(_) | Type::Error)
+                    })
                     && !self.graphics_rejected_capture_spans.contains(&expr.span())
                 {
                     self.sink.emit(errors::graphics_contract(
@@ -287,32 +291,29 @@ impl TypeChecker<'_> {
     }
 
     fn audit_graphics_equality(&mut self, operand: &Expr) {
-        let Some(mut owner) = self.graphics_audit_type(operand.span()) else {
+        let Some(owner) = self.graphics_audit_type(operand.span()) else {
             return;
         };
         // Equality on a runtime struct calls Equatable.equals even though the
         // source contains no Call node. Use this concrete instantiation's
         // operand type, not the last type recorded for the generic source span.
-        while let Type::Secret(inner) | Type::Refinement { base: inner, .. } =
-            self.interner.resolve(owner)
-        {
-            owner = *inner;
-        }
-        if !matches!(self.interner.resolve(owner), Type::Struct(_)) {
-            return;
-        }
         let Some(&interface) = self.named_types.get("Equatable") else {
             return;
         };
-        if let Some(&index) =
-            self.interface_method_definitions
-                .get(&(interface, owner, "equals".to_string()))
-            && let Some(function) = self
-                .graphics_method_definitions
-                .get(&self.method_definitions[index].source_span)
-                .cloned()
-        {
-            self.audit_graphics_function(&function, None);
+        for owner in self.aggregate_equality_owners(owner) {
+            if !matches!(self.interner.resolve(owner), Type::Struct(_)) {
+                continue;
+            }
+            if let Some(&index) =
+                self.interface_method_definitions
+                    .get(&(interface, owner, "equals".to_string()))
+                && let Some(function) = self
+                    .graphics_method_definitions
+                    .get(&self.method_definitions[index].source_span)
+                    .cloned()
+            {
+                self.audit_graphics_function(&function, None);
+            }
         }
     }
 
@@ -329,7 +330,12 @@ impl TypeChecker<'_> {
         }
         if let Some(ty) = self.graphics_audit_type(callee.span())
             && let Type::Function { params, .. } = self.interner.resolve(ty)
-            && params.contains(&TypeInterner::ERROR)
+            && params.iter().any(|param| {
+                matches!(
+                    self.interner.resolve(*param),
+                    Type::Capability(_) | Type::Error
+                )
+            })
         {
             self.sink.emit(errors::graphics_contract(
                 "callbacks cannot call function values with opaque capability parameters",
@@ -391,7 +397,8 @@ impl TypeChecker<'_> {
                     .enumerate()
                     .filter_map(|(index, instantiation)| {
                         (instantiation.definition == call.definition
-                            && instantiation.concrete_args == call.concrete_args)
+                            && instantiation.concrete_args == call.concrete_args
+                            && instantiation.specialization == call.specialization)
                             .then_some(index)
                     })
                     .collect::<Vec<_>>();

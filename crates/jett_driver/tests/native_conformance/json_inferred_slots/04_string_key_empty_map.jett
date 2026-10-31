@@ -1,0 +1,7 @@
+namespace app
+function encode[T](view entries: map[string, T]) returns string:
+    use json
+    return json.serialize_public[map[string, T]](view entries)
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "{encode(view map())}\n")
+    return nothing

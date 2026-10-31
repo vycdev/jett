@@ -1,0 +1,25 @@
+namespace app
+function copied_int(view stdout: Stdout) returns nothing:
+    optional[int64] source = some(3)
+    mutable int64 copied = view((view source) handle:
+        return nothing
+    )
+    copied = copied + 1
+    int64 original = source handle:
+        return nothing
+    Stdout.write(view stdout, "integer:{copied}:{original}\n")
+    return nothing
+function copied_string(view stdout: Stdout) returns nothing:
+    result[string, string] source = ok("kept")
+    mutable string copied = view((view source) handle error:
+        return nothing
+    )
+    copied = "changed"
+    string original = source handle error:
+        return nothing
+    Stdout.write(view stdout, "string:{copied}:{original}\n")
+    return nothing
+function main(stdout: Stdout) returns nothing:
+    copied_int(view stdout)
+    copied_string(view stdout)
+    return nothing

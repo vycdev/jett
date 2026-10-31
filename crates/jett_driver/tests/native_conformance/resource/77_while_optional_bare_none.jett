@@ -1,0 +1,21 @@
+namespace app
+function observe_optional(view net: Network, view outcome: optional[resource_probe.TestHandle]) returns int64:
+    use resource_probe
+    mutable int64 remaining = 2
+    mutable int64 total = 0
+    while remaining > 0:
+        resource_probe.TestHandle token = view((view outcome) handle:
+            return 0
+        )
+        int64 observed = resource_probe.borrow(view net, view token) handle error:
+            return 0
+        total = total + observed
+        remaining = remaining - 1
+    return total
+export function main(net: Network) returns nothing:
+    use resource_probe
+    optional[resource_probe.TestHandle] held = none
+    int64 observed = observe_optional(view net, held)
+    if observed != 0:
+        int64 ignored = resource_probe.terminal_label()
+    return nothing

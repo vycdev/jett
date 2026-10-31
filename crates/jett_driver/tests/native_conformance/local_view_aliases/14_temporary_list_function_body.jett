@@ -1,0 +1,50 @@
+namespace app
+struct Packet:
+    numbers: list[int64]
+    names: list[string]
+function number_text(item: optional[int64]) returns string:
+    int64 selected = item handle:
+        return "none"
+    return string.from_int64(selected)
+function name_text(item: optional[string]) returns string:
+    string selected = item handle:
+        return "none"
+    return selected
+function make_packet(view stdout: Stdout, label: string) returns Packet:
+    Stdout.write(view stdout, "make:{label}\n")
+    return Packet(numbers: list(2, 3, 5), names: list("Ada", "Lin"))
+mutual:
+    function count[T](view values: list[T]) returns int64
+function count[T](view values: list[T]) returns int64:
+    return list.length[T](view values)
+function scenario(view stdout: Stdout) returns int64:
+    list[int64] numbers = view make_packet(view stdout, "numbers").numbers
+    list[int64] forwarded = numbers
+    int64 count_value = count[int64](view forwarded)
+    int64 inferred = count(view numbers)
+    int64 total = list.sum[int64](view numbers)
+    bool empty = list.is_empty[int64](view forwarded)
+    Stdout.write(view stdout, "numbers:{count_value}:{inferred}:{total}:{empty}\n")
+    optional[int64] first = list.get[int64](view numbers, 0)
+    optional[int64] negative = list.get[int64](view numbers, -1)
+    optional[int64] outside = list.get[int64](view numbers, 3)
+    Stdout.write(view stdout, "first:{number_text(first)}\n")
+    Stdout.write(view stdout, "negative:{number_text(negative)}\n")
+    Stdout.write(view stdout, "outside:{number_text(outside)}\n")
+    list[int64] copied = clone numbers
+    list[int64] extended = list.append[int64](copied, 7)
+    int64 independent = list.sum[int64](view extended)
+    Stdout.write(view stdout, "clone:{independent}:{list.sum[int64](view numbers)}\n")
+    return total
+function names(view stdout: Stdout) returns nothing:
+    list[string] names = view make_packet(view stdout, "names").names
+    int64 count_value = count[string](view names)
+    optional[string] first = list.get[string](view names, 0)
+    Stdout.write(view stdout, "names:{count_value}\n")
+    Stdout.write(view stdout, "name:{name_text(first)}\n")
+    return nothing
+function main(stdout: Stdout) returns nothing:
+    int64 total = scenario(view stdout)
+    Stdout.write(view stdout, "result:{total}\n")
+    names(view stdout)
+    return nothing

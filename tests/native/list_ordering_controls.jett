@@ -1,0 +1,145 @@
+namespace app
+function signed_report() returns string:
+    list[int8] descending = list(7, -2)
+    bool before = list.is_sorted[int8](view descending)
+    list[list[int8]] rows = list(list(7, 1), list(-2, 2))
+    list[list[int8]] ordered = list.sort_by_index[int8](rows, 0)
+    mutable string markers = ""
+    for row in view ordered:
+        int8 marker = list.get[int8](view row, 1) handle: default 0
+        markers = "{markers}{marker},"
+    return "int8:{before}:{markers}"
+function unsigned_report() returns string:
+    list[uint8] descending = list(255, 2)
+    bool before = list.is_sorted[uint8](view descending)
+    list[list[uint8]] rows = list(list(255, 1), list(2, 2))
+    list[list[uint8]] ordered = list.sort_by_index[uint8](rows, 0)
+    mutable string markers = ""
+    for row in view ordered:
+        uint8 marker = list.get[uint8](view row, 1) handle: default 0
+        markers = "{markers}{marker},"
+    return "uint8:{before}:{markers}"
+function decimal_report() returns string:
+    list[float32] descending = list(3.5, -2.25)
+    bool before = list.is_sorted[float32](view descending)
+    list[list[float32]] rows = list(list(3.5, 1.0), list(-2.25, 2.0))
+    list[list[float32]] ordered = list.sort_by_index[float32](rows, 0)
+    mutable string markers = ""
+    for row in view ordered:
+        float32 marker = list.get[float32](view row, 1) handle: default 0.0
+        markers = "{markers}{marker},"
+    return "float32:{before}:{markers}"
+function wide_unsigned_report() returns string:
+    list[uint64] descending = list(18446744073709551615, 9223372036854775808)
+    bool before = list.is_sorted[uint64](view descending)
+    list[list[uint64]] rows = list(list(18446744073709551615, 1), list(9223372036854775808, 2))
+    list[list[uint64]] ordered = list.sort_by_index[uint64](rows, 0)
+    mutable string markers = ""
+    for row in view ordered:
+        uint64 marker = list.get[uint64](view row, 1) handle: default 0
+        markers = "{markers}{marker},"
+    return "uint64:{before}:{markers}"
+function float32_report() returns string:
+    float32 zero = 0.0
+    float32 one = 1.0
+    float32 nan = zero / zero
+    float32 positive = one / zero
+    float32 negative = -positive
+    list[float32] nan_left = list(nan, one)
+    list[float32] nan_right = list(one, nan)
+    list[float32] empty = list()
+    list[float32] singleton = list(nan)
+    list[float32] infinities = list(negative, zero, positive)
+    list[float32] reversed = list(positive, negative)
+    bool left = list.is_sorted[float32](view nan_left)
+    bool right = list.is_sorted[float32](view nan_right)
+    bool no_pair = list.is_sorted[float32](view empty)
+    bool one_value = list.is_sorted[float32](view singleton)
+    bool ready = list.is_sorted[float32](view infinities)
+    bool backwards = list.is_sorted[float32](view reversed)
+    list[float32] ordered = list.sort[float32](nan_left)
+    float32 first = list.first[float32](view ordered) handle: default 0.0
+    float32 last = list.last[float32](view ordered) handle: default 0.0
+    return "f32:nan:{left}:{right}:{no_pair}:{one_value};infinity:{ready}:{backwards};sort:{first != first}:{last == one}"
+function float64_report() returns string:
+    float64 zero = 0.0
+    float64 one = 1.0
+    float64 nan = zero / zero
+    float64 positive = one / zero
+    float64 negative = -positive
+    list[float64] nan_left = list(nan, one)
+    list[float64] nan_right = list(one, nan)
+    list[float64] empty = list()
+    list[float64] singleton = list(nan)
+    list[float64] infinities = list(negative, zero, positive)
+    list[float64] reversed = list(positive, negative)
+    bool left = list.is_sorted[float64](view nan_left)
+    bool right = list.is_sorted[float64](view nan_right)
+    bool no_pair = list.is_sorted[float64](view empty)
+    bool one_value = list.is_sorted[float64](view singleton)
+    bool ready = list.is_sorted[float64](view infinities)
+    bool backwards = list.is_sorted[float64](view reversed)
+    list[float64] ordered = list.sort[float64](nan_left)
+    float64 first = list.first[float64](view ordered) handle: default 0.0
+    float64 last = list.last[float64](view ordered) handle: default 0.0
+    return "f64:nan:{left}:{right}:{no_pair}:{one_value};infinity:{ready}:{backwards};sort:{first != first}:{last == one}"
+function pending_string_rows(view stdout: Stdout) returns nothing:
+    list[list[string]] rows = list(list(run run "zebra", "first"), list("apple", "second"))
+    list[list[string]] ordered = list.sort_by_index[string](rows, 0)
+    trace ordered
+    list[string] head = list.first[list[string]](view ordered) handle: return nothing
+    string key = list.first[string](view head) handle: return nothing
+    string once = join key handle error: return nothing
+    string joined = join once handle error: return nothing
+    string marker = list.last[string](view head) handle: return nothing
+    list[string] tail = list.last[list[string]](view ordered) handle: return nothing
+    string last = list.last[string](view tail) handle: return nothing
+    Stdout.write(view stdout, "index-string:{marker}:{last}:{joined}\n")
+function pending_scalar_rows(view stdout: Stdout) returns nothing:
+    list[list[int64]] rows = list(list(run 2, 11), list(1, 22))
+    list[list[int64]] ordered = list.sort_by_index[int64](rows, 0)
+    trace ordered
+    list[int64] head = list.first[list[int64]](view ordered) handle: return nothing
+    int64 key = list.first[int64](view head) handle: return nothing
+    int64 joined = join key handle error: return nothing
+    int64 marker = list.last[int64](view head) handle: return nothing
+    list[int64] tail = list.last[list[int64]](view ordered) handle: return nothing
+    int64 last = list.last[int64](view tail) handle: return nothing
+    Stdout.write(view stdout, "index-scalar:{marker}:{last}:{joined}\n")
+function pending_outer_rows(view stdout: Stdout) returns nothing:
+    list[list[string]] rows = list(run run list("zebra", "first"), list("apple", "second"))
+    list[list[string]] ordered = list.sort_by_index[string](rows, 0)
+    trace ordered
+    list[string] head = list.first[list[string]](view ordered) handle: return nothing
+    list[string] once = join head handle error: return nothing
+    list[string] joined = join once handle error: return nothing
+    string key = list.first[string](view joined) handle: return nothing
+    string marker = list.last[string](view joined) handle: return nothing
+    list[string] tail = list.last[list[string]](view ordered) handle: return nothing
+    string last = list.last[string](view tail) handle: return nothing
+    Stdout.write(view stdout, "index-row:{marker}:{last}:{key}\n")
+function ascending_signed(first: int8, second: int8) returns bool:
+    list[int8] ordered = list.sort[int8](list(first, second))
+    return list.is_sorted[int8](view ordered)
+function ascending_unsigned(first: uint8, second: uint8) returns bool:
+    list[uint8] ordered = list.sort[uint8](list(first, second))
+    return list.is_sorted[uint8](view ordered)
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "{signed_report()}\n{unsigned_report()}\n{decimal_report()}\n{wide_unsigned_report()}\n{float32_report()}\n{float64_report()}\n")
+    pending_string_rows(view stdout)
+    pending_scalar_rows(view stdout)
+    pending_outer_rows(view stdout)
+verify ordering:
+    assert signed_report() == "int8:false:2,1,"
+    assert unsigned_report() == "uint8:false:2,1,"
+    assert decimal_report() == "float32:false:2,1,"
+    assert wide_unsigned_report() == "uint64:false:2,1,"
+    assert float32_report() == "f32:nan:false:false:true:true;infinity:true:false;sort:true:true"
+    assert float64_report() == "f64:nan:false:false:true:true;infinity:true:false;sort:true:true"
+property ordered_pairs:
+    given signed_first: int8
+    given signed_second: int8
+    given unsigned_first: uint8
+    given unsigned_second: uint8
+    assert ascending_signed(signed_first, signed_second)
+    assert ascending_unsigned(unsigned_first, unsigned_second)

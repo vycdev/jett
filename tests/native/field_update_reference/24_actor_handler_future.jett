@@ -1,0 +1,15 @@
+namespace app
+struct Inner:
+    value: int64
+actor Store:
+    mutable Inner inner = Inner(value: 1)
+    receive replace(value: int64):
+        inner.value = value
+    receive read responds int64:
+        respond inner.value
+function main(stdout: Stdout) returns nothing:
+    Store store = spawn Store()
+    int64 before = ask store.read
+    send store.replace(9)
+    int64 after = ask store.read
+    Stdout.write(view stdout, "actor:{before}:{after}\n")

@@ -1,0 +1,4 @@
+trace marker: string = positive
+trace marker: string = root
+trace extracted: map[int64, app.Positive] = map(1: 7)
+trace source: app.Record = app.Record(values: map(1: 7))

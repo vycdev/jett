@@ -1,0 +1,60 @@
+namespace app
+struct Inner:
+    value: int64
+struct Record:
+    inner: Inner
+    label: string
+enum Choice:
+    wrapped(record: Record)
+function make() returns Record:
+    return Record(inner: Inner(value: 1), label: "before")
+function read(view record: Record) returns int64:
+    return record.inner.value
+function copy_and_replace(view source: Record) returns Record:
+    mutable Record copied = clone source
+    copied = Record(inner: Inner(value: read(view copied) + 1), label: copied.label)
+    return copied
+function copied_field_reads(view source: Record) returns int64:
+    mutable Inner direct = source.inner
+    direct = Inner(value: direct.value + 2)
+    mutable Inner viewed =(view source).inner
+    viewed = Inner(value: viewed.value + 3)
+    return direct.value + viewed.value
+function loop_read(view records: list[Record]) returns int64:
+    mutable int64 total = 0
+    for record in view records:
+        total = total + record.inner.value
+    return total
+function match_read(view choice: Choice) returns int64:
+    match choice:
+        wrapped(record):
+            return record.inner.value
+function temporary_read() returns int64:
+    return make().inner.value
+function main(stdout: Stdout) returns nothing:
+    Record original = make()
+    Record copied = copy_and_replace(view original)
+    Stdout.write(view stdout, "original:{read(view original)}\ncopied:{read(view copied)}\noriginal:{read(view original)}\n")
+    list[Record] records = list(clone original, clone copied)
+    Choice choice = Choice.wrapped(clone copied)
+    Stdout.write(view stdout, "loop:{loop_read(view records)}\nmatch:{match_read(view choice)}:{match_read(view choice)}\ntemporary:{temporary_read()}\n")
+    Stdout.write(view stdout, "fields:{copied_field_reads(view original)}:{read(view original)}\n")
+verify read_and_copy:
+    Record original = make()
+    Record copied = copy_and_replace(view original)
+    assert read(view original) == 1
+    assert read(view copied) == 2
+    list[Record] records = list(clone original, clone copied)
+    Choice choice = Choice.wrapped(clone copied)
+    assert loop_read(view records) == 3
+    assert match_read(view choice) == 2
+    assert temporary_read() == 1
+    assert copied_field_reads(view original) == 7
+    assert read(view original) == 1
+property preserves_source:
+    given record: Record
+    int64 before = read(view record)
+    Record copied = copy_and_replace(view record)
+    assert read(view record) == before
+    assert read(view copied) == before + 1
+    assert copied_field_reads(view record) == before * 2 + 5
